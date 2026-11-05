@@ -2,6 +2,7 @@
 
 use crate::theme::{palette, Palette};
 use gpui_kit::component::button::{Button, ButtonVariants};
+use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::component::ThemeStyled;
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
@@ -176,12 +177,42 @@ pub fn segmented(
     cx: &mut App,
     change: impl Fn(usize, &mut Window, &mut App) + 'static,
 ) -> impl IntoElement {
+    let labels = options.iter().map(|label| SharedString::from(*label)).collect();
+    choice(id, labels, None, selected, window, cx, change)
+}
+
+/// A segmented control whose labels are made at run time, and whose `blocked`
+/// option can't be picked and says why.
+pub fn choice(
+    id: impl Into<ElementId>,
+    options: Vec<SharedString>,
+    blocked: Option<(usize, &'static str)>,
+    selected: usize,
+    window: &mut Window,
+    cx: &mut App,
+    change: impl Fn(usize, &mut Window, &mut App) + 'static,
+) -> impl IntoElement {
     let p = palette(cx);
     let id = id.into();
     let focus = focus_for(&id, window, cx);
     let change = Rc::new(change);
     let count = options.len();
     let keys = change.clone();
+    let blocked_at = blocked.map(|(i, _)| i);
+    // The next option in a direction, jumping over the blocked one.
+    let neighbour = move |from: usize, back: bool| {
+        let to = if back { from.checked_sub(1)? } else { from + 1 };
+        let to = if Some(to) == blocked_at {
+            if back {
+                to.checked_sub(1)?
+            } else {
+                to + 1
+            }
+        } else {
+            to
+        };
+        (to < count).then_some(to)
+    };
     let mut track = div()
         .id(id)
         .track_focus(&focus)
@@ -194,26 +225,34 @@ pub fn segmented(
         .border_color(p.hairline)
         .rounded(px(10.))
         .when(focused(&focus, window), |d| d.focus_ring_style(window, cx))
-        .on_key_down(move |e: &KeyDownEvent, window, cx| match e.keystroke.key.as_str() {
-            "left" if selected > 0 => keys(selected - 1, window, cx),
-            "right" if selected + 1 < count => keys(selected + 1, window, cx),
-            _ => {}
+        .on_key_down(move |e: &KeyDownEvent, window, cx| {
+            let to = match e.keystroke.key.as_str() {
+                "left" => neighbour(selected, true),
+                "right" => neighbour(selected, false),
+                _ => None,
+            };
+            if let Some(to) = to {
+                keys(to, window, cx);
+            }
         });
-    for (i, label) in options.iter().enumerate() {
+    for (i, label) in options.into_iter().enumerate() {
         let pick = change.clone();
-        track = track.child(
-            div()
-                .id(i)
-                .px(px(12.))
-                .py(px(4.))
-                .rounded(px(6.))
-                .text_size(px(13.))
-                .cursor_pointer()
-                .when(i == selected, |d| d.bg(p.segment).text_color(p.text))
-                .when(i != selected, |d| d.text_color(p.secondary))
-                .child(*label)
-                .on_click(move |_, window, cx| pick(i, window, cx)),
-        );
+        let why = blocked.filter(|(at, _)| *at == i).map(|(_, why)| why);
+        let segment = div()
+            .id(i)
+            .px(px(12.))
+            .py(px(4.))
+            .rounded(px(6.))
+            .text_size(px(13.))
+            .when(i == selected, |d| d.bg(p.segment).text_color(p.text))
+            .when(i != selected, |d| d.text_color(p.secondary))
+            .child(label);
+        track = track.child(match why {
+            Some(why) => {
+                segment.opacity(0.4).tooltip(move |window, cx| Tooltip::new(why).build(window, cx)).into_any_element()
+            }
+            None => segment.cursor_pointer().on_click(move |_, window, cx| pick(i, window, cx)).into_any_element(),
+        });
     }
     track
 }

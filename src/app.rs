@@ -7,6 +7,7 @@ use crate::hook;
 use crate::layout::{Link, Live};
 use crate::log;
 use crate::monitors::{self, Mon};
+use crate::snap::{self, WM_APP_SNAP_BLOCKED};
 use crate::tray::{self, CLASS, WM_APP_API, WM_APP_LINEUP};
 use crate::{arrange, ease, hotkey, identify, overlay};
 use seam::api::{self, Client, Command, Reply, RpcError};
@@ -62,6 +63,8 @@ const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 const TAKE_OVER_WAIT_MS: u32 = 25_000;
 const HOTKEY_LINE_UP: i32 = 1;
 const HOTKEY_PAUSE: i32 = 2;
+const HOTKEY_NEXT_ZONE: i32 = 3;
+const HOTKEY_PREV_ZONE: i32 = 4;
 const NIN_KEYSELECT: u32 = NIN_SELECT | NINF_KEY;
 
 const ID_LINEUP: usize = 1;
@@ -128,7 +131,7 @@ struct App {
     token: String,
     hotkey_errors: Vec<HotkeyError>,
     /// The shortcuts registered now, to skip work when they haven't changed.
-    bound: [Option<String>; 2],
+    bound: [Option<String>; 4],
     clients: Vec<String>,
     last_state_event: Option<Instant>,
     /// The Store copy: Windows updates it, so the updater stays off.
@@ -280,6 +283,7 @@ fn persist(app: &App) {
 fn relink(app: &mut App) {
     app.links = resolve(&app.mons, app.cfg.desks.get(&app.sig).map(|d| d.borders.as_slice()));
     hook::set_live(Live { rects: app.mons.iter().map(|m| m.rect).collect(), links: app.links.clone() });
+    snap::update(app.hwnd, &app.cfg, &app.sig, &app.mons);
     arm_hook(app);
     update_tip(app);
 }
@@ -363,12 +367,18 @@ fn send_state_event(app: &mut App) {
 
 /// Register the shortcuts that changed. Windows refuses one another app holds.
 fn apply_hotkeys(app: &mut App) {
-    let wanted = [app.cfg.hotkeys.line_up.clone(), app.cfg.hotkeys.pause.clone()];
+    let keys = &app.cfg.hotkeys;
+    let wanted = [keys.line_up.clone(), keys.pause.clone(), keys.next_zone.clone(), keys.prev_zone.clone()];
     if wanted == app.bound {
         return;
     }
     app.hotkey_errors.clear();
-    let slots = [(HOTKEY_LINE_UP, "line_up"), (HOTKEY_PAUSE, "pause")];
+    let slots = [
+        (HOTKEY_LINE_UP, "line_up"),
+        (HOTKEY_PAUSE, "pause"),
+        (HOTKEY_NEXT_ZONE, "next_zone"),
+        (HOTKEY_PREV_ZONE, "prev_zone"),
+    ];
     for ((id, action), combo) in slots.into_iter().zip(&wanted) {
         unsafe {
             let _ = UnregisterHotKey(Some(app.hwnd), id);
@@ -655,6 +665,7 @@ fn run_command(app: &mut App, queued: Queued) {
         Command::ZonesSet(on) => {
             app.cfg.zones.enabled = on;
             persist(app);
+            snap::update(app.hwnd, &app.cfg, &app.sig, &app.mons);
             publish(app);
             Ok(json!({ "on": on }))
         }
@@ -689,9 +700,11 @@ fn run_command(app: &mut App, queued: Queued) {
             read_update_state(app);
             ok()
         }
-        Command::WorkspaceSwitch { .. } | Command::WorkspaceCapture { .. } | Command::ZoneMove(_) => {
-            refused("Seam can't do that yet")
-        }
+        Command::ZoneMove(dir) => match snap::move_foreground(dir == api::Dir::Next) {
+            Ok(()) => ok(),
+            Err(why) => refused(why),
+        },
+        Command::WorkspaceSwitch { .. } | Command::WorkspaceCapture { .. } => refused("Seam can't do that yet"),
         // Answered on the client's own thread.
         _ => Err(RpcError::new(api::METHOD_NOT_FOUND, "not a tray command")),
     };
@@ -831,6 +844,11 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                 HOTKEY_PAUSE => {
                     with_app(|a| set_remap(a, !a.cfg.enabled));
                 }
+                id @ (HOTKEY_NEXT_ZONE | HOTKEY_PREV_ZONE) => {
+                    if let Err(why) = snap::move_foreground(id == HOTKEY_NEXT_ZONE) {
+                        log::info!("zone hotkey: {why}");
+                    }
+                }
                 _ => {}
             }
             LRESULT(0)
@@ -858,6 +876,11 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
         }
         WM_APP_UPDATE => {
             with_app(update_read);
+            LRESULT(0)
+        }
+        WM_APP_SNAP_BLOCKED => {
+            let body = "Seam can't move windows from apps running as administrator.";
+            with_app(|a| notify(a, "Seam", body, BalloonAction::None));
             LRESULT(0)
         }
         WM_TIMER if wparam.0 == TIMER_UPDATE => {
@@ -1053,7 +1076,7 @@ pub fn run() {
             saver: Saver::start(),
             token: api_server::new_token().unwrap_or_default(),
             hotkey_errors: Vec::new(),
-            bound: [None, None],
+            bound: [None, None, None, None],
             clients: Vec::new(),
             last_state_event: None,
             packaged: package::is_packaged(),

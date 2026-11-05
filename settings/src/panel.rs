@@ -7,6 +7,7 @@ use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::input::{Input, InputEvent, InputState};
 use gpui_kit::component::notification::Notification;
 use gpui_kit::component::scroll::ScrollableElement;
+use gpui_kit::component::slider::{SliderEvent, SliderState};
 use gpui_kit::component::{ActiveTheme, Icon, Theme, ThemeStyled, WindowExt};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
@@ -31,7 +32,6 @@ const CONTEXT: &str = "SeamPanel";
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Page {
     Displays,
-    #[cfg(feature = "preview")]
     Zones,
     #[cfg(feature = "preview")]
     Workspaces,
@@ -44,7 +44,6 @@ impl Page {
     pub fn title(self) -> &'static str {
         match self {
             Page::Displays => "Displays",
-            #[cfg(feature = "preview")]
             Page::Zones => "Zones",
             #[cfg(feature = "preview")]
             Page::Workspaces => "Workspaces",
@@ -57,7 +56,6 @@ impl Page {
     fn icon(self) -> assets::IconName {
         match self {
             Page::Displays => assets::IconName::Monitor,
-            #[cfg(feature = "preview")]
             Page::Zones => assets::IconName::LayoutGrid,
             #[cfg(feature = "preview")]
             Page::Workspaces => assets::IconName::Layers,
@@ -68,7 +66,7 @@ impl Page {
     }
 
     pub fn from_arg(arg: &str) -> Option<Page> {
-        [Page::Displays, Page::Shortcuts, Page::General, Page::About]
+        [Page::Displays, Page::Zones, Page::Shortcuts, Page::General, Page::About]
             .into_iter()
             .find(|p| p.title().eq_ignore_ascii_case(arg))
     }
@@ -76,7 +74,6 @@ impl Page {
     fn top_group() -> Vec<Page> {
         vec![
             Page::Displays,
-            #[cfg(feature = "preview")]
             Page::Zones,
             #[cfg(feature = "preview")]
             Page::Workspaces,
@@ -99,6 +96,10 @@ pub struct Panel {
     pub links: Vec<Link>,
     pub layout: Vec<Placed>,
     pub ease_on: bool,
+    /// The screen whose zones the Zones page shows, as an index into `mons`.
+    pub zone_screen: usize,
+    /// The Gap slider. It sends the new gap when it's let go.
+    pub gap: Entity<SliderState>,
     pub search: Entity<InputState>,
     /// Holds focus when no control does, so Tab and Ctrl+F always reach a binding.
     focus: FocusHandle,
@@ -129,7 +130,18 @@ impl Panel {
         let saved = std::fs::read_to_string(last_page_file()).ok();
         let page = page.or(saved.and_then(|s| Page::from_arg(s.trim()))).unwrap_or(Page::Displays);
         let search = cx.new(|cx| InputState::new(window, cx).placeholder("Search"));
+        let gap =
+            cx.new(|_| SliderState::new().min(0.).max(32.).step(2.).default_value(Config::default().zones.gap as f32));
         let subscriptions = vec![
+            cx.subscribe_in(&gap, window, |this, _, event: &SliderEvent, window, cx| match event {
+                SliderEvent::Change(value) => {
+                    this.config.zones.gap = value.end() as u32;
+                    cx.notify();
+                }
+                SliderEvent::Release(value) => {
+                    this.patch(json!({ "zones": { "gap": value.end() as u32 } }), window, cx);
+                }
+            }),
             cx.subscribe_in(&search, window, |this, input, event: &InputEvent, _, cx| {
                 if matches!(event, InputEvent::Change) {
                     this.query = input.read(cx).value();
@@ -157,6 +169,8 @@ impl Panel {
             links: Vec::new(),
             layout: Vec::new(),
             ease_on: seam::ease::is_on(),
+            zone_screen: 0,
+            gap,
             search,
             focus,
             query: SharedString::default(),
@@ -597,8 +611,9 @@ impl Render for Panel {
         } else {
             match self.page {
                 Page::Displays => pages::displays::render(self, window, cx).into_any_element(),
+                Page::Zones => pages::zones::render(self, window, cx).into_any_element(),
                 #[cfg(feature = "preview")]
-                Page::Zones | Page::Workspaces => ui::page_title(self.page.title(), "Planned", p).into_any_element(),
+                Page::Workspaces => ui::page_title(self.page.title(), "Planned", p).into_any_element(),
                 Page::Shortcuts => pages::shortcuts::render(self, window, cx).into_any_element(),
                 Page::General => pages::general::render(self, window, cx).into_any_element(),
                 Page::About => pages::about::render(self, window, cx).into_any_element(),

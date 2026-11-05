@@ -1,0 +1,647 @@
+//! Zone snapping: drag a window with the show key held and it lands in a zone.
+//! It runs on the tray's main thread from a WinEvent hook and a 16 ms timer
+//! that lives only while a window is being dragged. Nothing here touches the
+//! mouse hook (D7).
+
+use crate::{log, zone_paint};
+use seam::config::{Config, ZoneSettings};
+use seam::desk::Mon;
+use seam::geom;
+use seam::winutil;
+use seam::zones::{self, Rect, ZoneLayout};
+use std::cell::RefCell;
+use std::collections::{HashMap, VecDeque};
+use windows::Win32::Foundation::*;
+use windows::Win32::Graphics::Gdi::*;
+use windows::Win32::UI::Accessibility::*;
+use windows::Win32::UI::HiDpi::{GetDpiForMonitor, MDT_EFFECTIVE_DPI};
+use windows::Win32::UI::Input::KeyboardAndMouse::*;
+use windows::Win32::UI::WindowsAndMessaging::*;
+
+/// A window the tray couldn't move, probably because it runs as administrator.
+pub const WM_APP_SNAP_BLOCKED: u32 = WM_APP + 14;
+const TICK_MS: u32 = 16;
+/// Time for an app to react to a move before the next step.
+const SETTLE_MS: u32 = 120;
+const MAX_SNAPPED: usize = 256;
+/// A window this close to where it was put still counts as snapped.
+const CLOSE_ENOUGH: i32 = 4;
+/// The gap slider's end. A stored gap past it is cut back when used.
+const MAX_GAP: u32 = 32;
+/// Times a placement is tried again when the app hadn't finished reacting.
+const MAX_RETRIES: u8 = 2;
+
+/// Width, height and monitor DPI of a window before it was snapped.
+type Old = (i32, i32, u32);
+
+#[derive(PartialEq)]
+struct Screen {
+    id: String,
+    bounds: Rect,
+    layout: Option<ZoneLayout>,
+}
+
+/// A screen's zones in pixels, worked out when they're needed so a moved taskbar counts.
+struct Placed {
+    id: String,
+    bounds: Rect,
+    work: Rect,
+    dpi: u32,
+    /// With no gap, so every point of the work area is in a zone.
+    cells: Vec<Rect>,
+    zones: Vec<Rect>,
+}
+
+/// What the overlay shows: a screen, and the zones lit on it.
+#[derive(Clone, Copy, PartialEq)]
+struct View {
+    screen: usize,
+    hit: Option<(usize, usize)>,
+}
+
+/// A drag is only a move once the window has moved without changing size.
+/// Until then it could still be an edge resize, which zones leave alone.
+#[derive(Clone, Copy, PartialEq)]
+enum Phase {
+    Waiting,
+    Moving,
+    Resizing,
+}
+
+struct Drag {
+    hwnd: isize,
+    phase: Phase,
+    /// The window's rect when the drag began.
+    start: Rect,
+    was_maximized: bool,
+    /// What the window's snapped entry said when the drag began, if it was snapped.
+    /// Its old size is given back at the drop, or carried to the next zone.
+    was_snapped: Option<Option<Old>>,
+    /// The main mouse button, if it was down when the drag began. A drag started
+    /// from the keyboard has none, so it can't be told it ended.
+    button: Option<VIRTUAL_KEY>,
+    geometry: Vec<Placed>,
+    /// The zone Span started from.
+    anchor: Option<(usize, usize)>,
+    shown: Option<View>,
+    timer: usize,
+}
+
+struct Snapped {
+    /// Size and DPI before snapping, for "restore size". None for a maximized window.
+    old: Option<Old>,
+    screen: String,
+    from: usize,
+    to: usize,
+    at: Rect,
+}
+
+enum Step {
+    Restore,
+    Move,
+    Fit,
+    Verify,
+}
+
+/// A placement waiting on the app between steps.
+struct Pending {
+    hwnd: isize,
+    target: Rect,
+    before: Rect,
+    steps: VecDeque<Step>,
+    retries: u8,
+    timer: usize,
+}
+
+#[derive(Default)]
+struct Engine {
+    owner: isize,
+    enabled: bool,
+    settings: ZoneSettings,
+    /// Lower case.
+    exclude: Vec<String>,
+    screens: Vec<Screen>,
+    hook: Option<HWINEVENTHOOK>,
+    drag: Option<Drag>,
+    snapped: HashMap<isize, Snapped>,
+    overlays: HashMap<String, HWND>,
+    pending: Option<Pending>,
+    warned: bool,
+}
+
+thread_local! {
+    static ENGINE: RefCell<Engine> = RefCell::new(Engine::default());
+}
+
+fn with_engine<R>(f: impl FnOnce(&mut Engine) -> R) -> Option<R> {
+    ENGINE.with(|e| e.try_borrow_mut().ok().map(|mut e| f(&mut e)))
+}
+
+fn hwnd_of(key: isize) -> HWND {
+    HWND(key as *mut _)
+}
+
+fn rect_of(r: &geom::Rect) -> Rect {
+    Rect { x: r.left, y: r.top, w: r.width(), h: r.height() }
+}
+
+fn key_code(key: &str) -> Option<VIRTUAL_KEY> {
+    match key {
+        "shift" => Some(VK_SHIFT),
+        "ctrl" => Some(VK_CONTROL),
+        "alt" => Some(VK_MENU),
+        _ => None,
+    }
+}
+
+fn held(vk: VIRTUAL_KEY) -> bool {
+    unsafe { GetAsyncKeyState(i32::from(vk.0)) < 0 }
+}
+
+/// The work area (taskbar excluded) and effective DPI of the screen at `bounds`.
+fn work_area(bounds: Rect) -> Option<(Rect, u32)> {
+    let r = RECT { left: bounds.x, top: bounds.y, right: bounds.x + bounds.w, bottom: bounds.y + bounds.h };
+    unsafe {
+        let monitor = MonitorFromRect(&r, MONITOR_DEFAULTTONEAREST);
+        let mut info = MONITORINFO { cbSize: size_of::<MONITORINFO>() as u32, ..Default::default() };
+        if !GetMonitorInfoW(monitor, &mut info).as_bool() {
+            return None;
+        }
+        let (mut dx, mut dy) = (0u32, 0u32);
+        let dpi =
+            if GetDpiForMonitor(monitor, MDT_EFFECTIVE_DPI, &mut dx, &mut dy).is_ok() && dx > 0 { dx } else { 96 };
+        let w = info.rcWork;
+        Some((Rect { x: w.left, y: w.top, w: w.right - w.left, h: w.bottom - w.top }, dpi))
+    }
+}
+
+/// Whether two rects match within a few pixels. A window that can't be resized
+/// only has to start in the right place.
+fn close(a: Rect, b: Rect, sized: bool) -> bool {
+    let size = [(a.w, b.w), (a.h, b.h)];
+    let sides = [(a.x, b.x), (a.y, b.y)].into_iter().chain(size.into_iter().filter(|_| sized));
+    sides.into_iter().all(|(p, q)| (p - q).abs() <= CLOSE_ENOUGH)
+}
+
+/// The main mouse button as the keyboard-state calls see it, so a swapped pair counts.
+fn main_button() -> VIRTUAL_KEY {
+    if unsafe { GetSystemMetrics(SM_SWAPBUTTON) } != 0 {
+        VK_RBUTTON
+    } else {
+        VK_LBUTTON
+    }
+}
+
+/// Tell the engine what the settings, this desk's layouts and the screens are now.
+pub fn update(owner: HWND, cfg: &Config, sig: &str, mons: &[Mon]) {
+    let desk = cfg.desks.get(sig);
+    let screens = mons.iter().map(|m| Screen {
+        id: m.id.clone(),
+        bounds: rect_of(&m.rect),
+        layout: desk.and_then(|d| d.zones.get(&m.id)).and_then(zones::layout_of),
+    });
+    let screens: Vec<Screen> = screens.collect();
+    let exclude: Vec<String> = cfg.zones.exclude.iter().map(|x| x.to_lowercase()).collect();
+    with_engine(|e| {
+        // A change that isn't about zones mustn't cut a drag short.
+        let same = e.owner == owner.0 as isize
+            && e.enabled == cfg.zones.enabled
+            && e.settings == cfg.zones
+            && e.exclude == exclude
+            && e.screens == screens;
+        if same {
+            return;
+        }
+        e.cancel_drag();
+        e.owner = owner.0 as isize;
+        e.enabled = cfg.zones.enabled;
+        e.settings = cfg.zones.clone();
+        e.exclude = exclude;
+        e.screens = screens;
+        // The screens may have changed, and the windows are made again when needed.
+        for (_, overlay) in e.overlays.drain() {
+            zone_paint::destroy(overlay);
+        }
+        e.sync_hook();
+    });
+}
+
+/// Move the foreground window to the next or previous zone, across screens.
+pub fn move_foreground(next: bool) -> Result<(), String> {
+    with_engine(|e| e.move_foreground(next)).unwrap_or_else(|| Err("Seam is busy, try again".into()))
+}
+
+unsafe extern "system" fn on_event(_: HWINEVENTHOOK, event: u32, hwnd: HWND, object: i32, _: i32, _: u32, _: u32) {
+    if object != OBJID_WINDOW.0 {
+        return;
+    }
+    with_engine(|e| match event {
+        EVENT_SYSTEM_MOVESIZESTART => e.drag_start(hwnd),
+        EVENT_SYSTEM_MOVESIZEEND => e.drag_end(hwnd),
+        _ => {}
+    });
+}
+
+unsafe extern "system" fn on_tick(_: HWND, _: u32, _: usize, _: u32) {
+    with_engine(Engine::tick);
+}
+
+unsafe extern "system" fn on_settle(_: HWND, _: u32, id: usize, _: u32) {
+    with_engine(|e| {
+        if e.pending.as_ref().is_some_and(|p| p.timer == id) {
+            e.advance();
+        } else {
+            let _ = KillTimer(None, id);
+        }
+    });
+}
+
+impl Engine {
+    fn sync_hook(&mut self) {
+        let wanted = self.enabled && self.screens.iter().any(|s| s.layout.is_some());
+        match (wanted, self.hook) {
+            (true, None) => unsafe {
+                let flags = WINEVENT_OUTOFCONTEXT | WINEVENT_SKIPOWNPROCESS;
+                let hook = SetWinEventHook(
+                    EVENT_SYSTEM_MOVESIZESTART,
+                    EVENT_SYSTEM_MOVESIZEEND,
+                    None,
+                    Some(on_event),
+                    0,
+                    0,
+                    flags,
+                );
+                if hook.0.is_null() {
+                    log::info!("zone drag hook not installed");
+                } else {
+                    self.hook = Some(hook);
+                }
+            },
+            (false, Some(hook)) => {
+                let _ = unsafe { UnhookWinEvent(hook) };
+                self.hook = None;
+            }
+            _ => {}
+        }
+    }
+
+    fn geometry(&self) -> Vec<Placed> {
+        let gap = |dpi: u32| (self.settings.gap.min(MAX_GAP) as f32 * dpi as f32 / 96.0).round() as i32;
+        let placed = self.screens.iter().filter_map(|s| {
+            let layout = s.layout.as_ref()?;
+            let (work, dpi) = work_area(s.bounds)?;
+            Some(Placed {
+                id: s.id.clone(),
+                bounds: s.bounds,
+                work,
+                dpi,
+                cells: zones::rects(&layout.tree, work, 0),
+                zones: zones::rects(&layout.tree, work, gap(dpi)),
+            })
+        });
+        placed.collect()
+    }
+
+    /// The snapped entry for a window that is still where it was put.
+    fn current(&self, hwnd: HWND) -> Option<&Snapped> {
+        let snapped = self.snapped.get(&(hwnd.0 as isize))?;
+        let here = winutil::visible_rect(hwnd)?;
+        close(here, snapped.at, winutil::is_resizable(hwnd)).then_some(snapped)
+    }
+
+    fn drag_start(&mut self, hwnd: HWND) {
+        self.cancel_drag();
+        let key = hwnd.0 as isize;
+        // A placement still waiting would yank the window back under the pointer.
+        if self.pending.as_ref().is_some_and(|p| p.hwnd == key) {
+            if let Some(p) = self.pending.take() {
+                unsafe {
+                    let _ = KillTimer(None, p.timer);
+                }
+            }
+        }
+        if !self.enabled || !winutil::is_snappable(hwnd, std::process::id(), &self.exclude) {
+            return;
+        }
+        // Windows keeps a lower process from moving this one, so don't offer zones for it (D12).
+        if winutil::is_elevated_over_us(hwnd) {
+            self.blocked();
+            return;
+        }
+        let (Some(start), geometry) = (winutil::window_rect(hwnd), self.geometry()) else { return };
+        if geometry.is_empty() {
+            return;
+        }
+        let was_snapped = self.current(hwnd).map(|s| s.old);
+        let button = Some(main_button()).filter(|b| held(*b));
+        let timer = unsafe { SetTimer(None, 0, TICK_MS, Some(on_tick)) };
+        let was_maximized = winutil::is_maximized(hwnd);
+        self.drag = Some(Drag {
+            hwnd: key,
+            phase: Phase::Waiting,
+            start,
+            was_maximized,
+            was_snapped,
+            button,
+            geometry,
+            anchor: None,
+            shown: None,
+            timer,
+        });
+    }
+
+    /// A snapped window dropped outside any zone gets its old size back, scaled
+    /// to the screen it's on, with the pointer at the same place along its width.
+    fn restore_size(&mut self, hwnd: HWND, (w, h, dpi): Old) {
+        let Some(now) = winutil::window_rect(hwnd) else { return };
+        let mut pt = POINT::default();
+        if unsafe { GetCursorPos(&mut pt) }.is_err() || now.w <= 0 {
+            return;
+        }
+        let k = winutil::monitor_dpi(hwnd).max(1) as f32 / dpi.max(1) as f32;
+        let (w, h) = ((w as f32 * k).round() as i32, (h as f32 * k).round() as i32);
+        let along = (pt.x - now.x) as f32 / now.w as f32;
+        let x = pt.x - (along * w as f32).round() as i32;
+        let flags = SWP_NOZORDER | SWP_NOACTIVATE | SWP_ASYNCWINDOWPOS;
+        unsafe {
+            let _ = SetWindowPos(hwnd, None, x, now.y, w, h, flags);
+        }
+    }
+
+    fn tick(&mut self) {
+        let Some(mut drag) = self.drag.take() else { return };
+        let mut pt = POINT::default();
+        if !unsafe { IsWindow(Some(hwnd_of(drag.hwnd))) }.as_bool() {
+            self.finish(drag, false);
+            return;
+        }
+        if unsafe { GetCursorPos(&mut pt) }.is_err() {
+            self.drag = Some(drag);
+            return;
+        }
+        // The end of the drag never arrived, so don't let a drop snap by surprise.
+        if drag.button.is_some_and(|b| !held(b)) {
+            self.finish(drag, false);
+            return;
+        }
+        if drag.phase == Phase::Waiting {
+            let hwnd = hwnd_of(drag.hwnd);
+            let Some(now) = winutil::window_rect(hwnd) else {
+                self.drag = Some(drag);
+                return;
+            };
+            if now != drag.start {
+                let resized = !drag.was_maximized && (now.w != drag.start.w || now.h != drag.start.h);
+                drag.phase = if resized { Phase::Resizing } else { Phase::Moving };
+                if resized {
+                    // Zones have nothing to do with a resize.
+                    unsafe {
+                        let _ = KillTimer(None, drag.timer);
+                    }
+                }
+            }
+        }
+        if drag.phase != Phase::Moving {
+            self.drag = Some(drag);
+            return;
+        }
+        let show_key = key_code(&self.settings.show_key).unwrap_or(VK_SHIFT);
+        let span_key = key_code(&self.settings.span_key).filter(|k| *k != show_key);
+        let show = held(show_key);
+        let span = show && span_key.is_some_and(held);
+        let view =
+            show.then(|| drag.geometry.iter().position(|g| g.bounds.contains(pt.x, pt.y))).flatten().map(|screen| {
+                let cell = zones::zone_at(&drag.geometry[screen].cells, pt.x, pt.y);
+                let hit = cell.map(|zone| {
+                    if !span {
+                        drag.anchor = None;
+                        return (zone, zone);
+                    }
+                    match drag.anchor {
+                        Some((s, from)) if s == screen => (from, zone),
+                        _ => {
+                            drag.anchor = Some((screen, zone));
+                            (zone, zone)
+                        }
+                    }
+                });
+                View { screen, hit }
+            });
+        // Repaint only when what is lit changes.
+        if view != drag.shown {
+            self.present(&mut drag, view);
+        }
+        self.drag = Some(drag);
+    }
+
+    fn overlay_for(&mut self, id: &str) -> Option<HWND> {
+        if !self.overlays.contains_key(id) {
+            self.overlays.insert(id.to_string(), zone_paint::create()?);
+        }
+        self.overlays.get(id).copied()
+    }
+
+    fn hide_all(&self) {
+        for overlay in self.overlays.values() {
+            zone_paint::hide(*overlay);
+        }
+    }
+
+    fn present(&mut self, drag: &mut Drag, view: Option<View>) {
+        if let Some(previous) = drag.shown.filter(|p| view.is_none_or(|v| v.screen != p.screen)) {
+            if let Some(overlay) = self.overlays.get(&drag.geometry[previous.screen].id) {
+                zone_paint::hide(*overlay);
+            }
+        }
+        if let Some(view) = view {
+            let g = &drag.geometry[view.screen];
+            if let Some(overlay) = self.overlay_for(&g.id) {
+                let lit = view.hit.map(|(a, b)| zones::span(g.zones[a], g.zones[b]));
+                zone_paint::paint(overlay, g.work, g.dpi as f32 / 96.0, &g.zones, lit);
+            }
+        }
+        drag.shown = view;
+    }
+
+    fn cancel_drag(&mut self) {
+        if let Some(drag) = self.drag.take() {
+            self.finish(drag, false);
+        }
+    }
+
+    fn drag_end(&mut self, hwnd: HWND) {
+        match self.drag.take() {
+            Some(drag) if drag.hwnd == hwnd.0 as isize => self.finish(drag, true),
+            other => self.drag = other,
+        }
+    }
+
+    /// Stop the timer and hide the overlay. If it was showing a zone and the
+    /// drag ended normally, put the window there.
+    fn finish(&mut self, drag: Drag, dropped: bool) {
+        unsafe {
+            let _ = KillTimer(None, drag.timer);
+        }
+        self.hide_all();
+        let hwnd = hwnd_of(drag.hwnd);
+        // Maximized by the drag itself is Windows' top-edge snap, or a browser tab
+        // merging back into a window. Either way it isn't ours to place.
+        if !dropped || drag.phase != Phase::Moving || (winutil::is_maximized(hwnd) && !drag.was_maximized) {
+            return;
+        }
+        let lit = drag.shown.and_then(|view| Some((view.screen, view.hit?)));
+        let Some((screen, (a, b))) = lit else {
+            // Dropped outside every zone, so a snapped window gets its old size back.
+            if let (Some(Some(old)), true) = (drag.was_snapped, self.settings.restore_size) {
+                if !winutil::is_maximized(hwnd) && winutil::is_resizable(hwnd) {
+                    self.restore_size(hwnd, old);
+                }
+            }
+            self.snapped.remove(&drag.hwnd);
+            return;
+        };
+        let g = &drag.geometry[screen];
+        let rect = zones::span(g.zones[a], g.zones[b]);
+        self.snap_to(hwnd, g, (a.min(b), a.max(b)), rect, drag.was_snapped);
+    }
+
+    fn snap_to(&mut self, hwnd: HWND, g: &Placed, (from, to): (usize, usize), rect: Rect, was: Option<Option<Old>>) {
+        let key = hwnd.0 as isize;
+        // A window put in a zone a moment ago isn't there yet, but its old size still counts.
+        let known = self.current(hwnd).is_some() || self.pending.as_ref().is_some_and(|p| p.hwnd == key);
+        let old = match was {
+            Some(old) => old,
+            None => match self.snapped.get(&key).filter(|_| known) {
+                Some(s) => s.old,
+                None if winutil::is_maximized(hwnd) => None,
+                None => winutil::window_rect(hwnd).map(|r| (r.w, r.h, winutil::monitor_dpi(hwnd))),
+            },
+        };
+        // The screen's DPI, not the window's: a window that ignores DPI needs no extra step.
+        let crosses = winutil::monitor_dpi(hwnd) != g.dpi;
+        self.place(hwnd, rect, crosses);
+        self.snapped.insert(key, Snapped { old, screen: g.id.clone(), from, to, at: rect });
+        if self.snapped.len() > MAX_SNAPPED {
+            // Windows that closed since. A system-wide destroy hook would cost more than this.
+            self.snapped.retain(|k, _| unsafe { IsWindow(Some(hwnd_of(*k))) }.as_bool());
+            if self.snapped.len() > MAX_SNAPPED {
+                self.snapped.clear();
+            }
+        }
+    }
+
+    /// Put the window's visible frame on `target`, a step at a time with the
+    /// app's own reactions in between (D8).
+    fn place(&mut self, hwnd: HWND, target: Rect, crosses_dpi: bool) {
+        let Some(before) = winutil::window_rect(hwnd) else { return };
+        if winutil::visible_rect(hwnd) == Some(target) {
+            return;
+        }
+        let mut steps = VecDeque::new();
+        if winutil::is_maximized(hwnd) {
+            steps.push_back(Step::Restore);
+        }
+        if crosses_dpi {
+            steps.push_back(Step::Move);
+        }
+        steps.push_back(Step::Fit);
+        steps.push_back(Step::Verify);
+        if let Some(earlier) = self.pending.take() {
+            unsafe {
+                let _ = KillTimer(None, earlier.timer);
+                // Another window's placement is cut short, so land it where it was going.
+                let other = hwnd_of(earlier.hwnd);
+                let unfinished = earlier.steps.iter().any(|s| matches!(s, Step::Fit));
+                if earlier.hwnd != hwnd.0 as isize && unfinished && IsWindow(Some(other)).as_bool() {
+                    winutil::fit(other, earlier.target);
+                }
+            }
+        }
+        self.pending = Some(Pending { hwnd: hwnd.0 as isize, target, before, steps, retries: 0, timer: 0 });
+        self.advance();
+    }
+
+    fn advance(&mut self) {
+        let Some(mut p) = self.pending.take() else { return };
+        if p.timer != 0 {
+            unsafe {
+                let _ = KillTimer(None, p.timer);
+            }
+            p.timer = 0;
+        }
+        let hwnd = hwnd_of(p.hwnd);
+        if !unsafe { IsWindow(Some(hwnd)) }.as_bool() {
+            return;
+        }
+        match p.steps.pop_front() {
+            Some(Step::Restore) => winutil::restore(hwnd),
+            Some(Step::Move) => winutil::move_to(hwnd, p.target),
+            Some(Step::Fit) => winutil::fit(hwnd, p.target),
+            Some(Step::Verify) => {
+                if winutil::window_rect(hwnd) == Some(p.before) {
+                    self.blocked();
+                    return;
+                }
+                // It moved, but an app that answered a DPI change late can leave it off by its margins.
+                let landed =
+                    winutil::visible_rect(hwnd).is_some_and(|v| close(v, p.target, winutil::is_resizable(hwnd)));
+                if landed || p.retries >= MAX_RETRIES {
+                    return;
+                }
+                p.retries += 1;
+                p.steps.extend([Step::Fit, Step::Verify]);
+            }
+            None => return,
+        }
+        p.timer = unsafe { SetTimer(None, 0, SETTLE_MS, Some(on_settle)) };
+        self.pending = Some(p);
+    }
+
+    /// Say so once per run, because a window that won't move is nearly always
+    /// one running as administrator (D12).
+    fn blocked(&mut self) {
+        log::info!("a window didn't move, probably because it runs as administrator");
+        if !self.warned {
+            self.warned = true;
+            unsafe {
+                let _ = PostMessageW(Some(hwnd_of(self.owner)), WM_APP_SNAP_BLOCKED, WPARAM(0), LPARAM(0));
+            }
+        }
+    }
+
+    fn move_foreground(&mut self, next: bool) -> Result<(), String> {
+        if !self.enabled {
+            return Err("Zones are off".into());
+        }
+        let geometry = self.geometry();
+        if geometry.is_empty() {
+            return Err("No screen has zones yet. Pick a layout on the Zones page".into());
+        }
+        let hwnd = unsafe { GetForegroundWindow() };
+        if !winutil::is_snappable(hwnd, std::process::id(), &self.exclude) {
+            return Err("That window can't be moved into a zone".into());
+        }
+        // Every zone in order, screen by screen, so the last one wraps onto the next screen.
+        let flat: Vec<(usize, usize)> =
+            geometry.iter().enumerate().flat_map(|(s, g)| (0..g.zones.len()).map(move |z| (s, z))).collect();
+        let position = |id: &str, zone: usize| geometry.iter().position(|g| g.id == id).map(|s| (s, zone));
+        let snapped = self.current(hwnd).and_then(|s| position(&s.screen, if next { s.to } else { s.from }));
+        let centre = winutil::visible_rect(hwnd).map(|r| (r.x + r.w / 2, r.y + r.h / 2));
+        let under = centre.and_then(|(x, y)| {
+            let s = geometry.iter().position(|g| g.bounds.contains(x, y))?;
+            Some((s, zones::zone_at(&geometry[s].cells, x, y)?))
+        });
+        let n = flat.len();
+        let index = match (snapped, under) {
+            (Some(at), _) => {
+                flat.iter().position(|f| *f == at).map(|i| if next { (i + 1) % n } else { (i + n - 1) % n })
+            }
+            (None, Some(at)) => flat.iter().position(|f| *f == at),
+            (None, None) => Some(if next { 0 } else { n - 1 }),
+        };
+        let (screen, zone) = flat[index.unwrap_or(0)];
+        let g = &geometry[screen];
+        self.snap_to(hwnd, g, (zone, zone), g.zones[zone], None);
+        Ok(())
+    }
+}

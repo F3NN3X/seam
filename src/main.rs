@@ -19,6 +19,10 @@ mod hook;
 mod identify;
 #[cfg(windows)]
 mod overlay;
+#[cfg(windows)]
+mod snap;
+#[cfg(windows)]
+mod zone_paint;
 
 #[cfg(windows)]
 fn main() {

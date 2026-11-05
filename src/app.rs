@@ -8,11 +8,14 @@ use crate::layout::{Link, Live};
 use crate::log;
 use crate::monitors::{self, Mon};
 use crate::snap::{self, WM_APP_REFIT, WM_APP_SNAP_BLOCKED};
+use crate::switcher::{self, CaptureJob, Screen as SwitchScreen, SwitchJob, WM_APP_CAPTURED, WM_APP_SWITCHED};
 use crate::tray::{self, CLASS, WM_APP_API, WM_APP_LINEUP};
 use crate::{arrange, ease, hotkey, identify, overlay};
 use seam::api::{self, Client, Command, Reply, RpcError};
 use seam::config::TrayClick;
-use seam::state::{self, AlignResult, DeskRef, HotkeyError, Remap, Screen, Snapshot, State, UpdateState};
+use seam::state::{self, AlignResult, DeskRef, HotkeyError, Remap, Screen, Snapshot, State, UpdateState, WorkspaceRef};
+use seam::workspace::{self, Workspace};
+use seam::zones;
 use seam::{autostart, package, process, updates};
 use serde_json::{json, Value};
 use std::cell::RefCell;
@@ -65,12 +68,17 @@ const HOTKEY_LINE_UP: i32 = 1;
 const HOTKEY_PAUSE: i32 = 2;
 const HOTKEY_NEXT_ZONE: i32 = 3;
 const HOTKEY_PREV_ZONE: i32 = 4;
+const HOTKEY_CAPTURE: i32 = 5;
+/// One hotkey id per workspace on the desk, from here up.
+const HOTKEY_WORKSPACE: i32 = 100;
 const NIN_KEYSELECT: u32 = NIN_SELECT | NINF_KEY;
 
 const ID_LINEUP: usize = 1;
 const ID_ENABLED: usize = 2;
 const ID_OPEN: usize = 6;
 const ID_QUIT: usize = 9;
+/// Menu ids of the workspaces in the submenu, from here up.
+const ID_WORKSPACE: usize = 100;
 
 /// What clicking a balloon does.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -107,6 +115,17 @@ impl Saver {
     }
 }
 
+/// A `workspace.capture` running on a worker.
+struct Capturing {
+    /// The API client waiting for the id. A hotkey has none.
+    reply: Option<Sender<Reply>>,
+    name: Option<String>,
+    /// The workspace to overwrite, if this is "Update from screen".
+    into: Option<String>,
+    /// The desk it was started on.
+    sig: String,
+}
+
 /// An `arrangement.align` running on a worker.
 struct Aligning {
     reply: Sender<Reply>,
@@ -130,8 +149,11 @@ struct App {
     /// Lets the panel prove it's the one the tray started.
     token: String,
     hotkey_errors: Vec<HotkeyError>,
-    /// The shortcuts registered now, to skip work when they haven't changed.
-    bound: [Option<String>; 4],
+    /// The shortcuts registered now (id, action, combo), to skip work when they haven't changed.
+    bound: Vec<(i32, String, Option<String>)>,
+    /// The workspace last switched to, if it's still on this desk.
+    workspace: Option<String>,
+    capturing: Option<Capturing>,
     clients: Vec<String>,
     last_state_event: Option<Instant>,
     /// The Store copy: Windows updates it, so the updater stays off.
@@ -300,6 +322,9 @@ fn refresh(app: &mut App) {
     if arrived {
         desk::note_active(&mut app.cfg, &app.sig, &app.mons, unix_now());
         persist(app);
+        // Workspaces and their shortcuts belong to the desk.
+        app.workspace = None;
+        apply_hotkeys(app);
     }
     relink(app);
     // New set of screens that's never been lined up: ask once. Only mark it
@@ -329,7 +354,12 @@ fn snapshot(app: &App) -> Snapshot {
         primary: m.primary,
     });
     let saved_name = app.cfg.desks.get(&app.sig).map(|d| d.name.clone()).filter(|n| !n.is_empty());
+    let workspace = app.workspace.as_ref().and_then(|id| {
+        let saved = app.cfg.desks.get(&app.sig)?;
+        workspace::list(&saved.workspaces).into_iter().find(|w| w.id == *id)
+    });
     let state = State {
+        workspace: workspace.map(|w| WorkspaceRef { id: w.id, name: w.name }),
         seam_version: env!("CARGO_PKG_VERSION").into(),
         packaged: app.packaged,
         update: app.update.clone(),
@@ -341,7 +371,6 @@ fn snapshot(app: &App) -> Snapshot {
         hotkey_errors: app.hotkey_errors.clone(),
         last_align: app.last_align.clone(),
         clients: app.clients.clone(),
-        ..State::default()
     };
     Snapshot { state, config: serde_json::to_value(&app.cfg).unwrap_or_default() }
 }
@@ -365,33 +394,161 @@ fn send_state_event(app: &mut App) {
     api_server::broadcast("state.changed", &state);
 }
 
+/// The workspaces saved for the desk that is connected.
+fn desk_workspaces(app: &App) -> Vec<Workspace> {
+    app.cfg.desks.get(&app.sig).map(|d| workspace::list(&d.workspaces)).unwrap_or_default()
+}
+
 /// Register the shortcuts that changed. Windows refuses one another app holds.
 fn apply_hotkeys(app: &mut App) {
     let keys = &app.cfg.hotkeys;
-    let wanted = [keys.line_up.clone(), keys.pause.clone(), keys.next_zone.clone(), keys.prev_zone.clone()];
+    let mut wanted = vec![
+        (HOTKEY_LINE_UP, "line_up".to_string(), keys.line_up.clone()),
+        (HOTKEY_PAUSE, "pause".to_string(), keys.pause.clone()),
+        (HOTKEY_NEXT_ZONE, "next_zone".to_string(), keys.next_zone.clone()),
+        (HOTKEY_PREV_ZONE, "prev_zone".to_string(), keys.prev_zone.clone()),
+        (HOTKEY_CAPTURE, "capture_workspace".to_string(), keys.capture_workspace.clone()),
+    ];
+    for (id, ws) in (HOTKEY_WORKSPACE..).zip(desk_workspaces(app)) {
+        wanted.push((id, format!("workspace:{}", ws.id), ws.hotkey));
+    }
     if wanted == app.bound {
         return;
     }
     app.hotkey_errors.clear();
-    let slots = [
-        (HOTKEY_LINE_UP, "line_up"),
-        (HOTKEY_PAUSE, "pause"),
-        (HOTKEY_NEXT_ZONE, "next_zone"),
-        (HOTKEY_PREV_ZONE, "prev_zone"),
-    ];
-    for ((id, action), combo) in slots.into_iter().zip(&wanted) {
+    for (id, _, _) in &app.bound {
         unsafe {
-            let _ = UnregisterHotKey(Some(app.hwnd), id);
+            let _ = UnregisterHotKey(Some(app.hwnd), *id);
         }
+    }
+    for (id, action, combo) in &wanted {
         let Some(combo) = combo else { continue };
         let registered = hotkey::parse(combo)
-            .is_some_and(|c| unsafe { RegisterHotKey(Some(app.hwnd), id, HOT_KEY_MODIFIERS(c.mods), c.vk).is_ok() });
+            .is_some_and(|c| unsafe { RegisterHotKey(Some(app.hwnd), *id, HOT_KEY_MODIFIERS(c.mods), c.vk).is_ok() });
         if !registered {
             log::info!("hotkey {action} not registered: {combo}");
-            app.hotkey_errors.push(HotkeyError { action: action.into(), combo: combo.clone() });
+            app.hotkey_errors.push(HotkeyError { action: action.clone(), combo: combo.clone() });
         }
     }
     app.bound = wanted;
+}
+
+fn job_screens(app: &App) -> Vec<SwitchScreen> {
+    let desk = app.cfg.desks.get(&app.sig);
+    let screen = |m: &Mon| SwitchScreen {
+        id: m.id.clone(),
+        bounds: zones::Rect { x: m.rect.left, y: m.rect.top, w: m.rect.width(), h: m.rect.height() },
+        layout: desk.and_then(|d| d.zones.get(&m.id)).and_then(zones::layout_of),
+    };
+    app.mons.iter().map(screen).collect()
+}
+
+/// Start switching to a workspace on this desk. The worker does the rest and the
+/// result comes back as an event.
+fn start_switch(app: &mut App, id: Option<&str>, name: Option<&str>) -> Reply {
+    let found = desk_workspaces(app).into_iter().find(|w| match (id, name) {
+        (Some(id), _) => w.id == id,
+        (None, Some(name)) => w.name.eq_ignore_ascii_case(name),
+        (None, None) => false,
+    });
+    let Some(workspace) = found else {
+        return Err(RpcError::new(api::NOT_FOUND, "no such workspace on this desk"));
+    };
+    log::info!("switching to workspace {}", workspace.name);
+    // A hotkey gives the tray the right to take focus. For anyone else this is all it can do.
+    let _ = unsafe { AllowSetForegroundWindow(std::process::id()) };
+    let job = SwitchJob { owner: app.hwnd.0 as isize, workspace, screens: job_screens(app), gap: app.cfg.zones.gap };
+    if switcher::switch(job) {
+        Ok(json!({ "ok": true }))
+    } else {
+        refused("Couldn't start the switch")
+    }
+}
+
+/// A switch finished: say which workspace is in use, and how it went.
+fn switched(app: &mut App) {
+    let Some(done) = switcher::take_switched() else { return };
+    log::info!(
+        "workspace {}: {} launched, {} placed, {} skipped",
+        done.name,
+        done.launched,
+        done.placed,
+        done.skipped.len()
+    );
+    app.workspace = Some(done.id.clone());
+    publish(app);
+    let skipped: Vec<Value> =
+        done.skipped.iter().map(|(app, reason)| json!({ "app": app, "reason": reason })).collect();
+    let data = json!({
+        "id": done.id, "name": done.name, "launched": done.launched, "placed": done.placed, "skipped": skipped
+    });
+    api_server::broadcast("workspace.switched", &data);
+}
+
+/// Start capturing the windows on screen. Returns an answer only if it can't start.
+fn start_capture(
+    app: &mut App,
+    name: Option<String>,
+    into: Option<String>,
+    reply: Option<Sender<Reply>>,
+) -> Option<Reply> {
+    if app.capturing.is_some() {
+        return Some(busy("Already capturing"));
+    }
+    if into.as_ref().is_some_and(|into| !desk_workspaces(app).iter().any(|w| w.id == *into)) {
+        return Some(Err(RpcError::new(api::NOT_FOUND, "no such workspace on this desk")));
+    }
+    app.capturing = Some(Capturing { reply, name, into, sig: app.sig.clone() });
+    let job = CaptureJob { owner: app.hwnd.0 as isize, screens: job_screens(app), gap: app.cfg.zones.gap };
+    if switcher::capture(job) {
+        return None;
+    }
+    app.capturing = None;
+    Some(refused("Couldn't start the capture"))
+}
+
+/// A capture finished: save it as a new workspace, or over the one it was asked to update.
+fn captured(app: &mut App) {
+    let (Some(rules), Some(job)) = (switcher::take_captured(), app.capturing.take()) else { return };
+    let answer = |r: Reply| {
+        if let Some(tx) = &job.reply {
+            let _ = tx.send(r);
+        }
+    };
+    let Some(desk) = app.cfg.desks.get_mut(&job.sig) else { return answer(refused("That desk is gone")) };
+    let existing = workspace::list(&desk.workspaces);
+    let saved = match &job.into {
+        Some(into) => {
+            let Some(old) = existing.iter().find(|w| w.id == *into) else {
+                return answer(Err(RpcError::new(api::NOT_FOUND, "no such workspace on this desk")));
+            };
+            let windows = workspace::keep_launch_flags(old, rules);
+            let updated = Workspace { windows, ..old.clone() };
+            let same = |v: &&mut Value| workspace::parse(v).is_some_and(|w| w.id == *into);
+            if let Some(slot) = desk.workspaces.iter_mut().find(same) {
+                *slot = workspace::to_value(&updated);
+            }
+            updated
+        }
+        None => {
+            let names: Vec<String> = existing.iter().map(|w| w.name.clone()).collect();
+            let ids: Vec<String> = existing.iter().map(|w| w.id.clone()).collect();
+            let name = match job.name.as_deref().map(str::trim) {
+                Some(name) if !name.is_empty() => workspace::unique_name(name, &names),
+                _ => workspace::next_name(&names),
+            };
+            let created = Workspace { id: workspace::new_id(&ids), name, windows: rules, ..Workspace::default() };
+            desk.workspaces.push(workspace::to_value(&created));
+            created
+        }
+    };
+    persist(app);
+    publish(app);
+    if job.reply.is_some() {
+        return answer(Ok(json!({ "id": saved.id })));
+    }
+    let body = format!("{} windows saved as {}", saved.windows.len(), saved.name);
+    notify(app, "Workspace captured", &body, BalloonAction::OpenPanel("workspaces"));
 }
 
 fn set_remap(app: &mut App, on: bool) {
@@ -704,7 +861,13 @@ fn run_command(app: &mut App, queued: Queued) {
             Ok(()) => ok(),
             Err(why) => refused(why),
         },
-        Command::WorkspaceSwitch { .. } | Command::WorkspaceCapture { .. } => refused("Seam can't do that yet"),
+        Command::WorkspaceSwitch { id, name } => start_switch(app, id.as_deref(), name.as_deref()),
+        Command::WorkspaceCapture { name, into } => {
+            if let Some(refusal) = start_capture(app, name, into, Some(reply.clone())) {
+                let _ = reply.send(refusal);
+            }
+            return;
+        }
         // Answered on the client's own thread.
         _ => Err(RpcError::new(api::METHOD_NOT_FOUND, "not a tray command")),
     };
@@ -774,6 +937,24 @@ fn show_menu(app: &mut App) {
         let _ = AppendMenuW(menu, MF_SEPARATOR, 0, None);
         let _ = AppendMenuW(menu, MF_STRING, ID_OPEN, w!("Open Seam…"));
         let _ = AppendMenuW(menu, MF_STRING, ID_LINEUP, w!("Line Up Screens…"));
+        let workspaces = desk_workspaces(app);
+        // Only made when there is something to put in it, so no menu handle is dropped unused.
+        let submenu = if workspaces.is_empty() { None } else { CreatePopupMenu().ok() };
+        if let Some(submenu) = submenu {
+            let active = app.workspace.as_deref();
+            for (id, ws) in (ID_WORKSPACE..).zip(&workspaces) {
+                // A tab puts the shortcut at the right edge, and && is how a menu spells &.
+                let mut label = ws.name.replace('&', "&&");
+                if let Some(combo) = &ws.hotkey {
+                    label = format!("{label}\t{combo}");
+                }
+                let label: Vec<u16> = label.encode_utf16().chain(std::iter::once(0)).collect();
+                let _ = AppendMenuW(submenu, flag(active == Some(ws.id.as_str())), id, PCWSTR(label.as_ptr()));
+            }
+            if AppendMenuW(menu, MF_POPUP, submenu.0 as usize, w!("Workspaces")).is_err() {
+                let _ = DestroyMenu(submenu);
+            }
+        }
         let _ = AppendMenuW(menu, MF_SEPARATOR, 0, None);
         let _ = AppendMenuW(menu, flag(app.cfg.enabled), ID_ENABLED, w!("Remap pointer at borders"));
         let _ = AppendMenuW(menu, MF_SEPARATOR, 0, None);
@@ -791,6 +972,12 @@ fn show_menu(app: &mut App) {
                 open_panel(app, None);
             }
             ID_ENABLED => set_remap(app, !app.cfg.enabled),
+            id if id >= ID_WORKSPACE => {
+                let chosen = workspaces.get(id - ID_WORKSPACE).map(|w| w.id.clone());
+                if let Some(Err(e)) = chosen.map(|id| start_switch(app, Some(&id), None)) {
+                    log::info!("workspace menu: {}", e.message);
+                }
+            }
             ID_QUIT => {
                 // Close after this borrow ends so WM_DESTROY can clean up the icon.
                 let _ = PostMessageW(Some(hwnd), WM_CLOSE, WPARAM(0), LPARAM(0));
@@ -850,8 +1037,28 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                         log::info!("zone hotkey: {why}");
                     }
                 }
+                HOTKEY_CAPTURE => {
+                    with_app(|a| start_capture(a, None, None, None));
+                }
+                slot if slot >= HOTKEY_WORKSPACE => {
+                    with_app(|a| {
+                        let action = a.bound.iter().find(|(id, ..)| *id == slot).map(|(_, action, _)| action.clone());
+                        let id = action.as_deref().and_then(|action| action.strip_prefix("workspace:"));
+                        if let Some(Err(e)) = id.map(|id| start_switch(a, Some(id), None)) {
+                            log::info!("workspace hotkey: {}", e.message);
+                        }
+                    });
+                }
                 _ => {}
             }
+            LRESULT(0)
+        }
+        WM_APP_SWITCHED => {
+            with_app(switched);
+            LRESULT(0)
+        }
+        WM_APP_CAPTURED => {
+            with_app(captured);
             LRESULT(0)
         }
         WM_APP_API => {
@@ -1092,7 +1299,9 @@ pub fn run() {
             saver: Saver::start(),
             token: api_server::new_token().unwrap_or_default(),
             hotkey_errors: Vec::new(),
-            bound: [None, None, None, None],
+            bound: Vec::new(),
+            workspace: None,
+            capturing: None,
             clients: Vec::new(),
             last_state_event: None,
             packaged: package::is_packaged(),

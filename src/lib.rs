@@ -9,6 +9,7 @@ pub mod layout;
 pub mod log;
 pub mod state;
 pub mod updates;
+pub mod workspace;
 pub mod zones;
 
 #[cfg(windows)]

@@ -1,5 +1,6 @@
 //! Global shortcuts, and recording a new one.
 
+use crate::pages::workspaces;
 use crate::panel::Panel;
 use crate::theme::palette;
 use crate::ui::{self, card, keycaps, row_with, section};
@@ -31,24 +32,25 @@ fn types_characters(combo: &str) -> bool {
     combo.contains("Ctrl") && combo.contains("Alt") && !combo.contains("Shift") && printable
 }
 
-/// Every shortcut, so each row's buttons get an id of their own.
-const ACTIONS: [&str; 4] = ["line_up", "pause", "next_zone", "prev_zone"];
-
 fn stop_recording(panel: &mut Panel) {
     panel.recording = None;
     panel.recorder = None;
 }
 
-fn finish(panel: &mut Panel, action: &'static str, value: Value, window: &mut Window, cx: &mut Context<Panel>) {
+fn finish(panel: &mut Panel, action: &str, value: Value, window: &mut Window, cx: &mut Context<Panel>) {
     stop_recording(panel);
-    panel.hotkey_warning = value.as_str().is_some_and(types_characters).then_some(action);
-    panel.patch(json!({ "hotkeys": { action: value } }), window, cx);
+    panel.hotkey_warning = value.as_str().is_some_and(types_characters).then(|| action.to_string());
+    // A workspace's shortcut is saved with the workspace, the rest with the settings.
+    match action.strip_prefix("workspace:") {
+        Some(id) => workspaces::set_hotkey(panel, id, value.as_str().map(String::from), window, cx),
+        None => panel.patch(json!({ "hotkeys": { action: value } }), window, cx),
+    }
 }
 
 /// Listens ahead of every key binding, so Tab and Ctrl+C can be recorded too.
-fn start_recording(panel: &mut Panel, action: &'static str, cx: &mut Context<Panel>) {
+fn start_recording(panel: &mut Panel, action: String, cx: &mut Context<Panel>) {
     let view = cx.entity().downgrade();
-    panel.recording = Some(action);
+    panel.recording = Some(action.clone());
     panel.recorder = Some(cx.intercept_keystrokes(move |event, window, cx| {
         let key = event.keystroke.clone();
         if ["shift", "control", "alt", "platform", "function"].contains(&key.key.as_str()) {
@@ -58,10 +60,10 @@ fn start_recording(panel: &mut Panel, action: &'static str, cx: &mut Context<Pan
         let _ = view.update(cx, |panel, cx| {
             match key.key.as_str() {
                 "escape" => stop_recording(panel),
-                "backspace" => finish(panel, action, Value::Null, window, cx),
+                "backspace" => finish(panel, &action, Value::Null, window, cx),
                 _ => {
                     if let Some(combo) = combo_of(&key) {
-                        finish(panel, action, json!(combo), window, cx);
+                        finish(panel, &action, json!(combo), window, cx);
                     }
                 }
             }
@@ -71,16 +73,17 @@ fn start_recording(panel: &mut Panel, action: &'static str, cx: &mut Context<Pan
     cx.notify();
 }
 
+/// One row. `slot` numbers the row, so its buttons get ids of their own.
 fn shortcut_row(
     panel: &Panel,
-    title: &'static str,
-    action: &'static str,
+    title: String,
+    action: String,
     combo: Option<&String>,
+    slot: usize,
     cx: &mut Context<Panel>,
 ) -> AnyElement {
     let p = palette(cx);
-    let slot = ACTIONS.iter().position(|a| *a == action).unwrap_or_default();
-    if panel.recording == Some(action) {
+    if panel.recording.as_deref() == Some(action.as_str()) {
         let field = div()
             .flex()
             .items_center()
@@ -103,7 +106,7 @@ fn shortcut_row(
         |text: &'static str, color: Hsla| div().text_size(px(13.)).text_color(color).child(text).into_any_element();
     let about = if conflict {
         Some(note("Another app already uses this shortcut. Choose a different one", p.negative))
-    } else if panel.hotkey_warning == Some(action) {
+    } else if panel.hotkey_warning.as_deref() == Some(action.as_str()) {
         Some(note("Ctrl+Alt types characters on many keyboards. Add Shift", p.negative))
     } else {
         None
@@ -114,21 +117,32 @@ fn shortcut_row(
     };
     let label = if combo.is_some() { "Change" } else { "Record" };
     let button = ui::secondary(("change", slot), label, cx)
-        .on_click(cx.listener(move |panel, _, _, cx| start_recording(panel, action, cx)));
+        .on_click(cx.listener(move |panel, _, _, cx| start_recording(panel, action.clone(), cx)));
     row_with(title, about, div().flex().items_center().gap(px(16.)).child(keys).child(button))
 }
 
 pub fn render(panel: &mut Panel, _: &mut Window, cx: &mut Context<Panel>) -> impl IntoElement {
     let p = palette(cx);
     let keys = panel.config.hotkeys.clone();
+    let mut row = |title: &str, action: &str, combo: Option<&String>, slot: usize| {
+        shortcut_row(panel, title.to_string(), action.to_string(), combo, slot, cx)
+    };
     let rows = vec![
-        shortcut_row(panel, "Line up screens", "line_up", keys.line_up.as_ref(), cx),
-        shortcut_row(panel, "Pause or resume pointer remap", "pause", keys.pause.as_ref(), cx),
+        row("Line up screens", "line_up", keys.line_up.as_ref(), 0),
+        row("Pause or resume pointer remap", "pause", keys.pause.as_ref(), 1),
     ];
     let zone_rows = vec![
-        shortcut_row(panel, "Move window to next zone", "next_zone", keys.next_zone.as_ref(), cx),
-        shortcut_row(panel, "Move window to previous zone", "prev_zone", keys.prev_zone.as_ref(), cx),
+        row("Move window to next zone", "next_zone", keys.next_zone.as_ref(), 2),
+        row("Move window to previous zone", "prev_zone", keys.prev_zone.as_ref(), 3),
     ];
+    // One row for each workspace on this desk, then the capture shortcut.
+    let on_desk = workspaces::on_desk(panel);
+    let mut workspace_rows: Vec<AnyElement> = on_desk
+        .iter()
+        .enumerate()
+        .map(|(i, ws)| row(&ws.name, &format!("workspace:{}", ws.id), ws.hotkey.as_ref(), 10 + i))
+        .collect();
+    workspace_rows.push(row("Capture current windows", "capture_workspace", keys.capture_workspace.as_ref(), 4));
     div()
         .flex()
         .flex_col()
@@ -136,4 +150,5 @@ pub fn render(panel: &mut Panel, _: &mut Window, cx: &mut Context<Panel>) -> imp
         .child(ui::page_title("Shortcuts", "These work anywhere in Windows, even with this window closed", p))
         .child(section("Displays", card(rows, p), p))
         .child(section("Zones", card(zone_rows, p), p))
+        .child(section("Workspaces", card(workspace_rows, p), p))
 }

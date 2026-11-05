@@ -163,6 +163,43 @@ Snap a few windows first: a normal one on screen 1, a spanning one across two zo
 - [ ] **Restore size.** After a re-fit, drag a re-fitted window out of its zone. It still gets the size it had before it was first snapped.
 - [ ] **Hook timing.** Note `hook stats` before and after a re-fit run. `own max` doesn't change.
 
+## Workspaces
+
+Use the 4-screen desk with Priority zones on screen 1.
+
+- [ ] **Page.** Workspaces is in the sidebar with no "planned" note. With none saved on this desk it shows "No workspaces for <desk> yet" and a **Capture current windows** button.
+- [ ] **Capture.** Open Windows Terminal (packaged), Notepad or another Win32 app, and Discord (Squirrel). Put them in zones and press **Capture current windows**. A workspace named "Workspace 1" is selected with its name field open and focused. Type a name and press Enter. The table lists the three apps with the right screen and zone, the tray's own windows and the Seam window are not in it, and `config.json` holds the workspace under `desks[...].workspaces`.
+- [ ] **Switch from closed.** Close all three apps and press **Switch now**. Each starts (Terminal and Discord through their AUMID), lands in its zone, and the card says "in use". `workspace.switched` has `launched` 3.
+- [ ] **Two Firefox windows.** Capture two Firefox windows in different zones, close them, switch. Each lands in its own zone.
+- [ ] **Maximized.** Capture a maximized window, switch. It comes back maximized on its screen, and un-maximizing gives its saved normal size.
+- [ ] **Other windows.** Set **Leave**: nothing else changes. Set **Minimize**: other windows on this desk's screens minimize, and the Seam window doesn't. Set **Close** with an unsaved Notepad document: Notepad asks to save and nothing else is closed.
+- [ ] **Unticked app.** Untick Launch on an app, close it, switch. It isn't started, and nothing is reported as an error.
+- [ ] **Hung app.** Switch while an app is hung. Seam stays responsive, the other windows still land, and the log's hook timing line doesn't move.
+- [ ] **Newer switch wins.** Switch to one workspace, then another straight away. The second one finishes and only it is "in use".
+- [ ] **Hotkeys.** On Shortcuts, give each workspace a shortcut (Ctrl+Shift+Alt+1, +2). Both work with the Seam window closed, and the tray submenu shows them at the right.
+- [ ] **Conflict.** Give two workspaces the same shortcut. The second shows the red keycaps and the conflict line, and `hotkey_errors` has `workspace:<id>`.
+- [ ] **Capture shortcut.** Set one for **Capture current windows** and press it. A balloon says it saved, and clicking it opens Workspaces.
+- [ ] **Tray submenu.** The tray menu has **Workspaces** with the workspaces of this desk and a check on the active one. On a desk with none it isn't there. Choose one, and it switches.
+- [ ] **Edit.** Change an app's **Goes to** to another zone, to "full" and to "Keep where it is", then switch. Each does what it says. Change **Other windows** and **Start missing apps**: both stay after reopening the window.
+- [ ] **Update from screen.** Move windows, press **Update from screen**. The table follows, and an app whose Launch box was off keeps it off.
+- [ ] **Rename and delete.** The **...** menu's Rename opens the name field. Delete removes the workspace at once and Undo, within 8 s, brings it back.
+- [ ] **Full path.** Hover an app's name in the table. A tooltip shows the full path of the program that will run.
+- [ ] **Export and import.** Export a workspace on the home desk. On "Laptop only", import it: windows map by number or model, and any that match nothing say "Screen not connected" and stay where they are. A workspace with the same name gets " 2".
+- [ ] **Import is untrusted.** After an import every Launch box is empty and **Start missing apps** is off. Edit the file so one rule's `exe` is `\\server\share\tool.exe` and another's is `C:\Windows\notepad.txt`, and set an `aumid` of `a b;c`. After import those three values are empty. Tick Launch and Start missing apps by hand and switch: nothing starts for them.
+- [ ] **Network path refused.** In `config.json`, give a rule of a saved workspace the `exe` `\\server\share\tool.exe` (no `aumid`) and switch with that app closed. Nothing runs, and `workspace.switched` lists it in `skipped` with the reason `refused`.
+- [ ] **Only drive-letter programs.** In `config.json`, try these `exe` values on a rule with no `aumid`, one at a time, with the app closed, and switch: `/\server\share\x.exe`, `\/server\share\x.exe`, `C:/Tools/x.exe`, `cmd.exe`, `..\x.exe`, `C:x.exe`, `\\?\C:\Tools\x.exe`. Each is refused (`skipped` says `refused`) and nothing runs. A real `C:\...\x.exe` starts. An `.exe` on a mapped network drive (for example `Z:\x.exe`) is refused too.
+- [ ] **Import can't arm Other windows.** Export a workspace set to **Close**, import it: **Other windows** reads **Leave**.
+- [ ] **Nothing matched.** Set **Close** (or **Minimize**) on a workspace whose apps are all closed and none ticked to launch, then switch. No window is closed or minimized, and `skipped` has "Other windows" with `nothing matched`.
+- [ ] **Late windows are left alone.** With **Close**, switch to a workspace that starts an app with a splash screen or an updater window (Discord). The app's main window stays open when it appears after the splash, and the app's own dialogs aren't closed.
+- [ ] **Switch while launching.** Switch to a workspace that starts a slow app, then pick another workspace holding the same app within a few seconds. The app is started once, and the second switch places its window.
+- [ ] **Already in place.** Switch twice in a row. The second time `skipped` is empty and `placed` counts every window.
+- [ ] **Re-fit after a switch.** With **Keep windows in their zones** on, snap a window to zone 2, switch to a workspace that puts it in zone 3, then change the scaling. The window stays in zone 3.
+- [ ] **Wild rect.** Give a rule `"target": {"rect": [1e9, 1e9, 1e9, 1e9]}` and switch. The window ends up on screen at a sane size.
+- [ ] **No leaked menu.** Open the tray menu 50 times on a desk with no workspaces. The tray's USER object count in Task Manager doesn't climb.
+- [ ] **Steam.** A rule whose `exe` is under `steamapps\` is never started, and is skipped with `steam game`.
+- [ ] **Desk change.** Unplug to "Laptop only". That desk has its own workspaces and shortcuts, and the old shortcuts stop working. Plug back in and they return.
+- [ ] **API.** With a test client, `workspaces.list` returns the workspaces, `workspace.switch` with `{"name":"coding"}` (any case) starts a switch and a subscribed client gets `workspace.switched`, and an unknown name gets error 1. `workspace.capture` with `{"name":"From API"}` returns an id, and with `into` overwrites that workspace.
+
 ## Settings panel
 
 - [ ] **Open.** Choose **Open Seam…** in the tray menu. The panel opens in your Windows theme on the last page you used, and the sidebar shows the current remap state.

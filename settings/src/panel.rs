@@ -33,7 +33,6 @@ const CONTEXT: &str = "SeamPanel";
 pub enum Page {
     Displays,
     Zones,
-    #[cfg(feature = "preview")]
     Workspaces,
     Shortcuts,
     General,
@@ -45,7 +44,6 @@ impl Page {
         match self {
             Page::Displays => "Displays",
             Page::Zones => "Zones",
-            #[cfg(feature = "preview")]
             Page::Workspaces => "Workspaces",
             Page::Shortcuts => "Shortcuts",
             Page::General => "General",
@@ -57,7 +55,6 @@ impl Page {
         match self {
             Page::Displays => assets::IconName::Monitor,
             Page::Zones => assets::IconName::LayoutGrid,
-            #[cfg(feature = "preview")]
             Page::Workspaces => assets::IconName::Layers,
             Page::Shortcuts => assets::IconName::Keyboard,
             Page::General => assets::IconName::SlidersHorizontal,
@@ -66,18 +63,13 @@ impl Page {
     }
 
     pub fn from_arg(arg: &str) -> Option<Page> {
-        [Page::Displays, Page::Zones, Page::Shortcuts, Page::General, Page::About]
+        [Page::Displays, Page::Zones, Page::Workspaces, Page::Shortcuts, Page::General, Page::About]
             .into_iter()
             .find(|p| p.title().eq_ignore_ascii_case(arg))
     }
 
     fn top_group() -> Vec<Page> {
-        vec![
-            Page::Displays,
-            Page::Zones,
-            #[cfg(feature = "preview")]
-            Page::Workspaces,
-        ]
+        vec![Page::Displays, Page::Zones, Page::Workspaces]
     }
 }
 
@@ -102,6 +94,13 @@ pub struct Panel {
     pub editor: Option<pages::zone_editor::Editor>,
     /// The editor's window on the real screen, while it's open.
     pub screen_window: Option<pages::screen_editor::Shown>,
+    /// The workspace the Workspaces page shows, by id. `None` shows the first.
+    pub workspace: Option<String>,
+    /// The name field is open on the selected workspace.
+    pub naming: bool,
+    /// The name field should take focus when it next draws.
+    pub focus_name: bool,
+    pub name_input: Entity<InputState>,
     /// The Gap slider. It sends the new gap when it's let go.
     pub gap: Entity<SliderState>,
     pub search: Entity<InputState>,
@@ -109,10 +108,10 @@ pub struct Panel {
     focus: FocusHandle,
     pub query: SharedString,
     /// The shortcut being recorded, and what stops recording it.
-    pub recording: Option<&'static str>,
+    pub recording: Option<String>,
     pub recorder: Option<Subscription>,
     /// A shortcut that works but types characters on some keyboards.
-    pub hotkey_warning: Option<&'static str>,
+    pub hotkey_warning: Option<String>,
     pub toast_generation: u64,
     /// What the updater left in its state file, read when the tray says it changed.
     pub update_file: UpdateFile,
@@ -134,6 +133,7 @@ impl Panel {
         let saved = std::fs::read_to_string(last_page_file()).ok();
         let page = page.or(saved.and_then(|s| Page::from_arg(s.trim()))).unwrap_or(Page::Displays);
         let search = cx.new(|cx| InputState::new(window, cx).placeholder("Search"));
+        let name_input = cx.new(|cx| InputState::new(window, cx).placeholder("Workspace name"));
         let gap =
             cx.new(|_| SliderState::new().min(0.).max(32.).step(2.).default_value(Config::default().zones.gap as f32));
         let subscriptions = vec![
@@ -144,6 +144,11 @@ impl Panel {
                 }
                 SliderEvent::Release(value) => {
                     this.patch(json!({ "zones": { "gap": value.end() as u32 } }), window, cx);
+                }
+            }),
+            cx.subscribe_in(&name_input, window, |this, _, event: &InputEvent, window, cx| {
+                if matches!(event, InputEvent::PressEnter { .. } | InputEvent::Blur) {
+                    pages::workspaces::finish_naming(this, window, cx);
                 }
             }),
             cx.subscribe_in(&search, window, |this, input, event: &InputEvent, _, cx| {
@@ -183,6 +188,10 @@ impl Panel {
             zone_screen: 0,
             editor: None,
             screen_window: None,
+            workspace: None,
+            naming: false,
+            focus_name: false,
+            name_input,
             gap,
             search,
             focus,
@@ -398,7 +407,7 @@ impl Panel {
         });
     }
 
-    fn reload_config(&self, window: &mut Window, cx: &mut Context<Self>) {
+    pub fn reload_config(&self, window: &mut Window, cx: &mut Context<Self>) {
         self.call("config.get", json!({}), window, cx, |this, result, _, cx| {
             if let Some(config) = result.ok().and_then(|c| serde_json::from_value(c).ok()) {
                 this.config = config;
@@ -648,8 +657,7 @@ impl Render for Panel {
             match self.page {
                 Page::Displays => pages::displays::render(self, window, cx).into_any_element(),
                 Page::Zones => pages::zones::render(self, window, cx).into_any_element(),
-                #[cfg(feature = "preview")]
-                Page::Workspaces => ui::page_title(self.page.title(), "Planned", p).into_any_element(),
+                Page::Workspaces => pages::workspaces::render(self, window, cx).into_any_element(),
                 Page::Shortcuts => pages::shortcuts::render(self, window, cx).into_any_element(),
                 Page::General => pages::general::render(self, window, cx).into_any_element(),
                 Page::About => pages::about::render(self, window, cx).into_any_element(),

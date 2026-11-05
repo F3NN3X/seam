@@ -35,3 +35,6 @@ strip = true
 
 [profile.dev]
 panic = "abort"
+
+[dev-dependencies]
+proptest = "1.12.0"

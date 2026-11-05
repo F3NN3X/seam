@@ -8,6 +8,7 @@ use gpui_kit::component::{ActiveTheme, WindowExt};
 use gpui_kit::*;
 use seam::autostart;
 use seam::config::{Config, TrayClick};
+use seam::package::{self, Startup};
 use serde_json::json;
 use std::path::PathBuf;
 
@@ -80,8 +81,15 @@ fn confirm_import(panel: &Panel, next: Config, window: &mut Window, cx: &mut Con
 }
 
 fn open_folder() {
-    if let Some(dir) = Config::path().parent() {
-        let _ = std::process::Command::new("explorer").arg(dir).spawn();
+    let _ = std::process::Command::new("explorer").arg(package::settings_dir()).spawn();
+}
+
+/// Where the settings are. The Store copy's live in its package folder.
+fn folder_label() -> String {
+    let dir = package::settings_dir().display().to_string();
+    match std::env::var("LOCALAPPDATA") {
+        Ok(local) if package::is_packaged() => dir.replacen(&local, "%LOCALAPPDATA%", 1),
+        _ => r"%APPDATA%\Seam".to_string(),
     }
 }
 
@@ -95,15 +103,34 @@ pub fn render(panel: &mut Panel, window: &mut Window, cx: &mut Context<Panel>) -
         }
     };
 
-    let start_with_windows = switch("autostart", autostart::is_enabled(), window, cx, {
-        let view = view.clone();
-        move |on, _, cx| {
-            if let Ok(tray) = std::env::current_exe().map(|e| e.with_file_name("seam.exe")) {
-                autostart::set(on, &tray);
+    // The Store copy asks Windows, which can keep the task off. Until it
+    // answers, the switch can't be used.
+    let packaged = package::is_packaged();
+    let locked = packaged && panel.startup.is_none_or(Startup::locked);
+    let blocked = packaged && panel.startup.is_some_and(Startup::locked);
+    let start_on = if packaged { panel.startup.is_some_and(Startup::is_on) } else { autostart::is_enabled() };
+    let start_with_windows =
+        div().opacity(if locked { 0.5 } else { 1. }).child(switch("autostart", start_on, window, cx, {
+            let view = view.clone();
+            move |on, _, cx| {
+                if locked {
+                    return;
+                }
+                if packaged {
+                    view.update(cx, |panel, cx| panel.set_startup(on, cx));
+                    return;
+                }
+                if let Ok(tray) = std::env::current_exe().map(|e| e.with_file_name("seam.exe")) {
+                    autostart::set(on, &tray);
+                }
+                view.update(cx, |_, cx| cx.notify());
             }
-            view.update(cx, |_, cx| cx.notify());
-        }
-    });
+        }));
+    let start_about = if blocked {
+        "Turned off in Windows Settings, Startup apps"
+    } else {
+        "Seam waits in the tray after you sign in"
+    };
     let offer =
         switch("ask-new-desks", panel.config.ask_new_desks, window, cx, setter(|on| json!({ "ask_new_desks": on })));
     let selected = usize::from(panel.config.tray_click == TrayClick::LineUp);
@@ -135,7 +162,7 @@ pub fn render(panel: &mut Panel, window: &mut Window, cx: &mut Context<Panel>) -
         .font_weight(FontWeight::NORMAL)
         .text_size(px(13.))
         .text_color(p.secondary)
-        .child(r"%APPDATA%\Seam");
+        .child(folder_label());
 
     div()
         .flex()
@@ -146,12 +173,7 @@ pub fn render(panel: &mut Panel, window: &mut Window, cx: &mut Context<Panel>) -
             "Startup",
             card(
                 vec![
-                    row(
-                        "Start with Windows",
-                        Some("Seam waits in the tray after you sign in".into()),
-                        start_with_windows,
-                        p,
-                    ),
+                    row("Start with Windows", Some(start_about.into()), start_with_windows, p),
                     row(
                         "Offer to line up new screens",
                         Some("Asks once when screens Seam hasn't seen connect".into()),

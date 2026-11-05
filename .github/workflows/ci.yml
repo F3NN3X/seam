@@ -13,9 +13,19 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - uses: Swatinem/rust-cache@v2
+      - name: Both crates are on one version
+        shell: bash
+        run: |
+          a=$(grep -m1 '^version' Cargo.toml | cut -d'"' -f2)
+          b=$(grep -m1 '^version' settings/Cargo.toml | cut -d'"' -f2)
+          [ "$a" = "$b" ] || { echo "seam is $a but seam-settings is $b"; exit 1; }
+      # About and diagnostics show it. Local builds say "dev".
+      - name: Short build id
+        shell: bash
+        run: echo "SEAM_BUILD=${GITHUB_SHA::7}" >> "$GITHUB_ENV"
       - run: cargo fmt --all --check
-      - run: cargo clippy --workspace -- -D warnings
-      - run: cargo test
+      - run: cargo clippy --workspace --all-targets -- -D warnings
+      - run: cargo test --workspace
       - run: cargo build --release --workspace
       - uses: actions/upload-artifact@v7
         with:

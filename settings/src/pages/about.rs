@@ -1,11 +1,13 @@
-//! Version, help and diagnostics. Updates arrive with Phase 3.
+//! Version, updates, help and diagnostics.
 
+use crate::pages::updates;
 use crate::panel::Panel;
 use crate::theme::{palette, Palette};
 use crate::ui;
 use gpui_kit::component::notification::Notification;
 use gpui_kit::component::WindowExt;
 use gpui_kit::*;
+use seam::package;
 use seam::state::{BorderState, Remap, Zones};
 use seam::winver;
 
@@ -72,7 +74,7 @@ fn diagnostics(panel: &Panel) -> String {
     text
 }
 
-pub fn render(_: &mut Panel, _: &mut Window, cx: &mut Context<Panel>) -> impl IntoElement {
+pub fn render(panel: &mut Panel, window: &mut Window, cx: &mut Context<Panel>) -> impl IntoElement {
     let p = palette(cx);
     let header = div().flex().items_center().gap(px(16.)).child(mark(p)).child(ui::page_title(
         format!("Seam {}", env!("CARGO_PKG_VERSION")),
@@ -92,7 +94,16 @@ pub fn render(_: &mut Panel, _: &mut Window, cx: &mut Context<Panel>) -> impl In
     let source = ui::secondary("source", "Source on GitHub", cx).on_click(|_, _, cx| cx.open_url(REPO));
     let licenses = ui::secondary("licenses", "Licenses", cx)
         .on_click(|_, _, cx| cx.open_url(&format!("{REPO}/blob/main/LICENSE")));
-    div().flex().flex_col().gap(px(ui::SECTION_GAP)).child(header).child(ui::section(
+    let mut page = div().flex().flex_col().gap(px(ui::SECTION_GAP)).child(header);
+    if let Some(note) = updates::unsigned_note(cx) {
+        page = page.child(note);
+    }
+    if !package::is_packaged() {
+        if let Some(card) = updates::update_card(panel, cx) {
+            page = page.child(card);
+        }
+    }
+    page.child(updates::group(panel, window, cx)).child(ui::section(
         "Help",
         div()
             .flex()

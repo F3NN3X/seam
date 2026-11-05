@@ -11,25 +11,34 @@ use crate::tray::{self, CLASS, WM_APP_API, WM_APP_LINEUP};
 use crate::{arrange, ease, hotkey, identify, overlay};
 use seam::api::{self, Client, Command, Reply, RpcError};
 use seam::config::TrayClick;
-use seam::state::{self, AlignResult, DeskRef, HotkeyError, Remap, Screen, Snapshot, State};
+use seam::state::{self, AlignResult, DeskRef, HotkeyError, Remap, Screen, Snapshot, State, UpdateState};
+use seam::{autostart, package, process, updates};
 use serde_json::{json, Value};
 use std::cell::RefCell;
+use std::os::windows::process::CommandExt;
 use std::sync::mpsc::{channel, Sender};
+use std::sync::Mutex;
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use windows::core::{w, PCWSTR};
 use windows::Win32::Foundation::*;
 use windows::Win32::Graphics::Gdi::*;
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
+use windows::Win32::System::SystemInformation::GetTickCount;
 use windows::Win32::System::Threading::CreateMutexW;
 use windows::Win32::UI::HiDpi::{SetProcessDpiAwarenessContext, DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2};
-use windows::Win32::UI::Input::KeyboardAndMouse::{RegisterHotKey, UnregisterHotKey, HOT_KEY_MODIFIERS};
+use windows::Win32::UI::Input::KeyboardAndMouse::{
+    GetAsyncKeyState, GetLastInputInfo, RegisterHotKey, UnregisterHotKey, HOT_KEY_MODIFIERS, LASTINPUTINFO,
+    VIRTUAL_KEY, VK_LBUTTON, VK_RBUTTON,
+};
 use windows::Win32::UI::Shell::*;
 use windows::Win32::UI::WindowsAndMessaging::*;
 
 const WM_APP_TRAY: u32 = WM_APP + 1;
 /// A worker finished `arrangement.align`.
 const WM_APP_ALIGNED: u32 = WM_APP + 11;
+/// A worker read the updater's state file.
+const WM_APP_UPDATE: u32 = WM_APP + 13;
 const TIMER_REFRESH: usize = 1;
 /// Windows silently removes low-level hooks that ever time out, so re-arm periodically.
 const TIMER_REARM: usize = 2;
@@ -40,6 +49,17 @@ const TIMER_API: usize = 4;
 /// Sends a `state.changed` that came too soon after the last one.
 const TIMER_STATE: usize = 5;
 const STATE_EVENT_GAP: Duration = Duration::from_millis(100);
+/// Starts the update check, 2 minutes after launch and then every 24 hours.
+const TIMER_UPDATE: usize = 6;
+/// Retries an automatic install until the PC is idle.
+const TIMER_AUTO_INSTALL: usize = 7;
+const FIRST_UPDATE_CHECK_MS: u32 = 2 * 60 * 1000;
+const UPDATE_CHECK_EVERY_MS: u32 = 24 * 60 * 60 * 1000;
+const AUTO_INSTALL_RETRY_MS: u32 = 60 * 1000;
+const IDLE_BEFORE_INSTALL_MS: u32 = 2 * 60 * 1000;
+const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+/// How long the Store copy waits for a GitHub copy it asked to quit.
+const TAKE_OVER_WAIT_MS: u32 = 25_000;
 const HOTKEY_LINE_UP: i32 = 1;
 const HOTKEY_PAUSE: i32 = 2;
 const NIN_KEYSELECT: u32 = NIN_SELECT | NINF_KEY;
@@ -111,7 +131,26 @@ struct App {
     bound: [Option<String>; 2],
     clients: Vec<String>,
     last_state_event: Option<Instant>,
+    /// The Store copy: Windows updates it, so the updater stays off.
+    packaged: bool,
+    /// What the updater left in its state file.
+    update: Option<UpdateState>,
+    /// The version an automatic install was started for, so it runs once.
+    install_started: Option<String>,
+    /// The updater's last attempt ended in an error, so nothing installs by itself.
+    update_failed: bool,
 }
+
+/// What a worker found in the updater's state file.
+struct UpdateRead {
+    update: Option<UpdateState>,
+    failed: bool,
+    /// A new version, so say so.
+    announce: bool,
+}
+
+/// Hands the state file's contents from a worker to the main thread.
+static UPDATE_READ: Mutex<Option<UpdateRead>> = Mutex::new(None);
 
 thread_local! {
     static APP: RefCell<Option<App>> = const { RefCell::new(None) };
@@ -288,6 +327,8 @@ fn snapshot(app: &App) -> Snapshot {
     let saved_name = app.cfg.desks.get(&app.sig).map(|d| d.name.clone()).filter(|n| !n.is_empty());
     let state = State {
         seam_version: env!("CARGO_PKG_VERSION").into(),
+        packaged: app.packaged,
+        update: app.update.clone(),
         remap: Remap::of(app.cfg.enabled, app.links.len()),
         zones: if app.cfg.zones.enabled { state::Zones::On } else { state::Zones::Off },
         desk: DeskRef { sig: app.sig.clone(), name: saved_name.unwrap_or_else(|| desk::default_name(&app.mons)) },
@@ -415,6 +456,120 @@ fn tray_click(app: &mut App) {
     }
 }
 
+/// Start `seam-settings.exe` with no window, for the updater.
+fn run_settings(args: &[&str]) -> Option<std::process::Child> {
+    let panel = std::env::current_exe().ok()?.with_file_name("seam-settings.exe");
+    std::process::Command::new(panel).args(args).creation_flags(CREATE_NO_WINDOW).spawn().ok()
+}
+
+/// Read the updater's state file, then tell the main thread. Runs on a worker.
+fn read_update_file(hwnd: isize) {
+    let file = updates::read();
+    let current = env!("CARGO_PKG_VERSION");
+    let failed = file.error.is_some();
+    let available = file.available.filter(|v| v != current && updates::is_plain_version(v));
+    let update = available.map(|available| UpdateState { available, ready: file.ready });
+    let new = update.as_ref().filter(|u| u.ready && updates::notified().as_deref() != Some(u.available.as_str()));
+    let announce = new.is_some();
+    if let Some(new) = new {
+        updates::set_notified(&new.available);
+    }
+    // Two workers can finish before the main thread looks. Keep an announcement either found.
+    let mut slot = UPDATE_READ.lock().unwrap_or_else(|e| e.into_inner());
+    let announce = announce || slot.as_ref().is_some_and(|earlier| earlier.announce);
+    *slot = Some(UpdateRead { update, failed, announce });
+    drop(slot);
+    unsafe {
+        let _ = PostMessageW(Some(HWND(hwnd as *mut _)), WM_APP_UPDATE, WPARAM(0), LPARAM(0));
+    }
+}
+
+fn read_update_state(app: &App) {
+    let hwnd = app.hwnd.0 as isize;
+    let _ = std::thread::Builder::new().name("seam-update-state".into()).spawn(move || read_update_file(hwnd));
+}
+
+/// Run the check as its own process, so the tray never touches the network.
+fn check_for_updates(hwnd: HWND) {
+    let hwnd = hwnd.0 as isize;
+    let _ = std::thread::Builder::new().name("seam-update-check".into()).spawn(move || {
+        if let Some(mut check) = run_settings(&["--check-updates"]) {
+            let _ = check.wait();
+        }
+        read_update_file(hwnd);
+    });
+}
+
+/// The updater has news, or the file was read at start.
+fn update_read(app: &mut App) {
+    let Some(read) = UPDATE_READ.lock().unwrap_or_else(|e| e.into_inner()).take() else { return };
+    app.update = read.update;
+    app.update_failed = read.failed;
+    publish(app);
+    if let (true, Some(available)) = (read.announce, app.update.as_ref().map(|u| u.available.clone())) {
+        let body = format!("Seam {available} is ready to install");
+        notify(app, "Update ready", &body, BalloonAction::OpenPanel("about"));
+        api_server::broadcast("update.ready", &json!({ "version": available }));
+    }
+    arm_auto_install(app);
+}
+
+/// An automatic install is wanted, and the PC may not be idle yet.
+fn arm_auto_install(app: &App) {
+    let wanted = app.cfg.updates.auto_install && !app.packaged && !app.update_failed;
+    let ready = app.update.as_ref().filter(|u| u.ready && app.install_started.as_deref() != Some(&u.available));
+    if wanted && ready.is_some() {
+        unsafe { SetTimer(Some(app.hwnd), TIMER_AUTO_INSTALL, AUTO_INSTALL_RETRY_MS, None) };
+    }
+}
+
+/// No Line Up, no button held, and no input for 2 minutes.
+fn is_idle() -> bool {
+    if overlay::is_active() {
+        return false;
+    }
+    unsafe {
+        let held = |key: VIRTUAL_KEY| GetAsyncKeyState(i32::from(key.0)) < 0;
+        if held(VK_LBUTTON) || held(VK_RBUTTON) {
+            return false;
+        }
+        let mut last = LASTINPUTINFO { cbSize: size_of::<LASTINPUTINFO>() as u32, dwTime: 0 };
+        GetLastInputInfo(&mut last).as_bool() && GetTickCount().wrapping_sub(last.dwTime) >= IDLE_BEFORE_INSTALL_MS
+    }
+}
+
+/// Install a ready update once the PC is idle. The new tray says it updated.
+fn auto_install(app: &mut App) {
+    let version = app.update.as_ref().filter(|u| u.ready).map(|u| u.available.clone());
+    let Some(version) = version.filter(|v| app.install_started.as_ref() != Some(v) && !app.update_failed) else {
+        unsafe {
+            let _ = KillTimer(Some(app.hwnd), TIMER_AUTO_INSTALL);
+        }
+        return;
+    };
+    if !app.cfg.updates.auto_install || !is_idle() {
+        return;
+    }
+    unsafe {
+        let _ = KillTimer(Some(app.hwnd), TIMER_AUTO_INSTALL);
+    }
+    log::info!("installing {version} while idle");
+    app.install_started = Some(version.clone());
+    let _ = std::thread::Builder::new().name("seam-update-install".into()).spawn(move || {
+        run_settings(&["--install", &version]);
+    });
+}
+
+/// Delete what an update left behind. Best effort and silent.
+fn clean_up_after_update() {
+    if let Ok(exe) = std::env::current_exe() {
+        for name in ["seam.exe.old", "seam-settings.exe.old"] {
+            let _ = std::fs::remove_file(exe.with_file_name(name));
+        }
+    }
+    updates::clear();
+}
+
 fn refused(message: impl Into<String>) -> Reply {
     Err(RpcError::new(api::REFUSED, message))
 }
@@ -440,6 +595,7 @@ fn patch_config(app: &mut App, patch: &Value) -> Reply {
     apply_hotkeys(app);
     relink(app);
     publish(app);
+    arm_auto_install(app);
     Ok(json!({ "ok": true }))
 }
 
@@ -528,7 +684,11 @@ fn run_command(app: &mut App, queued: Queued) {
             }
             ok()
         }
-        Command::UpdateReady => ok(),
+        Command::UpdateReady if app.packaged => refused("The Store updates Seam"),
+        Command::UpdateReady => {
+            read_update_state(app);
+            ok()
+        }
         Command::WorkspaceSwitch { .. } | Command::WorkspaceCapture { .. } | Command::ZoneMove(_) => {
             refused("Seam can't do that yet")
         }
@@ -696,6 +856,21 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
             with_app(align_finished);
             LRESULT(0)
         }
+        WM_APP_UPDATE => {
+            with_app(update_read);
+            LRESULT(0)
+        }
+        WM_TIMER if wparam.0 == TIMER_UPDATE => {
+            SetTimer(Some(hwnd), TIMER_UPDATE, UPDATE_CHECK_EVERY_MS, None);
+            if with_app(|a| a.cfg.updates.auto_check).unwrap_or(false) {
+                check_for_updates(hwnd);
+            }
+            LRESULT(0)
+        }
+        WM_TIMER if wparam.0 == TIMER_AUTO_INSTALL => {
+            with_app(auto_install);
+            LRESULT(0)
+        }
         WM_APP_LINEUP => {
             with_app(start_lineup);
             LRESULT(0)
@@ -776,16 +951,33 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
     }
 }
 
-/// Seam is already running, so ask it to do what this launch was for.
-fn hand_over(line_up: bool) {
-    let Ok(mut client) = Client::connect("seam", None) else { return };
+/// Seam is already running, so ask it to do what this launch was for. The one
+/// exception is the Store copy meeting the GitHub copy: the Store copy wins, so
+/// it asks the other to quit and starts in its place. Returns whether to start.
+fn take_over(mut client: Client, line_up: bool) -> bool {
+    let info = client.call("app.info", Value::Null).ok();
+    let pid = info.as_ref().and_then(|i| i["pid"].as_u64()).and_then(|pid| u32::try_from(pid).ok());
+    let github_copy = info.as_ref().is_some_and(|i| i["packaged"] == false);
+    if package::is_packaged() && github_copy && client.call("app.quit", Value::Null).is_ok() {
+        // It was told to close, so it will, even if slowly. Wait for it, then
+        // start either way, so there's never no tray at all.
+        if let Some(pid) = pid {
+            process::wait_for_exit(pid, TAKE_OVER_WAIT_MS);
+        }
+        return true;
+    }
     // Hand over foreground rights so the window that opens gets the keyboard.
-    let info = client.call("app.info", Value::Null);
-    if let Some(pid) = info.ok().and_then(|i| i["pid"].as_u64()) {
-        let _ = unsafe { AllowSetForegroundWindow(pid as u32) };
+    if let Some(pid) = pid {
+        let _ = unsafe { AllowSetForegroundWindow(pid) };
     }
     let method = if line_up { "lineup.start" } else { "panel.open" };
     let _ = client.call(method, json!({}));
+    false
+}
+
+fn arg_after(flag: &str) -> Option<String> {
+    let args: Vec<String> = std::env::args().collect();
+    args.iter().position(|a| a == flag).and_then(|i| args.get(i + 1)).cloned()
 }
 
 pub fn run() {
@@ -793,14 +985,28 @@ pub fn run() {
         let _ = SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
 
         // One instance only. Launching again opens Seam in the running one.
-        let line_up = std::env::args().any(|a| a == "--line-up");
+        let has_flag = |flag: &str| std::env::args().any(|a| a == flag);
+        let line_up = has_flag("--line-up");
+        let updated_from = arg_after("--updated-from");
         let _mutex = CreateMutexW(None, true, w!("Local\\Seam.SingleInstance"));
-        if GetLastError() == ERROR_ALREADY_EXISTS {
-            hand_over(line_up);
+        let mutex_taken = GetLastError() == ERROR_ALREADY_EXISTS;
+        // The pipe name is shared by the Store and GitHub copies, so it also
+        // finds a Seam whose mutex this one can't see. A mutex alone means v0.1.
+        let carry_on = match Client::connect("seam", None) {
+            Ok(client) => take_over(client, line_up),
+            Err(_) => !mutex_taken,
+        };
+        if !carry_on {
             return;
         }
 
-        let cfg = Config::load();
+        // A Store copy's first run starts clean and offers the earlier settings in the panel.
+        let cfg = if package::first_run() {
+            package::stash_earlier_config();
+            Config::default()
+        } else {
+            Config::load()
+        };
         // After the instance check: only the running instance owns the log.
         log::apply(cfg.debug_log);
         log::info!("seam {} started", env!("CARGO_PKG_VERSION"));
@@ -850,6 +1056,10 @@ pub fn run() {
             bound: [None, None],
             clients: Vec::new(),
             last_state_event: None,
+            packaged: package::is_packaged(),
+            update: None,
+            install_started: None,
+            update_failed: false,
         };
         APP.with(|a| *a.borrow_mut() = Some(app));
         with_app(|a| {
@@ -859,6 +1069,26 @@ pub fn run() {
             api_server::start(a.hwnd.0 as isize, a.token.clone(), snapshot(a), a.cfg.api.enabled);
         });
         SetTimer(Some(hwnd), TIMER_REARM, 60_000, None);
+        if with_app(|a| a.packaged) == Some(false) {
+            SetTimer(Some(hwnd), TIMER_UPDATE, FIRST_UPDATE_CHECK_MS, None);
+            package::note_unpackaged_install();
+            if let Ok(tray) = std::env::current_exe() {
+                autostart::add_flag(&tray);
+            }
+            with_app(|a| read_update_state(a));
+        }
+        if let Some(from) = &updated_from {
+            log::info!("updated from {from}");
+            let _ = std::thread::Builder::new().name("seam-update-clean".into()).spawn(clean_up_after_update);
+            let body = format!("Updated to {}", env!("CARGO_PKG_VERSION"));
+            with_app(|a| notify(a, "Seam", &body, BalloonAction::None));
+        }
+        // A launch from the Start menu or by hand opens the window too. A
+        // sign-in launch, a restart after an update and a `--line-up` start don't.
+        let quiet = line_up || updated_from.is_some() || has_flag("--tray-only") || package::login_launch();
+        if !quiet {
+            with_app(|a| open_panel(a, None));
+        }
         if line_up {
             let _ = PostMessageW(Some(hwnd), WM_APP_LINEUP, WPARAM(0), LPARAM(0));
         }

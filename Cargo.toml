@@ -3,7 +3,7 @@ members = ["settings"]
 
 [package]
 name = "seam"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 description = "Line up your screens on Windows 11 so the pointer crosses where they physically meet."
 license = "MIT"
@@ -32,6 +32,11 @@ features = [
     "Win32_System_IO",
     "Win32_System_Pipes",
     "Win32_Devices_Display",
+    "Win32_Storage_Packaging_Appx",
+    "Win32_System_WinRT",
+    "ApplicationModel",
+    "ApplicationModel_Activation",
+    "Foundation",
 ]
 
 [profile.release]

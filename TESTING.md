@@ -101,6 +101,58 @@ Use a small client that opens `\\.\pipe\seam-<your username>` and writes one JSO
 - [ ] **About.** **Copy diagnostics** puts your version, Windows build, screens and borders on the clipboard, with no window titles or file paths.
 - [ ] **Panel missing.** Rename `seam-settings.exe`, choose **Open Seam…**. A balloon says it's unavailable and Seam keeps running. Rename it back.
 
+## Starting and signing in
+
+- [ ] **By hand.** Run `seam.exe` with nothing running. The tray icon appears and the Seam window opens.
+- [ ] **Sign-in.** Turn on **Start with Windows**, sign out and in. Seam is in the tray and no window opens. `HKCU\Software\Microsoft\Windows\CurrentVersion\Run` holds `"…\seam.exe" --autostart`.
+- [ ] **Run key from v0.1.** Put the old value, the quoted path alone, in that key. Start Seam. The value now ends in `--autostart`.
+- [ ] **Window from the panel.** Quit Seam, run `seam-settings.exe --page about`. The tray starts, and one window opens on About.
+- [ ] **`--line-up` and updates.** `seam.exe --line-up` opens Line Up and no window. A restart after an update opens no window either.
+
+## Updates (GitHub build)
+
+Needs the real minisign key in `SEAM_PUBLIC_KEY`, and a published pre-release on GitHub that's newer than the build under test. Cut `v0.2.1-beta.1` from a build with the key, mark it as a pre-release, and publish it. Test with a 0.2.0 build in a folder you can write to. Delete the pre-release afterwards.
+
+- [ ] **No key.** On a build with the placeholder key, **Check now** ends in "This build has no update key yet, so no update can be trusted", with **Try again**. Nothing is downloaded, and `%LOCALAPPDATA%\Seam\updates\state.json` holds the same text in `error`.
+- [ ] **Pre-releases off.** With **Include pre-releases** off, **Check now** says "Seam is up to date" and About shows no card.
+- [ ] **Check and download.** Turn on **Include pre-releases** and press **Check now**. The card shows "Checking for updates", then "Downloading Seam 0.2.1-beta.1" with a bar, "X of Y MB" and a "0 MB" to "Y MB" range, then "Seam 0.2.1-beta.1 is ready to install" with the date, size, notes and "signature checked". The About entry in the sidebar gets an amber dot.
+- [ ] **Notification.** A balloon says an update is ready, once. Click it and About opens. Quit and start Seam again: no second balloon for the same version.
+- [ ] **Daily check.** Leave **Check for updates every day** on. Two minutes after Seam starts, `state.json` has a new `last_checked`, with no window and no console flash. Turn it off, restart, and wait three minutes: it doesn't change.
+- [ ] **Bad download.** Change one byte of a file in `updates\<version>\` and press **Check now**. The folder is replaced and the check succeeds. Then publish a copy of the release with a broken `latest.json.minisig`: the check is refused with "The update's signature doesn't match Seam's key".
+- [ ] **Install and restart.** Press **Install and restart**. Seam closes and comes back on the new version with your borders, and a balloon says "Updated to 0.2.1-beta.1". A minute later no `seam.exe.old` or `updates` folder is left.
+- [ ] **Can't install here.** Put both exes in `C:\Program Files\Seam` and run from there with an update ready. **Install and restart** ends in "Can't install here" with **Download**, which opens the release page. Nothing changed.
+- [ ] **Rollback.** Make `seam-settings.exe` read-only and locked by another program, then install. Seam is back on the old version, the error is shown, and the tray is running.
+- [ ] **On their own.** Turn on **Install updates on their own**. While you use the PC nothing happens. Leave it alone for two minutes with an update ready, and Seam restarts on the new version with the balloon. With Line Up open, it waits.
+- [ ] **No network.** Turn Wi-Fi off and press **Check now**. About shows one line saying what happened, with **Try again**, and the remap keeps working.
+- [ ] **Hook timing.** Compare `hook stats` across a check and an install with a run without one. Own max stays well under 1000 µs.
+
+## Microsoft Store build
+
+Build and install a test package, from an elevated prompt the first time:
+
+```
+cargo build --release --workspace
+pwsh packaging\pack-msix.ps1 -Sign -Install
+```
+
+Quit any GitHub copy first, unless the step says otherwise.
+
+- [ ] **Identity.** About says "Updates come from the Microsoft Store" with **Open in Store**, which opens the Store's updates page. There's no update card and no **Check now**.
+- [ ] **Updater off.** `seam-settings.exe --check-updates` and `--install 0.0.0`, run from the package folder, exit at once with nothing downloaded. The tray makes no check after two minutes.
+- [ ] **Config survives.** Change a setting, quit Seam, start it again. The setting is kept.
+- [ ] **Log and folder.** Turn on **Debug log**. `seam.log` is written. **Open** shows the folder under `%LOCALAPPDATA%\Packages\…\LocalCache\Roaming\Seam`, which holds `config.json` and `seam.log`. The path under the button is that one.
+- [ ] **Ease setting.** Turn **Ease cursor movement between displays** off and on in Windows. Displays shows the right state each time.
+- [ ] **Align arrangement.** **Align arrangement** changes the Windows arrangement from inside the package, or refuses with the same reason as the GitHub build.
+- [ ] **Elevated windows.** Run an elevated window on a screen and move the pointer across a border with the remap on. The pointer crosses and nothing crashes. With zones on, a Shift-drag over the elevated window doesn't move it.
+- [ ] **Shortcuts.** Ctrl+Shift+Alt+L and Ctrl+Shift+Alt+P work.
+- [ ] **Start with Windows.** The switch turns the startup task on, and Windows Settings, Startup apps lists Seam as on. Sign out and in: Seam is in the tray with no window. Start it from the Start menu: the tray and the window both open.
+- [ ] **Turned off in Windows.** Turn Seam off in Windows Settings, Startup apps. General shows "Turned off in Windows Settings, Startup apps" under the switch, and the switch can't be used. Turn it back on there and reopen the window.
+- [ ] **Reboot.** Restart the PC with **Start with Windows** on. Seam is in the tray with no window.
+- [ ] **Both installed.** With the test package installed, start the GitHub `seam.exe` from a folder. It hands over and exits, and the packaged Seam's window opens. Then quit Seam, start the GitHub copy, and start the packaged one from the Start menu. The GitHub copy quits, the packaged copy runs, and there's one tray icon.
+- [ ] **Two-copies note.** While the GitHub copy's Run key or its exe is still there, the packaged window shows "Seam is installed twice. Uninstall the GitHub version to keep the Store one" on every page. Delete the GitHub copy and clear its Run key, and the note goes.
+- [ ] **Import.** With a GitHub `config.json` in `%APPDATA%\Seam` and no package config (uninstall the package to clear it), start the packaged Seam. It starts with default settings, and the window shows "Import settings from your earlier Seam". **Import** brings the old settings in. Reopen the window: no offer. If the offer never shows, the package can't read `%APPDATA%\Seam`, which needs a decision.
+- [ ] **Uninstall.** Remove the package. Seam leaves the tray, and the GitHub copy still starts.
+
 ## Reconnecting and sleep
 
 - [ ] **Unplug a screen.** Unplug the U3477. The log shows `display change`, then `no saved layout for these screens`. The other screens behave as plain Windows.

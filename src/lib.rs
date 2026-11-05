@@ -8,6 +8,7 @@ pub mod hotkey;
 pub mod layout;
 pub mod log;
 pub mod state;
+pub mod updates;
 
 #[cfg(windows)]
 pub mod autostart;
@@ -15,6 +16,10 @@ pub mod autostart;
 pub mod ease;
 #[cfg(windows)]
 pub mod monitors;
+#[cfg(windows)]
+pub mod package;
+#[cfg(windows)]
+pub mod process;
 #[cfg(windows)]
 pub mod tray;
 #[cfg(windows)]

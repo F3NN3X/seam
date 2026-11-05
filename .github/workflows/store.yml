@@ -1,0 +1,86 @@
+# Uploads a Microsoft Store DRAFT with the msstore CLI, then commits it to
+# certification. Both the upload and the commit wait for approval through the
+# `store` environment. Going live stays a manual "Publish now" in Partner
+# Center. The first submission can't be automated, so run this from the second
+# release on. The secrets live in the `store` environment only. Setting them up
+# is in packaging/README.md.
+name: Store
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to package (must match Cargo.toml, e.g. 0.2.1)"
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  pack:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Short build id
+        shell: bash
+        run: echo "SEAM_BUILD=${GITHUB_SHA::7}" >> "$GITHUB_ENV"
+      - run: cargo build --release --workspace
+      - name: Pack the unsigned -store.msix
+        shell: pwsh
+        env:
+          EXPECT_VERSION: ${{ inputs.version }}
+        run: ./packaging/pack-msix.ps1 -ExpectVersion $env:EXPECT_VERSION
+      - uses: actions/upload-artifact@v7
+        with:
+          name: store-msix
+          path: dist/*-store.msix
+          if-no-files-found: error
+
+  upload:
+    needs: pack
+    runs-on: windows-latest
+    environment: store # approval 1 of 2
+    steps:
+      - uses: actions/download-artifact@v7
+        with:
+          name: store-msix
+          path: dist
+      - name: Set up msstore
+        uses: microsoft/microsoft-store-apppublisher@15abd1c50fcc164b19cb240fb04ef3c49bf715a2 # v1.1
+      - name: Configure msstore
+        shell: pwsh
+        env:
+          TENANT_ID: ${{ secrets.PARTNER_CENTER_TENANT_ID }}
+          SELLER_ID: ${{ secrets.PARTNER_CENTER_SELLER_ID }}
+          CLIENT_ID: ${{ secrets.PARTNER_CENTER_CLIENT_ID }}
+          CLIENT_SECRET: ${{ secrets.PARTNER_CENTER_CLIENT_SECRET }}
+        run: msstore reconfigure --tenantId "$env:TENANT_ID" --sellerId "$env:SELLER_ID" --clientId "$env:CLIENT_ID" --clientSecret "$env:CLIENT_SECRET"
+      - name: Upload as a draft, without committing
+        shell: pwsh
+        env:
+          STORE_APP_ID: ${{ vars.STORE_APP_ID }}
+        run: |
+          $msix = Get-ChildItem dist/*-store.msix | Select-Object -First 1
+          msstore publish $msix.FullName --appId "$env:STORE_APP_ID" --noCommit
+          msstore submission status "$env:STORE_APP_ID"
+
+  commit:
+    needs: upload
+    runs-on: windows-latest
+    environment: store # approval 2 of 2, after looking at the draft. Never edit it in the web UI
+    steps:
+      - name: Set up msstore
+        uses: microsoft/microsoft-store-apppublisher@15abd1c50fcc164b19cb240fb04ef3c49bf715a2 # v1.1
+      - name: Configure msstore
+        shell: pwsh
+        env:
+          TENANT_ID: ${{ secrets.PARTNER_CENTER_TENANT_ID }}
+          SELLER_ID: ${{ secrets.PARTNER_CENTER_SELLER_ID }}
+          CLIENT_ID: ${{ secrets.PARTNER_CENTER_CLIENT_ID }}
+          CLIENT_SECRET: ${{ secrets.PARTNER_CENTER_CLIENT_SECRET }}
+        run: msstore reconfigure --tenantId "$env:TENANT_ID" --sellerId "$env:SELLER_ID" --clientId "$env:CLIENT_ID" --clientSecret "$env:CLIENT_SECRET"
+      - name: Commit to certification
+        shell: pwsh
+        env:
+          STORE_APP_ID: ${{ vars.STORE_APP_ID }}
+        run: msstore submission publish "$env:STORE_APP_ID"

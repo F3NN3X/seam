@@ -402,6 +402,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
             LRESULT(1)
         }
         WM_TIMER if wparam.0 == TIMER_REARM => {
+            hook::log_stats();
             if !overlay::is_active() {
                 with_app(|a| arm_hook(a));
             }

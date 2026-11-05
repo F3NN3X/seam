@@ -79,7 +79,7 @@ Set the mouse to its highest rate, up to 8 kHz.
 powershell -c "(Select-String 'hook ([0-9.]+)us' $env:APPDATA\Seam\seam.log).Matches | % { [double]$_.Groups[1].Value } | Measure-Object -Maximum -Average"
 ```
 
-Only remaps are timed. A move that stays on one screen isn't logged, so this figure doesn't cover that path.
+- [ ] **Every event.** The log writes a `hook stats` line once a minute, covering all mouse events. `max` should stay well under 1000 µs while `events` shows your polling rate is reaching the hook.
 
 ## Ease cursor movement off
 

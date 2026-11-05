@@ -11,6 +11,8 @@ use windows::Win32::UI::WindowsAndMessaging::*;
 thread_local! {
     static LIVE: RefCell<Live> = RefCell::new(Live::default());
     static HOOK: Cell<Option<HHOOK>> = const { Cell::new(None) };
+    /// Events, total ns and slowest ns since the last `log_stats`. Only updated while logging.
+    static STATS: Cell<(u64, u64, u64)> = const { Cell::new((0, 0, 0)) };
 }
 
 pub fn set_live(live: Live) {
@@ -56,6 +58,29 @@ fn cursor_is_confined(live: &Live) -> bool {
 }
 
 unsafe extern "system" fn ll_proc(code: i32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
+    if !log::enabled() {
+        return on_mouse(code, wparam, lparam);
+    }
+    let started = Instant::now();
+    let res = on_mouse(code, wparam, lparam);
+    let ns = started.elapsed().as_nanos() as u64;
+    STATS.with(|s| {
+        let (events, total, max) = s.get();
+        s.set((events + 1, total + ns, max.max(ns)));
+    });
+    res
+}
+
+/// Log the hook's timing since the last call. Covers every event, not just remaps.
+pub fn log_stats() {
+    let (events, total, max) = STATS.with(Cell::take);
+    if events > 0 {
+        let avg = total as f64 / events as f64 / 1e3;
+        log::info!("hook stats: {events} events, avg {avg:.1}us, max {:.1}us", max as f64 / 1e3);
+    }
+}
+
+unsafe fn on_mouse(code: i32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
     if code == HC_ACTION as i32 && wparam.0 as u32 == WM_MOUSEMOVE {
         let info = &*(lparam.0 as *const MSLLHOOKSTRUCT);
         // Leave injected input (remote desktop, automation, our own moves) alone.

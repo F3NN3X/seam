@@ -227,12 +227,15 @@ pub fn remap_crossing(
     overshoot: i32,
 ) -> Option<(i32, i32)> {
     let a_rel = along_abs - a.along_origin(side) as f64;
-    let b_rel = m.apply(a_rel).round();
-    let len_b = b.along_len(side) as f64;
-    if b_rel < 0.0 || b_rel > len_b - 1.0 {
+    let raw = m.apply(a_rel);
+    let last = b.along_len(side) as f64 - 1.0;
+    // One source pixel spans `s` pixels here, so a pointer that came in by
+    // rounding can sit half of one past the edge on its way back.
+    let slack = 0.5 * m.s.max(1.0) + 1e-9;
+    if !(raw >= -slack && raw <= last + slack) {
         return None;
     }
-    let along_b = b.along_origin(side) + b_rel as i32;
+    let along_b = b.along_origin(side) + raw.round().clamp(0.0, last) as i32;
     let over = overshoot.max(0);
     Some(match side {
         Side::Right => ((b.left + over).min(b.right - 1), along_b),

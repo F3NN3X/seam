@@ -277,7 +277,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "bug: rounding past the last row loses the way back"]
     fn round_trip_from_the_last_row_finds_its_way_back() {
         let a = Rect::new(0, 0, 1000, 1000);
         let b = Rect::new(1000, 0, 1000, 1000);
@@ -291,7 +290,6 @@ mod tests {
 
     proptest! {
         #[test]
-        #[ignore = "bug: rounding past the last row loses the way back"]
         fn round_trip_returns_within_a_pixel(
             side in prop::sample::select(&SIDES[..]),
             len_a in 200..5000i32,

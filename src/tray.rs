@@ -8,16 +8,8 @@ use windows::Win32::UI::WindowsAndMessaging::*;
 pub const CLASS: PCWSTR = w!("SeamTray");
 pub const WM_APP_LINEUP: u32 = WM_APP + 3;
 pub const WM_APP_RELOAD: u32 = WM_APP + 4;
-/// Unhook, remove the tray icon and exit. Sent by the updater.
-pub const WM_APP_QUIT: u32 = WM_APP + 5;
-/// Run `arrange::align`; the result goes to `status.json`.
-pub const WM_APP_ALIGN: u32 = WM_APP + 6;
-/// Show the number of the monitor at index `wParam` for 1.5 s.
-pub const WM_APP_IDENTIFY: u32 = WM_APP + 7;
-/// Switch to the workspace at index `wParam`.
-pub const WM_APP_SWITCH: u32 = WM_APP + 8;
-/// `--check-updates` finished with an update ready to install.
-pub const WM_APP_UPDATE_READY: u32 = WM_APP + 9;
+/// Wakes the main thread to drain the API command queue.
+pub const WM_APP_API: u32 = WM_APP + 5;
 pub const PANEL_TITLE: &str = "Seam Settings";
 
 /// Ask the running tray app, if any, to reread config.json.

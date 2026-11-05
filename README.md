@@ -8,7 +8,7 @@ This is a Windows take on [Shim](https://screenshim.app/) for macOS, with one ad
 
 1. In **Settings → System → Display → Multiple displays**, turn on **Ease cursor movement between displays**. Seam relies on it so the pointer can always leave a screen toward its neighbour, and warns you if it's off.
 2. Run `seam.exe`. It lives in the tray. On a new set of screens it asks once.
-3. Click the tray icon, or choose **Line Up Screens…** in its menu. A full-screen overlay opens on every monitor, with big numbers so you know which screen is which.
+3. Choose **Line Up Screens…** in the tray menu, or press Ctrl+Shift+Alt+L. A full-screen overlay opens on every monitor, with big numbers so you know which screen is which.
 4. For each border, the reference screen shows two coloured lines. On the neighbouring screen, drag the matching lines until each one runs straight across the bezel:
    - **Grab a line** to move just that line. This sets the scale.
    - **Drag anywhere else** to move both lines. This sets the height.
@@ -20,14 +20,20 @@ When you finish, Seam saves the layout for that exact set of screens and turns o
 
 ### Tray menu
 
-- **Line Up Screens…**: calibrate (left-clicking the icon does the same).
-- **Settings…**: opens the settings panel, with the same options as this menu and room for more.
+- **Open Seam…**: opens the Seam window, which holds the other settings.
+- **Line Up Screens…**: calibrate.
 - **Remap pointer at borders**: pause or resume the hook.
-- **Also align Windows arrangement**: whether finishing a line-up also moves monitors in Display settings.
-- **Launch at login**: per-user `Run` key, no admin needed.
-- **Open settings folder**: `%APPDATA%\Seam\config.json`.
 
-Running `seam.exe` again while it's already running opens Line Up. `seam.exe --line-up` starts with it open.
+Left-clicking the icon opens Seam on a new install. If you're upgrading from v0.1 it keeps opening Line Up. `tray_click` in `config.json` sets which.
+
+Running `seam.exe` again while it's already running opens the Seam window. `seam.exe --line-up` opens Line Up, or starts with it open.
+
+### Shortcuts
+
+- **Ctrl+Shift+Alt+L**: Line Up.
+- **Ctrl+Shift+Alt+P**: pause or resume the remap.
+
+If another app already holds one, Seam keeps running without it.
 
 ## How it works
 
@@ -47,7 +53,7 @@ The hook runs on its own high-priority thread, so UI work can never delay mouse 
 
 ## Debug log
 
-Run `seam.exe --log`, or set `SEAM_LOG=1`, to append to `%APPDATA%\Seam\seam.log`: monitors, resolved borders, every remap with its time in the hook, a once-a-minute line timing all hook events, hook install and removal, display changes, and arrangement results. Quit any running Seam first, because a second launch only opens Line Up in the first one. Logging is off by default, and then adds only an atomic load to the hook.
+Run `seam.exe --log`, or set `SEAM_LOG=1`, to append to `%APPDATA%\Seam\seam.log`: monitors, resolved borders, every remap with its time in the hook, a once-a-minute line timing all hook events, hook install and removal, display changes, and arrangement results. Quit any running Seam first, because a second launch only opens the window of the first one. Logging is off by default, and then adds only an atomic load to the hook.
 
 ## Build
 

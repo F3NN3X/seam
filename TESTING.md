@@ -36,8 +36,32 @@ Start with a v0.1 `config.json` that has saved borders.
 - [ ] **Crossings.** The log shows `resolved 3 of 3 saved link(s)`, and crossings land where they did before.
 - [ ] **Desk name.** The connected desk's `name` is `PG32UCDM + 3 more` and its `last_seen` is now. Change the `name` by hand and restart. Your name stays.
 - [ ] **New screens.** Unplug a screen and replug it. The smaller set gets its own desk, named after its first screen, and the full desk is untouched.
-- [ ] **Status file.** `status.json` sits next to `config.json`. `pid` is the running `seam.exe`, `remap` is `"on"`, and `borders` lists 3 as `lined_up`. Pause the remap: `remap` becomes `"paused"`. Unplug the U3477: `monitors` and `borders` update.
 - [ ] **Going back.** Quit Seam. To return to v0.1, replace `config.json` with `config.v1.json.bak`. A v0.1 build can't read the borders in a v2 file.
+
+## Tray and shortcuts
+
+- [ ] **Menu.** Right-click the tray icon: status line, **Open Seam…**, **Line Up Screens…**, **Remap pointer at borders**, **Quit Seam**.
+- [ ] **Left-click, migrated.** With `"tray_click": "line_up"`, left-click opens Line Up. Press Esc.
+- [ ] **Left-click, new install.** With `"tray_click": "open"`, left-click opens the Seam window.
+- [ ] **Line up shortcut.** Press Ctrl+Shift+Alt+L. Line Up opens. Press Esc.
+- [ ] **Pause shortcut.** Press Ctrl+Shift+Alt+P. Crossings stop remapping and the tooltip says paused. Press it again and they work.
+- [ ] **Shortcut taken.** Have another app hold Ctrl+Shift+Alt+L, then start Seam. Seam runs, and `state.get` lists it in `hotkey_errors`.
+- [ ] **Ease balloon.** With Ease cursor movement off, click the balloon. The Seam window opens.
+
+## Local API
+
+Use a small client that opens `\\.\pipe\seam-<your username>` and writes one JSON line at a time.
+
+- [ ] **Own account only.** Run the client as another Windows user. It's refused.
+- [ ] **State.** `{"jsonrpc":"2.0","id":1,"method":"state.get"}` returns the 4 screens and 3 lined-up borders.
+- [ ] **Remap.** `remap.set` with `{"on":false}`. Crossings stop remapping, and a subscribed client gets `state.changed`. Turn it back on.
+- [ ] **Events.** Subscribe with `events.subscribe`, unplug the U3477. `desk.changed` arrives. Open and cancel Line Up. `lineup.finished` arrives with `saved` false.
+- [ ] **Identify.** `screen.identify` with `{"number":4}`. The number shows on the U3477 for 1.5 s.
+- [ ] **Off switch.** Set `api.enabled` to false in `config.json` and reload. Calls from your client get error 5.
+- [ ] **Bad input.** Send a line that isn't JSON, an unknown method, and a line over 1 MB. You get errors, or the connection closes, and Seam keeps running.
+- [ ] **Slow client.** Subscribe and stop reading while a second client toggles the remap for 30 s. Events go out at most 10 times a second, so the first client is dropped after about 26 s, and crossings stay smooth.
+- [ ] **Busy.** Open the tray menu and send `remap.set`. It's answered once the menu closes.
+- [ ] **Hook timing.** Note `hook stats` with a client spamming `state.get`. It matches a run without one.
 
 ## Line Up
 
@@ -78,7 +102,8 @@ Start with a v0.1 `config.json` that has saved borders.
 ## Shell
 
 - [ ] **Explorer restart.** Run `taskkill /f /im explorer.exe`, then `start explorer`. The tray icon comes back, and crossings work throughout.
-- [ ] **Second launch.** Run `seam.exe` again. No second process appears, Line Up opens in the first, and the keyboard works immediately (try Tab). Press Esc.
+- [ ] **Second launch.** Run `seam.exe` again. No second process appears, and the Seam window opens or comes to the front.
+- [ ] **Second launch, Line Up.** Run `seam.exe --line-up` while Seam is running. No second process appears, Line Up opens in the first, and the keyboard works immediately (try Tab). Press Esc.
 - [ ] **`--line-up`.** Quit Seam, then run `seam.exe --line-up`. It starts with Line Up open.
 - [ ] **Launch at login.** Tick it in the tray, sign out and in. Seam starts and crossings work. Untick it, sign out and in. Seam doesn't start.
 - [ ] **Pause.** Untick **Remap pointer at borders**. The log shows `hook uninstalled` and the tooltip says paused. Tick it again and crossings work.

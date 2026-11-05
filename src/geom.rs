@@ -359,4 +359,35 @@ mod tests {
         let (a1, a2) = anchor_points(&m, 2160, 1440);
         assert!(a1 >= 1000.0 && a2 <= 2160.0 && a2 > a1);
     }
+
+    #[test]
+    fn pairs_reject_degenerate_input() {
+        assert_eq!(EdgeMap::from_pairs(100.0, 50.0, 100.0, 70.0), None); // same line twice
+        assert_eq!(EdgeMap::from_pairs(100.0, 50.0, 100.9, 50.9), None); // under a pixel apart
+        assert_eq!(EdgeMap::from_pairs(100.0, 50.0, 500.0, 50.0), None); // zero scale
+        assert_eq!(EdgeMap::from_pairs(0.0, 0.0, 1000.0, 50.0), None); // scale 0.05
+        assert_eq!(EdgeMap::from_pairs(0.0, 0.0, 100.0, 1100.0), None); // scale 11
+    }
+
+    #[test]
+    fn pairs_reject_non_finite_input() {
+        assert_eq!(EdgeMap::from_pairs(f64::NAN, 0.0, 100.0, 100.0), None);
+        assert_eq!(EdgeMap::from_pairs(0.0, f64::NAN, 100.0, 100.0), None);
+        assert_eq!(EdgeMap::from_pairs(0.0, 0.0, f64::INFINITY, 100.0), None);
+        assert_eq!(EdgeMap::from_pairs(0.0, 0.0, 100.0, f64::INFINITY), None);
+    }
+
+    #[test]
+    fn pairs_reject_mirrored_input_either_way_round() {
+        assert_eq!(EdgeMap::from_pairs(100.0, 500.0, 900.0, 100.0), None);
+        assert_eq!(EdgeMap::from_pairs(900.0, 100.0, 100.0, 500.0), None);
+    }
+
+    #[test]
+    fn pairs_accept_the_limits_and_either_order() {
+        assert_eq!(EdgeMap::from_pairs(0.0, 0.0, 1.0, 1.0), Some(EdgeMap { s: 1.0, o: 0.0 }));
+        assert_eq!(EdgeMap::from_pairs(0.0, 5.0, 100.0, 15.0), Some(EdgeMap { s: 0.1, o: 5.0 }));
+        assert_eq!(EdgeMap::from_pairs(0.0, 5.0, 100.0, 1005.0), Some(EdgeMap { s: 10.0, o: 5.0 }));
+        assert_eq!(EdgeMap::from_pairs(100.0, 15.0, 0.0, 5.0), Some(EdgeMap { s: 0.1, o: 5.0 }));
+    }
 }

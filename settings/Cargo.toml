@@ -6,4 +6,5 @@ license = "MIT"
 publish = false
 
 [dependencies]
+seam = { path = ".." }
 gpui-kit = "=0.9.0"

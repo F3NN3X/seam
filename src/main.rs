@@ -4,16 +4,16 @@
 
 #![cfg_attr(windows, windows_subsystem = "windows")]
 
-mod config;
-mod geom;
 mod layout;
+
+use seam::geom;
+#[cfg(windows)]
+use seam::{autostart, config, tray};
 
 #[cfg(windows)]
 mod app;
 #[cfg(windows)]
 mod arrange;
-#[cfg(windows)]
-mod autostart;
 #[cfg(windows)]
 mod hook;
 #[cfg(windows)]

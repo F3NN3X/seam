@@ -86,6 +86,18 @@ impl Config {
             }
         }
     }
+
+    /// Apply one change to the file as it is right now, so a process with an
+    /// older copy in memory can't undo what another one saved.
+    pub fn edit(change: impl FnOnce(&mut Config)) {
+        Self::edit_at(&Self::path(), change);
+    }
+
+    fn edit_at(p: &Path, change: impl FnOnce(&mut Config)) {
+        let mut c = Self::load_from(p);
+        change(&mut c);
+        c.save_to(p);
+    }
 }
 
 #[cfg(test)]
@@ -167,6 +179,15 @@ mod tests {
         let back = Config::load_from(&p);
         assert!(!back.enabled && back.seen == ["sig"]);
         assert!(!p.with_extension("json.tmp").exists());
+        let _ = std::fs::remove_dir_all(p.parent().unwrap());
+    }
+
+    #[test]
+    fn edit_changes_one_field_and_keeps_saved_layouts() {
+        let p = scratch("edit", br#"{"layouts": {"desk": []}, "seen": ["desk"]}"#);
+        Config::edit_at(&p, |c| c.enabled = false);
+        let back = Config::load_from(&p);
+        assert!(!back.enabled && back.layouts.contains_key("desk") && back.seen == ["desk"]);
         let _ = std::fs::remove_dir_all(p.parent().unwrap());
     }
 

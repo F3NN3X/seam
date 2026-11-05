@@ -6,6 +6,7 @@ use crate::hook;
 use crate::layout::{Link, Live};
 use crate::log;
 use crate::monitors::{self, Mon};
+use crate::tray::{self, CLASS};
 use crate::{arrange, autostart, overlay};
 use std::cell::RefCell;
 use windows::core::{w, PCWSTR};
@@ -17,12 +18,13 @@ use windows::Win32::UI::HiDpi::{SetProcessDpiAwarenessContext, DPI_AWARENESS_CON
 use windows::Win32::UI::Shell::*;
 use windows::Win32::UI::WindowsAndMessaging::*;
 
-const CLASS: PCWSTR = w!("SeamTray");
 const WM_APP_TRAY: u32 = WM_APP + 1;
 const WM_APP_LINEUP: u32 = WM_APP + 3;
 const TIMER_REFRESH: usize = 1;
 /// Windows silently removes low-level hooks that ever time out, so re-arm periodically.
 const TIMER_REARM: usize = 2;
+/// Retries a reload the app was too busy for (menu open).
+const TIMER_RELOAD: usize = 3;
 const NIN_KEYSELECT: u32 = NIN_SELECT | NINF_KEY;
 
 const ID_LINEUP: usize = 1;
@@ -30,6 +32,7 @@ const ID_ENABLED: usize = 2;
 const ID_ALIGN: usize = 3;
 const ID_AUTOSTART: usize = 4;
 const ID_FOLDER: usize = 5;
+const ID_SETTINGS: usize = 6;
 const ID_QUIT: usize = 9;
 
 struct App {
@@ -225,6 +228,22 @@ fn start_lineup(app: &mut App) {
     }
 }
 
+/// The panel writes config.json itself; pick up what it changed.
+fn reload(app: &mut App) {
+    log::info!("config reloaded");
+    app.cfg = Config::load();
+    refresh(app);
+}
+
+fn open_settings(app: &mut App) {
+    let panel = std::env::current_exe().map(|exe| exe.with_file_name("seam-settings.exe"));
+    // Lets an already open panel come to the front.
+    let _ = unsafe { AllowSetForegroundWindow(ASFW_ANY) };
+    if panel.and_then(|p| std::process::Command::new(p).spawn()).is_err() {
+        notify(app, "Settings unavailable", "seam-settings.exe needs to be next to seam.exe.", false);
+    }
+}
+
 fn lineup_done(app: &mut App, accepted: bool) {
     if let (true, Some(res)) = (accepted, overlay::take_result()) {
         let mons = monitors::enumerate();
@@ -269,6 +288,7 @@ fn show_menu(app: &mut App) {
         let _ = AppendMenuW(menu, MF_STRING | MF_GRAYED, 0, PCWSTR(status_w.as_ptr()));
         let _ = AppendMenuW(menu, MF_SEPARATOR, 0, None);
         let _ = AppendMenuW(menu, MF_STRING, ID_LINEUP, w!("Line Up Screens…"));
+        let _ = AppendMenuW(menu, MF_STRING, ID_SETTINGS, w!("Settings…"));
         let _ = AppendMenuW(menu, MF_SEPARATOR, 0, None);
         let _ = AppendMenuW(menu, flag(app.cfg.enabled), ID_ENABLED, w!("Remap pointer at borders"));
         let _ = AppendMenuW(menu, flag(app.cfg.align_arrangement), ID_ALIGN, w!("Also align Windows arrangement"));
@@ -285,6 +305,7 @@ fn show_menu(app: &mut App) {
         let _ = DestroyMenu(menu);
         match cmd.0 as usize {
             ID_LINEUP => start_lineup(app),
+            ID_SETTINGS => open_settings(app),
             ID_ENABLED => {
                 app.cfg.enabled = !app.cfg.enabled;
                 app.cfg.save();
@@ -295,7 +316,9 @@ fn show_menu(app: &mut App) {
                 app.cfg.save();
             }
             ID_AUTOSTART => {
-                autostart::set(!autostart::is_enabled());
+                if let Ok(exe) = std::env::current_exe() {
+                    autostart::set(!autostart::is_enabled(), &exe);
+                }
             }
             ID_FOLDER => {
                 if let Some(dir) = Config::path().parent() {
@@ -343,6 +366,18 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
         }
         overlay::WM_APP_CALIB_DONE => {
             with_app(|a| lineup_done(a, wparam.0 != 0));
+            LRESULT(0)
+        }
+        tray::WM_APP_RELOAD => {
+            if with_app(reload).is_none() {
+                SetTimer(Some(hwnd), TIMER_RELOAD, 250, None);
+            }
+            LRESULT(0)
+        }
+        WM_TIMER if wparam.0 == TIMER_RELOAD => {
+            if with_app(reload).is_some() {
+                let _ = KillTimer(Some(hwnd), TIMER_RELOAD);
+            }
             LRESULT(0)
         }
         WM_DISPLAYCHANGE => {

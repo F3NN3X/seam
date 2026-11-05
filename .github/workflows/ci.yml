@@ -12,12 +12,14 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v7
-      - run: cargo fmt --check
-      - run: cargo clippy -- -D warnings
+      - run: cargo fmt --all --check
+      - run: cargo clippy --workspace -- -D warnings
       - run: cargo test
-      - run: cargo build --release
+      - run: cargo build --release --workspace
       - uses: actions/upload-artifact@v7
         with:
           name: seam
-          path: target/release/seam.exe
+          path: |
+            target/release/seam.exe
+            target/release/seam-settings.exe
           if-no-files-found: error

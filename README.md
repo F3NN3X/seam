@@ -21,6 +21,7 @@ When you finish, Seam saves the layout for that exact set of screens and turns o
 ### Tray menu
 
 - **Line Up Screens…**: calibrate (left-clicking the icon does the same).
+- **Settings…**: opens the settings panel, with the same options as this menu and room for more.
 - **Remap pointer at borders**: pause or resume the hook.
 - **Also align Windows arrangement**: whether finishing a line-up also moves monitors in Display settings.
 - **Launch at login**: per-user `Run` key, no admin needed.

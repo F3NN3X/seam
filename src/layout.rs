@@ -86,6 +86,14 @@ pub fn plan(rects: &[Rect], primary: usize, links: &[Link]) -> Result<Vec<Rect>,
             }
         }
     }
+    // Placing each screen follows only one border, so a loop of borders can
+    // leave the last one misaligned. A rounding pixel is fine.
+    for l in links {
+        let origin = out[l.b].along_origin(l.side);
+        if aligned_along_origin(&out[l.a], &out[l.b], l.side, &l.map).is_some_and(|want| (want - origin).abs() > 1) {
+            return Err("this layout is too complex to align automatically".into());
+        }
+    }
     Ok(out)
 }
 
@@ -438,7 +446,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "bug: plan silently ignores a border that closes a cycle"]
     fn plan_refuses_a_grid_when_one_border_cannot_be_honoured() {
         // B moves down 100, D follows it, and the screens still touch, but the
         // C-D border wants D level with C. No arrangement satisfies all four.

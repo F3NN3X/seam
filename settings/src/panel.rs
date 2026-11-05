@@ -98,6 +98,8 @@ pub struct Panel {
     pub ease_on: bool,
     /// The screen whose zones the Zones page shows, as an index into `mons`.
     pub zone_screen: usize,
+    /// The zone editor's unsaved copy of a layout, while it's open.
+    pub editor: Option<pages::zone_editor::Editor>,
     /// The Gap slider. It sends the new gap when it's let go.
     pub gap: Entity<SliderState>,
     pub search: Entity<InputState>,
@@ -170,6 +172,7 @@ impl Panel {
             layout: Vec::new(),
             ease_on: seam::ease::is_on(),
             zone_screen: 0,
+            editor: None,
             gap,
             search,
             focus,
@@ -224,6 +227,7 @@ impl Panel {
             KeyBinding::new("ctrl-f", FocusSearch, Some(CONTEXT)),
             KeyBinding::new("escape", ClearSearch, Some(CONTEXT)),
         ]);
+        pages::zone_editor::bind_keys(cx);
     }
 
     /// Stay connected, and redraw from events. There's no polling.
@@ -390,6 +394,17 @@ impl Panel {
     }
 
     fn show(&mut self, page: Page, window: &mut Window, cx: &mut Context<Self>) {
+        // Unsaved zone edits ask before they're lost.
+        if self.editor.is_some() {
+            let then: pages::zone_editor::Then =
+                std::rc::Rc::new(move |panel, window, cx| panel.show_now(page, window, cx));
+            pages::zone_editor::guard(self, window, cx, then);
+            return;
+        }
+        self.show_now(page, window, cx);
+    }
+
+    fn show_now(&mut self, page: Page, window: &mut Window, cx: &mut Context<Self>) {
         self.page = page;
         let _ = std::fs::write(last_page_file(), page.title());
         self.clear_search(window, cx);

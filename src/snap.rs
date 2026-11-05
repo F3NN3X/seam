@@ -7,15 +7,13 @@ use crate::{log, overlay, zone_paint};
 use seam::config::{Config, ZoneSettings};
 use seam::desk::Mon;
 use seam::geom;
-use seam::winutil;
+use seam::winutil::{self, work_area};
 use seam::zones::{self, Rect, ZoneLayout};
 use std::cell::RefCell;
 use std::collections::{HashMap, VecDeque};
 use std::time::Instant;
 use windows::Win32::Foundation::*;
-use windows::Win32::Graphics::Gdi::*;
 use windows::Win32::UI::Accessibility::*;
-use windows::Win32::UI::HiDpi::{GetDpiForMonitor, MDT_EFFECTIVE_DPI};
 use windows::Win32::UI::Input::KeyboardAndMouse::*;
 use windows::Win32::UI::WindowsAndMessaging::*;
 
@@ -166,23 +164,6 @@ fn key_code(key: &str) -> Option<VIRTUAL_KEY> {
 
 fn held(vk: VIRTUAL_KEY) -> bool {
     unsafe { GetAsyncKeyState(i32::from(vk.0)) < 0 }
-}
-
-/// The work area (taskbar excluded) and effective DPI of the screen at `bounds`.
-fn work_area(bounds: Rect) -> Option<(Rect, u32)> {
-    let r = RECT { left: bounds.x, top: bounds.y, right: bounds.x + bounds.w, bottom: bounds.y + bounds.h };
-    unsafe {
-        let monitor = MonitorFromRect(&r, MONITOR_DEFAULTTONEAREST);
-        let mut info = MONITORINFO { cbSize: size_of::<MONITORINFO>() as u32, ..Default::default() };
-        if !GetMonitorInfoW(monitor, &mut info).as_bool() {
-            return None;
-        }
-        let (mut dx, mut dy) = (0u32, 0u32);
-        let dpi =
-            if GetDpiForMonitor(monitor, MDT_EFFECTIVE_DPI, &mut dx, &mut dy).is_ok() && dx > 0 { dx } else { 96 };
-        let w = info.rcWork;
-        Some((Rect { x: w.left, y: w.top, w: w.right - w.left, h: w.bottom - w.top }, dpi))
-    }
 }
 
 /// Whether two rects match within a few pixels. A window that can't be resized

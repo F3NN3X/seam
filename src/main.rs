@@ -22,6 +22,8 @@ mod overlay;
 #[cfg(windows)]
 mod snap;
 #[cfg(windows)]
+mod switcher;
+#[cfg(windows)]
 mod zone_paint;
 
 #[cfg(windows)]

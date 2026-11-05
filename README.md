@@ -34,10 +34,21 @@ The editor opens on the screen itself, over its work area, so you line zones up 
 
 Experimental: turn on **Keep windows in their zones** on the Zones page and Seam moves snapped windows back into their zones after a screen, resolution or scaling change, or after waking the PC. It's off by default, and windows you've moved since they snapped are left alone.
 
+### Workspaces
+
+Arrange your windows the way you like them, then press **Capture current windows** on the Workspaces page. Seam saves which app is on which screen and in which zone (or maximized, or at its own size), for the desk you have connected. **Switch now**, the workspace's shortcut, or **Workspaces** in the tray menu then puts each app back. Apps that aren't running are started if they're ticked under Launch and **Start missing apps** is on, and Seam waits up to 15 seconds for each window. **Update from screen** saves the windows as they are now into a workspace.
+
+**Other windows** says what a switch does with everything else on the desk's screens: leave it, minimize it, or close it. Close only asks. Each app gets a normal close request, so one with unsaved work shows its own prompt and stays open. Seam never ends a process.
+
+Each workspace's **...** menu has **Export...** and **Import...**. An imported workspace starts with launching off, and every app has to be ticked again, because a file from someone else shouldn't be able to start programs for you. Windows are mapped to your screens by device path, then by number and model, then by number, and any that match nothing stay where they are.
+
+Other apps, such as a Stream Deck, can switch workspaces through the local API.
+
 ### Tray menu
 
 - **Open Seam…**: opens the Seam window, which holds the other settings.
 - **Line Up Screens…**: calibrate.
+- **Workspaces**: switch to a workspace on this desk. Only shown when the desk has some.
 - **Remap pointer at borders**: pause or resume the hook.
 
 Left-clicking the icon opens Seam on a new install. If you're upgrading from v0.1 it keeps opening Line Up. `tray_click` in `config.json` sets which.
@@ -49,6 +60,7 @@ Running `seam.exe` again while it's already running opens the Seam window. `seam
 - **Ctrl+Shift+Alt+L**: Line Up.
 - **Ctrl+Shift+Alt+P**: pause or resume the remap.
 - **Win+Alt+Right** and **Win+Alt+Left**: move the focused window to the next or previous zone.
+- One per workspace, and one to capture the current windows, all set on the Shortcuts page. Ctrl+Shift+Alt plus a number is a good choice, since Ctrl+Alt alone types characters on many keyboards.
 
 If another app already holds one, Seam keeps running without it.
 
@@ -109,4 +121,8 @@ To cross-compile from Linux, use `./build-cross.sh`. It needs `mingw-w64` and Ru
 - Borders are found from the Windows arrangement: two screens must touch there. Screens that touch on your desk but have a gap in the layout ("glue") aren't supported yet.
 - Rotated screens work as long as Windows reports their rotated size, which it does. Mirrored screens have nothing to line up.
 - "Align Windows arrangement" refuses layouts where moving one screen would break another border (some 2×2 grids). The pointer remap still works in those layouts.
+- Windows of apps running as administrator are skipped by workspaces and zones, because Windows doesn't let Seam move them.
+- Apps that restore their own positions when they start may move after Seam places them. Seam places a window once and doesn't fight the app.
+- Workspaces don't restore browser tabs or open documents.
+- Close only asks. Apps with unsaved work will prompt, and those windows stay open.
 - The tray icon is drawn at runtime.

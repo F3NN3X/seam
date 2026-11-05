@@ -4,5 +4,6 @@ pub mod general;
 pub mod screen_editor;
 pub mod shortcuts;
 pub mod updates;
+pub mod workspaces;
 pub mod zone_editor;
 pub mod zones;

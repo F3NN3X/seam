@@ -72,6 +72,10 @@ fn resolve(mons: &[Mon], saved: Option<&Vec<SavedBorder>>) -> Vec<Link> {
         .filter_map(|s| {
             let a = mons.iter().position(|m| m.id == s.a)?;
             let b = mons.iter().position(|m| m.id == s.b)?;
+            if !s.map.is_valid() {
+                log::info!("link {a}->{b} dropped: invalid map {:?}", s.map);
+                return None;
+            }
             let now = touching(&mons[a].rect, &mons[b].rect);
             if now != Some(s.side) {
                 log::info!("link {a}->{b} dropped: saved side {:?}, now {now:?}", s.side);

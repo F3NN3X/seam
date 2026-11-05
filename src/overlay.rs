@@ -77,7 +77,7 @@ pub fn take_result() -> Option<Vec<SavedBorder>> {
 
 fn initial_map(mons: &[Mon], a: usize, b: usize, side: Side, saved: &[SavedBorder]) -> EdgeMap {
     let (ia, ib) = (&mons[a].id, &mons[b].id);
-    for s in saved {
+    for s in saved.iter().filter(|s| s.map.is_valid()) {
         if &s.a == ia && &s.b == ib && s.side == side {
             return s.map;
         }

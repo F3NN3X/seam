@@ -266,7 +266,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "bug: a zero scale inverts to NaN and lands on row 0"]
     fn decide_never_acts_on_a_map_that_cannot_be_inverted() {
         // `s` of 0 can reach us from a hand-edited config.
         let a = Rect::new(0, 0, 1000, 1000);

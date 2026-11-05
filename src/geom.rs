@@ -100,6 +100,12 @@ impl EdgeMap {
         EdgeMap { s: 1.0 / self.s, o: -self.o / self.s }
     }
 
+    /// Whether the map could have come from a real line-up. A hand-edited
+    /// config can hold anything, and a zero scale has no inverse.
+    pub fn is_valid(&self) -> bool {
+        (0.1..=10.0).contains(&self.s) && self.o.is_finite()
+    }
+
     /// Solve the map from two corresponding points. Rejects degenerate or
     /// mirrored solutions (the screens can't be flipped relative to each other).
     pub fn from_pairs(a1: f64, b1: f64, a2: f64, b2: f64) -> Option<EdgeMap> {
@@ -108,10 +114,7 @@ impl EdgeMap {
             return None;
         }
         let s = (b2 - b1) / da;
-        if !(s.is_finite()) || !(0.1..=10.0).contains(&s) {
-            return None;
-        }
-        Some(EdgeMap { s, o: b1 - s * a1 })
+        Some(EdgeMap { s, o: b1 - s * a1 }).filter(EdgeMap::is_valid)
     }
 }
 
@@ -393,5 +396,19 @@ mod tests {
         assert_eq!(EdgeMap::from_pairs(0.0, 5.0, 100.0, 15.0), Some(EdgeMap { s: 0.1, o: 5.0 }));
         assert_eq!(EdgeMap::from_pairs(0.0, 5.0, 100.0, 1005.0), Some(EdgeMap { s: 10.0, o: 5.0 }));
         assert_eq!(EdgeMap::from_pairs(100.0, 15.0, 0.0, 5.0), Some(EdgeMap { s: 0.1, o: 5.0 }));
+    }
+
+    #[test]
+    fn invalid_maps_are_recognised() {
+        assert!(EdgeMap { s: 1.5, o: -20.0 }.is_valid());
+        for m in [
+            EdgeMap { s: 0.0, o: 7.0 },
+            EdgeMap { s: -1.0, o: 0.0 },
+            EdgeMap { s: 11.0, o: 0.0 },
+            EdgeMap { s: f64::NAN, o: 0.0 },
+            EdgeMap { s: 1.0, o: f64::INFINITY },
+        ] {
+            assert!(!m.is_valid(), "{m:?}");
+        }
     }
 }

@@ -62,7 +62,12 @@ impl Config {
     }
 
     fn load_from(p: &Path) -> Config {
-        std::fs::read_to_string(p).ok().and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default()
+        let Ok(bytes) = std::fs::read(p) else { return Config::default() };
+        serde_json::from_slice(&bytes).unwrap_or_else(|_| {
+            // Set it aside: the next save would otherwise destroy the layouts in it.
+            let _ = std::fs::rename(p, p.with_extension("json.corrupt"));
+            Config::default()
+        })
     }
 
     pub fn save(&self) {
@@ -166,7 +171,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "bug: the next save overwrites the only copy"]
     fn a_corrupt_file_is_not_destroyed_by_the_next_save() {
         let original = br#"{"layouts": {"my-desk": [ damaged"#;
         let p = scratch("keep", original);

@@ -110,6 +110,23 @@ Set up first: on Zones, pick **Priority** for screen 1 and **Grid** for screen 2
 - [ ] **Hook timing.** Note `hook stats`, then drag windows with Shift held for 10 s. `own max` and `avg` match a run with nothing dragged, and the pointer stays smooth.
 - [ ] **Overlay clean-up.** After every drag no overlay stays on any screen, including when you press Esc mid-drag or close the dragged window.
 
+## Re-fit after a display change (experimental)
+
+Snap a few windows first: a normal one on screen 1, a spanning one across two zones, one on the 125% screen and a fixed-size one. Do each check with **Keep windows in their zones** on Zones turned on, then again with it off.
+
+- [ ] **Off by default.** On a fresh `config.json` the switch is off. With the debug log on, changing resolution writes no `zone refit` line.
+- [ ] **Change resolution.** With it on, change screen 1's resolution and change it back. About two seconds after the last change the snapped windows are back on their zones, and the log has one `zone refit: N found, N moved, N skipped` line. With it off nothing moves.
+- [ ] **Change scaling.** Change screen 2 from 125% to 100% and back. Snapped windows return to their zones, with no jump after they settle.
+- [ ] **Unplug and replug.** Unplug the U3477, wait, replug it. Windows that were on it come back to their zones. Windows Windows moved to another screen while it was away go to that screen's zones, and a zone that doesn't exist there leaves them alone.
+- [ ] **Sleep and wake.** Sleep the PC and wake it with the setting on. Windows that moved while the screens woke are put back.
+- [ ] **Restart the tray.** Snap a window, quit and start Seam, then change the resolution. The window is still re-fitted. Dragging it out first stops that.
+- [ ] **Moved by hand.** Snap a window, drag it somewhere else and drop it outside every zone, then change the resolution. It stays where you put it. Do the same after resizing it by its edge, and after dragging it to the top edge so it maximizes.
+- [ ] **Left alone.** A minimized window, a maximized one and Task Manager run as administrator don't move and no balloon appears.
+- [ ] **During a drag.** Change the resolution while holding a window mid-drag with Shift held. Nothing moves until you let go, and the re-fit runs afterwards.
+- [ ] **During Line Up.** Open Line Up and change the resolution. The re-fit waits until Line Up closes.
+- [ ] **Restore size.** After a re-fit, drag a re-fitted window out of its zone. It still gets the size it had before it was first snapped.
+- [ ] **Hook timing.** Note `hook stats` before and after a re-fit run. `own max` doesn't change.
+
 ## Settings panel
 
 - [ ] **Open.** Choose **Open Seam…** in the tray menu. The panel opens in your Windows theme on the last page you used, and the sidebar shows the current remap state.

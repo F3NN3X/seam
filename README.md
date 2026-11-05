@@ -28,6 +28,8 @@ Windows 11 shows its own snap layouts when you drag a window to the top of the s
 
 Seam can't move windows from apps running as administrator. It tells you once when that happens.
 
+Experimental: turn on **Keep windows in their zones** on the Zones page and Seam moves snapped windows back into their zones after a screen, resolution or scaling change, or after waking the PC. It's off by default, and windows you've moved since they snapped are left alone.
+
 ### Tray menu
 
 - **Open Seam…**: opens the Seam window, which holds the other settings.

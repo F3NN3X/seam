@@ -3,7 +3,7 @@
 
 use crate::zones::{frame_adjust, Rect};
 use std::sync::OnceLock;
-use windows::core::PWSTR;
+use windows::core::{w, PCWSTR, PWSTR};
 use windows::Win32::Foundation::{CloseHandle, ERROR_ACCESS_DENIED, HANDLE, HWND, RECT};
 use windows::Win32::Graphics::Dwm::{DwmGetWindowAttribute, DWMWA_CLOAKED, DWMWA_EXTENDED_FRAME_BOUNDS};
 use windows::Win32::Graphics::Gdi::{GetMonitorInfoW, MonitorFromWindow, MONITORINFO, MONITOR_DEFAULTTONEAREST};
@@ -191,5 +191,50 @@ pub fn move_to(h: HWND, target: Rect) {
     let (x, y) = (target.x - (visible.x - window.x), target.y - (visible.y - window.y));
     unsafe {
         let _ = SetWindowPos(h, None, x, y, 0, 0, FLAGS | SWP_NOSIZE);
+    }
+}
+
+/// Which zones a window is in, kept on the window itself (as FancyZones does) so a
+/// restart of the tray still knows. Bit i is zone i, in two 64-bit halves.
+const STAMP_LOW: PCWSTR = w!("Seam_zones");
+const STAMP_HIGH: PCWSTR = w!("Seam_zones_max128");
+
+fn stamp_part(h: HWND, name: PCWSTR) -> u64 {
+    unsafe { GetPropW(h, name).0 as usize as u64 }
+}
+
+pub fn has_zone_stamp(h: HWND) -> bool {
+    stamp_part(h, STAMP_LOW) != 0 || stamp_part(h, STAMP_HIGH) != 0
+}
+
+pub fn zone_stamp(h: HWND) -> Vec<usize> {
+    let (low, high) = (stamp_part(h, STAMP_LOW), stamp_part(h, STAMP_HIGH));
+    (0..64).filter(|i| low >> i & 1 == 1).chain((0..64).filter(|i| high >> i & 1 == 1).map(|i| i + 64)).collect()
+}
+
+/// Replace the stamp. Zone numbers past 127 can't be kept, so such a window is left unstamped.
+pub fn stamp_zones(h: HWND, zones: &[usize]) {
+    clear_zone_stamp(h);
+    let (mut low, mut high) = (0u64, 0u64);
+    for &zone in zones {
+        match zone {
+            0..=63 => low |= 1 << zone,
+            64..=127 => high |= 1 << (zone - 64),
+            _ => return,
+        }
+    }
+    unsafe {
+        for (name, bits) in [(STAMP_LOW, low), (STAMP_HIGH, high)] {
+            if bits != 0 {
+                let _ = SetPropW(h, name, Some(HANDLE(bits as usize as *mut _)));
+            }
+        }
+    }
+}
+
+pub fn clear_zone_stamp(h: HWND) {
+    unsafe {
+        let _ = RemovePropW(h, STAMP_LOW);
+        let _ = RemovePropW(h, STAMP_HIGH);
     }
 }

@@ -25,6 +25,12 @@ const ENTRIES: &[Entry] = &[
     entry(Page::Zones, "Show zones", "Hold while dragging", "shift ctrl alt key"),
     entry(Page::Zones, "Span zones", "Add this key to cover more", "shift ctrl alt key"),
     entry(Page::Zones, "Gap", "Space between zones and the screen edge", "padding"),
+    entry(
+        Page::Zones,
+        "Keep windows in their zones",
+        "Experimental. Moves snapped windows back after a screen change",
+        "refit resolution scaling unplug",
+    ),
     entry(Page::Zones, "Restore size when dragged out", "The window gets its old size back", "snap"),
     entry(Page::Shortcuts, "Line up screens", "Global shortcut", "hotkey keyboard"),
     entry(Page::Shortcuts, "Pause or resume pointer remap", "Global shortcut", "hotkey keyboard"),

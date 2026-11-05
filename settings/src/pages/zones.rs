@@ -2,7 +2,7 @@
 
 use crate::panel::Panel;
 use crate::theme::{palette, Palette};
-use crate::ui::{self, row, section, switch};
+use crate::ui::{self, card, row, section, switch};
 use gpui_kit::component::slider::Slider;
 use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::component::ThemeStyled;
@@ -271,6 +271,16 @@ pub fn render(panel: &mut Panel, window: &mut Window, cx: &mut Context<Panel>) -
             view.update(cx, |panel, cx| panel.patch(json!({ "zones": { "restore_size": on } }), window, cx))
         }
     });
+    let refit = switch("zone-refit", zones_cfg.refit, window, cx, {
+        let view = view.clone();
+        move |on, window, cx| view.update(cx, |panel, cx| panel.patch(json!({ "zones": { "refit": on } }), window, cx))
+    });
+    let refit_row = row(
+        "Keep windows in their zones",
+        Some("Experimental. Moves snapped windows back after a screen or resolution change".into()),
+        refit,
+        p,
+    );
     let cell = |content: AnyElement| div().flex_1().min_w_0().child(content);
     let snapping = div()
         .flex()
@@ -344,6 +354,10 @@ pub fn render(panel: &mut Panel, window: &mut Window, cx: &mut Context<Panel>) -
                     .child(caption),
             ),
         )
-        .child(section("Snapping", snapping, p));
+        .child(section(
+            "Snapping",
+            div().flex().flex_col().gap(px(12.)).child(snapping).child(card(vec![refit_row], p)),
+            p,
+        ));
     body
 }

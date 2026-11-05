@@ -61,6 +61,8 @@ pub struct ZoneSettings {
     pub span_key: String,
     pub gap: u32,
     pub restore_size: bool,
+    /// Experimental: after a screen change, put snapped windows back in their zones.
+    pub refit: bool,
     /// Exe file names, case-insensitive.
     pub exclude: Vec<String>,
 }
@@ -73,6 +75,7 @@ impl Default for ZoneSettings {
             span_key: "ctrl".into(),
             gap: 8,
             restore_size: true,
+            refit: false,
             exclude: Vec::new(),
         }
     }

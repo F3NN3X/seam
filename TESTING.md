@@ -78,13 +78,27 @@ Use a small client that opens `\\.\pipe\seam-<your username>` and writes one JSO
 
 ## Settings panel
 
-- [ ] **Open.** Choose **Settings…** in the tray menu. The panel opens in your Windows theme, with all three switches matching the current settings.
-- [ ] **Single panel.** Choose **Settings…** again. The open panel comes to the front and no second one starts.
-- [ ] **Remap switch.** Turn it off. Crossings stop remapping and the tray tooltip says paused. Turn it on and they work again.
+- [ ] **Open.** Choose **Open Seam…** in the tray menu. The panel opens in your Windows theme on the last page you used, and the sidebar shows the current remap state.
+- [ ] **Single panel.** Choose **Open Seam…** again. The open panel comes to the front and no second one starts.
+- [ ] **By hand.** Close the panel and run `seam-settings.exe` directly, with Seam running and then with it closed. Each time the panel opens through the tray, and in the second case the tray starts too.
+- [ ] **Tray quits.** Quit Seam with the panel open. The panel says Seam isn't running, and **Start** brings it back without restarting the panel by hand.
+- [ ] **Light and dark.** Switch Windows between light and dark with the panel open. It follows straight away, and every page reads clearly in both.
+- [ ] **Map.** Displays shows every screen at its real size, with amber on lined up borders. Clicking a screen flashes its number on that screen.
+- [ ] **Remap switch.** Turn it off. Crossings stop remapping and the sidebar says paused. Turn it on and they work again.
 - [ ] **Align switch.** Turn it off, then open the tray menu. **Also align Windows arrangement** is unticked. Turn it back on.
+- [ ] **Rename.** Rename a desk from its **…** menu. The sidebar and tray menu show the new name.
+- [ ] **Forget and Undo.** Forget the desk in use. The borders go to "Not lined up", the page keeps a sensible desk name, and **Saved desks** says there are none. Press **Undo** within 8 seconds and everything comes back. Forget it again, wait, and the notification goes on its own. Line up to save it again.
+- [ ] **Record a shortcut.** On Shortcuts, press **Change**, then Ctrl+Alt+Shift+K. The new keys show and work from another app.
+- [ ] **Recorder keys.** Press **Change** then Esc: nothing changes. Press **Change** then Backspace: the row says "Not set" and stays that way after quitting and restarting Seam. **Record** a shortcut again.
+- [ ] **Shortcut problems.** Record Ctrl+Alt+K: the row warns that it types characters. Record a shortcut another app holds: the row says so and the keycaps turn red.
+- [ ] **Keyboard.** Ctrl+F jumps to search and Esc clears it. Tab walks the sidebar then the page, with a ring on each control, and no ring appears after a mouse click. Space flips a switch. Left and Right change the Tray icon choice.
+- [ ] **Search.** Type "log" and press a result. It opens that page.
+- [ ] **Left-click.** Choose **Open Seam** under Tray icon, then left-click the tray icon. The panel opens. Set it back.
 - [ ] **Start with Windows.** Turn it on, sign out and in. Seam starts, and the panel doesn't. Turn it off.
-- [ ] **Open.** The button opens the folder holding `config.json`.
-- [ ] **Panel missing.** Rename `seam-settings.exe`, choose **Settings…**. A balloon says it's unavailable and Seam keeps running. Rename it back.
+- [ ] **Debug log.** Turn it on, cross a border, and check `seam.log` grows. Turn it off.
+- [ ] **Files.** **Open** shows the folder holding `config.json`. **Export…** then **Import…** round-trips your settings, and importing a broken file is refused with nothing changed.
+- [ ] **About.** **Copy diagnostics** puts your version, Windows build, screens and borders on the clipboard, with no window titles or file paths.
+- [ ] **Panel missing.** Rename `seam-settings.exe`, choose **Open Seam…**. A balloon says it's unavailable and Seam keeps running. Rename it back.
 
 ## Reconnecting and sleep
 

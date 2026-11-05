@@ -17,3 +17,5 @@ pub mod ease;
 pub mod monitors;
 #[cfg(windows)]
 pub mod tray;
+#[cfg(windows)]
+pub mod winver;

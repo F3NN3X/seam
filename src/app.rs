@@ -1,7 +1,7 @@
 //! Tray app: owns config, tracks monitor changes, runs the hook and the overlay.
 
 use crate::api_server::{self, Queued};
-use crate::config::{merge_patch, signature, Config};
+use crate::config::{signature, Config};
 use crate::desk::{self, has_neighbours, resolve};
 use crate::hook;
 use crate::layout::{Link, Live};
@@ -285,14 +285,12 @@ fn snapshot(app: &App) -> Snapshot {
         name: m.name.clone(),
         primary: m.primary,
     });
+    let saved_name = app.cfg.desks.get(&app.sig).map(|d| d.name.clone()).filter(|n| !n.is_empty());
     let state = State {
         seam_version: env!("CARGO_PKG_VERSION").into(),
         remap: Remap::of(app.cfg.enabled, app.links.len()),
         zones: if app.cfg.zones.enabled { state::Zones::On } else { state::Zones::Off },
-        desk: DeskRef {
-            sig: app.sig.clone(),
-            name: app.cfg.desks.get(&app.sig).map(|d| d.name.clone()).unwrap_or_default(),
-        },
+        desk: DeskRef { sig: app.sig.clone(), name: saved_name.unwrap_or_else(|| desk::default_name(&app.mons)) },
         screens: screens.collect(),
         borders: desk::border_states(&app.mons, &app.links),
         hotkey_errors: app.hotkey_errors.clone(),
@@ -428,12 +426,7 @@ fn busy(message: &str) -> Reply {
 /// Merge a patch into the settings, keep it only if the result is a valid
 /// config, and apply it live.
 fn patch_config(app: &mut App, patch: &Value) -> Reply {
-    let mut merged = match serde_json::to_value(&app.cfg) {
-        Ok(v) => v,
-        Err(e) => return refused(e.to_string()),
-    };
-    merge_patch(&mut merged, patch);
-    let mut next: Config = match serde_json::from_value(merged) {
+    let mut next = match app.cfg.patched(patch) {
         Ok(c) => c,
         Err(e) => return refused(format!("That isn't a valid setting: {e}")),
     };
@@ -826,7 +819,7 @@ pub fn run() {
         let Ok(hwnd) = CreateWindowExW(
             WS_EX_TOOLWINDOW,
             CLASS,
-            w!("Seam"),
+            w!("Seam tray"),
             WS_POPUP,
             0,
             0,

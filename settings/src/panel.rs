@@ -1,0 +1,560 @@
+//! The window: the link to the tray, the sidebar, and which page is showing.
+
+use crate::theme::palette;
+use crate::{pages, search, ui};
+use gpui_kit::component::button::{Button, ButtonVariants};
+use gpui_kit::component::input::{Input, InputEvent, InputState};
+use gpui_kit::component::notification::Notification;
+use gpui_kit::component::scroll::ScrollableElement;
+use gpui_kit::component::{ActiveTheme, Icon, Theme, ThemeStyled, WindowExt};
+use gpui_kit::prelude::FluentBuilder as _;
+use gpui_kit::*;
+use seam::api::{CallError, Client, Event};
+use seam::config::{diff_patch, Config};
+use seam::desk::{self, Mon, Placed};
+use seam::layout::Link;
+use seam::monitors;
+use seam::state::{Remap, State};
+use serde_json::{json, Value};
+use std::path::PathBuf;
+use std::sync::mpsc::Receiver;
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
+
+actions!(seam_panel, [FocusSearch, ClearSearch]);
+
+const CONTEXT: &str = "SeamPanel";
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Page {
+    Displays,
+    #[cfg(feature = "preview")]
+    Zones,
+    #[cfg(feature = "preview")]
+    Workspaces,
+    Shortcuts,
+    General,
+    About,
+}
+
+impl Page {
+    pub fn title(self) -> &'static str {
+        match self {
+            Page::Displays => "Displays",
+            #[cfg(feature = "preview")]
+            Page::Zones => "Zones",
+            #[cfg(feature = "preview")]
+            Page::Workspaces => "Workspaces",
+            Page::Shortcuts => "Shortcuts",
+            Page::General => "General",
+            Page::About => "About",
+        }
+    }
+
+    fn icon(self) -> assets::IconName {
+        match self {
+            Page::Displays => assets::IconName::Monitor,
+            #[cfg(feature = "preview")]
+            Page::Zones => assets::IconName::LayoutGrid,
+            #[cfg(feature = "preview")]
+            Page::Workspaces => assets::IconName::Layers,
+            Page::Shortcuts => assets::IconName::Keyboard,
+            Page::General => assets::IconName::SlidersHorizontal,
+            Page::About => assets::IconName::Info,
+        }
+    }
+
+    pub fn from_arg(arg: &str) -> Option<Page> {
+        [Page::Displays, Page::Shortcuts, Page::General, Page::About]
+            .into_iter()
+            .find(|p| p.title().eq_ignore_ascii_case(arg))
+    }
+
+    fn top_group() -> Vec<Page> {
+        vec![
+            Page::Displays,
+            #[cfg(feature = "preview")]
+            Page::Zones,
+            #[cfg(feature = "preview")]
+            Page::Workspaces,
+        ]
+    }
+}
+
+fn last_page_file() -> PathBuf {
+    Config::path().with_file_name("panel-page.txt")
+}
+
+pub struct Panel {
+    pub page: Page,
+    /// Requests go here. `None` while the tray isn't reachable.
+    pub client: Option<Arc<Mutex<Client>>>,
+    pub token: String,
+    pub state: Option<State>,
+    pub config: Config,
+    pub mons: Vec<Mon>,
+    pub links: Vec<Link>,
+    pub layout: Vec<Placed>,
+    pub ease_on: bool,
+    pub search: Entity<InputState>,
+    /// Holds focus when no control does, so Tab and Ctrl+F always reach a binding.
+    focus: FocusHandle,
+    pub query: SharedString,
+    /// The shortcut being recorded, and what stops recording it.
+    pub recording: Option<&'static str>,
+    pub recorder: Option<Subscription>,
+    /// A shortcut that works but types characters on some keyboards.
+    pub hotkey_warning: Option<&'static str>,
+    pub toast_generation: u64,
+    /// The tray was reachable earlier, so a reconnect means a new tray.
+    was_linked: bool,
+    _link: Task<()>,
+    _subscriptions: Vec<Subscription>,
+}
+
+impl Panel {
+    pub fn new(page: Option<Page>, token: String, window: &mut Window, cx: &mut Context<Self>) -> Panel {
+        let saved = std::fs::read_to_string(last_page_file()).ok();
+        let page = page.or(saved.and_then(|s| Page::from_arg(s.trim()))).unwrap_or(Page::Displays);
+        let search = cx.new(|cx| InputState::new(window, cx).placeholder("Search"));
+        let subscriptions = vec![
+            cx.subscribe_in(&search, window, |this, input, event: &InputEvent, _, cx| {
+                if matches!(event, InputEvent::Change) {
+                    this.query = input.read(cx).value();
+                    cx.notify();
+                }
+            }),
+            cx.observe_window_appearance(window, |_, window, cx| Theme::sync_system_appearance(Some(window), cx)),
+            // The Ease setting has no change event, so look again on coming back.
+            cx.observe_window_activation(window, |this, window, cx| {
+                if window.is_window_active() {
+                    this.ease_on = seam::ease::is_on();
+                    cx.notify();
+                }
+            }),
+        ];
+        let focus = cx.focus_handle();
+        focus.focus(window, cx);
+        let mut panel = Panel {
+            page,
+            client: None,
+            token,
+            state: None,
+            config: Config::default(),
+            mons: Vec::new(),
+            links: Vec::new(),
+            layout: Vec::new(),
+            ease_on: seam::ease::is_on(),
+            search,
+            focus,
+            query: SharedString::default(),
+            recording: None,
+            recorder: None,
+            hotkey_warning: None,
+            toast_generation: 0,
+            was_linked: false,
+            _link: Task::ready(()),
+            _subscriptions: subscriptions,
+        };
+        panel.read_screens();
+        panel._link = panel.link(cx);
+        panel
+    }
+
+    pub fn bind_keys(cx: &mut App) {
+        cx.bind_keys([
+            KeyBinding::new("ctrl-f", FocusSearch, Some(CONTEXT)),
+            KeyBinding::new("escape", ClearSearch, Some(CONTEXT)),
+        ]);
+    }
+
+    /// Stay connected, and redraw from events. There's no polling.
+    fn link(&self, cx: &mut Context<Self>) -> Task<()> {
+        let token = self.token.clone();
+        cx.spawn(async move |this, cx| loop {
+            let session = {
+                let token = token.clone();
+                cx.background_executor().spawn(async move { connect(&token) }).await
+            };
+            let Ok((client, events, state, config)) = session else {
+                let linked = this.update(cx, |this, cx| {
+                    this.client = None;
+                    this.state = None;
+                    cx.notify();
+                });
+                if linked.is_err() {
+                    return;
+                }
+                cx.background_executor().timer(Duration::from_secs(1)).await;
+                continue;
+            };
+            let client = Arc::new(Mutex::new(client));
+            let accepted = this.update(cx, |this, cx| {
+                // A new tray has a new token, so this panel can't change settings.
+                // Ask for a fresh one.
+                if this.was_linked {
+                    crate::restart_panel(cx);
+                    return false;
+                }
+                this.was_linked = true;
+                this.client = Some(client.clone());
+                this.apply(state, config);
+                cx.notify();
+                true
+            });
+            if !matches!(accepted, Ok(true)) {
+                return;
+            }
+            let events = Arc::new(Mutex::new(events));
+            loop {
+                let next = {
+                    let events = events.clone();
+                    cx.background_executor().spawn(async move { next_event(&events) }).await
+                };
+                let Some(event) = next else { break };
+                let fresh = {
+                    let client = client.clone();
+                    cx.background_executor()
+                        .spawn(async move { client.lock().ok()?.call("config.get", json!({})).ok() })
+                        .await
+                };
+                let updated = this.update(cx, |this, cx| {
+                    if event.kind == "state.changed" {
+                        if let (Ok(state), Some(config)) = (serde_json::from_value(event.data), fresh) {
+                            this.apply(state, config);
+                        }
+                    }
+                    cx.notify();
+                });
+                if updated.is_err() {
+                    return;
+                }
+            }
+        })
+    }
+
+    fn apply(&mut self, state: State, config: Value) {
+        let screens_changed = self.state.as_ref().map(|s| &s.desk.sig) != Some(&state.desk.sig);
+        if let Ok(config) = serde_json::from_value(config) {
+            self.config = config;
+        }
+        self.state = Some(state);
+        if screens_changed {
+            self.read_screens();
+        }
+        self.relink();
+    }
+
+    fn read_screens(&mut self) {
+        self.mons = monitors::enumerate();
+    }
+
+    /// The tray's answer to what's lined up, worked out here for the map.
+    fn relink(&mut self) {
+        let sig = self.state.as_ref().map(|s| s.desk.sig.clone()).unwrap_or_default();
+        let saved = self.config.desks.get(&sig).map(|d| d.borders.as_slice());
+        self.links = desk::resolve(&self.mons, saved);
+        self.layout = desk::physical_layout(&self.mons, &self.links);
+    }
+
+    pub fn desk_name(&self) -> String {
+        self.state.as_ref().map(|s| s.desk.name.clone()).unwrap_or_default()
+    }
+
+    /// Call the tray off the UI thread, then carry on here with the answer.
+    pub fn call(
+        &self,
+        method: &'static str,
+        params: Value,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+        then: impl FnOnce(&mut Panel, Result<Value, CallError>, &mut Window, &mut Context<Panel>) + 'static,
+    ) {
+        let Some(client) = self.client.clone() else {
+            window.push_notification(refusal("Seam isn't running", "Start it from the sidebar, then try again"), cx);
+            return;
+        };
+        let answer = cx.background_executor().spawn(async move {
+            match client.lock() {
+                Ok(mut c) => c.call(method, params),
+                Err(_) => Err(CallError::Io(std::io::ErrorKind::BrokenPipe.into())),
+            }
+        });
+        cx.spawn_in(window, async move |this, cx| {
+            let result = answer.await;
+            let _ = this.update_in(cx, |this, window, cx| then(this, result, window, cx));
+        })
+        .detach();
+    }
+
+    /// Run a command whose only feedback is a refusal.
+    pub fn command(&self, method: &'static str, params: Value, window: &mut Window, cx: &mut Context<Self>) {
+        self.call(method, params, window, cx, |_, result, window, cx| {
+            if let Err(e) = result {
+                window.push_notification(refusal("Seam can't do that", &error_text(&e)), cx);
+            }
+        });
+    }
+
+    /// Change settings. They show at once, and the tray has the last word.
+    pub fn patch(&mut self, patch: Value, window: &mut Window, cx: &mut Context<Self>) {
+        if let Ok(config) = self.config.patched(&patch) {
+            self.config = config;
+        }
+        self.relink();
+        cx.notify();
+        self.call("config.patch", json!({ "patch": patch }), window, cx, |this, result, window, cx| {
+            if let Err(e) = result {
+                window.push_notification(refusal("Setting left as it was", &error_text(&e)), cx);
+            }
+            this.reload_config(window, cx);
+        });
+    }
+
+    fn reload_config(&self, window: &mut Window, cx: &mut Context<Self>) {
+        self.call("config.get", json!({}), window, cx, |this, result, _, cx| {
+            if let Some(config) = result.ok().and_then(|c| serde_json::from_value(c).ok()) {
+                this.config = config;
+                this.relink();
+                cx.notify();
+            }
+        });
+    }
+
+    /// Replace every setting with `next`.
+    pub fn replace_config(&mut self, next: &Config, window: &mut Window, cx: &mut Context<Self>) {
+        let (Ok(old), Ok(new)) = (serde_json::to_value(&self.config), serde_json::to_value(next)) else { return };
+        self.patch(diff_patch(&old, &new), window, cx);
+    }
+
+    fn show(&mut self, page: Page, window: &mut Window, cx: &mut Context<Self>) {
+        self.page = page;
+        let _ = std::fs::write(last_page_file(), page.title());
+        self.clear_search(window, cx);
+        cx.notify();
+    }
+
+    fn clear_search(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.query = SharedString::default();
+        self.search.update(cx, |input, cx| input.set_value("", window, cx));
+    }
+
+    fn nav_row(&self, page: Page, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let p = palette(cx);
+        let active = self.page == page;
+        let id = ElementId::Name(format!("nav-{}", page.title()).into());
+        let focus = window.use_keyed_state(id.clone(), cx, |_, cx| cx.focus_handle()).read(cx).clone();
+        let update_ready = page == Page::About && self.state.as_ref().is_some_and(|s| s.update.is_some());
+        div()
+            .id(id)
+            .track_focus(&focus)
+            .tab_index(0)
+            .flex()
+            .items_center()
+            .gap(px(10.))
+            .h(px(32.))
+            .px(px(8.))
+            .rounded(px(6.))
+            .text_size(px(14.))
+            .cursor_pointer()
+            .when(active, |d| d.bg(p.raised).text_color(p.text))
+            .when(!active, |d| d.text_color(p.secondary).hover(|d| d.bg(p.card)))
+            .when(ui::focused(&focus, window), |d| d.focus_ring_style(window, cx))
+            .child(Icon::new(page.icon()).size(px(16.)).text_color(if active { p.text } else { p.muted }))
+            .child(div().flex_1().child(page.title()))
+            .when(update_ready, |d| d.child(ui::dot(p.accent, true)))
+            .on_click(cx.listener(move |this, _, window, cx| this.show(page, window, cx)))
+            .on_key_down(cx.listener(move |this, e: &KeyDownEvent, window, cx| {
+                if matches!(e.keystroke.key.as_str(), "space" | "enter") {
+                    this.show(page, window, cx);
+                }
+            }))
+    }
+
+    fn status_row(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let p = palette(cx);
+        let base = div().flex().items_center().gap(px(8.)).mt(px(12.)).p(px(8.)).rounded(px(8.)).bg(p.card);
+        let text = |title: String, detail: String| {
+            div()
+                .flex()
+                .flex_col()
+                .flex_1()
+                .min_w_0()
+                .child(div().text_size(px(13.)).font_weight(FontWeight::MEDIUM).child(title))
+                .child(div().text_size(px(12.)).text_color(p.secondary).truncate().child(detail))
+        };
+        let Some(state) = &self.state else {
+            return base
+                .child(ui::dot(p.negative, false))
+                .child(text("Seam isn't running".into(), "Remap is off".into()))
+                .child(
+                    ui::primary("start-seam", "Start").on_click(cx.listener(|_, _, _, cx| crate::restart_panel(cx))),
+                );
+        };
+        let (title, color, filled) = match state.remap {
+            Remap::On => ("Remap on", p.positive, true),
+            Remap::Paused => ("Remap paused", p.muted, true),
+            Remap::OffNoBorders => ("Not lined up", p.muted, false),
+        };
+        let screens = state.screens.len();
+        let detail = format!("{}, {screens} screen{}", state.desk.name, if screens == 1 { "" } else { "s" });
+        let enabled = self.config.enabled;
+        let (icon, label) =
+            if enabled { (assets::IconName::Pause, "Pause remap") } else { (assets::IconName::Play, "Resume remap") };
+        let toggle = Button::new("toggle-remap")
+            .ghost()
+            .icon(Icon::new(icon).size(px(16.)).text_color(p.secondary))
+            .tooltip(label)
+            .on_click(cx.listener(move |this, _, window, cx| {
+                this.command("remap.set", json!({ "on": !enabled }), window, cx);
+            }));
+        base.child(ui::dot(color, filled)).child(text(title.into(), detail)).child(toggle)
+    }
+
+    fn sidebar(&self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let p = palette(cx);
+        let search = Input::new(&self.search)
+            .appearance(false)
+            .prefix(Icon::new(assets::IconName::Search).size(px(16.)).text_color(p.muted))
+            .suffix(ui::keycaps("Ctrl F", false, p).text_color(p.secondary));
+        let mut top = div().flex().flex_col().gap(px(2.)).mt(px(16.));
+        for page in Page::top_group() {
+            top = top.child(self.nav_row(page, window, cx));
+        }
+        let mut app = div().flex().flex_col().gap(px(2.));
+        for page in [Page::Shortcuts, Page::General, Page::About] {
+            app = app.child(self.nav_row(page, window, cx));
+        }
+        div()
+            .flex()
+            .flex_col()
+            .flex_none()
+            .w(px(240.))
+            .h_full()
+            .p(px(12.))
+            .bg(p.sidebar)
+            .border_r_1()
+            .border_color(p.hairline)
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .h(px(32.))
+                    .px(px(8.))
+                    .rounded(px(8.))
+                    .bg(p.input)
+                    .border_1()
+                    .border_color(p.hairline)
+                    .child(search),
+            )
+            .child(self.status_row(cx))
+            .child(top)
+            .child(div().mt(px(24.)).mb(px(8.)).px(px(8.)).text_size(px(12.)).text_color(p.muted).child("App"))
+            .child(app)
+            .child(div().flex_1())
+            .child(
+                div()
+                    .px(px(8.))
+                    .text_size(px(12.))
+                    .text_color(p.muted)
+                    .child(format!("Seam {}", env!("CARGO_PKG_VERSION"))),
+            )
+    }
+
+    fn results(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let p = palette(cx);
+        let matches = search::find(&self.query);
+        let mut list = div().flex().flex_col().gap(px(24.)).child(ui::page_title(
+            "Search",
+            match matches.len() {
+                0 => format!("Nothing matches {}", self.query),
+                1 => "1 setting".to_string(),
+                n => format!("{n} settings"),
+            },
+            p,
+        ));
+        let rows = matches.iter().enumerate().map(|(i, hit)| {
+            let page = hit.page;
+            div()
+                .id(i)
+                .cursor_pointer()
+                .hover(|d| d.bg(p.raised))
+                .child(ui::row(hit.title, Some(page.title().into()), div(), p))
+                .on_click(cx.listener(move |this, _, window, cx| this.show(page, window, cx)))
+                .into_any_element()
+        });
+        let rows: Vec<AnyElement> = rows.collect();
+        if !rows.is_empty() {
+            list = list.child(ui::card(rows, p));
+        }
+        list
+    }
+}
+
+/// One line for a refused command, saying what happened and why.
+pub fn refusal(title: &str, reason: &str) -> Notification {
+    struct Feedback;
+    Notification::new().id::<Feedback>().title(title.to_string()).message(reason.to_string())
+}
+
+pub fn error_text(e: &CallError) -> String {
+    match e {
+        CallError::Rpc(e) => e.message.clone(),
+        CallError::Io(_) => "Seam stopped answering".to_string(),
+    }
+}
+
+type Session = (Client, Receiver<Event>, State, Value);
+
+fn connect(token: &str) -> Result<Session, CallError> {
+    let mut client = Client::connect("panel", Some(token))?;
+    let events = Client::subscribe("panel", Some(token), &["state", "desk", "workspace", "update", "lineup"])?;
+    let state = client.call("state.get", json!({}))?;
+    let state = serde_json::from_value(state).map_err(std::io::Error::other)?;
+    let config = client.call("config.get", json!({}))?;
+    Ok((client, events, state, config))
+}
+
+fn next_event(events: &Mutex<Receiver<Event>>) -> Option<Event> {
+    events.lock().ok()?.recv().ok()
+}
+
+impl Render for Panel {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let p = palette(cx);
+        let body = if !self.query.is_empty() {
+            self.results(cx).into_any_element()
+        } else {
+            match self.page {
+                Page::Displays => pages::displays::render(self, window, cx).into_any_element(),
+                #[cfg(feature = "preview")]
+                Page::Zones | Page::Workspaces => ui::page_title(self.page.title(), "Planned", p).into_any_element(),
+                Page::Shortcuts => pages::shortcuts::render(self, window, cx).into_any_element(),
+                Page::General => pages::general::render(self, window, cx).into_any_element(),
+                Page::About => pages::about::render(self, window, cx).into_any_element(),
+            }
+        };
+        div()
+            .track_focus(&self.focus)
+            .key_context(CONTEXT)
+            .on_action(cx.listener(|this, _: &FocusSearch, window, cx| {
+                this.search.update(cx, |input, cx| input.focus(window, cx));
+            }))
+            .on_action(cx.listener(|this, _: &ClearSearch, window, cx| this.clear_search(window, cx)))
+            .flex()
+            .size_full()
+            .bg(p.page)
+            .text_color(p.text)
+            .font_family(cx.theme().font_family.clone())
+            .child(self.sidebar(window, cx))
+            .child(
+                div().flex_1().min_w_0().h_full().child(
+                    div()
+                        .id("page")
+                        .size_full()
+                        .overflow_y_scrollbar()
+                        .child(div().flex().flex_col().gap(px(ui::SECTION_GAP)).px(px(32.)).py(px(24.)).child(body)),
+                ),
+            )
+    }
+}

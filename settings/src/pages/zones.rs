@@ -1,16 +1,17 @@
 //! Zones: a layout for each screen, and how dragging a window snaps to it.
 
+use crate::pages::zone_editor;
 use crate::panel::Panel;
 use crate::theme::{palette, Palette};
 use crate::ui::{self, card, row, section, switch};
 use gpui_kit::component::slider::Slider;
-use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::component::ThemeStyled;
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 use seam::desk::Mon;
 use seam::zones::{self, Dir, LeafTag, Node, Rect, Template, ZoneLayout};
 use serde_json::{json, Value};
+use std::rc::Rc;
 
 /// Config value and label of each key a drag can use.
 const KEYS: [(&str, &str); 3] = [("shift", "Shift"), ("ctrl", "Ctrl"), ("alt", "Alt")];
@@ -55,8 +56,6 @@ fn tile(
     let p = palette(cx);
     let id = ElementId::Name(format!("zone-tile-{}", template.title()).into());
     let focus = window.use_keyed_state(id.clone(), cx, |_, cx| cx.focus_handle()).read(cx).clone();
-    // Custom needs the editor, which comes later. It only shows when a layout already is custom.
-    let blocked = template == Template::Custom && !selected;
     let mut art = div().relative().w(px(TILE_ART.0)).h(px(TILE_ART.1));
     match art_tree(template, layout.filter(|l| l.template == template)) {
         Some(tree) => {
@@ -75,8 +74,13 @@ fn tile(
         }
         None => art = art.child(div().size_full().rounded(px(4.)).bg(p.page)),
     }
+    // Custom is made in the editor, so its tile opens it.
     let pick = move |panel: &mut Panel, window: &mut Window, cx: &mut Context<Panel>| {
-        set_template(panel, template, window, cx)
+        if template == Template::Custom {
+            return zone_editor::open(panel, window, cx);
+        }
+        let then: zone_editor::Then = Rc::new(move |panel, window, cx| set_template(panel, template, window, cx));
+        zone_editor::guard(panel, window, cx, then);
     };
     let face = div()
         .id(id)
@@ -96,19 +100,14 @@ fn tile(
         .child(
             div().text_size(px(13.)).text_color(if selected { p.text } else { p.secondary }).child(template.title()),
         );
-    let face = if blocked {
-        face.opacity(0.5).tooltip(|window, cx| {
-            Tooltip::new("Custom layouts need the editor, which isn't built yet").build(window, cx)
-        })
-    } else {
-        face.cursor_pointer().on_click(cx.listener(move |panel, _, window, cx| pick(panel, window, cx))).on_key_down(
-            cx.listener(move |panel, e: &KeyDownEvent, window, cx| {
-                if matches!(e.keystroke.key.as_str(), "space" | "enter") {
-                    pick(panel, window, cx);
-                }
-            }),
-        )
-    };
+    let face = face
+        .cursor_pointer()
+        .on_click(cx.listener(move |panel, _, window, cx| pick(panel, window, cx)))
+        .on_key_down(cx.listener(move |panel, e: &KeyDownEvent, window, cx| {
+            if matches!(e.keystroke.key.as_str(), "space" | "enter") {
+                pick(panel, window, cx);
+            }
+        }));
     // A second, fainter ring around the chosen tile.
     div()
         .id(("zone-halo", i))
@@ -121,7 +120,7 @@ fn tile(
 }
 
 /// The screen the page is showing, with the layout saved for it on this desk.
-fn chosen(panel: &Panel) -> Option<(&Mon, Option<ZoneLayout>)> {
+pub fn chosen(panel: &Panel) -> Option<(&Mon, Option<ZoneLayout>)> {
     let mon = panel.mons.get(panel.zone_screen.min(panel.mons.len().checked_sub(1)?))?;
     let sig = panel.state.as_ref().map(|s| s.desk.sig.as_str())?;
     let saved = panel.config.desks.get(sig).and_then(|d| d.zones.get(&mon.id)).and_then(zones::layout_of);
@@ -319,15 +318,23 @@ pub fn render(panel: &mut Panel, window: &mut Window, cx: &mut Context<Panel>) -
         let note = ui::description("Start Seam to set up zones", p);
         return body.child(note);
     };
+    // The desk or screen changed under the editor, so its tree is for something else.
+    let sig = panel.state.as_ref().map(|s| s.desk.sig.clone());
+    if panel.editor.as_ref().is_some_and(|e| Some(&e.sig) != sig.as_ref() || e.screen != mon.id) {
+        panel.editor = None;
+    }
     let selected = saved.as_ref().map_or(Template::None, |l| l.template);
     let labels: Vec<SharedString> =
         panel.mons.iter().enumerate().map(|(i, m)| format!("{}  {}", i + 1, m.name).into()).collect();
     let tabs = ui::choice("zone-screen", labels, None, panel.zone_screen.min(panel.mons.len() - 1), window, cx, {
         let view = view.clone();
-        move |i, _, cx| {
+        move |i, window, cx| {
             view.update(cx, |panel, cx| {
-                panel.zone_screen = i;
-                cx.notify();
+                let then: zone_editor::Then = Rc::new(move |panel, _, cx| {
+                    panel.zone_screen = i;
+                    cx.notify();
+                });
+                zone_editor::guard(panel, window, cx, then);
             })
         }
     });
@@ -339,20 +346,31 @@ pub fn render(panel: &mut Panel, window: &mut Window, cx: &mut Context<Panel>) -
     }
     let room = f64::from(window.viewport_size().width) - 240. - 64. - TILE_WIDTH as f64 * 2. - 24. - 20.;
     let caption = ui::description("Stored as parts of the screen, so a new resolution keeps the layout", p);
+    let edit_layout = ui::secondary("edit-layout", "Edit layout", cx)
+        .on_click(cx.listener(|panel, _, window, cx| zone_editor::open(panel, window, cx)));
+    let below = div().flex().items_center().justify_between().gap(px(16.)).child(caption).child(edit_layout);
+    let gap_px = zones_cfg.gap.min(32);
+    let stage = if panel.editor.is_some() {
+        zone_editor::view(panel, &mon, gap_px, room, PREVIEW_HEIGHT, window, cx)
+    } else {
+        div()
+            .flex()
+            .flex_col()
+            .gap(px(12.))
+            .child(preview(&mon, saved.as_ref(), gap_px, room, p))
+            .child(below)
+            .into_any_element()
+    };
 
     body = body
         .child(div().flex().child(tabs))
         .child(
-            div().flex().items_start().gap(px(24.)).child(tiles).child(
-                div()
-                    .flex()
-                    .flex_col()
-                    .flex_1()
-                    .min_w_0()
-                    .gap(px(12.))
-                    .child(preview(&mon, saved.as_ref(), zones_cfg.gap.min(32), room, p))
-                    .child(caption),
-            ),
+            div()
+                .flex()
+                .items_start()
+                .gap(px(24.))
+                .child(tiles)
+                .child(div().flex().flex_col().flex_1().min_w_0().child(stage)),
         )
         .child(section(
             "Snapping",

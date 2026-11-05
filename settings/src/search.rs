@@ -22,6 +22,7 @@ const ENTRIES: &[Entry] = &[
     entry(Page::Displays, "Also align Windows arrangement", "Move screens in Display settings to match", ""),
     entry(Page::Zones, "Zones on", "Hold a key while you drag a window to drop it into a zone", "snap enable"),
     entry(Page::Zones, "Layout", "Columns, rows, grid or priority for each screen", "template tiles"),
+    entry(Page::Zones, "Edit layout", "Split, merge and resize the zones of a screen", "editor custom divider"),
     entry(Page::Zones, "Show zones", "Hold while dragging", "shift ctrl alt key"),
     entry(Page::Zones, "Span zones", "Add this key to cover more", "shift ctrl alt key"),
     entry(Page::Zones, "Gap", "Space between zones and the screen edge", "padding"),

@@ -112,6 +112,24 @@ Set up first: on Zones, pick **Priority** for screen 1 and **Grid** for screen 2
 - [ ] **Changing screens.** Change a screen's resolution, then drag with Shift held. The zones match the new size, with no leftover overlay at the old one. Turn Zones off, and Task Manager's memory for `seam.exe` drops back.
 - [ ] **Overlay clean-up.** After every drag no overlay stays on any screen, including when you press Esc mid-drag or close the dragged window.
 
+## Zone editor
+
+- [ ] **Open.** On Zones, press **Edit layout** under the preview. The preview becomes the editor, with a toolbar under it: Split side by side, Split top and bottom, Merge with neighbour, Undo, Reset, Done. Press the **Custom** tile on a screen with no custom layout: it opens the editor too.
+- [ ] **No layout yet.** On a screen set to None, open the editor. It starts as one zone covering the screen, and splitting it works.
+- [ ] **Select.** Click a zone: it gets an amber outline and a faint amber fill. Tab to the preview, then use the arrow keys to move the selection from zone to zone. Tab again reaches every toolbar button, in order.
+- [ ] **Split.** Select a zone and press **Split side by side**: it becomes two zones, with the old number kept on the first. Do the same with **Split top and bottom**. The zones renumber left subtree first.
+- [ ] **Too small or too deep.** Keep splitting one zone. When its halves would be under 120 px the split buttons turn grey and a tooltip says the zone is too small to split further. Nothing crashes at any depth, and at 128 zones the tooltip says a layout can have 128 zones at most.
+- [ ] **Drag a divider.** Drag a divider. The zones follow the pointer, a tag next to it shows the two widths in px, and the divider pulls to 1/4, 1/3, 1/2, 2/3 and 3/4 when it comes within 2% of them. It never goes below 10% or above 90%.
+- [ ] **Merge.** Select one of two sibling zones and press **Merge with neighbour**: they become one. Select a zone whose neighbour is split into more zones: the button is grey and its tooltip says merging needs the zone next to it to be a single zone.
+- [ ] **Undo.** Press Ctrl+Z after a split, a merge, a Reset and a divider drag. Each undoes exactly one step, and a drag is one step. The Undo button's tooltip names the last step, for example "Undo split (Ctrl+Z)". With focus anywhere on the page outside the editor, Ctrl+Z does nothing.
+- [ ] **Reset.** Press **Reset**. The tree goes back to the template the layout started from, or to how it was when the editor opened for a custom one. It can be undone.
+- [ ] **Done.** Press **Done**. The editor closes, the Custom tile is highlighted, the preview shows the tree, and `config.json` holds `"template": "custom"` plus the tree for that screen. Shift-drag a window: it snaps to the new zones, with no restart.
+- [ ] **Esc.** Edit, then press Esc with focus on a toolbar button, then again with focus on the preview. Both times the edits are thrown away with no dialog and `config.json` is unchanged.
+- [ ] **Leaving with edits.** Edit, then press another page in the sidebar, another screen tab or another layout tile. One dialog asks "Discard layout changes?" with Discard and Keep editing. Keep editing leaves everything as it was, Discard goes where you were headed. Without any edits there is no dialog.
+- [ ] **Only Done writes.** Watch `config.json` while editing. It doesn't change until Done.
+- [ ] **Every screen.** Edit the layout of the portrait U3477 and the 1920x550 panel, which are the tricky shapes. Dividers, px widths and the saved layout follow the real screen size.
+- [ ] **Screens change.** With the editor open, unplug a screen. The editor closes without saving.
+
 ## Re-fit after a display change (experimental)
 
 Snap a few windows first: a normal one on screen 1, a spanning one across two zones, one on the 125% screen and a fixed-size one. Do each check with **Keep windows in their zones** on Zones turned on, then again with it off.

@@ -28,6 +28,8 @@ Windows 11 shows its own snap layouts when you drag a window to the top of the s
 
 Seam can't move windows from apps running as administrator. It tells you once when that happens.
 
+To make your own layout, press **Edit layout** on the Zones page (or the **Custom** tile). Click a zone and split it side by side or top and bottom, drag a divider (it snaps to quarters and thirds), merge two neighbouring zones, then press **Done**. Esc throws the changes away and Ctrl+Z undoes the last one. A layout can have up to 128 zones.
+
 Experimental: turn on **Keep windows in their zones** on the Zones page and Seam moves snapped windows back into their zones after a screen, resolution or scaling change, or after waking the PC. It's off by default, and windows you've moved since they snapped are left alone.
 
 ### Tray menu

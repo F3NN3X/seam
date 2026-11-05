@@ -27,6 +27,18 @@ Line Up has three borders, in this order. You drag the lines on the second scree
 
 On this desk, **Also align Windows arrangement** is expected to refuse. See [Align arrangement](#align-arrangement).
 
+## Upgrading from v0.1
+
+Start with a v0.1 `config.json` that has saved borders.
+
+- [ ] **Migration.** Start Seam once. `config.json` now has `"version": 2`, a `desks` entry with every border from the old `layouts`, and no `layouts`. `"tray_click"` is `"line_up"`.
+- [ ] **Backup.** `config.v1.json.bak` sits next to `config.json` and holds the original file. Restart Seam. It's unchanged.
+- [ ] **Crossings.** The log shows `resolved 3 of 3 saved link(s)`, and crossings land where they did before.
+- [ ] **Desk name.** The connected desk's `name` is `PG32UCDM + 3 more` and its `last_seen` is now. Change the `name` by hand and restart. Your name stays.
+- [ ] **New screens.** Unplug a screen and replug it. The smaller set gets its own desk, named after its first screen, and the full desk is untouched.
+- [ ] **Status file.** `status.json` sits next to `config.json`. `pid` is the running `seam.exe`, `remap` is `"on"`, and `borders` lists 3 as `lined_up`. Pause the remap: `remap` becomes `"paused"`. Unplug the U3477: `monitors` and `borders` update.
+- [ ] **Going back.** Quit Seam. To return to v0.1, replace `config.json` with `config.v1.json.bak`. A v0.1 build can't read the borders in a v2 file.
+
 ## Line Up
 
 - [ ] **Open.** Left-click the tray icon. Every screen shows its number. Border 1 of 3 is active, and the keyboard works straight away.

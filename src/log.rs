@@ -2,6 +2,7 @@
 //!
 //! Lines go to a writer thread, so file I/O never runs inside the mouse hook.
 //! With logging off, `info!` is one atomic load: no formatting, no allocation.
+//! Only the tray calls `init`, so the panel's calls into the lib write nothing.
 
 use crate::config::Config;
 use std::ffi::OsStr;
@@ -10,7 +11,6 @@ use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::sync::mpsc::{channel, Sender};
 use std::sync::OnceLock;
-use windows::Win32::System::SystemInformation::GetLocalTime;
 
 enum Msg {
     Line(String),
@@ -59,11 +59,21 @@ pub fn enabled() -> bool {
 
 pub fn write(args: fmt::Arguments) {
     let Some(tx) = TX.get() else { return };
-    let t = unsafe { GetLocalTime() };
-    let _ = tx.send(Msg::Line(format!(
-        "{:04}-{:02}-{:02} {:02}:{:02}:{:02}.{:03} {args}\n",
+    let _ = tx.send(Msg::Line(format!("{} {args}\n", stamp())));
+}
+
+#[cfg(windows)]
+fn stamp() -> String {
+    let t = unsafe { windows::Win32::System::SystemInformation::GetLocalTime() };
+    format!(
+        "{:04}-{:02}-{:02} {:02}:{:02}:{:02}.{:03}",
         t.wYear, t.wMonth, t.wDay, t.wHour, t.wMinute, t.wSecond, t.wMilliseconds
-    )));
+    )
+}
+
+#[cfg(not(windows))]
+fn stamp() -> String {
+    String::new()
 }
 
 /// Wait for queued lines to reach the file. The writer dies with the process.
@@ -75,14 +85,16 @@ pub fn flush() {
     }
 }
 
-macro_rules! info {
+#[doc(hidden)]
+#[macro_export]
+macro_rules! log_info {
     ($($arg:tt)*) => {
         if $crate::log::enabled() {
             $crate::log::write(format_args!($($arg)*));
         }
     };
 }
-pub(crate) use info;
+pub use crate::log_info as info;
 
 #[cfg(test)]
 mod tests {

@@ -95,6 +95,7 @@ powershell -c "(Select-String 'hook ([0-9.]+)us' $env:APPDATA\Seam\seam.log).Mat
 
 Turn off **Settings → System → Display → Multiple displays → Ease cursor movement between displays**.
 
+- [ ] **Warning.** Restart Seam with the setting off. A balloon warns once, and the log shows `Ease cursor movement is off`. The settings panel shows it as off.
 - [ ] **Describe what happens.** Expected: crossings where both screens have pixels at that row still remap. Elsewhere the pointer stops at the edge, because Seam only acts when a move leaves the screen across a calibrated border and lands on a physical screen. Try the top of screen 1 left of x=596, and the right edge of screen 1 below where screen 4 ends. Record what you see, then turn it back on.
 
 ## Align arrangement

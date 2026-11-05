@@ -7,7 +7,7 @@ use crate::layout::{Link, Live};
 use crate::log;
 use crate::monitors::{self, Mon};
 use crate::tray::{self, CLASS};
-use crate::{arrange, autostart, overlay};
+use crate::{arrange, autostart, ease, overlay};
 use std::cell::RefCell;
 use windows::core::{w, PCWSTR};
 use windows::Win32::Foundation::*;
@@ -45,6 +45,8 @@ struct App {
     taskbar_created: u32,
     /// Only the "new screen setup" balloon should open Line Up when clicked.
     balloon_opens_lineup: bool,
+    /// Warn once per run if Windows may stop the pointer before Seam sees it.
+    ease_warned: bool,
 }
 
 thread_local! {
@@ -212,6 +214,21 @@ fn refresh(app: &mut App) {
         app.cfg.seen.push(app.sig.clone());
         app.cfg.save();
     }
+    warn_about_ease(app);
+}
+
+/// The remap needs this Windows setting, so say so if it's off.
+fn warn_about_ease(app: &mut App) {
+    if app.links.is_empty() || app.ease_warned || ease::is_on() {
+        return;
+    }
+    log::info!("Ease cursor movement is off");
+    app.ease_warned = notify(
+        app,
+        "Ease cursor movement is off",
+        "Turn it on in Display settings, or the pointer can stop at screen edges.",
+        false,
+    );
 }
 
 fn start_lineup(app: &mut App) {
@@ -495,6 +512,7 @@ pub fn run() {
             links: Vec::new(),
             taskbar_created: RegisterWindowMessageW(w!("TaskbarCreated")),
             balloon_opens_lineup: false,
+            ease_warned: false,
         };
         APP.with(|a| *a.borrow_mut() = Some(app));
         with_app(|a| {

@@ -8,7 +8,7 @@ use gpui_kit::component::setting::{SettingField, SettingGroup, SettingItem, Sett
 use gpui_kit::component::{ActiveTheme, Theme};
 use gpui_kit::*;
 use seam::config::Config;
-use seam::{autostart, tray};
+use seam::{autostart, ease, tray};
 
 fn seam_exe() -> Option<std::path::PathBuf> {
     Some(std::env::current_exe().ok()?.with_file_name("seam.exe"))
@@ -48,6 +48,23 @@ fn start_with_windows() -> SettingItem {
     .description("Launch Seam when you sign in.")
 }
 
+fn ease_cursor() -> SettingItem {
+    let about = if ease::is_on() {
+        "On. Seam needs this Windows setting."
+    } else {
+        "Off. Turn it on, or the pointer can stop at screen edges."
+    };
+    SettingItem::new(
+        "Ease cursor movement between displays",
+        SettingField::render(|_, _, _| {
+            Button::new("open-display").label("Open").on_click(|_, _, _| {
+                let _ = std::process::Command::new("explorer").arg("ms-settings:display").spawn();
+            })
+        }),
+    )
+    .description(about)
+}
+
 fn open_folder() -> SettingItem {
     SettingItem::new(
         "Settings folder",
@@ -80,7 +97,8 @@ fn general() -> SettingPage {
                     "Move monitors in Display settings after lining up.",
                     |c| c.align_arrangement,
                     |c, on| c.align_arrangement = on,
-                )),
+                ))
+                .item(ease_cursor()),
         )
         .group(SettingGroup::new().title("Files").item(open_folder()))
 }

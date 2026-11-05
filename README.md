@@ -6,7 +6,7 @@ This is a Windows take on [Shim](https://screenshim.app/) for macOS, with one ad
 
 ## Use it
 
-1. In **Settings → System → Display → Multiple displays**, turn on **Ease cursor movement between displays**. Seam relies on it so the pointer can always leave a screen toward its neighbour.
+1. In **Settings → System → Display → Multiple displays**, turn on **Ease cursor movement between displays**. Seam relies on it so the pointer can always leave a screen toward its neighbour, and warns you if it's off.
 2. Run `seam.exe`. It lives in the tray. On a new set of screens it asks once.
 3. Click the tray icon, or choose **Line Up Screens…** in its menu. A full-screen overlay opens on every monitor, with big numbers so you know which screen is which.
 4. For each border, the reference screen shows two coloured lines. On the neighbouring screen, drag the matching lines until each one runs straight across the bezel:

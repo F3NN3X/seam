@@ -8,7 +8,7 @@ mod layout;
 
 use seam::geom;
 #[cfg(windows)]
-use seam::{autostart, config, tray};
+use seam::{autostart, config, ease, tray};
 
 #[cfg(windows)]
 mod app;

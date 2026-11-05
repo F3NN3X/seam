@@ -6,4 +6,6 @@ pub mod geom;
 #[cfg(windows)]
 pub mod autostart;
 #[cfg(windows)]
+pub mod ease;
+#[cfg(windows)]
 pub mod tray;

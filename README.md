@@ -18,6 +18,16 @@ This is a Windows take on [Shim](https://screenshim.app/) for macOS, with one ad
 
 When you finish, Seam saves the layout for that exact set of screens and turns on the remap. If **Also align Windows arrangement** is checked (it is by default), Seam also moves your monitors in the Windows arrangement. Each border then lines up at the middle of its physical overlap, so things like dragging a window between screens look right even with Seam closed. You can undo this anytime in Display settings.
 
+### Zones
+
+Open **Zones** in the Seam window, pick a layout for each screen (Columns, Rows, Grid or Priority), and hold **Shift** while you drag a window. The zones show on the screen under the pointer, the one under it turns amber, and letting go snaps the window into it. Hold **Ctrl** as well to cover several zones with one window. Both keys, the gap between zones and whether a window gets its old size back when you drag it out are on the same page.
+
+**Win+Alt+Right** and **Win+Alt+Left** move the focused window to the next or previous zone, carrying on to the next screen after the last zone. A window that isn't in a zone snaps to the one holding its centre. Layouts belong to the set of screens you have connected, so each desk keeps its own.
+
+Windows 11 shows its own snap layouts when you drag a window to the top of the screen. Seam leaves that alone. To turn it off, go to **Settings → System → Multitasking** and switch off "Show snap layouts when I drag a window to the top of my screen".
+
+Seam can't move windows from apps running as administrator. It tells you once when that happens.
+
 ### Tray menu
 
 - **Open Seam…**: opens the Seam window, which holds the other settings.
@@ -32,6 +42,7 @@ Running `seam.exe` again while it's already running opens the Seam window. `seam
 
 - **Ctrl+Shift+Alt+L**: Line Up.
 - **Ctrl+Shift+Alt+P**: pause or resume the remap.
+- **Win+Alt+Right** and **Win+Alt+Left**: move the focused window to the next or previous zone.
 
 If another app already holds one, Seam keeps running without it.
 

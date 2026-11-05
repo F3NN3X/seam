@@ -32,6 +32,8 @@ features = [
     "Win32_System_IO",
     "Win32_System_Pipes",
     "Win32_Devices_Display",
+    "Win32_Graphics_Dwm",
+    "Win32_UI_Accessibility",
     "Win32_Storage_Packaging_Appx",
     "Win32_System_WinRT",
     "ApplicationModel",

@@ -46,6 +46,7 @@ Start with a v0.1 `config.json` that has saved borders.
 - [ ] **Line up shortcut.** Press Ctrl+Shift+Alt+L. Line Up opens. Press Esc.
 - [ ] **Pause shortcut.** Press Ctrl+Shift+Alt+P. Crossings stop remapping and the tooltip says paused. Press it again and they work.
 - [ ] **Shortcut taken.** Have another app hold Ctrl+Shift+Alt+L, then start Seam. Seam runs, and `state.get` lists it in `hotkey_errors`.
+- [ ] **Zone shortcuts.** Win+Alt+Right and Win+Alt+Left are registered by default. If another app holds one, `state.get` lists `next_zone` or `prev_zone` in `hotkey_errors`.
 - [ ] **Ease balloon.** With Ease cursor movement off, click the balloon. The Seam window opens.
 
 ## Local API
@@ -75,6 +76,31 @@ Use a small client that opens `\\.\pipe\seam-<your username>` and writes one JSO
 - [ ] **Enter during a drag, middle border.** Hold the mouse button mid-drag and press Enter. The drag ends, the next border opens, and the app stays up. Releasing the button later moves nothing.
 - [ ] **Enter during a drag, last border.** Same, on border 3. Line Up finishes and the app stays up.
 - [ ] **Finish.** Press Enter on the last border. A balloon appears, the saved layout has 3 borders, and the log shows `resolved 3 of 3 saved link(s)`.
+
+## Zones
+
+Set up first: on Zones, pick **Priority** for screen 1 and **Grid** for screen 2, with **Shift** to show and **Ctrl** to span.
+
+- [ ] **Page.** Zones is in the sidebar with no preview note. The header says "Hold Shift while you drag a window to drop it into a zone", the tabs list the 4 screens, and the preview shows each zone's number and width in px. The chosen tile has an amber ring.
+- [ ] **Layouts.** Pick each of None, Columns, Rows, Grid and Priority. The preview changes, and `config.json` holds the layout under `desks[...].zones` for that screen's device path. **None** removes the entry. **Custom** is greyed out with a tooltip.
+- [ ] **Shift-drag, each screen.** Drag a window with Shift held on every screen of the test desk, including the portrait U3477. The zones show with their numbers, the zone under the pointer turns amber, and letting go snaps the window with its visible edges on the zone.
+- [ ] **Release Shift.** Hold Shift, move over a zone, release Shift, then let go of the window. The overlay goes away and the window stays where you dropped it.
+- [ ] **Span.** Hold Shift and Ctrl together and drag across two zones. The amber box covers both, and the window fills it.
+- [ ] **Across the 125% and 100% border.** Drag a window from the 125% screen to the 100% one with Shift held, and back. It lands on the zone at the right size both ways, with no jump afterwards.
+- [ ] **Maximized.** Snap a maximized window. It restores, then fills the zone.
+- [ ] **Gap 0 and 16.** Move the Gap slider to 0, then 16. The value under the title follows it, and the next snap leaves that much space between zones and at the screen edge, scaled on a screen with 125% scaling.
+- [ ] **Restore size.** Snap a window, then drag it out by its title bar. It goes back to its old size with the pointer at the same place along the title bar. Turn **Restore size when dragged out** off and it keeps the zone's size.
+- [ ] **Keys.** Choose Alt to show zones. The span choice that matches is greyed out with a tooltip. Choose the key span uses to show zones: span moves to another key.
+- [ ] **Zones off.** Turn **Zones on** off, or run `zones.set` with `{"on":false}`. Shift-drag shows nothing.
+- [ ] **Next and previous zone.** Press Win+Alt+Right with a window focused. An unsnapped window snaps to the zone holding its centre. Press again to step through the zones, and past the last one it lands in the first zone of the next screen. Win+Alt+Left goes back, wrapping the other way.
+- [ ] **Zone hotkeys in the panel.** On Shortcuts, Zones shows both shortcuts. Record new keys and they work from another app. Record one another app holds and the row says so in red.
+- [ ] **API.** `zone.move` with `{"dir":"next"}` moves the focused window as the hotkey does. With zones off or no layout set it answers error 3 with the reason.
+- [ ] **Excluded app.** Add an exe name such as `notepad.exe` to `zones.exclude` in `config.json` and reload. Dragging it with Shift held shows no overlay.
+- [ ] **Elevated window.** Run Task Manager as administrator and Shift-drag it onto a zone. It doesn't move, and you get one balloon: "Seam can't move windows from apps running as administrator." A second try in the same session shows no second balloon.
+- [ ] **Game with ClipCursor.** With zones on, run a game that confines the pointer. No overlay appears and the game isn't disturbed.
+- [ ] **Windows snap flyout.** Dragging a window to the top edge still shows Windows' own layouts. Seam leaves that setting alone.
+- [ ] **Hook timing.** Note `hook stats`, then drag windows with Shift held for 10 s. `own max` and `avg` match a run with nothing dragged, and the pointer stays smooth.
+- [ ] **Overlay clean-up.** After every drag no overlay stays on any screen, including when you press Esc mid-drag or close the dragged window.
 
 ## Settings panel
 

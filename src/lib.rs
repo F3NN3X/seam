@@ -9,6 +9,7 @@ pub mod layout;
 pub mod log;
 pub mod state;
 pub mod updates;
+pub mod zones;
 
 #[cfg(windows)]
 pub mod autostart;
@@ -22,5 +23,7 @@ pub mod package;
 pub mod process;
 #[cfg(windows)]
 pub mod tray;
+#[cfg(windows)]
+pub mod winutil;
 #[cfg(windows)]
 pub mod winver;

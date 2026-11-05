@@ -31,6 +31,9 @@ fn types_characters(combo: &str) -> bool {
     combo.contains("Ctrl") && combo.contains("Alt") && !combo.contains("Shift") && printable
 }
 
+/// Every shortcut, so each row's buttons get an id of their own.
+const ACTIONS: [&str; 4] = ["line_up", "pause", "next_zone", "prev_zone"];
+
 fn stop_recording(panel: &mut Panel) {
     panel.recording = None;
     panel.recorder = None;
@@ -76,6 +79,7 @@ fn shortcut_row(
     cx: &mut Context<Panel>,
 ) -> AnyElement {
     let p = palette(cx);
+    let slot = ACTIONS.iter().position(|a| *a == action).unwrap_or_default();
     if panel.recording == Some(action) {
         let field = div()
             .flex()
@@ -88,7 +92,7 @@ fn shortcut_row(
             .rounded(px(8.))
             .text_size(px(13.))
             .child("Press the keys…");
-        let cancel = ui::secondary(("cancel", action.len()), "Cancel", cx).on_click(cx.listener(|panel, _, _, cx| {
+        let cancel = ui::secondary(("cancel", slot), "Cancel", cx).on_click(cx.listener(|panel, _, _, cx| {
             stop_recording(panel);
             cx.notify();
         }));
@@ -109,17 +113,21 @@ fn shortcut_row(
         None => div().text_size(px(13.)).text_color(p.muted).child("Not set").into_any_element(),
     };
     let label = if combo.is_some() { "Change" } else { "Record" };
-    let button = ui::secondary(("change", action.len()), label, cx)
+    let button = ui::secondary(("change", slot), label, cx)
         .on_click(cx.listener(move |panel, _, _, cx| start_recording(panel, action, cx)));
     row_with(title, about, div().flex().items_center().gap(px(16.)).child(keys).child(button))
 }
 
 pub fn render(panel: &mut Panel, _: &mut Window, cx: &mut Context<Panel>) -> impl IntoElement {
     let p = palette(cx);
-    let (line_up, pause) = (panel.config.hotkeys.line_up.clone(), panel.config.hotkeys.pause.clone());
+    let keys = panel.config.hotkeys.clone();
     let rows = vec![
-        shortcut_row(panel, "Line up screens", "line_up", line_up.as_ref(), cx),
-        shortcut_row(panel, "Pause or resume pointer remap", "pause", pause.as_ref(), cx),
+        shortcut_row(panel, "Line up screens", "line_up", keys.line_up.as_ref(), cx),
+        shortcut_row(panel, "Pause or resume pointer remap", "pause", keys.pause.as_ref(), cx),
+    ];
+    let zone_rows = vec![
+        shortcut_row(panel, "Move window to next zone", "next_zone", keys.next_zone.as_ref(), cx),
+        shortcut_row(panel, "Move window to previous zone", "prev_zone", keys.prev_zone.as_ref(), cx),
     ];
     div()
         .flex()
@@ -127,4 +135,5 @@ pub fn render(panel: &mut Panel, _: &mut Window, cx: &mut Context<Panel>) -> imp
         .gap(px(ui::SECTION_GAP))
         .child(ui::page_title("Shortcuts", "These work anywhere in Windows, even with this window closed", p))
         .child(section("Displays", card(rows, p), p))
+        .child(section("Zones", card(zone_rows, p), p))
 }

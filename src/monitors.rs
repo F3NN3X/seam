@@ -1,5 +1,6 @@
 //! Enumerate monitors with stable IDs, friendly names, pixel rects and physical DPI.
 
+pub use crate::desk::Mon;
 use crate::geom::Rect;
 use crate::log;
 use windows::core::BOOL;
@@ -8,21 +9,6 @@ use windows::Win32::Foundation::{ERROR_SUCCESS, LPARAM, RECT};
 use windows::Win32::Graphics::Gdi::*;
 use windows::Win32::UI::HiDpi::{GetDpiForMonitor, MDT_RAW_DPI};
 use windows::Win32::UI::WindowsAndMessaging::MONITORINFOF_PRIMARY;
-
-#[derive(Clone, Debug)]
-pub struct Mon {
-    /// Stable monitor device path (survives reboots and port changes on the same GPU).
-    pub id: String,
-    /// GDI name like \\.\DISPLAY1, used to match display-config source modes.
-    pub gdi: String,
-    /// Friendly name from EDID, e.g. "DELL U2723QE".
-    pub name: String,
-    /// Desktop rect in physical pixels.
-    pub rect: Rect,
-    /// Physical pixels per inch from EDID (0 if unknown, e.g. some TVs).
-    pub raw_dpi: f64,
-    pub primary: bool,
-}
 
 fn wstr(buf: &[u16]) -> String {
     let n = buf.iter().position(|&c| c == 0).unwrap_or(buf.len());
@@ -108,6 +94,7 @@ pub fn enumerate() -> Vec<Mon> {
             mons.push(Mon {
                 id,
                 gdi,
+                named: !name.is_empty(),
                 name: if name.is_empty() { format!("Display {}", i + 1) } else { name },
                 rect: Rect { left: r.left, top: r.top, right: r.right, bottom: r.bottom },
                 raw_dpi,

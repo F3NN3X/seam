@@ -1,12 +1,13 @@
 //! Tray app: owns config, tracks monitor changes, runs the hook and the overlay.
 
-use crate::config::{signature, Config, SavedBorder};
-use crate::geom::touching;
+use crate::config::{signature, Config};
+use crate::desk::{self, has_neighbours, resolve};
 use crate::hook;
 use crate::layout::{Link, Live};
 use crate::log;
 use crate::monitors::{self, Mon};
-use crate::tray::{self, CLASS};
+use crate::status::{self, AlignResult, Remap, Status};
+use crate::tray::{self, CLASS, WM_APP_LINEUP};
 use crate::{arrange, autostart, ease, overlay};
 use std::cell::RefCell;
 use windows::core::{w, PCWSTR};
@@ -19,7 +20,6 @@ use windows::Win32::UI::Shell::*;
 use windows::Win32::UI::WindowsAndMessaging::*;
 
 const WM_APP_TRAY: u32 = WM_APP + 1;
-const WM_APP_LINEUP: u32 = WM_APP + 3;
 const TIMER_REFRESH: usize = 1;
 /// Windows silently removes low-level hooks that ever time out, so re-arm periodically.
 const TIMER_REARM: usize = 2;
@@ -47,6 +47,8 @@ struct App {
     balloon_opens_lineup: bool,
     /// Warn once per run if Windows may stop the pointer before Seam sees it.
     ease_warned: bool,
+    /// What the last arrangement attempt did, for the panel.
+    last_align: Option<AlignResult>,
 }
 
 thread_local! {
@@ -63,40 +65,6 @@ fn wide<const N: usize>(s: &str) -> [u16; N] {
         out[i] = c;
     }
     out
-}
-
-/// Resolve saved borders against the monitors that are connected right now.
-/// A border only applies if the two screens still touch on the same side.
-fn resolve(mons: &[Mon], saved: Option<&Vec<SavedBorder>>) -> Vec<Link> {
-    let Some(saved) = saved else {
-        log::info!("no saved layout for these screens");
-        return Vec::new();
-    };
-    let links: Vec<Link> = saved
-        .iter()
-        .filter_map(|s| {
-            let a = mons.iter().position(|m| m.id == s.a)?;
-            let b = mons.iter().position(|m| m.id == s.b)?;
-            if !s.map.is_valid() {
-                log::info!("link {a}->{b} dropped: invalid map {:?}", s.map);
-                return None;
-            }
-            let now = touching(&mons[a].rect, &mons[b].rect);
-            if now != Some(s.side) {
-                log::info!("link {a}->{b} dropped: saved side {:?}, now {now:?}", s.side);
-            }
-            (now == Some(s.side)).then_some(Link { a, b, side: s.side, map: s.map })
-        })
-        .collect();
-    log::info!("resolved {} of {} saved link(s)", links.len(), saved.len());
-    for l in &links {
-        log::info!("link {}->{} {:?} s={} o={}", l.a, l.b, l.side, l.map.s, l.map.o);
-    }
-    links
-}
-
-fn has_neighbours(mons: &[Mon]) -> bool {
-    (0..mons.len()).any(|i| (i + 1..mons.len()).any(|j| touching(&mons[i].rect, &mons[j].rect).is_some()))
 }
 
 /// Draw the tray icon: two screens of different sizes with a line running straight across.
@@ -199,22 +167,48 @@ fn refresh(app: &mut App) {
         return;
     }
     app.mons = monitors::enumerate();
-    app.sig = signature(app.mons.iter().map(|m| m.id.as_str()));
-    app.links = resolve(&app.mons, app.cfg.layouts.get(&app.sig));
+    let sig = signature(app.mons.iter().map(|m| m.id.as_str()));
+    let arrived = sig != app.sig && !app.mons.is_empty();
+    app.sig = sig;
+    if arrived {
+        let (sig, mons) = (&app.sig, &app.mons);
+        app.cfg = Config::edit(|c| desk::note_active(c, sig, mons, status::unix_now()));
+    }
+    app.links = resolve(&app.mons, app.cfg.desks.get(&app.sig).map(|d| d.borders.as_slice()));
     hook::set_live(Live { rects: app.mons.iter().map(|m| m.rect).collect(), links: app.links.clone() });
     arm_hook(app);
     update_tip(app);
     // New set of screens that's never been lined up: ask once. Only mark it
     // seen if the shell actually showed the prompt (it may not be up at login).
     if app.links.is_empty()
+        && app.cfg.ask_new_desks
         && has_neighbours(&app.mons)
         && !app.cfg.seen.contains(&app.sig)
         && notify(app, "New screen setup", "Click here to line up your screens.", true)
     {
-        app.cfg.seen.push(app.sig.clone());
-        app.cfg.save();
+        let sig = &app.sig;
+        app.cfg = Config::edit(|c| c.seen.push(sig.clone()));
     }
     warn_about_ease(app);
+    write_status(app);
+}
+
+/// Publish what the tray is doing for the panel.
+fn write_status(app: &App) {
+    let status = Status {
+        pid: std::process::id(),
+        version: env!("CARGO_PKG_VERSION").into(),
+        written_at: status::unix_now(),
+        remap: Remap::of(app.cfg.enabled, app.links.len()),
+        desk: app.sig.clone(),
+        monitors: app.mons.iter().map(|m| m.id.clone()).collect(),
+        borders: desk::border_states(&app.mons, &app.links),
+        last_align: app.last_align.clone(),
+        ..Status::default()
+    };
+    if let Err(e) = status.write() {
+        log::info!("status.json not written: {e}");
+    }
 }
 
 /// The remap needs this Windows setting, so say so if it's off.
@@ -234,7 +228,7 @@ fn warn_about_ease(app: &mut App) {
 fn start_lineup(app: &mut App) {
     let mons = monitors::enumerate();
     let sig = signature(mons.iter().map(|m| m.id.as_str()));
-    let saved = app.cfg.layouts.get(&sig).cloned().unwrap_or_default();
+    let saved = app.cfg.desks.get(&sig).map(|d| d.borders.clone()).unwrap_or_default();
     if !overlay::start(app.hwnd, mons, &saved) {
         notify(
             app,
@@ -266,18 +260,24 @@ fn lineup_done(app: &mut App, accepted: bool) {
         let mons = monitors::enumerate();
         let sig = signature(mons.iter().map(|m| m.id.as_str()));
         let links = resolve(&mons, Some(&res));
-        app.cfg.layouts.insert(sig.clone(), res);
-        if !app.cfg.seen.contains(&sig) {
-            app.cfg.seen.push(sig);
-        }
-        app.cfg.enabled = true;
-        app.cfg.save();
+        app.cfg = Config::edit(|c| {
+            desk::note_active(c, &sig, &mons, status::unix_now());
+            if let Some(desk) = c.desks.get_mut(&sig) {
+                desk.borders = res;
+            }
+            if !c.seen.contains(&sig) {
+                c.seen.push(sig.clone());
+            }
+            c.enabled = true;
+        });
         // A mode set can stall input for seconds; never let it run under the
         // hook, or Windows may silently remove it.
         hook::enable(false);
         let msg = if app.cfg.align_arrangement {
             let res = arrange::align(&mons, &links);
             log::info!("arrangement result: {res:?}");
+            let message = res.as_ref().err().cloned().unwrap_or_default();
+            app.last_align = Some(AlignResult { ok: res.is_ok(), message });
             match res {
                 Ok(_) => "The pointer now crosses where your screens meet.".to_string(),
                 Err(e) => format!("Pointer remap is on. Windows arrangement unchanged: {e}."),
@@ -324,13 +324,13 @@ fn show_menu(app: &mut App) {
             ID_LINEUP => start_lineup(app),
             ID_SETTINGS => open_settings(app),
             ID_ENABLED => {
-                app.cfg.enabled = !app.cfg.enabled;
-                app.cfg.save();
+                let on = !app.cfg.enabled;
+                app.cfg = Config::edit(|c| c.enabled = on);
                 refresh(app);
             }
             ID_ALIGN => {
-                app.cfg.align_arrangement = !app.cfg.align_arrangement;
-                app.cfg.save();
+                let on = !app.cfg.align_arrangement;
+                app.cfg = Config::edit(|c| c.align_arrangement = on);
             }
             ID_AUTOSTART => {
                 if let Ok(exe) = std::env::current_exe() {
@@ -513,6 +513,7 @@ pub fn run() {
             taskbar_created: RegisterWindowMessageW(w!("TaskbarCreated")),
             balloon_opens_lineup: false,
             ease_warned: false,
+            last_align: None,
         };
         APP.with(|a| *a.borrow_mut() = Some(app));
         with_app(|a| {

@@ -17,6 +17,8 @@ mod autostart;
 #[cfg(windows)]
 mod hook;
 #[cfg(windows)]
+mod log;
+#[cfg(windows)]
 mod monitors;
 #[cfg(windows)]
 mod overlay;

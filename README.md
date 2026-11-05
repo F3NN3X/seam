@@ -44,6 +44,10 @@ The hook only acts when the pointer leaves a screen across a calibrated border, 
 - Input is injected (remote desktop, automation tools).
 - The screens no longer touch on the same side as when you calibrated.
 
+## Debug log
+
+Run `seam.exe --log`, or set `SEAM_LOG=1`, to append to `%APPDATA%\Seam\seam.log`: monitors, resolved borders, every remap with its time in the hook, hook install and removal, display changes, and arrangement results. Quit any running Seam first, because a second launch only opens Line Up in the first one. Logging is off by default, and then adds only an atomic load to the hook.
+
 ## Build
 
 On Windows with Rust installed:

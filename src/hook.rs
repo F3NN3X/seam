@@ -2,7 +2,9 @@
 //! where the screens physically meet instead of at the same pixel row.
 
 use crate::layout::{decide, Live};
+use crate::log;
 use std::cell::{Cell, RefCell};
+use std::time::Instant;
 use windows::Win32::Foundation::{LPARAM, LRESULT, POINT, RECT, WPARAM};
 use windows::Win32::UI::WindowsAndMessaging::*;
 
@@ -20,14 +22,17 @@ pub fn set_live(live: Live) {
 pub fn enable(on: bool) {
     HOOK.with(|h| unsafe {
         match (on, h.get()) {
-            (true, None) => {
-                if let Ok(hh) = SetWindowsHookExW(WH_MOUSE_LL, Some(ll_proc), None, 0) {
+            (true, None) => match SetWindowsHookExW(WH_MOUSE_LL, Some(ll_proc), None, 0) {
+                Ok(hh) => {
                     h.set(Some(hh));
+                    log::info!("hook installed");
                 }
-            }
+                Err(e) => log::info!("hook install failed: {e}"),
+            },
             (false, Some(hh)) => {
-                let _ = UnhookWindowsHookEx(hh);
+                let res = UnhookWindowsHookEx(hh);
                 h.set(None);
+                log::info!("hook uninstalled: {res:?}");
             }
             _ => {}
         }
@@ -55,17 +60,29 @@ unsafe extern "system" fn ll_proc(code: i32, wparam: WPARAM, lparam: LPARAM) -> 
         let info = &*(lparam.0 as *const MSLLHOOKSTRUCT);
         // Leave injected input (remote desktop, automation, our own moves) alone.
         if info.flags & LLMHF_INJECTED == 0 {
+            let started = log::enabled().then(Instant::now);
             let mut prev = POINT::default();
             if GetCursorPos(&mut prev).is_ok() {
-                let dest = LIVE.with(|l| {
+                let (from, pt) = ((prev.x, prev.y), (info.pt.x, info.pt.y));
+                let crossing = LIVE.with(|l| {
                     let live = l.try_borrow().ok()?;
                     if live.links.is_empty() || cursor_is_confined(&live) {
                         return None;
                     }
-                    decide(&live, (prev.x, prev.y), (info.pt.x, info.pt.y))
+                    decide(&live, from, pt)
                 });
-                if let Some((x, y)) = dest {
-                    if (x, y) != (info.pt.x, info.pt.y) && SetCursorPos(x, y).is_ok() {
+                if let Some(c) = crossing {
+                    if c.to != pt && SetCursorPos(c.to.0, c.to.1).is_ok() {
+                        if let Some(t0) = started {
+                            let us = t0.elapsed().as_secs_f64() * 1e6;
+                            log::info!(
+                                "remap {from:?} -> {:?} (raw {pt:?}) border {}->{} {:?} hook {us:.1}us",
+                                c.to,
+                                c.src,
+                                c.dst,
+                                c.side
+                            );
+                        }
                         return LRESULT(1); // swallow the original move
                     }
                 }

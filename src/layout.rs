@@ -20,8 +20,17 @@ pub struct Live {
     pub links: Vec<Link>,
 }
 
+/// A remapped move: where it lands, and the border it crossed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Crossing {
+    pub to: (i32, i32),
+    pub src: usize,
+    pub dst: usize,
+    pub side: Side,
+}
+
 /// Where a move from `prev` to `pt` should land. `None` leaves it to Windows.
-pub fn decide(live: &Live, prev: (i32, i32), pt: (i32, i32)) -> Option<(i32, i32)> {
+pub fn decide(live: &Live, prev: (i32, i32), pt: (i32, i32)) -> Option<Crossing> {
     let src = live.rects.iter().position(|r| r.contains(prev.0, prev.1))?;
     let a = live.rects[src];
     let (side, along, over) = exit_of(&a, prev, pt)?;
@@ -33,8 +42,8 @@ pub fn decide(live: &Live, prev: (i32, i32), pt: (i32, i32)) -> Option<(i32, i32
         } else {
             continue;
         };
-        if let Some(p) = remap_crossing(&a, &live.rects[dst], side, &map, along, over) {
-            return Some(p);
+        if let Some(to) = remap_crossing(&a, &live.rects[dst], side, &map, along, over) {
+            return Some(Crossing { to, src, dst, side });
         }
     }
     None

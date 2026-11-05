@@ -1,6 +1,7 @@
 //! Enumerate monitors with stable IDs, friendly names, pixel rects and physical DPI.
 
 use crate::geom::Rect;
+use crate::log;
 use windows::core::BOOL;
 use windows::Win32::Devices::Display::*;
 use windows::Win32::Foundation::{ERROR_SUCCESS, LPARAM, RECT};
@@ -116,5 +117,16 @@ pub fn enumerate() -> Vec<Mon> {
     }
     // Stable, human-friendly numbering: left-to-right, then top-to-bottom.
     mons.sort_by_key(|m| (m.rect.left, m.rect.top));
+    log::info!("enumerated {} monitor(s)", mons.len());
+    for (i, m) in mons.iter().enumerate() {
+        log::info!(
+            "monitor {i}: id={} name={:?} rect={:?} raw_dpi={} primary={}",
+            m.id,
+            m.name,
+            m.rect,
+            m.raw_dpi,
+            m.primary
+        );
+    }
     mons
 }

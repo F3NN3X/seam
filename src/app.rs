@@ -4,6 +4,7 @@ use crate::config::{signature, Config, SavedBorder};
 use crate::geom::touching;
 use crate::hook;
 use crate::layout::{Link, Live};
+use crate::log;
 use crate::monitors::{self, Mon};
 use crate::{arrange, autostart, overlay};
 use std::cell::RefCell;
@@ -62,15 +63,27 @@ fn wide<const N: usize>(s: &str) -> [u16; N] {
 /// Resolve saved borders against the monitors that are connected right now.
 /// A border only applies if the two screens still touch on the same side.
 fn resolve(mons: &[Mon], saved: Option<&Vec<SavedBorder>>) -> Vec<Link> {
-    let Some(saved) = saved else { return Vec::new() };
-    saved
+    let Some(saved) = saved else {
+        log::info!("no saved layout for these screens");
+        return Vec::new();
+    };
+    let links: Vec<Link> = saved
         .iter()
         .filter_map(|s| {
             let a = mons.iter().position(|m| m.id == s.a)?;
             let b = mons.iter().position(|m| m.id == s.b)?;
-            (touching(&mons[a].rect, &mons[b].rect) == Some(s.side)).then_some(Link { a, b, side: s.side, map: s.map })
+            let now = touching(&mons[a].rect, &mons[b].rect);
+            if now != Some(s.side) {
+                log::info!("link {a}->{b} dropped: saved side {:?}, now {now:?}", s.side);
+            }
+            (now == Some(s.side)).then_some(Link { a, b, side: s.side, map: s.map })
         })
-        .collect()
+        .collect();
+    log::info!("resolved {} of {} saved link(s)", links.len(), saved.len());
+    for l in &links {
+        log::info!("link {}->{} {:?} s={} o={}", l.a, l.b, l.side, l.map.s, l.map.o);
+    }
+    links
 }
 
 fn has_neighbours(mons: &[Mon]) -> bool {
@@ -223,11 +236,14 @@ fn lineup_done(app: &mut App, accepted: bool) {
         // hook, or Windows may silently remove it.
         hook::enable(false);
         let msg = if app.cfg.align_arrangement {
-            match arrange::align(&mons, &links) {
+            let res = arrange::align(&mons, &links);
+            log::info!("arrangement result: {res:?}");
+            match res {
                 Ok(_) => "The pointer now crosses where your screens meet.".to_string(),
                 Err(e) => format!("Pointer remap is on. Windows arrangement unchanged: {e}."),
             }
         } else {
+            log::info!("arrangement skipped: setting is off");
             "The pointer now crosses where your screens meet.".to_string()
         };
         refresh(app);
@@ -326,6 +342,12 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
             LRESULT(0)
         }
         WM_DISPLAYCHANGE => {
+            log::info!(
+                "display change: {}x{}, overlay active: {}",
+                lparam.0 & 0xffff,
+                (lparam.0 >> 16) & 0xffff,
+                overlay::is_active()
+            );
             // Screens changed under us: a half-finished line-up no longer applies.
             if overlay::is_active() {
                 overlay::cancel();
@@ -335,6 +357,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
         }
         WM_POWERBROADCAST => {
             if wparam.0 == PBT_APMRESUMEAUTOMATIC as usize {
+                log::info!("resumed from sleep");
                 SetTimer(Some(hwnd), TIMER_REFRESH, 1500, None);
             }
             LRESULT(1)
@@ -391,6 +414,10 @@ pub fn run() {
             return;
         }
 
+        // After the instance check: only the running instance owns the log.
+        log::init();
+        log::info!("seam {} started", env!("CARGO_PKG_VERSION"));
+
         let hinst = GetModuleHandleW(None).unwrap_or_default();
         let wc = WNDCLASSEXW {
             cbSize: std::mem::size_of::<WNDCLASSEXW>() as u32,
@@ -444,5 +471,7 @@ pub fn run() {
             let _ = TranslateMessage(&msg);
             DispatchMessageW(&msg);
         }
+        log::info!("seam exiting");
+        log::flush();
     }
 }

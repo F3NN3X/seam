@@ -1,0 +1,84 @@
+# Drafts a GitHub release on a version tag. A person publishes it. Secrets:
+# MINISIGN_SECRET_KEY (the full contents of the minisign secret key file) and
+# MINISIGN_PASSWORD, held in the `release` environment, which needs a required
+# reviewer, so a workflow edited on another branch can't reach the key.
+# Setting them up is in packaging/README.md.
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: windows-latest
+    environment: release
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Versions match the tag
+        shell: bash
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          for f in Cargo.toml settings/Cargo.toml; do
+            v=$(grep -m1 '^version' "$f" | cut -d'"' -f2)
+            [ "$v" = "$tag" ] || { echo "$f is $v, tag is $tag"; exit 1; }
+          done
+
+      - name: Short build id
+        shell: bash
+        run: |
+          echo "SEAM_BUILD=${GITHUB_SHA::7}" >> "$GITHUB_ENV"
+          # The tag's annotation holds the release notes, and checkout can turn it into a bare tag.
+          git fetch --force --tags origin "refs/tags/$GITHUB_REF_NAME:refs/tags/$GITHUB_REF_NAME"
+
+      - run: cargo build --release --workspace
+
+      - name: Manifest and checksums
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag="${GITHUB_REF_NAME#v}"
+          mkdir dist
+          cp target/release/seam.exe target/release/seam-settings.exe dist/
+          pre=false; [[ "$tag" == *-* ]] && pre=true
+          notes=$(git tag -l --format='%(contents)' "$GITHUB_REF_NAME")
+          python - "$tag" "$pre" "$notes" <<'PY'
+          import hashlib, json, os, sys, datetime
+          tag, pre, notes = sys.argv[1], sys.argv[2] == "true", sys.argv[3]
+          files = [{"name": n, "size": os.path.getsize(f"dist/{n}"),
+                    "sha256": hashlib.sha256(open(f"dist/{n}", "rb").read()).hexdigest()}
+                   for n in ("seam.exe", "seam-settings.exe")]
+          json.dump({"version": tag, "date": datetime.date.today().isoformat(), "prerelease": pre,
+                     "notes": notes.strip(), "files": files}, open("dist/latest.json", "w"), indent=2)
+          PY
+
+      - name: Install minisign
+        shell: pwsh
+        run: choco install minisign --version 0.8.0 --no-progress -y
+
+      - name: Sign manifest
+        shell: bash
+        env:
+          MINISIGN_SECRET_KEY: ${{ secrets.MINISIGN_SECRET_KEY }}
+          MINISIGN_PASSWORD: ${{ secrets.MINISIGN_PASSWORD }}
+        run: |
+          trap 'rm -f "$RUNNER_TEMP/seam.key"' EXIT
+          printf '%s' "$MINISIGN_SECRET_KEY" > "$RUNNER_TEMP/seam.key"
+          printf '%s\n' "$MINISIGN_PASSWORD" | minisign -S -s "$RUNNER_TEMP/seam.key" -m dist/latest.json
+
+      - name: Zip for manual download
+        shell: pwsh
+        run: Compress-Archive -Path dist/seam.exe, dist/seam-settings.exe, README.md, LICENSE -DestinationPath "dist/seam-$($env:GITHUB_REF_NAME.TrimStart('v'))-windows-x64.zip"
+
+      # A draft only. Publishing is a person's click.
+      - name: Draft release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          flags="--draft"; [[ "$GITHUB_REF_NAME" == *-* ]] && flags="$flags --prerelease"
+          gh release create "$GITHUB_REF_NAME" $flags --notes-from-tag dist/*

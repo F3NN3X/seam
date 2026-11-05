@@ -8,6 +8,7 @@ mod panel;
 mod search;
 mod theme;
 mod ui;
+mod update;
 
 use gpui_kit::*;
 use panel::{Page, Panel};
@@ -32,7 +33,8 @@ fn next_to_this_exe(name: &str) -> Option<std::path::PathBuf> {
 fn hand_over_to_tray(page: Option<String>) {
     if Client::connect("seam-settings", None).is_err() {
         if let Some(tray) = next_to_this_exe("seam.exe") {
-            let _ = std::process::Command::new(tray).spawn();
+            // Only the window was asked for, so the tray needn't open another.
+            let _ = std::process::Command::new(tray).arg("--tray-only").spawn();
         }
     }
     let started = Instant::now();
@@ -55,6 +57,13 @@ pub fn restart_panel(cx: &mut App) {
 }
 
 fn main() {
+    // The updater's two headless modes. Neither opens a window.
+    if std::env::args().any(|a| a == "--check-updates") {
+        std::process::exit(update::check_main());
+    }
+    if let Some(version) = arg_after("--install") {
+        std::process::exit(update::install_main(&version));
+    }
     let page = arg_after("--page");
     let Some(token) = arg_after("--token") else {
         hand_over_to_tray(page);

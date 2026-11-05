@@ -99,6 +99,23 @@ pub fn primary(id: impl Into<ElementId>, label: impl Into<SharedString>) -> Butt
     Button::new(id).label(label).primary().rounded(px(8.))
 }
 
+/// A dashed note, for what needs saying but not doing right now. It may carry one button.
+pub fn note(text: impl Into<SharedString>, action: Option<Button>, p: Palette) -> Div {
+    div()
+        .flex()
+        .items_center()
+        .justify_between()
+        .gap(px(16.))
+        .px(px(16.))
+        .py(px(12.))
+        .border_1()
+        .border_dashed()
+        .border_color(p.hairline_strong)
+        .rounded(px(12.))
+        .child(div().flex_1().text_size(px(13.)).line_height(px(18.)).text_color(p.secondary).child(text.into()))
+        .children(action)
+}
+
 /// Status is always a dot and a word. Filled for good, hollow otherwise.
 pub fn dot(color: Hsla, filled: bool) -> Div {
     let d = div().size(px(8.)).flex_none().rounded_full();

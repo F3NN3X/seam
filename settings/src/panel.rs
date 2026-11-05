@@ -1,5 +1,6 @@
 //! The window: the link to the tray, the sidebar, and which page is showing.
 
+use crate::pages::updates::UpdateUi;
 use crate::theme::palette;
 use crate::{pages, search, ui};
 use gpui_kit::component::button::{Button, ButtonVariants};
@@ -14,7 +15,9 @@ use seam::config::{diff_patch, Config};
 use seam::desk::{self, Mon, Placed};
 use seam::layout::Link;
 use seam::monitors;
+use seam::package::{self, Startup};
 use seam::state::{Remap, State};
+use seam::updates::{self, UpdateFile};
 use serde_json::{json, Value};
 use std::path::PathBuf;
 use std::sync::mpsc::Receiver;
@@ -106,6 +109,15 @@ pub struct Panel {
     /// A shortcut that works but types characters on some keyboards.
     pub hotkey_warning: Option<&'static str>,
     pub toast_generation: u64,
+    /// What the updater left in its state file, read when the tray says it changed.
+    pub update_file: UpdateFile,
+    pub update_ui: UpdateUi,
+    /// The Store copy's "Start with Windows", which Windows keeps. `None` until it answers.
+    pub startup: Option<Startup>,
+    /// A GitHub copy is still installed next to this Store copy.
+    pub dual_install: bool,
+    /// Settings from an earlier GitHub install, offered once.
+    pub import_offer: Option<Config>,
     /// The tray was reachable earlier, so a reconnect means a new tray.
     was_linked: bool,
     _link: Task<()>,
@@ -152,13 +164,45 @@ impl Panel {
             recorder: None,
             hotkey_warning: None,
             toast_generation: 0,
+            update_file: updates::read(),
+            update_ui: UpdateUi::Idle,
+            startup: None,
+            dual_install: package::is_packaged() && package::unpackaged_copy_installed(),
+            import_offer: package::take_import_offer(),
             was_linked: false,
             _link: Task::ready(()),
             _subscriptions: subscriptions,
         };
         panel.read_screens();
         panel._link = panel.link(cx);
+        if package::is_packaged() {
+            panel.refresh_startup(cx);
+        }
         panel
+    }
+
+    /// Ask Windows about the startup task. It blocks, so it runs off the UI thread.
+    fn refresh_startup(&self, cx: &mut Context<Self>) {
+        cx.spawn(async move |this, cx| {
+            let state = cx.background_executor().spawn(async { package::startup_state() }).await;
+            let _ = this.update(cx, |this, cx| {
+                this.startup = state;
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    /// Turn the Store copy's startup task on or off.
+    pub fn set_startup(&self, on: bool, cx: &mut Context<Self>) {
+        cx.spawn(async move |this, cx| {
+            let state = cx.background_executor().spawn(async move { package::set_startup(on) }).await;
+            let _ = this.update(cx, |this, cx| {
+                this.startup = state.or(this.startup);
+                cx.notify();
+            });
+        })
+        .detach();
     }
 
     pub fn bind_keys(cx: &mut App) {
@@ -237,6 +281,10 @@ impl Panel {
         let screens_changed = self.state.as_ref().map(|s| &s.desk.sig) != Some(&state.desk.sig);
         if let Ok(config) = serde_json::from_value(config) {
             self.config = config;
+        }
+        // The tray reads the updater's file and says so in the state.
+        if self.state.as_ref().map(|s| &s.update) != Some(&state.update) {
+            self.update_file = updates::read();
         }
         self.state = Some(state);
         if screens_changed {
@@ -344,7 +392,8 @@ impl Panel {
         let active = self.page == page;
         let id = ElementId::Name(format!("nav-{}", page.title()).into());
         let focus = window.use_keyed_state(id.clone(), cx, |_, cx| cx.focus_handle()).read(cx).clone();
-        let update_ready = page == Page::About && self.state.as_ref().is_some_and(|s| s.update.is_some());
+        let update_ready =
+            page == Page::About && self.state.as_ref().is_some_and(|s| s.update.as_ref().is_some_and(|u| u.ready));
         div()
             .id(id)
             .track_focus(&focus)
@@ -461,6 +510,27 @@ impl Panel {
             )
     }
 
+    /// Dashed notes at the top of every page.
+    fn banners(&self, cx: &mut Context<Self>) -> Vec<Div> {
+        let p = palette(cx);
+        let mut banners = Vec::new();
+        if self.dual_install {
+            let text = "Seam is installed twice. Uninstall the GitHub version to keep the Store one";
+            banners.push(ui::note(text, None, p));
+        }
+        if self.import_offer.is_some() {
+            let import = ui::secondary("import-earlier", "Import", cx).on_click(cx.listener(|panel, _, window, cx| {
+                if let Some(earlier) = panel.import_offer.take() {
+                    panel.replace_config(&earlier, window, cx);
+                    window.push_notification(Notification::new().message("Imported your settings"), cx);
+                }
+                cx.notify();
+            }));
+            banners.push(ui::note("Import settings from your earlier Seam", Some(import), p));
+        }
+        banners
+    }
+
     fn results(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let p = palette(cx);
         let matches = search::find(&self.query);
@@ -534,6 +604,7 @@ impl Render for Panel {
                 Page::About => pages::about::render(self, window, cx).into_any_element(),
             }
         };
+        let banners = self.banners(cx);
         div()
             .track_focus(&self.focus)
             .key_context(CONTEXT)
@@ -547,14 +618,8 @@ impl Render for Panel {
             .text_color(p.text)
             .font_family(cx.theme().font_family.clone())
             .child(self.sidebar(window, cx))
-            .child(
-                div().flex_1().min_w_0().h_full().child(
-                    div()
-                        .id("page")
-                        .size_full()
-                        .overflow_y_scrollbar()
-                        .child(div().flex().flex_col().gap(px(ui::SECTION_GAP)).px(px(32.)).py(px(24.)).child(body)),
-                ),
-            )
+            .child(div().flex_1().min_w_0().h_full().child(div().id("page").size_full().overflow_y_scrollbar().child(
+                div().flex().flex_col().gap(px(ui::SECTION_GAP)).px(px(32.)).py(px(24.)).children(banners).child(body),
+            )))
     }
 }

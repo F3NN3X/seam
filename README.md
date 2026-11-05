@@ -7,7 +7,7 @@ This is a Windows take on [Shim](https://screenshim.app/) for macOS, with one ad
 ## Use it
 
 1. In **Settings → System → Display → Multiple displays**, turn on **Ease cursor movement between displays**. Seam relies on it so the pointer can always leave a screen toward its neighbour, and warns you if it's off.
-2. Run `seam.exe`. It lives in the tray. On a new set of screens it asks once.
+2. Run `seam.exe`. It lives in the tray, and opens the Seam window when you start it yourself. At sign-in it starts in the tray only. On a new set of screens it asks once.
 3. Choose **Line Up Screens…** in the tray menu, or press Ctrl+Shift+Alt+L. A full-screen overlay opens on every monitor, with big numbers so you know which screen is which.
 4. For each border, the reference screen shows two coloured lines. On the neighbouring screen, drag the matching lines until each one runs straight across the bezel:
    - **Grab a line** to move just that line. This sets the scale.
@@ -34,6 +34,17 @@ Running `seam.exe` again while it's already running opens the Seam window. `seam
 - **Ctrl+Shift+Alt+P**: pause or resume the remap.
 
 If another app already holds one, Seam keeps running without it.
+
+## Install and update
+
+Seam comes two ways, and both run the same code.
+
+- **Microsoft Store.** The Store signs it and updates it, so Seam's own updater is off. About says so and opens the Store's updates page. "Start with Windows" uses the Store's startup task, and Windows Settings, Startup apps can turn it off, in which case General says so.
+- **GitHub.** Download `seam-X.Y.Z-windows-x64.zip`, unzip it and keep both exes together. It's unsigned, so see [Troubleshooting](#troubleshooting). It updates itself.
+
+The GitHub build checks for a new version two minutes after it starts and then once a day, and it tells you with a notification. It downloads the update ahead of time and only installs one that Seam's signing key signed. **Install and restart** in About swaps the files and starts Seam again with your settings. **Install updates on their own** does the same while you're away from the computer, and tells you afterwards. If Seam sits in a folder that needs admin rights, About says so and offers the download page instead. **Include pre-releases** is off by default.
+
+If both copies are installed, the Store copy runs and the GitHub copy is asked to quit, because two copies would both hook the mouse. Seam shows a note until you remove the GitHub one. The first time the Store copy runs, it offers to import the settings of an earlier GitHub install.
 
 ## How it works
 
@@ -65,13 +76,23 @@ cargo build --release
 
 This builds the tray app, `target\release\seam.exe`. To include the settings panel, run `cargo build --release --workspace`, which also needs CMake and the Visual Studio C++ tools. Keep `seam-settings.exe` next to `seam.exe`.
 
+To build the Store package, see `packaging/README.md`.
+
 To cross-compile from Linux, use `./build-cross.sh`. It needs `mingw-w64` and Rust's library sources for `-Zbuild-std`.
 
 `cargo test` runs the geometry and config tests on any OS.
+
+## Troubleshooting
+
+- **"Windows protected your PC".** The GitHub build isn't signed, so SmartScreen warns about it. Choose **More info**, then **Run anyway**. The Store version is signed.
+- **Smart App Control blocks it.** Smart App Control can refuse unsigned apps outright, with no way to run them. Use the Store version.
+- **The zip won't run.** Windows marks a downloaded zip as untrusted. Unblock it before unzipping: right-click it, choose **Properties**, tick **Unblock**. Or run `Unblock-File seam-X.Y.Z-windows-x64.zip` in PowerShell.
+- **A shortcut doesn't work.** NVIDIA, AMD and Intel overlays hold some combinations. General and Shortcuts show a conflict in red. Choose another one in Shortcuts.
+- **No update arrives.** About says why when a check fails. The most common cause is a network that blocks `api.github.com`. Check by hand with **Check now**.
 
 ## Limits
 
 - Borders are found from the Windows arrangement: two screens must touch there. Screens that touch on your desk but have a gap in the layout ("glue") aren't supported yet.
 - Rotated screens work as long as Windows reports their rotated size, which it does. Mirrored screens have nothing to line up.
 - "Align Windows arrangement" refuses layouts where moving one screen would break another border (some 2×2 grids). The pointer remap still works in those layouts.
-- The tray icon is drawn at runtime, and the exe itself has no icon yet.
+- The tray icon is drawn at runtime.

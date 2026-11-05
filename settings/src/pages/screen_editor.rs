@@ -49,39 +49,45 @@ fn wanted(panel: &Panel) -> Option<(Rect, bool)> {
 
 /// Make the window match the editor: open it, move it to another screen, swap
 /// its mode, or close it. Called from every draw, and a no-op once it matches.
-pub fn sync(panel: &mut Panel, window: &Window, cx: &mut Context<Panel>) {
+pub fn sync(panel: &mut Panel, cx: &mut Context<Panel>) {
     let matches = match (&panel.screen_window, wanted(panel)) {
         (None, None) => true,
         (Some(shown), Some((area, mirror))) => shown.area == area && shown.mirror == mirror,
         _ => false,
     };
     if !matches {
-        // Windows are opened and closed once this draw is over.
-        cx.defer_in(window, |panel, _, cx| apply(panel, cx));
+        // A new window draws as it opens and reads the panel, so this has to
+        // run with the panel free, not just after its draw.
+        let entity = cx.entity();
+        cx.defer(move |cx| apply(entity, cx));
     }
 }
 
-fn apply(panel: &mut Panel, cx: &mut Context<Panel>) {
-    let (old, want) = (panel.screen_window.take(), wanted(panel));
-    panel.screen_window = match (old, want) {
+fn apply(entity: Entity<Panel>, cx: &mut App) {
+    let (old, want) = entity.update(cx, |panel, _| (panel.screen_window.take(), wanted(panel)));
+    let shown = match (old, want) {
         (None, None) => None,
         (Some(old), None) => {
             close(&old, cx);
             None
         }
-        (None, Some((area, mirror))) => open(&cx.entity(), area, mirror, cx),
+        (None, Some((area, mirror))) => open(&entity, area, mirror, cx),
         (Some(old), Some((area, mirror))) if old.mirror == mirror => {
             let moved = old.handle.update(cx, |view, _, _| view.area = area).is_ok();
             moved.then(|| {
-                panelwin::place(TITLE, PANEL_TITLE, area, mirror);
+                place_later(area, mirror, cx);
                 Shown { area, ..old }
             })
         }
         (Some(old), Some((area, mirror))) => {
             close(&old, cx);
-            open(&cx.entity(), area, mirror, cx)
+            open(&entity, area, mirror, cx)
         }
     };
+    entity.update(cx, |panel, cx| {
+        panel.screen_window = shown;
+        cx.notify();
+    });
 }
 
 fn close(shown: &Shown, cx: &mut App) {
@@ -113,8 +119,17 @@ fn open(panel: &Entity<Panel>, area: Rect, mirror: bool, cx: &mut App) -> Option
             cx.new(|cx| ScreenEditor::new(panel.clone(), area, mirror, window, cx))
         })
         .ok()?;
-    panelwin::place(TITLE, PANEL_TITLE, area, mirror);
+    place_later(area, mirror, cx);
     Some(Shown { handle, area, mirror })
+}
+
+/// gpui only hears about the new size if it isn't mid-update when Win32 sends
+/// it, so this runs as a task of its own.
+fn place_later(area: Rect, mirror: bool, cx: &mut App) {
+    cx.spawn(async move |_| {
+        panelwin::place(TITLE, PANEL_TITLE, area, mirror);
+    })
+    .detach();
 }
 
 /// The panel's activation brings the editor window back behind it.
@@ -162,9 +177,7 @@ impl Render for ScreenEditor {
             ((f32::from(size.width) * scale).round() as i32, (f32::from(size.height) * scale).round() as i32);
         if ((got_w - self.area.w).abs() > 1 || (got_h - self.area.h).abs() > 1) && self.retries < RETRIES {
             self.retries += 1;
-            cx.defer_in(window, |this, _, _| {
-                panelwin::place(TITLE, PANEL_TITLE, this.area, this.mirror);
-            });
+            place_later(self.area, self.mirror, cx);
         }
         let panel = self.panel.read(cx);
         let Some(editor) = panel.editor.as_ref() else { return div().into_any_element() };

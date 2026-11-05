@@ -656,7 +656,7 @@ impl Render for Panel {
             }
         };
         let banners = self.banners(cx);
-        pages::screen_editor::sync(self, window, cx);
+        pages::screen_editor::sync(self, cx);
         div()
             .track_focus(&self.focus)
             .key_context(CONTEXT)

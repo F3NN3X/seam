@@ -7,7 +7,7 @@ use crate::hook;
 use crate::layout::{Link, Live};
 use crate::log;
 use crate::monitors::{self, Mon};
-use crate::snap::{self, WM_APP_SNAP_BLOCKED};
+use crate::snap::{self, WM_APP_REFIT, WM_APP_SNAP_BLOCKED};
 use crate::tray::{self, CLASS, WM_APP_API, WM_APP_LINEUP};
 use crate::{arrange, ease, hotkey, identify, overlay};
 use seam::api::{self, Client, Command, Reply, RpcError};
@@ -722,6 +722,7 @@ fn drain_api(app: &mut App) {
 }
 
 fn lineup_done(app: &mut App, accepted: bool) {
+    snap::line_up_ended();
     if let (true, Some(res)) = (accepted, overlay::take_result()) {
         let mons = monitors::enumerate();
         let sig = signature(mons.iter().map(|m| m.id.as_str()));
@@ -878,6 +879,17 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
             with_app(update_read);
             LRESULT(0)
         }
+        WM_APP_REFIT => {
+            snap::refit_found();
+            LRESULT(0)
+        }
+        // The work area changed, which is what a scaling change or a moved taskbar does.
+        WM_SETTINGCHANGE => {
+            if wparam.0 == SPI_SETWORKAREA.0 as usize {
+                snap::display_changed();
+            }
+            DefWindowProcW(hwnd, msg, wparam, lparam)
+        }
         WM_APP_SNAP_BLOCKED => {
             let body = "Seam can't move windows from apps running as administrator.";
             with_app(|a| notify(a, "Seam", body, BalloonAction::None));
@@ -926,12 +938,14 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                 overlay::cancel();
             }
             SetTimer(Some(hwnd), TIMER_REFRESH, 800, None);
+            snap::display_changed();
             LRESULT(0)
         }
         WM_POWERBROADCAST => {
             if wparam.0 == PBT_APMRESUMEAUTOMATIC as usize {
                 log::info!("resumed from sleep");
                 SetTimer(Some(hwnd), TIMER_REFRESH, 1500, None);
+                snap::display_changed();
             }
             LRESULT(1)
         }

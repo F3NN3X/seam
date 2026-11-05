@@ -3,7 +3,7 @@
 //! that lives only while a window is being dragged. Nothing here touches the
 //! mouse hook (D7).
 
-use crate::{log, zone_paint};
+use crate::{log, overlay, zone_paint};
 use seam::config::{Config, ZoneSettings};
 use seam::desk::Mon;
 use seam::geom;
@@ -17,6 +17,11 @@ use windows::Win32::UI::Accessibility::*;
 use windows::Win32::UI::HiDpi::{GetDpiForMonitor, MDT_EFFECTIVE_DPI};
 use windows::Win32::UI::Input::KeyboardAndMouse::*;
 use windows::Win32::UI::WindowsAndMessaging::*;
+
+#[path = "refit.rs"]
+mod refit;
+
+pub use refit::{display_changed, found as refit_found, line_up_ended, WM_APP_REFIT};
 
 /// A window the tray couldn't move, probably because it runs as administrator.
 pub const WM_APP_SNAP_BLOCKED: u32 = WM_APP + 14;
@@ -74,6 +79,8 @@ struct Drag {
     /// The window's rect when the drag began.
     start: Rect,
     was_maximized: bool,
+    /// The window carried a zone stamp when the drag began.
+    stamped: bool,
     /// What the window's snapped entry said when the drag began, if it was snapped.
     /// Its old size is given back at the drop, or carried to the next zone.
     was_snapped: Option<Option<Old>>,
@@ -110,6 +117,8 @@ struct Pending {
     before: Rect,
     steps: VecDeque<Step>,
     retries: u8,
+    /// A re-fit after a display change: say nothing if the window doesn't move.
+    quiet: bool,
     timer: usize,
 }
 
@@ -127,6 +136,7 @@ struct Engine {
     overlays: HashMap<String, HWND>,
     pending: Option<Pending>,
     warned: bool,
+    refit: refit::Refit,
 }
 
 thread_local! {
@@ -218,6 +228,9 @@ pub fn update(owner: HWND, cfg: &Config, sig: &str, mons: &[Mon]) {
         e.settings = cfg.zones.clone();
         e.exclude = exclude;
         e.screens = screens;
+        if !e.settings.refit {
+            e.refit_stop();
+        }
         // The screens may have changed, and the windows are made again when needed.
         for (_, overlay) in e.overlays.drain() {
             zone_paint::destroy(overlay);
@@ -333,6 +346,7 @@ impl Engine {
             return;
         }
         let was_snapped = self.current(hwnd).map(|s| s.old);
+        let stamped = winutil::has_zone_stamp(hwnd);
         let button = Some(main_button()).filter(|b| held(*b));
         let timer = unsafe { SetTimer(None, 0, TICK_MS, Some(on_tick)) };
         let was_maximized = winutil::is_maximized(hwnd);
@@ -341,6 +355,7 @@ impl Engine {
             phase: Phase::Waiting,
             start,
             was_maximized,
+            stamped,
             was_snapped,
             button,
             geometry,
@@ -484,9 +499,24 @@ impl Engine {
         }
         self.hide_all();
         let hwnd = hwnd_of(drag.hwnd);
+        self.finish_drag(&drag, dropped, hwnd);
+        // A re-fit that had to wait for this drag can go now.
+        self.refit_resume();
+    }
+
+    fn finish_drag(&mut self, drag: &Drag, dropped: bool, hwnd: HWND) {
+        // Resized by hand: it's no longer in its zone.
+        if dropped && drag.phase == Phase::Resizing {
+            self.unsnap(hwnd, drag.stamped);
+            return;
+        }
         // Maximized by the drag itself is Windows' top-edge snap, or a browser tab
         // merging back into a window. Either way it isn't ours to place.
-        if !dropped || drag.phase != Phase::Moving || (winutil::is_maximized(hwnd) && !drag.was_maximized) {
+        if !dropped || drag.phase != Phase::Moving {
+            return;
+        }
+        if winutil::is_maximized(hwnd) && !drag.was_maximized {
+            self.unsnap(hwnd, drag.stamped);
             return;
         }
         let lit = drag.shown.and_then(|view| Some((view.screen, view.hit?)));
@@ -497,12 +527,20 @@ impl Engine {
                     self.restore_size(hwnd, old);
                 }
             }
-            self.snapped.remove(&drag.hwnd);
+            self.unsnap(hwnd, drag.stamped);
             return;
         };
         let g = &drag.geometry[screen];
         let rect = zones::span(g.zones[a], g.zones[b]);
         self.snap_to(hwnd, g, (a.min(b), a.max(b)), rect, drag.was_snapped);
+    }
+
+    /// The window stopped being in a zone, so forget it, including the stamp on the window.
+    fn unsnap(&mut self, hwnd: HWND, stamped: bool) {
+        self.snapped.remove(&(hwnd.0 as isize));
+        if stamped {
+            winutil::clear_zone_stamp(hwnd);
+        }
     }
 
     fn snap_to(&mut self, hwnd: HWND, g: &Placed, (from, to): (usize, usize), rect: Rect, was: Option<Option<Old>>) {
@@ -519,8 +557,10 @@ impl Engine {
         };
         // The screen's DPI, not the window's: a window that ignores DPI needs no extra step.
         let crosses = winutil::monitor_dpi(hwnd) != g.dpi;
-        self.place(hwnd, rect, crosses);
+        self.place(hwnd, rect, crosses, false);
         self.snapped.insert(key, Snapped { old, screen: g.id.clone(), from, to, at: rect });
+        // The zones the window covers, kept on the window so a restart of the tray remembers them.
+        winutil::stamp_zones(hwnd, &refit::covered(&g.cells, from, to));
         if self.snapped.len() > MAX_SNAPPED {
             // Windows that closed since. A system-wide destroy hook would cost more than this.
             self.snapped.retain(|k, _| unsafe { IsWindow(Some(hwnd_of(*k))) }.as_bool());
@@ -532,10 +572,10 @@ impl Engine {
 
     /// Put the window's visible frame on `target`, a step at a time with the
     /// app's own reactions in between (D8).
-    fn place(&mut self, hwnd: HWND, target: Rect, crosses_dpi: bool) {
-        let Some(before) = winutil::window_rect(hwnd) else { return };
+    fn place(&mut self, hwnd: HWND, target: Rect, crosses_dpi: bool, quiet: bool) -> bool {
+        let Some(before) = winutil::window_rect(hwnd) else { return false };
         if winutil::visible_rect(hwnd) == Some(target) {
-            return;
+            return false;
         }
         let mut steps = VecDeque::new();
         if winutil::is_maximized(hwnd) {
@@ -557,11 +597,20 @@ impl Engine {
                 }
             }
         }
-        self.pending = Some(Pending { hwnd: hwnd.0 as isize, target, before, steps, retries: 0, timer: 0 });
-        self.advance();
+        self.pending = Some(Pending { hwnd: hwnd.0 as isize, target, before, steps, retries: 0, quiet, timer: 0 });
+        self.advance_step();
+        true
     }
 
+    /// The settle timer fired. When the placement is over, the next re-fit can start.
     fn advance(&mut self) {
+        self.advance_step();
+        if self.pending.is_none() {
+            self.refit_pump();
+        }
+    }
+
+    fn advance_step(&mut self) {
         let Some(mut p) = self.pending.take() else { return };
         if p.timer != 0 {
             unsafe {
@@ -579,7 +628,9 @@ impl Engine {
             Some(Step::Fit) => winutil::fit(hwnd, p.target),
             Some(Step::Verify) => {
                 if winutil::window_rect(hwnd) == Some(p.before) {
-                    self.blocked();
+                    if !p.quiet {
+                        self.blocked();
+                    }
                     return;
                 }
                 // It moved, but an app that answered a DPI change late can leave it off by its margins.

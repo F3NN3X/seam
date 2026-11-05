@@ -1,8 +1,9 @@
-# Drafts a GitHub release on a version tag. A person publishes it. Secrets:
-# MINISIGN_SECRET_KEY (the full contents of the minisign secret key file) and
-# MINISIGN_PASSWORD, held in the `release` environment, which needs a required
-# reviewer, so a workflow edited on another branch can't reach the key.
-# Setting them up is in packaging/README.md.
+# Drafts a GitHub release on a version tag. A person publishes it. Signing is
+# skipped until the `release` environment holds MINISIGN_SECRET_KEY (the full
+# contents of the minisign secret key file) and MINISIGN_PASSWORD. Without a
+# signature the updater ignores the release, so it's a manual download only.
+# That environment needs a required reviewer, so a workflow edited on another
+# branch can't reach the key. Setting it up is in packaging/README.md.
 name: Release
 
 on:
@@ -16,6 +17,8 @@ jobs:
   release:
     runs-on: windows-latest
     environment: release
+    env:
+      SIGN: ${{ secrets.MINISIGN_SECRET_KEY != '' }}
     steps:
       - uses: actions/checkout@v7
 
@@ -57,10 +60,12 @@ jobs:
           PY
 
       - name: Install minisign
+        if: env.SIGN == 'true'
         shell: pwsh
         run: choco install minisign --version 0.8.0 --no-progress -y
 
       - name: Sign manifest
+        if: env.SIGN == 'true'
         shell: bash
         env:
           MINISIGN_SECRET_KEY: ${{ secrets.MINISIGN_SECRET_KEY }}

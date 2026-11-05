@@ -37,14 +37,11 @@ If another app already holds one, Seam keeps running without it.
 
 ## Install and update
 
-Seam comes two ways, and both run the same code.
+Download `seam-X.Y.Z-windows-x64.zip` from [Releases](https://github.com/F3NN3X/seam/releases), unzip it and keep both exes together. It's unsigned, so Windows warns about an unknown publisher the first time. See [Troubleshooting](#troubleshooting). A Microsoft Store version is planned for later.
 
-- **Microsoft Store.** The Store signs it and updates it, so Seam's own updater is off. About says so and opens the Store's updates page. "Start with Windows" uses the Store's startup task, and Windows Settings, Startup apps can turn it off, in which case General says so.
-- **GitHub.** Download `seam-X.Y.Z-windows-x64.zip`, unzip it and keep both exes together. It's unsigned, so see [Troubleshooting](#troubleshooting). It updates itself.
+To update, download the new zip, quit Seam, and replace both exes. Your settings stay in `%APPDATA%\Seam`.
 
-The GitHub build checks for a new version two minutes after it starts and then once a day, and it tells you with a notification. It downloads the update ahead of time and only installs one that Seam's signing key signed. **Install and restart** in About swaps the files and starts Seam again with your settings. **Install updates on their own** does the same while you're away from the computer, and tells you afterwards. If Seam sits in a folder that needs admin rights, About says so and offers the download page instead. **Include pre-releases** is off by default.
-
-If both copies are installed, the Store copy runs and the GitHub copy is asked to quit, because two copies would both hook the mouse. Seam shows a note until you remove the GitHub one. The first time the Store copy runs, it offers to import the settings of an earlier GitHub install.
+Seam has a built-in updater, but it only installs releases signed with Seam's key, and no release is signed yet. About shows the result of each check.
 
 ## How it works
 
@@ -84,8 +81,8 @@ To cross-compile from Linux, use `./build-cross.sh`. It needs `mingw-w64` and Ru
 
 ## Troubleshooting
 
-- **"Windows protected your PC".** The GitHub build isn't signed, so SmartScreen warns about it. Choose **More info**, then **Run anyway**. The Store version is signed.
-- **Smart App Control blocks it.** Smart App Control can refuse unsigned apps outright, with no way to run them. Use the Store version.
+- **"Windows protected your PC".** The GitHub build isn't signed, so SmartScreen warns about it. Choose **More info**, then **Run anyway**.
+- **Smart App Control blocks it.** Smart App Control can refuse unsigned apps outright, with no way to run them.
 - **The zip won't run.** Windows marks a downloaded zip as untrusted. Unblock it before unzipping: right-click it, choose **Properties**, tick **Unblock**. Or run `Unblock-File seam-X.Y.Z-windows-x64.zip` in PowerShell.
 - **A shortcut doesn't work.** NVIDIA, AMD and Intel overlays hold some combinations. General and Shortcuts show a conflict in red. Choose another one in Shortcuts.
 - **No update arrives.** About says why when a check fails. The most common cause is a network that blocks `api.github.com`. Check by hand with **Check now**.

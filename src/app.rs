@@ -103,7 +103,7 @@ fn make_icon() -> HICON {
     rect(3, 16, 28, 17, cyan);
     unsafe {
         let color = CreateBitmap(N as i32, N as i32, 1, 32, Some(px.as_ptr() as *const _));
-        let mask_bits = vec![0u8; N * N / 8];
+        let mask_bits = [0u8; N * N / 8];
         let mask = CreateBitmap(N as i32, N as i32, 1, 1, Some(mask_bits.as_ptr() as *const _));
         let info = ICONINFO { fIcon: true.into(), xHotspot: 0, yHotspot: 0, hbmMask: mask, hbmColor: color };
         let icon = CreateIconIndirect(&info).unwrap_or_else(|_| LoadIconW(None, IDI_APPLICATION).unwrap_or_default());
@@ -183,11 +183,13 @@ fn refresh(app: &mut App) {
     update_tip(app);
     // New set of screens that's never been lined up: ask once. Only mark it
     // seen if the shell actually showed the prompt (it may not be up at login).
-    if app.links.is_empty() && has_neighbours(&app.mons) && !app.cfg.seen.contains(&app.sig) {
-        if notify(app, "New screen setup", "Click here to line up your screens.", true) {
-            app.cfg.seen.push(app.sig.clone());
-            app.cfg.save();
-        }
+    if app.links.is_empty()
+        && has_neighbours(&app.mons)
+        && !app.cfg.seen.contains(&app.sig)
+        && notify(app, "New screen setup", "Click here to line up your screens.", true)
+    {
+        app.cfg.seen.push(app.sig.clone());
+        app.cfg.save();
     }
 }
 
@@ -303,10 +305,8 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                 NIN_SELECT | NIN_KEYSELECT => {
                     let _ = PostMessageW(Some(hwnd), WM_APP_LINEUP, WPARAM(0), LPARAM(0));
                 }
-                NIN_BALLOONUSERCLICK => {
-                    if with_app(|a| std::mem::take(&mut a.balloon_opens_lineup)).unwrap_or(false) {
-                        let _ = PostMessageW(Some(hwnd), WM_APP_LINEUP, WPARAM(0), LPARAM(0));
-                    }
+                NIN_BALLOONUSERCLICK if with_app(|a| std::mem::take(&mut a.balloon_opens_lineup)).unwrap_or(false) => {
+                    let _ = PostMessageW(Some(hwnd), WM_APP_LINEUP, WPARAM(0), LPARAM(0));
                 }
                 _ => {}
             }

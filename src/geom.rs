@@ -108,7 +108,7 @@ impl EdgeMap {
             return None;
         }
         let s = (b2 - b1) / da;
-        if !(s.is_finite()) || s < 0.1 || s > 10.0 {
+        if !(s.is_finite()) || !(0.1..=10.0).contains(&s) {
             return None;
         }
         Some(EdgeMap { s, o: b1 - s * a1 })

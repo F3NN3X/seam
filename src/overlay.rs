@@ -430,6 +430,7 @@ unsafe fn fill(dc: HDC, r: RECT, c: (u8, u8, u8)) {
     let _ = DeleteObject(br.into());
 }
 
+#[allow(clippy::too_many_arguments)]
 unsafe fn text(
     dc: HDC,
     s: &str,
@@ -492,6 +493,7 @@ unsafe fn line(dc: HDC, w: i32, h: i32, along_is_y: bool, pos: f64, thick: i32, 
 }
 
 /// Small numbered tag next to a line, on the shared-edge side of the screen.
+#[allow(clippy::too_many_arguments)]
 unsafe fn tag(dc: HDC, w: i32, h: i32, edge: Side, pos: f64, label: &str, s: f64, c: (u8, u8, u8)) {
     let size = (34.0 * s) as i32;
     let inset = (28.0 * s) as i32;

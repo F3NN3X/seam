@@ -14,7 +14,7 @@ use std::collections::{HashMap, VecDeque};
 use windows::Win32::Foundation::*;
 use windows::Win32::Graphics::Gdi::*;
 use windows::Win32::UI::Accessibility::*;
-use windows::Win32::UI::HiDpi::{GetDpiForMonitor, GetDpiForWindow, MDT_EFFECTIVE_DPI};
+use windows::Win32::UI::HiDpi::{GetDpiForMonitor, MDT_EFFECTIVE_DPI};
 use windows::Win32::UI::Input::KeyboardAndMouse::*;
 use windows::Win32::UI::WindowsAndMessaging::*;
 
@@ -30,6 +30,9 @@ const CLOSE_ENOUGH: i32 = 4;
 const MAX_GAP: u32 = 32;
 /// Times a placement is tried again when the app hadn't finished reacting.
 const MAX_RETRIES: u8 = 2;
+
+/// Width, height and monitor DPI of a window before it was snapped.
+type Old = (i32, i32, u32);
 
 #[derive(PartialEq)]
 struct Screen {
@@ -71,8 +74,12 @@ struct Drag {
     /// The window's rect when the drag began.
     start: Rect,
     was_maximized: bool,
-    /// Size and DPI to give back once the drag is a move.
-    restore: Option<(i32, i32, u32)>,
+    /// What the window's snapped entry said when the drag began, if it was snapped.
+    /// Its old size is given back at the drop, or carried to the next zone.
+    was_snapped: Option<Option<Old>>,
+    /// The main mouse button, if it was down when the drag began. A drag started
+    /// from the keyboard has none, so it can't be told it ended.
+    button: Option<VIRTUAL_KEY>,
     geometry: Vec<Placed>,
     /// The zone Span started from.
     anchor: Option<(usize, usize)>,
@@ -82,7 +89,7 @@ struct Drag {
 
 struct Snapped {
     /// Size and DPI before snapping, for "restore size". None for a maximized window.
-    old: Option<(i32, i32, u32)>,
+    old: Option<Old>,
     screen: String,
     from: usize,
     to: usize,
@@ -168,8 +175,21 @@ fn work_area(bounds: Rect) -> Option<(Rect, u32)> {
     }
 }
 
-fn close(a: Rect, b: Rect) -> bool {
-    [(a.x, b.x), (a.y, b.y), (a.w, b.w), (a.h, b.h)].iter().all(|(p, q)| (p - q).abs() <= CLOSE_ENOUGH)
+/// Whether two rects match within a few pixels. A window that can't be resized
+/// only has to start in the right place.
+fn close(a: Rect, b: Rect, sized: bool) -> bool {
+    let size = [(a.w, b.w), (a.h, b.h)];
+    let sides = [(a.x, b.x), (a.y, b.y)].into_iter().chain(size.into_iter().filter(|_| sized));
+    sides.into_iter().all(|(p, q)| (p - q).abs() <= CLOSE_ENOUGH)
+}
+
+/// The main mouse button as the keyboard-state calls see it, so a swapped pair counts.
+fn main_button() -> VIRTUAL_KEY {
+    if unsafe { GetSystemMetrics(SM_SWAPBUTTON) } != 0 {
+        VK_RBUTTON
+    } else {
+        VK_LBUTTON
+    }
 }
 
 /// Tell the engine what the settings, this desk's layouts and the screens are now.
@@ -286,7 +306,7 @@ impl Engine {
     fn current(&self, hwnd: HWND) -> Option<&Snapped> {
         let snapped = self.snapped.get(&(hwnd.0 as isize))?;
         let here = winutil::visible_rect(hwnd)?;
-        close(here, snapped.at).then_some(snapped)
+        close(here, snapped.at, winutil::is_resizable(hwnd)).then_some(snapped)
     }
 
     fn drag_start(&mut self, hwnd: HWND) {
@@ -303,11 +323,17 @@ impl Engine {
         if !self.enabled || !winutil::is_snappable(hwnd, std::process::id(), &self.exclude) {
             return;
         }
+        // Windows keeps a lower process from moving this one, so don't offer zones for it (D12).
+        if winutil::is_elevated_over_us(hwnd) {
+            self.blocked();
+            return;
+        }
         let (Some(start), geometry) = (winutil::window_rect(hwnd), self.geometry()) else { return };
         if geometry.is_empty() {
             return;
         }
-        let restore = self.settings.restore_size.then(|| self.current(hwnd).and_then(|s| s.old)).flatten();
+        let was_snapped = self.current(hwnd).map(|s| s.old);
+        let button = Some(main_button()).filter(|b| held(*b));
         let timer = unsafe { SetTimer(None, 0, TICK_MS, Some(on_tick)) };
         let was_maximized = winutil::is_maximized(hwnd);
         self.drag = Some(Drag {
@@ -315,7 +341,8 @@ impl Engine {
             phase: Phase::Waiting,
             start,
             was_maximized,
-            restore,
+            was_snapped,
+            button,
             geometry,
             anchor: None,
             shown: None,
@@ -323,16 +350,15 @@ impl Engine {
         });
     }
 
-    /// A snapped window dragged out gets its old size back, scaled to the
-    /// screen it's on, with the pointer at the same place along its title bar.
-    fn restore_size(&mut self, hwnd: HWND, (w, h, dpi): (i32, i32, u32)) {
+    /// A snapped window dropped outside any zone gets its old size back, scaled
+    /// to the screen it's on, with the pointer at the same place along its width.
+    fn restore_size(&mut self, hwnd: HWND, (w, h, dpi): Old) {
         let Some(now) = winutil::window_rect(hwnd) else { return };
         let mut pt = POINT::default();
         if unsafe { GetCursorPos(&mut pt) }.is_err() || now.w <= 0 {
             return;
         }
-        self.snapped.remove(&(hwnd.0 as isize));
-        let k = unsafe { GetDpiForWindow(hwnd) }.max(1) as f32 / dpi.max(1) as f32;
+        let k = winutil::monitor_dpi(hwnd).max(1) as f32 / dpi.max(1) as f32;
         let (w, h) = ((w as f32 * k).round() as i32, (h as f32 * k).round() as i32);
         let along = (pt.x - now.x) as f32 / now.w as f32;
         let x = pt.x - (along * w as f32).round() as i32;
@@ -353,6 +379,11 @@ impl Engine {
             self.drag = Some(drag);
             return;
         }
+        // The end of the drag never arrived, so don't let a drop snap by surprise.
+        if drag.button.is_some_and(|b| !held(b)) {
+            self.finish(drag, false);
+            return;
+        }
         if drag.phase == Phase::Waiting {
             let hwnd = hwnd_of(drag.hwnd);
             let Some(now) = winutil::window_rect(hwnd) else {
@@ -362,13 +393,11 @@ impl Engine {
             if now != drag.start {
                 let resized = !drag.was_maximized && (now.w != drag.start.w || now.h != drag.start.h);
                 drag.phase = if resized { Phase::Resizing } else { Phase::Moving };
-                match drag.restore.take().filter(|_| !resized) {
-                    Some(old) => self.restore_size(hwnd, old),
-                    None if resized => unsafe {
-                        // Zones have nothing to do with a resize.
+                if resized {
+                    // Zones have nothing to do with a resize.
+                    unsafe {
                         let _ = KillTimer(None, drag.timer);
-                    },
-                    None => {}
+                    }
                 }
             }
         }
@@ -454,22 +483,42 @@ impl Engine {
             let _ = KillTimer(None, drag.timer);
         }
         self.hide_all();
-        let Some(View { screen, hit: Some((a, b)) }) = drag.shown.filter(|_| dropped) else { return };
+        let hwnd = hwnd_of(drag.hwnd);
+        // Maximized by the drag itself is Windows' top-edge snap, or a browser tab
+        // merging back into a window. Either way it isn't ours to place.
+        if !dropped || drag.phase != Phase::Moving || (winutil::is_maximized(hwnd) && !drag.was_maximized) {
+            return;
+        }
+        let lit = drag.shown.and_then(|view| Some((view.screen, view.hit?)));
+        let Some((screen, (a, b))) = lit else {
+            // Dropped outside every zone, so a snapped window gets its old size back.
+            if let (Some(Some(old)), true) = (drag.was_snapped, self.settings.restore_size) {
+                if !winutil::is_maximized(hwnd) && winutil::is_resizable(hwnd) {
+                    self.restore_size(hwnd, old);
+                }
+            }
+            self.snapped.remove(&drag.hwnd);
+            return;
+        };
         let g = &drag.geometry[screen];
         let rect = zones::span(g.zones[a], g.zones[b]);
-        self.snap_to(hwnd_of(drag.hwnd), g, (a.min(b), a.max(b)), rect);
+        self.snap_to(hwnd, g, (a.min(b), a.max(b)), rect, drag.was_snapped);
     }
 
-    fn snap_to(&mut self, hwnd: HWND, g: &Placed, (from, to): (usize, usize), rect: Rect) {
+    fn snap_to(&mut self, hwnd: HWND, g: &Placed, (from, to): (usize, usize), rect: Rect, was: Option<Option<Old>>) {
         let key = hwnd.0 as isize;
         // A window put in a zone a moment ago isn't there yet, but its old size still counts.
         let known = self.current(hwnd).is_some() || self.pending.as_ref().is_some_and(|p| p.hwnd == key);
-        let old = match self.snapped.get(&key).filter(|_| known) {
-            Some(s) => s.old,
-            None if winutil::is_maximized(hwnd) => None,
-            None => winutil::window_rect(hwnd).map(|r| (r.w, r.h, unsafe { GetDpiForWindow(hwnd) })),
+        let old = match was {
+            Some(old) => old,
+            None => match self.snapped.get(&key).filter(|_| known) {
+                Some(s) => s.old,
+                None if winutil::is_maximized(hwnd) => None,
+                None => winutil::window_rect(hwnd).map(|r| (r.w, r.h, winutil::monitor_dpi(hwnd))),
+            },
         };
-        let crosses = unsafe { GetDpiForWindow(hwnd) } != g.dpi;
+        // The screen's DPI, not the window's: a window that ignores DPI needs no extra step.
+        let crosses = winutil::monitor_dpi(hwnd) != g.dpi;
         self.place(hwnd, rect, crosses);
         self.snapped.insert(key, Snapped { old, screen: g.id.clone(), from, to, at: rect });
         if self.snapped.len() > MAX_SNAPPED {
@@ -534,7 +583,8 @@ impl Engine {
                     return;
                 }
                 // It moved, but an app that answered a DPI change late can leave it off by its margins.
-                let landed = winutil::visible_rect(hwnd).is_some_and(|v| close(v, p.target));
+                let landed =
+                    winutil::visible_rect(hwnd).is_some_and(|v| close(v, p.target, winutil::is_resizable(hwnd)));
                 if landed || p.retries >= MAX_RETRIES {
                     return;
                 }
@@ -591,7 +641,7 @@ impl Engine {
         };
         let (screen, zone) = flat[index.unwrap_or(0)];
         let g = &geometry[screen];
-        self.snap_to(hwnd, g, (zone, zone), g.zones[zone]);
+        self.snap_to(hwnd, g, (zone, zone), g.zones[zone], None);
         Ok(())
     }
 }

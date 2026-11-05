@@ -20,7 +20,7 @@ When you finish, Seam saves the layout for that exact set of screens and turns o
 
 ### Zones
 
-Open **Zones** in the Seam window, pick a layout for each screen (Columns, Rows, Grid or Priority), and hold **Shift** while you drag a window. The zones show on the screen under the pointer, the one under it turns amber, and letting go snaps the window into it. Hold **Ctrl** as well to cover several zones with one window. Both keys, the gap between zones and whether a window gets its old size back when you drag it out are on the same page.
+Open **Zones** in the Seam window, pick a layout for each screen (Columns, Rows, Grid or Priority), and hold **Shift** while you drag a window. The zones show on the screen under the pointer, the one under it turns amber, and letting go snaps the window into it. Hold **Ctrl** as well to cover several zones with one window. Both keys, the gap between zones and whether a window gets its old size back when you drop it outside a zone are on the same page.
 
 **Win+Alt+Right** and **Win+Alt+Left** move the focused window to the next or previous zone, carrying on to the next screen after the last zone. A window that isn't in a zone snaps to the one holding its centre. Layouts belong to the set of screens you have connected, so each desk keeps its own.
 

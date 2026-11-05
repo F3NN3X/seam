@@ -1,132 +1,80 @@
-//! Seam's settings panel, a separate process so its UI can never delay the
-//! mouse hook. Every change goes straight to config.json, then the tray reloads.
+//! The Seam window, a separate process so its UI can never delay the mouse
+//! hook. It reaches the tray only through the local API.
 
 #![cfg_attr(windows, windows_subsystem = "windows")]
 
-use gpui_kit::component::button::Button;
-use gpui_kit::component::setting::{SettingField, SettingGroup, SettingItem, SettingPage, Settings};
-use gpui_kit::component::{ActiveTheme, Theme};
+mod pages;
+mod panel;
+mod search;
+mod theme;
+mod ui;
+
 use gpui_kit::*;
-use seam::config::Config;
-use seam::{autostart, ease, tray};
+use panel::{Page, Panel};
+use seam::api::Client;
+use seam::tray;
+use serde_json::json;
+use std::time::{Duration, Instant};
 
-fn seam_exe() -> Option<std::path::PathBuf> {
-    Some(std::env::current_exe().ok()?.with_file_name("seam.exe"))
+const TRAY_START_TIMEOUT: Duration = Duration::from_secs(3);
+
+fn arg_after(flag: &str) -> Option<String> {
+    let args: Vec<String> = std::env::args().collect();
+    args.iter().position(|a| a == flag).and_then(|i| args.get(i + 1)).cloned()
 }
 
-fn config_switch(
-    title: &'static str,
-    about: &'static str,
-    read: fn(&Config) -> bool,
-    write: fn(&mut Config, bool),
-) -> SettingItem {
-    SettingItem::new(
-        title,
-        SettingField::switch(
-            move |_: &App| read(&Config::load()),
-            move |on: bool, _: &mut App| {
-                Config::edit(|c| write(c, on));
-                tray::reload();
-            },
-        ),
-    )
-    .description(about)
+fn next_to_this_exe(name: &str) -> Option<std::path::PathBuf> {
+    Some(std::env::current_exe().ok()?.with_file_name(name))
 }
 
-fn start_with_windows() -> SettingItem {
-    SettingItem::new(
-        "Start with Windows",
-        SettingField::switch(
-            |_: &App| autostart::is_enabled(),
-            |on: bool, _: &mut App| {
-                if let Some(exe) = seam_exe() {
-                    autostart::set(on, &exe);
-                }
-            },
-        ),
-    )
-    .description("Launch Seam when you sign in.")
-}
-
-fn ease_cursor() -> SettingItem {
-    let about = if ease::is_on() {
-        "On. Seam needs this Windows setting."
-    } else {
-        "Off. Turn it on, or the pointer can stop at screen edges."
-    };
-    SettingItem::new(
-        "Ease cursor movement between displays",
-        SettingField::render(|_, _, _| {
-            Button::new("open-display").label("Open").on_click(|_, _, _| {
-                let _ = std::process::Command::new("explorer").arg("ms-settings:display").spawn();
-            })
-        }),
-    )
-    .description(about)
-}
-
-fn open_folder() -> SettingItem {
-    SettingItem::new(
-        "Settings folder",
-        SettingField::render(|_, _, _| {
-            Button::new("open-folder").label("Open").on_click(|_, _, _| {
-                if let Some(dir) = Config::path().parent() {
-                    let _ = std::fs::create_dir_all(dir);
-                    let _ = std::process::Command::new("explorer").arg(dir).spawn();
-                }
-            })
-        }),
-    )
-    .description("Where config.json and the debug log live.")
-}
-
-fn general() -> SettingPage {
-    SettingPage::new("General")
-        .group(SettingGroup::new().title("Startup").item(start_with_windows()))
-        .group(
-            SettingGroup::new()
-                .title("Pointer")
-                .item(config_switch(
-                    "Remap pointer at borders",
-                    "Cross where the screens physically meet.",
-                    |c| c.enabled,
-                    |c, on| c.enabled = on,
-                ))
-                .item(config_switch(
-                    "Also align Windows arrangement",
-                    "Move monitors in Display settings after lining up.",
-                    |c| c.align_arrangement,
-                    |c, on| c.align_arrangement = on,
-                ))
-                .item(ease_cursor()),
-        )
-        .group(SettingGroup::new().title("Files").item(open_folder()))
-}
-
-struct Panel;
-
-impl Render for Panel {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        div()
-            .size_full()
-            .bg(cx.theme().background)
-            .text_color(cx.theme().foreground)
-            .child(Settings::new("seam-settings").page(general()))
+/// Only a panel the tray started has the session's token, so any other launch
+/// makes sure the tray is up and asks it for one.
+fn hand_over_to_tray(page: Option<String>) {
+    if Client::connect("seam-settings", None).is_err() {
+        if let Some(tray) = next_to_this_exe("seam.exe") {
+            let _ = std::process::Command::new(tray).spawn();
+        }
     }
+    let started = Instant::now();
+    while started.elapsed() < TRAY_START_TIMEOUT {
+        if let Ok(mut client) = Client::connect("seam-settings", None) {
+            let params = page.map_or_else(|| json!({}), |p| json!({ "page": p }));
+            let _ = client.call("panel.open", params);
+            return;
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+}
+
+/// Leave this window for one with a fresh token, starting the tray if needed.
+pub fn restart_panel(cx: &mut App) {
+    if let Some(panel) = next_to_this_exe("seam-settings.exe") {
+        let _ = std::process::Command::new(panel).spawn();
+    }
+    cx.quit();
 }
 
 fn main() {
+    let page = arg_after("--page");
+    let Some(token) = arg_after("--token") else {
+        hand_over_to_tray(page);
+        return;
+    };
     if tray::raise_open_panel() {
         return;
     }
-    application().with_assets(assets::Assets).run(|cx| {
+    application().with_assets(assets::AllAssets).run(move |cx| {
         init(cx);
-        Theme::sync_system_appearance(None, cx);
+        theme::install(cx);
+        Panel::bind_keys(cx);
         let options = WindowOptions {
             titlebar: Some(TitlebarOptions { title: Some(tray::PANEL_TITLE.into()), ..Default::default() }),
-            window_bounds: Some(WindowBounds::Windowed(Bounds::centered(None, size(px(760.), px(600.)), cx))),
+            window_bounds: Some(WindowBounds::Windowed(Bounds::centered(None, size(px(1080.), px(780.)), cx))),
+            window_min_size: Some(size(px(900.), px(640.))),
             ..Default::default()
         };
-        open_window(options, cx, |_, cx| cx.new(|_| Panel)).expect("failed to open the settings window");
+        let page = page.as_deref().and_then(Page::from_arg);
+        open_window(options, cx, move |window, cx| cx.new(|cx| Panel::new(page, token, window, cx)))
+            .expect("failed to open the Seam window");
     });
 }

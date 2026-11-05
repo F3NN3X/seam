@@ -1,0 +1,188 @@
+//! App-wide things: startup, the tray icon, other apps, files.
+
+use crate::panel::{error_text, refusal, Panel};
+use crate::theme::palette;
+use crate::ui::{self, card, row, row_with, section, switch};
+use gpui_kit::component::notification::Notification;
+use gpui_kit::component::{ActiveTheme, WindowExt};
+use gpui_kit::*;
+use seam::autostart;
+use seam::config::{Config, TrayClick};
+use serde_json::json;
+use std::path::PathBuf;
+
+fn export(panel: &Panel, window: &mut Window, cx: &mut Context<Panel>) {
+    let dir = dirs_home();
+    let chosen = cx.prompt_for_new_path(&dir, Some("seam-config.json"));
+    panel.call("config.get", json!({}), window, cx, move |_, result, window, cx| {
+        let config = match result {
+            Ok(config) => config,
+            Err(e) => return window.push_notification(refusal("Settings not exported", &error_text(&e)), cx),
+        };
+        cx.spawn_in(window, async move |_, cx| {
+            let Ok(Ok(Some(path))) = chosen.await else { return };
+            let saved = serde_json::to_string_pretty(&config).map_err(std::io::Error::other);
+            let saved = saved.and_then(|text| std::fs::write(&path, text));
+            let _ = cx.update(|window, cx| match saved {
+                Ok(()) => window.push_notification(Notification::new().message("Exported your settings"), cx),
+                Err(e) => window.push_notification(refusal("Settings not exported", &e.to_string()), cx),
+            });
+        })
+        .detach();
+    });
+}
+
+fn dirs_home() -> PathBuf {
+    std::env::var_os("USERPROFILE").map_or_else(|| PathBuf::from("."), PathBuf::from)
+}
+
+fn import(window: &mut Window, cx: &mut Context<Panel>) {
+    let chosen = cx.prompt_for_paths(PathPromptOptions {
+        files: true,
+        directories: false,
+        multiple: false,
+        prompt: Some("Import".into()),
+    });
+    cx.spawn_in(window, async move |this, cx| {
+        let Ok(Ok(Some(paths))) = chosen.await else { return };
+        let Some(path) = paths.first() else { return };
+        let read = std::fs::read(path).map_err(|e| e.to_string());
+        let parsed = read.and_then(|bytes| Config::from_import(&bytes));
+        let _ = this.update_in(cx, move |this, window, cx| match parsed {
+            Ok(next) => confirm_import(this, next, window, cx),
+            Err(e) => window.push_notification(refusal("That file can't be imported", &e), cx),
+        });
+    })
+    .detach();
+}
+
+fn confirm_import(panel: &Panel, next: Config, window: &mut Window, cx: &mut Context<Panel>) {
+    let view = cx.entity().downgrade();
+    let current = serde_json::to_string_pretty(&panel.config).unwrap_or_default();
+    window.open_alert_dialog(cx, move |alert, _, _| {
+        let (view, next, current) = (view.clone(), next.clone(), current.clone());
+        alert
+            .title("Replace your settings?")
+            .description("A copy of your current settings stays in the settings folder")
+            .ok_text("Import")
+            .on_ok(move |_, window, cx| {
+                let backup = Config::path().with_file_name("config.before-import.json");
+                if let Err(e) = std::fs::write(backup, &current) {
+                    window.push_notification(refusal("Nothing imported", &e.to_string()), cx);
+                    return true;
+                }
+                let next = next.clone();
+                let _ = view.update(cx, |panel, cx| panel.replace_config(&next, window, cx));
+                window.push_notification(Notification::new().message("Imported your settings"), cx);
+                true
+            })
+    });
+}
+
+fn open_folder() {
+    if let Some(dir) = Config::path().parent() {
+        let _ = std::process::Command::new("explorer").arg(dir).spawn();
+    }
+}
+
+pub fn render(panel: &mut Panel, window: &mut Window, cx: &mut Context<Panel>) -> impl IntoElement {
+    let p = palette(cx);
+    let view = cx.entity();
+    let setter = |patch: fn(bool) -> serde_json::Value| {
+        let view = view.clone();
+        move |on: bool, window: &mut Window, cx: &mut App| {
+            view.update(cx, |panel, cx| panel.patch(patch(on), window, cx));
+        }
+    };
+
+    let start_with_windows = switch("autostart", autostart::is_enabled(), window, cx, {
+        let view = view.clone();
+        move |on, _, cx| {
+            if let Ok(tray) = std::env::current_exe().map(|e| e.with_file_name("seam.exe")) {
+                autostart::set(on, &tray);
+            }
+            view.update(cx, |_, cx| cx.notify());
+        }
+    });
+    let offer =
+        switch("ask-new-desks", panel.config.ask_new_desks, window, cx, setter(|on| json!({ "ask_new_desks": on })));
+    let selected = usize::from(panel.config.tray_click == TrayClick::LineUp);
+    let left_click = ui::segmented("tray-click", &["Open Seam", "Start Line Up"], selected, window, cx, {
+        let view = view.clone();
+        move |i, window, cx| {
+            let value = if i == 0 { "open" } else { "line_up" };
+            view.update(cx, |panel, cx| panel.patch(json!({ "tray_click": value }), window, cx));
+        }
+    });
+    let connected = panel.state.as_ref().map_or(0, |s| s.clients.iter().filter(|c| *c != "panel").count());
+    let api_about =
+        format!("Stream Deck and tools on this PC can read status and switch workspaces. {connected} connected");
+    let api =
+        switch("api-enabled", panel.config.api.enabled, window, cx, setter(|on| json!({ "api": { "enabled": on } })));
+    let debug_log = switch("debug-log", panel.config.debug_log, window, cx, setter(|on| json!({ "debug_log": on })));
+
+    let folder = div()
+        .flex()
+        .gap(px(8.))
+        .child(
+            ui::secondary("export", "Export…", cx)
+                .on_click(cx.listener(|panel, _, window, cx| export(panel, window, cx))),
+        )
+        .child(ui::secondary("import", "Import…", cx).on_click(cx.listener(|_, _, window, cx| import(window, cx))))
+        .child(ui::secondary("open-folder", "Open", cx).on_click(|_, _, _| open_folder()));
+    let folder_path = div()
+        .font_family(cx.theme().mono_font_family.clone())
+        .font_weight(FontWeight::NORMAL)
+        .text_size(px(13.))
+        .text_color(p.secondary)
+        .child(r"%APPDATA%\Seam");
+
+    div()
+        .flex()
+        .flex_col()
+        .gap(px(ui::SECTION_GAP))
+        .child(ui::page_title("General", "How Seam starts and where it keeps its files", p))
+        .child(section(
+            "Startup",
+            card(
+                vec![
+                    row(
+                        "Start with Windows",
+                        Some("Seam waits in the tray after you sign in".into()),
+                        start_with_windows,
+                        p,
+                    ),
+                    row(
+                        "Offer to line up new screens",
+                        Some("Asks once when screens Seam hasn't seen connect".into()),
+                        offer,
+                        p,
+                    ),
+                ],
+                p,
+            ),
+            p,
+        ))
+        .child(section(
+            "Tray icon",
+            card(vec![row("Left-click", Some("Right-click always shows the menu".into()), left_click, p)], p),
+            p,
+        ))
+        .child(section(
+            "Other apps",
+            card(vec![row("Let other apps control Seam", Some(api_about.into()), api, p)], p),
+            p,
+        ))
+        .child(section(
+            "Files and troubleshooting",
+            card(
+                vec![
+                    row_with("Settings folder", Some(folder_path.into_any_element()), folder),
+                    row("Debug log", Some("Writes remaps and screen changes to seam.log".into()), debug_log, p),
+                ],
+                p,
+            ),
+            p,
+        ))
+        .child(div().text_size(px(12.)).text_color(p.muted).child("Seam follows your Windows light or dark mode"))
+}

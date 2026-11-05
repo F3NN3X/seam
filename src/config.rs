@@ -201,6 +201,27 @@ pub fn merge_patch(target: &mut serde_json::Value, patch: &serde_json::Value) {
     }
 }
 
+/// The merge patch that turns `old` into `new`.
+pub fn diff_patch(old: &serde_json::Value, new: &serde_json::Value) -> serde_json::Value {
+    let (Some(before), Some(after)) = (old.as_object(), new.as_object()) else { return new.clone() };
+    let mut patch = serde_json::Map::new();
+    for key in before.keys().filter(|k| !after.contains_key(*k)) {
+        patch.insert(key.clone(), serde_json::Value::Null);
+    }
+    for (key, value) in after {
+        match before.get(key) {
+            Some(same) if same == value => {}
+            Some(previous) => {
+                patch.insert(key.clone(), diff_patch(previous, value));
+            }
+            None => {
+                patch.insert(key.clone(), value.clone());
+            }
+        }
+    }
+    serde_json::Value::Object(patch)
+}
+
 /// Write-then-rename so a crash never leaves half a file.
 pub(crate) fn write_atomic(path: &Path, contents: &str) -> std::io::Result<()> {
     let tmp = path.with_extension("json.tmp");
@@ -209,6 +230,19 @@ pub(crate) fn write_atomic(path: &Path, contents: &str) -> std::io::Result<()> {
 }
 
 impl Config {
+    /// This config with a merge patch applied. A patch's null deletes a key,
+    /// but a deleted shortcut would come back as its default, so "not set"
+    /// stays an explicit null.
+    pub fn patched(&self, patch: &serde_json::Value) -> serde_json::Result<Config> {
+        let mut merged = serde_json::to_value(self)?;
+        merge_patch(&mut merged, patch);
+        let hotkeys = patch.get("hotkeys").and_then(|h| h.as_object()).into_iter().flatten();
+        for (action, _) in hotkeys.filter(|(_, value)| value.is_null()) {
+            merged["hotkeys"][action] = serde_json::Value::Null;
+        }
+        serde_json::from_value(merged)
+    }
+
     pub fn path() -> PathBuf {
         let base = std::env::var_os("APPDATA").map(PathBuf::from).unwrap_or_else(|| PathBuf::from("."));
         base.join("Seam").join("config.json")
@@ -234,6 +268,15 @@ impl Config {
                 Config::default()
             }
         }
+    }
+
+    /// Read a file the user chose to import. Old files convert, as on load.
+    pub fn from_import(bytes: &[u8]) -> Result<Config, String> {
+        let mut c: Config = serde_json::from_slice(bytes).map_err(|e| e.to_string())?;
+        if c.version < CURRENT_VERSION {
+            c.migrate_v1();
+        }
+        Ok(c)
     }
 
     /// Each v1 layout becomes a desk. Tray left-click stays on Line Up, so

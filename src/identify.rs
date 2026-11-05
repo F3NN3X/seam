@@ -70,7 +70,7 @@ pub fn show(number: u32, screen: Rect) {
         let Ok(hwnd) = CreateWindowExW(
             WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE,
             CLASS,
-            w!("Seam"),
+            w!("Seam screen number"),
             WS_POPUP,
             screen.left,
             screen.top,

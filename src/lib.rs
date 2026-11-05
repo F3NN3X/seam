@@ -20,6 +20,8 @@ pub mod monitors;
 #[cfg(windows)]
 pub mod package;
 #[cfg(windows)]
+pub mod panelwin;
+#[cfg(windows)]
 pub mod process;
 #[cfg(windows)]
 pub mod tray;

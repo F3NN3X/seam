@@ -100,6 +100,8 @@ pub struct Panel {
     pub zone_screen: usize,
     /// The zone editor's unsaved copy of a layout, while it's open.
     pub editor: Option<pages::zone_editor::Editor>,
+    /// The editor's window on the real screen, while it's open.
+    pub screen_window: Option<pages::screen_editor::Shown>,
     /// The Gap slider. It sends the new gap when it's let go.
     pub gap: Entity<SliderState>,
     pub search: Entity<InputState>,
@@ -155,12 +157,19 @@ impl Panel {
             cx.observe_window_activation(window, |this, window, cx| {
                 if window.is_window_active() {
                     this.ease_on = seam::ease::is_on();
+                    if this.screen_window.is_some() {
+                        pages::screen_editor::restack();
+                    }
                     cx.notify();
                 }
             }),
         ];
         let focus = cx.focus_handle();
         focus.focus(window, cx);
+        // The editor's window is the panel's, so it goes with it.
+        let release = cx.on_release(|panel, cx| pages::screen_editor::close_all(panel.screen_window.as_ref(), cx));
+        let mut subscriptions = subscriptions;
+        subscriptions.push(release);
         let mut panel = Panel {
             page,
             client: None,
@@ -173,6 +182,7 @@ impl Panel {
             ease_on: seam::ease::is_on(),
             zone_screen: 0,
             editor: None,
+            screen_window: None,
             gap,
             search,
             focus,
@@ -305,7 +315,18 @@ impl Panel {
             self.update_file = updates::read();
         }
         self.state = Some(state);
+        // A screen that came, went or changed size leaves the editor's tree meaning
+        // something else, so it closes and nothing is saved.
+        if self.editor.is_some() && !screens_changed {
+            let now = monitors::enumerate();
+            let same = now.len() == self.mons.len()
+                && now.iter().zip(&self.mons).all(|(a, b)| a.id == b.id && a.rect == b.rect);
+            if !same {
+                self.editor = None;
+            }
+        }
         if screens_changed {
+            self.editor = None;
             self.read_screens();
         }
         self.relink();
@@ -635,6 +656,7 @@ impl Render for Panel {
             }
         };
         let banners = self.banners(cx);
+        pages::screen_editor::sync(self, window, cx);
         div()
             .track_focus(&self.focus)
             .key_context(CONTEXT)

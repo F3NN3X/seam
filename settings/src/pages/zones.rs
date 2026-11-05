@@ -274,6 +274,18 @@ pub fn render(panel: &mut Panel, window: &mut Window, cx: &mut Context<Panel>) -
         let view = view.clone();
         move |on, window, cx| view.update(cx, |panel, cx| panel.patch(json!({ "zones": { "refit": on } }), window, cx))
     });
+    let on_screen = switch("zone-on-screen", zones_cfg.edit_on_screen, window, cx, {
+        let view = view.clone();
+        move |on, window, cx| {
+            view.update(cx, |panel, cx| panel.patch(json!({ "zones": { "edit_on_screen": on } }), window, cx))
+        }
+    });
+    let on_screen_row = row(
+        "Edit layouts on the screen",
+        Some("Off shows a live view on the screen, and you edit in the preview here".into()),
+        on_screen,
+        p,
+    );
     let refit_row = row(
         "Keep windows in their zones",
         Some("Experimental. Moves snapped windows back after a screen or resolution change".into()),
@@ -330,8 +342,13 @@ pub fn render(panel: &mut Panel, window: &mut Window, cx: &mut Context<Panel>) -
         let view = view.clone();
         move |i, window, cx| {
             view.update(cx, |panel, cx| {
-                let then: zone_editor::Then = Rc::new(move |panel, _, cx| {
+                // An editor that's open carries on with the screen picked.
+                let editing = panel.editor.is_some();
+                let then: zone_editor::Then = Rc::new(move |panel, window, cx| {
                     panel.zone_screen = i;
+                    if editing {
+                        zone_editor::open(panel, window, cx);
+                    }
                     cx.notify();
                 });
                 zone_editor::guard(panel, window, cx, then);
@@ -374,7 +391,7 @@ pub fn render(panel: &mut Panel, window: &mut Window, cx: &mut Context<Panel>) -
         )
         .child(section(
             "Snapping",
-            div().flex().flex_col().gap(px(12.)).child(snapping).child(card(vec![refit_row], p)),
+            div().flex().flex_col().gap(px(12.)).child(snapping).child(card(vec![on_screen_row, refit_row], p)),
             p,
         ));
     body

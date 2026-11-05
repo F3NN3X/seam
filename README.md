@@ -30,6 +30,8 @@ Seam can't move windows from apps running as administrator. It tells you once wh
 
 To make your own layout, press **Edit layout** on the Zones page (or the **Custom** tile). Click a zone and split it side by side or top and bottom, drag a divider (it snaps to quarters and thirds), merge two neighbouring zones, then press **Done**. Esc throws the changes away and Ctrl+Z undoes the last one. A layout can have up to 128 zones.
 
+The editor opens on the screen itself, over its work area, so you line zones up at full size. The Seam window stays in front for Split, Merge and Done. If you'd rather edit in the preview, turn off **Edit layouts on the screen** and the screen shows a live view that clicks pass through.
+
 Experimental: turn on **Keep windows in their zones** on the Zones page and Seam moves snapped windows back into their zones after a screen, resolution or scaling change, or after waking the PC. It's off by default, and windows you've moved since they snapped are left alone.
 
 ### Tray menu

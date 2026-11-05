@@ -106,7 +106,7 @@ fn main() {
         Theme::sync_system_appearance(None, cx);
         let options = WindowOptions {
             titlebar: Some(TitlebarOptions { title: Some(tray::PANEL_TITLE.into()), ..Default::default() }),
-            window_bounds: Some(WindowBounds::Windowed(Bounds::centered(None, size(px(720.), px(480.)), cx))),
+            window_bounds: Some(WindowBounds::Windowed(Bounds::centered(None, size(px(760.), px(600.)), cx))),
             ..Default::default()
         };
         open_window(options, cx, |_, cx| cx.new(|_| Panel)).expect("failed to open the settings window");

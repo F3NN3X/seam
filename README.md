@@ -57,7 +57,7 @@ On Windows with Rust installed:
 cargo build --release
 ```
 
-The exe is `target\release\seam.exe`.
+This builds the tray app, `target\release\seam.exe`. To include the settings panel, run `cargo build --release --workspace`, which also needs CMake and the Visual Studio C++ tools. Keep `seam-settings.exe` next to `seam.exe`.
 
 To cross-compile from Linux, use `./build-cross.sh`. It needs `mingw-w64` and Rust's library sources for `-Zbuild-std`.
 

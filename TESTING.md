@@ -40,6 +40,16 @@ On this desk, **Also align Windows arrangement** is expected to refuse. See [Ali
 - [ ] **Enter during a drag, last border.** Same, on border 3. Line Up finishes and the app stays up.
 - [ ] **Finish.** Press Enter on the last border. A balloon appears, the saved layout has 3 borders, and the log shows `resolved 3 of 3 saved link(s)`.
 
+## Settings panel
+
+- [ ] **Open.** Choose **Settings…** in the tray menu. The panel opens in your Windows theme, with all three switches matching the current settings.
+- [ ] **Single panel.** Choose **Settings…** again. The open panel comes to the front and no second one starts.
+- [ ] **Remap switch.** Turn it off. Crossings stop remapping and the tray tooltip says paused. Turn it on and they work again.
+- [ ] **Align switch.** Turn it off, then open the tray menu. **Also align Windows arrangement** is unticked. Turn it back on.
+- [ ] **Start with Windows.** Turn it on, sign out and in. Seam starts, and the panel doesn't. Turn it off.
+- [ ] **Open.** The button opens the folder holding `config.json`.
+- [ ] **Panel missing.** Rename `seam-settings.exe`, choose **Settings…**. A balloon says it's unavailable and Seam keeps running. Rename it back.
+
 ## Reconnecting and sleep
 
 - [ ] **Unplug a screen.** Unplug the U3477. The log shows `display change`, then `no saved layout for these screens`. The other screens behave as plain Windows.

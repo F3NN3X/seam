@@ -80,6 +80,19 @@ impl Default for ZoneSettings {
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(default)]
+pub struct ApiSettings {
+    /// "Let other apps control Seam".
+    pub enabled: bool,
+}
+
+impl Default for ApiSettings {
+    fn default() -> Self {
+        ApiSettings { enabled: true }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default)]
 pub struct UpdateSettings {
     pub auto_check: bool,
     pub auto_install: bool,
@@ -131,6 +144,7 @@ pub struct Config {
     pub hotkeys: Hotkeys,
     pub zones: ZoneSettings,
     pub updates: UpdateSettings,
+    pub api: ApiSettings,
     /// Layout signature (sorted device paths) -> desk.
     pub desks: BTreeMap<String, Desk>,
     /// Signatures we've already offered to line up, so we only ask once.
@@ -152,6 +166,7 @@ impl Default for Config {
             hotkeys: Hotkeys::default(),
             zones: ZoneSettings::default(),
             updates: UpdateSettings::default(),
+            api: ApiSettings::default(),
             desks: BTreeMap::new(),
             seen: Vec::new(),
             layouts: BTreeMap::new(),
@@ -164,6 +179,26 @@ pub fn signature<'a>(ids: impl Iterator<Item = &'a str>) -> String {
     let mut v: Vec<&str> = ids.collect();
     v.sort_unstable();
     v.join("|")
+}
+
+/// Apply a JSON merge patch (RFC 7386): objects merge, null removes.
+pub fn merge_patch(target: &mut serde_json::Value, patch: &serde_json::Value) {
+    let Some(fields) = patch.as_object() else {
+        *target = patch.clone();
+        return;
+    };
+    if !target.is_object() {
+        *target = serde_json::json!({});
+    }
+    if let Some(object) = target.as_object_mut() {
+        for (key, value) in fields {
+            if value.is_null() {
+                object.remove(key);
+            } else {
+                merge_patch(object.entry(key.clone()).or_insert(serde_json::Value::Null), value);
+            }
+        }
+    }
 }
 
 /// Write-then-rename so a crash never leaves half a file.
@@ -210,6 +245,10 @@ impl Config {
         }
         self.tray_click = TrayClick::LineUp;
         self.version = CURRENT_VERSION;
+    }
+
+    pub fn save(&self) {
+        self.save_to(&Self::path());
     }
 
     fn save_to(&self, p: &Path) {

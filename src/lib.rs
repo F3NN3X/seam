@@ -1,11 +1,13 @@
 //! Code shared by the tray app and the settings panel.
 
+pub mod api;
 pub mod config;
 pub mod desk;
 pub mod geom;
+pub mod hotkey;
 pub mod layout;
 pub mod log;
-pub mod status;
+pub mod state;
 
 #[cfg(windows)]
 pub mod autostart;

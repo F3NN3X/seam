@@ -432,7 +432,7 @@ unsafe fn fill(dc: HDC, r: RECT, c: (u8, u8, u8)) {
 }
 
 #[allow(clippy::too_many_arguments)]
-unsafe fn text(
+pub(crate) unsafe fn text(
     dc: HDC,
     s: &str,
     mut r: RECT,

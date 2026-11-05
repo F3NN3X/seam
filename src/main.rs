@@ -5,14 +5,18 @@
 #![cfg_attr(windows, windows_subsystem = "windows")]
 
 #[cfg(windows)]
-use seam::{autostart, config, desk, ease, geom, layout, log, monitors, status, tray};
+use seam::{config, desk, ease, geom, hotkey, layout, log, monitors, tray};
 
+#[cfg(windows)]
+mod api_server;
 #[cfg(windows)]
 mod app;
 #[cfg(windows)]
 mod arrange;
 #[cfg(windows)]
 mod hook;
+#[cfg(windows)]
+mod identify;
 #[cfg(windows)]
 mod overlay;
 

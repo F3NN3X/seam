@@ -2,13 +2,14 @@
 //!
 //! Lines go to a writer thread, so file I/O never runs inside the mouse hook.
 //! With logging off, `info!` is one atomic load: no formatting, no allocation.
-//! Only the tray calls `init`, so the panel's calls into the lib write nothing.
+//! Only the tray calls `apply`, so the panel's calls into the lib write nothing.
 
 use crate::config::Config;
 use std::ffi::OsStr;
 use std::fmt;
 use std::fs::{self, OpenOptions};
 use std::io::Write;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{channel, Sender};
 use std::sync::OnceLock;
 
@@ -18,17 +19,23 @@ enum Msg {
 }
 
 static TX: OnceLock<Sender<Msg>> = OnceLock::new();
+static ON: AtomicBool = AtomicBool::new(false);
 
 fn requested<A: AsRef<OsStr>>(mut args: impl Iterator<Item = A>, env: Option<&OsStr>) -> bool {
     env.is_some_and(|v| v == "1") || args.any(|a| a.as_ref() == "--log")
 }
 
-/// Start the writer thread if logging was asked for. Stays off, silently, if
-/// the file can't be opened.
-pub fn init() {
-    if !requested(std::env::args_os(), std::env::var_os("SEAM_LOG").as_deref()) {
-        return;
+/// Turn logging on or off now. `--log` and `SEAM_LOG=1` keep it on whatever
+/// the setting says. Stays off, silently, if the file can't be opened.
+pub fn apply(setting: bool) {
+    let on = setting || requested(std::env::args_os(), std::env::var_os("SEAM_LOG").as_deref());
+    if on && TX.get().is_none() {
+        start_writer();
     }
+    ON.store(on && TX.get().is_some(), Ordering::Relaxed);
+}
+
+fn start_writer() {
     let path = Config::path().with_file_name("seam.log");
     if let Some(dir) = path.parent() {
         let _ = fs::create_dir_all(dir);
@@ -54,7 +61,7 @@ pub fn init() {
 
 #[inline]
 pub fn enabled() -> bool {
-    TX.get().is_some()
+    ON.load(Ordering::Relaxed)
 }
 
 pub fn write(args: fmt::Arguments) {

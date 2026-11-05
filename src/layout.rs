@@ -1,7 +1,7 @@
 //! Platform-independent decisions over the whole set of monitors: where a move
 //! across a border lands, and how to rearrange monitors to match the borders.
 
-use crate::geom::{aligned_along_origin, exit_of, place_against, remap_crossing, touching, EdgeMap, Rect, Side};
+use crate::geom::{aligned_along_origin, exits_of, place_against, remap_crossing, touching, EdgeMap, Rect, Side};
 use std::collections::VecDeque;
 
 /// A calibrated border between two monitors (indices into `Live::rects`).
@@ -33,17 +33,18 @@ pub struct Crossing {
 pub fn decide(live: &Live, prev: (i32, i32), pt: (i32, i32)) -> Option<Crossing> {
     let src = live.rects.iter().position(|r| r.contains(prev.0, prev.1))?;
     let a = live.rects[src];
-    let (side, along, over) = exit_of(&a, prev, pt)?;
-    for l in &live.links {
-        let (dst, map) = if l.a == src && l.side == side {
-            (l.b, l.map)
-        } else if l.b == src && l.side.opposite() == side {
-            (l.a, l.map.inverse())
-        } else {
-            continue;
-        };
-        if let Some(to) = remap_crossing(&a, &live.rects[dst], side, &map, along, over) {
-            return Some(Crossing { to, src, dst, side });
+    for (side, along, over) in exits_of(&a, prev, pt).into_iter().flatten() {
+        for l in &live.links {
+            let (dst, map) = if l.a == src && l.side == side {
+                (l.b, l.map)
+            } else if l.b == src && l.side.opposite() == side {
+                (l.a, l.map.inverse())
+            } else {
+                continue;
+            };
+            if let Some(to) = remap_crossing(&a, &live.rects[dst], side, &map, along, over) {
+                return Some(Crossing { to, src, dst, side });
+            }
         }
     }
     None
@@ -193,7 +194,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "bug: corner exit skips a linked border"]
     fn decide_remaps_a_corner_exit_when_only_the_shallower_side_is_linked() {
         // B is taller, so the raw point lands on B even though the move went
         // further down than sideways. A has nothing below it.

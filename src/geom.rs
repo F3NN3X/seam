@@ -173,9 +173,13 @@ pub fn anchor_points(m: &EdgeMap, len_a: i32, len_b: i32) -> (f64, f64) {
     ((lo + 0.2 * (hi - lo)).round(), (lo + 0.8 * (hi - lo)).round())
 }
 
-/// How the pointer left monitor `a`: the side, the absolute coordinate along
+/// One way the pointer left a monitor: the side, the absolute coordinate along
 /// that edge where it crossed, and how many pixels past the edge it went.
-pub fn exit_of(a: &Rect, prev: (i32, i32), pt: (i32, i32)) -> Option<(Side, f64, i32)> {
+pub type Exit = (Side, f64, i32);
+
+/// How the pointer left monitor `a`. A move past a corner leaves through two
+/// sides at once, so the side it went furthest past comes first.
+pub fn exits_of(a: &Rect, prev: (i32, i32), pt: (i32, i32)) -> [Option<Exit>; 2] {
     let over_x = if pt.0 >= a.right {
         Some((Side::Right, pt.0 - a.right))
     } else if pt.0 < a.left {
@@ -190,18 +194,15 @@ pub fn exit_of(a: &Rect, prev: (i32, i32), pt: (i32, i32)) -> Option<(Side, f64,
     } else {
         None
     };
-    let (side, over) = match (over_x, over_y) {
-        (None, None) => return None,
-        (Some(x), None) => x,
-        (None, Some(y)) => y,
-        (Some(x), Some(y)) => {
-            if y.1 > x.1 {
-                y
-            } else {
-                x
-            }
-        }
+    let (first, second) = match (over_x, over_y) {
+        (Some(x), Some(y)) if y.1 > x.1 => (Some(y), Some(x)),
+        (Some(x), y) => (Some(x), y),
+        (None, y) => (y, None),
     };
+    [first, second].map(|e| e.map(|(side, over)| exit_through(a, prev, pt, side, over)))
+}
+
+fn exit_through(a: &Rect, prev: (i32, i32), pt: (i32, i32), side: Side, over: i32) -> Exit {
     // Interpolate where the straight move from prev to pt crossed the edge.
     let (p0, p1, q0, q1, edge) = match side {
         Side::Right => (prev.0, pt.0, prev.1, pt.1, a.right as f64 - 0.5),
@@ -212,7 +213,7 @@ pub fn exit_of(a: &Rect, prev: (i32, i32), pt: (i32, i32)) -> Option<(Side, f64,
     let t = if p1 != p0 { ((edge - p0 as f64) / (p1 - p0) as f64).clamp(0.0, 1.0) } else { 0.0 };
     let along = q0 as f64 + t * (q1 - q0) as f64;
     let (lo, hi) = if side.along_is_y() { (a.top, a.bottom - 1) } else { (a.left, a.right - 1) };
-    Some((side, along.clamp(lo as f64, hi as f64), over.max(0)))
+    (side, along.clamp(lo as f64, hi as f64), over.max(0))
 }
 
 /// Where the pointer should enter `b` after leaving `a` on `side`. `None` means
@@ -312,13 +313,13 @@ mod tests {
         // Physically identical 27" panels, tops aligned: map is pure scale.
         let m = EdgeMap { s: 1440.0 / 2160.0, o: 0.0 };
         // Leave the 4K screen at y=1620 (75% down) moving right.
-        let (side, along, over) = exit_of(&uhd(), (3839, 1620), (3842, 1620)).unwrap();
+        let (side, along, over) = exits_of(&uhd(), (3839, 1620), (3842, 1620))[0].unwrap();
         assert_eq!(side, Side::Right);
         assert_eq!(over, 2);
         let dest = remap_crossing(&uhd(), &qhd(), side, &m, along, over).unwrap();
         assert_eq!(dest, (3842, 1080)); // 75% down the 1440p screen
                                         // And back again: 1080 on the QHD maps to 1620 on the UHD.
-        let (side2, along2, over2) = exit_of(&qhd(), (3840, 1080), (3839, 1080)).unwrap();
+        let (side2, along2, over2) = exits_of(&qhd(), (3840, 1080), (3839, 1080))[0].unwrap();
         assert_eq!(side2, Side::Left);
         let back = remap_crossing(&qhd(), &uhd(), side2, &m.inverse(), along2, over2).unwrap();
         assert_eq!(back, (3839, 1620));
@@ -335,7 +336,7 @@ mod tests {
     #[test]
     fn diagonal_exit_interpolates() {
         let a = Rect::new(0, 0, 100, 100);
-        let (side, along, _) = exit_of(&a, (98, 50), (102, 54)).unwrap();
+        let (side, along, _) = exits_of(&a, (98, 50), (102, 54))[0].unwrap();
         assert_eq!(side, Side::Right);
         assert!((along - 51.5).abs() < 1e-9);
     }

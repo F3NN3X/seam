@@ -1,26 +1,10 @@
 //! Low-level mouse hook: when the pointer crosses a calibrated border, put it
 //! where the screens physically meet instead of at the same pixel row.
 
-use crate::geom::{exit_of, remap_crossing, EdgeMap, Rect, Side};
+use crate::layout::{decide, Live};
 use std::cell::{Cell, RefCell};
 use windows::Win32::Foundation::{LPARAM, LRESULT, POINT, RECT, WPARAM};
 use windows::Win32::UI::WindowsAndMessaging::*;
-
-/// A calibrated border between two monitors (indices into `Live::rects`).
-#[derive(Clone, Copy, Debug)]
-pub struct Link {
-    pub a: usize,
-    pub b: usize,
-    /// Side of `a` that `b` sits on.
-    pub side: Side,
-    pub map: EdgeMap,
-}
-
-#[derive(Default)]
-pub struct Live {
-    pub rects: Vec<Rect>,
-    pub links: Vec<Link>,
-}
 
 thread_local! {
     static LIVE: RefCell<Live> = RefCell::new(Live::default());
@@ -48,26 +32,6 @@ pub fn enable(on: bool) {
             _ => {}
         }
     });
-}
-
-/// Pure decision logic, kept separate from the Win32 plumbing.
-fn decide(live: &Live, prev: (i32, i32), pt: (i32, i32)) -> Option<(i32, i32)> {
-    let src = live.rects.iter().position(|r| r.contains(prev.0, prev.1))?;
-    let a = live.rects[src];
-    let (side, along, over) = exit_of(&a, prev, pt)?;
-    for l in &live.links {
-        let (dst, map) = if l.a == src && l.side == side {
-            (l.b, l.map)
-        } else if l.b == src && l.side.opposite() == side {
-            (l.a, l.map.inverse())
-        } else {
-            continue;
-        };
-        if let Some(p) = remap_crossing(&a, &live.rects[dst], side, &map, along, over) {
-            return Some(p);
-        }
-    }
-    None
 }
 
 /// Games and some apps confine the pointer with ClipCursor; leave those alone.

@@ -6,6 +6,7 @@
 
 mod config;
 mod geom;
+mod layout;
 
 #[cfg(windows)]
 mod app;

@@ -5,7 +5,8 @@
 
 use crate::config::SavedBorder;
 use crate::geom::{anchor_points, overlap_in_a, predict, touching, EdgeMap, Side};
-use crate::hook::{self, Link, Live};
+use crate::hook;
+use crate::layout::{Link, Live};
 use crate::monitors::Mon;
 use std::cell::RefCell;
 use windows::core::{w, PCWSTR};

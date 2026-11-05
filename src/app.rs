@@ -2,7 +2,8 @@
 
 use crate::config::{signature, Config, SavedBorder};
 use crate::geom::touching;
-use crate::hook::{self, Link, Live};
+use crate::hook;
+use crate::layout::{Link, Live};
 use crate::monitors::{self, Mon};
 use crate::{arrange, autostart, overlay};
 use std::cell::RefCell;

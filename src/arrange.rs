@@ -2,52 +2,11 @@
 //! where the middle of the physical overlap lines up in pixels too. With the
 //! hook running this is a nicety; without it, it's the best Windows can do.
 
-use crate::geom::{aligned_along_origin, place_against, touching, Rect};
-use crate::hook::Link;
+use crate::geom::Rect;
+use crate::layout::{plan, Link};
 use crate::monitors::Mon;
-use std::collections::VecDeque;
 use windows::Win32::Devices::Display::*;
 use windows::Win32::Foundation::{ERROR_SUCCESS, POINTL};
-
-/// New rects for every monitor, moving each neighbour only along its shared
-/// edge, starting from the primary (which Windows pins at 0,0).
-pub fn plan(rects: &[Rect], primary: usize, links: &[Link]) -> Result<Vec<Rect>, String> {
-    if rects.is_empty() {
-        return Ok(Vec::new());
-    }
-    let mut out = rects.to_vec();
-    let mut placed = vec![false; rects.len()];
-    let mut queue = VecDeque::from([primary]);
-    placed[primary] = true;
-    while let Some(m) = queue.pop_front() {
-        for l in links {
-            let (n, side, map) = if l.a == m && !placed[l.b] {
-                (l.b, l.side, l.map)
-            } else if l.b == m && !placed[l.a] {
-                (l.a, l.side.opposite(), l.map.inverse())
-            } else {
-                continue;
-            };
-            if let Some(origin) = aligned_along_origin(&out[m], &out[n], side, &map) {
-                out[n] = place_against(&out[m], &out[n], side, origin);
-            }
-            placed[n] = true;
-            queue.push_back(n);
-        }
-    }
-    // Every pair that touched before must still touch, and nothing may overlap.
-    for i in 0..rects.len() {
-        for j in (i + 1)..rects.len() {
-            if out[i].intersects(&out[j]) {
-                return Err("aligning would make screens overlap".into());
-            }
-            if touching(&rects[i], &rects[j]).is_some() && touching(&out[i], &out[j]).is_none() {
-                return Err("this layout is too complex to align automatically".into());
-            }
-        }
-    }
-    Ok(out)
-}
 
 /// Apply new desktop positions. Returns Ok(false) if nothing needed to move.
 pub fn align(mons: &[Mon], links: &[Link]) -> Result<bool, String> {

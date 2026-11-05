@@ -1,11 +1,19 @@
 //! Low-level mouse hook: when the pointer crosses a calibrated border, put it
 //! where the screens physically meet instead of at the same pixel row.
+//!
+//! The hook lives on its own high-priority thread with its own message loop, so
+//! UI work like painting the overlay can never delay mouse input.
 
-use crate::layout::{decide, Live};
+use crate::layout::{decide, Crossing, Live};
 use crate::log;
-use std::cell::{Cell, RefCell};
-use std::time::Instant;
+use std::cell::Cell;
+use std::sync::mpsc::{channel, Sender};
+use std::sync::{OnceLock, RwLock};
+use std::time::{Duration, Instant};
 use windows::Win32::Foundation::{LPARAM, LRESULT, POINT, RECT, WPARAM};
+use windows::Win32::System::Threading::{
+    GetCurrentThread, GetCurrentThreadId, SetThreadPriority, THREAD_PRIORITY_HIGHEST,
+};
 use windows::Win32::UI::WindowsAndMessaging::*;
 
 /// Hook timing in ns since the last `log_stats`. Only updated while logging.
@@ -18,23 +26,78 @@ struct Stats {
     next_max: u64,
 }
 
+/// Written by the UI thread, read by the hook. The hook only ever tries the
+/// lock, so at worst one move falls through to Windows during a swap.
+static LIVE: RwLock<Live> = RwLock::new(Live { rects: Vec::new(), links: Vec::new() });
+
 thread_local! {
-    static LIVE: RefCell<Live> = RefCell::new(Live::default());
+    // These three belong to the hook thread.
     static HOOK: Cell<Option<HHOOK>> = const { Cell::new(None) };
     static STATS: Cell<Stats> = Cell::new(Stats::default());
     /// Time the current event spent in hooks after ours.
     static NEXT_NS: Cell<u64> = const { Cell::new(0) };
 }
 
+const WM_APP_COMMAND: u32 = WM_APP + 20;
+const OFF: usize = 0;
+const ON: usize = 1;
+const STATS_LINE: usize = 2;
+
 pub fn set_live(live: Live) {
-    LIVE.with(|l| *l.borrow_mut() = live);
+    let mut guard = LIVE.write().unwrap_or_else(|e| e.into_inner());
+    let old = std::mem::replace(&mut *guard, live);
+    drop(guard);
+    drop(old); // freed outside the lock
 }
 
-/// Install or remove the hook. Must be called from the thread running the
-/// message loop; the hook callback runs on that thread.
+/// Install or remove the hook. Waits until it's done, because callers rely on
+/// the hook being gone before a mode set.
 pub fn enable(on: bool) {
+    command(if on { ON } else { OFF });
+}
+
+fn command(cmd: usize) {
+    let (done, wait) = channel::<()>();
+    let done = Box::into_raw(Box::new(done));
+    unsafe {
+        if PostThreadMessageW(hook_thread(), WM_APP_COMMAND, WPARAM(cmd), LPARAM(done as isize)).is_ok() {
+            let _ = wait.recv_timeout(Duration::from_secs(1));
+        } else {
+            drop(Box::from_raw(done));
+            log::info!("hook thread unavailable");
+        }
+    }
+}
+
+/// The hook thread's id, starting it on first use. Zero if it couldn't start.
+fn hook_thread() -> u32 {
+    static ID: OnceLock<u32> = OnceLock::new();
+    *ID.get_or_init(|| {
+        let (ready, wait) = channel();
+        let spawned = std::thread::Builder::new().name("seam-hook".into()).spawn(move || unsafe {
+            let mut msg = MSG::default();
+            // Creates this thread's queue, so posting to it can't fail once `ready` is sent.
+            let _ = PeekMessageW(&mut msg, None, 0, 0, PM_NOREMOVE);
+            let _ = SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_HIGHEST);
+            let _ = ready.send(GetCurrentThreadId());
+            while GetMessageW(&mut msg, None, 0, 0).as_bool() {
+                if msg.message == WM_APP_COMMAND {
+                    run_command(msg.wParam.0);
+                    let _ = Box::from_raw(msg.lParam.0 as *mut Sender<()>).send(());
+                }
+            }
+        });
+        spawned.ok().and_then(|_| wait.recv().ok()).unwrap_or(0)
+    })
+}
+
+fn run_command(cmd: usize) {
+    if cmd == STATS_LINE {
+        write_stats();
+        return;
+    }
     HOOK.with(|h| unsafe {
-        match (on, h.get()) {
+        match (cmd == ON, h.get()) {
             (true, None) => match SetWindowsHookExW(WH_MOUSE_LL, Some(ll_proc), None, 0) {
                 Ok(hh) => {
                     h.set(Some(hh));
@@ -50,6 +113,14 @@ pub fn enable(on: bool) {
             _ => {}
         }
     });
+}
+
+/// Where this move should land, unless the pointer is confined.
+fn crossing(from: (i32, i32), pt: (i32, i32)) -> Option<Crossing> {
+    let live = LIVE.try_read().ok()?;
+    // Most moves cross nothing, so only then pay for the system call.
+    let c = decide(&live, from, pt)?;
+    (!cursor_is_confined(&live)).then_some(c)
 }
 
 /// Games and some apps confine the pointer with ClipCursor; leave those alone.
@@ -89,9 +160,16 @@ unsafe extern "system" fn ll_proc(code: i32, wparam: WPARAM, lparam: LPARAM) -> 
     res
 }
 
-/// Log the hook's timing since the last call. Covers every event, not just
-/// remaps, and separates our own time from hooks later in the chain.
+/// Log the hook's timing since the last call.
 pub fn log_stats() {
+    if log::enabled() {
+        command(STATS_LINE);
+    }
+}
+
+/// Covers every event, not just remaps, and separates our own time from hooks
+/// later in the chain.
+fn write_stats() {
     let t = STATS.with(Cell::take);
     if t.events > 0 {
         let us = |ns: u64| ns as f64 / 1e3;
@@ -125,14 +203,7 @@ unsafe fn on_mouse(code: i32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
             let mut prev = POINT::default();
             if GetCursorPos(&mut prev).is_ok() {
                 let (from, pt) = ((prev.x, prev.y), (info.pt.x, info.pt.y));
-                let crossing = LIVE.with(|l| {
-                    let live = l.try_borrow().ok()?;
-                    if live.links.is_empty() || cursor_is_confined(&live) {
-                        return None;
-                    }
-                    decide(&live, from, pt)
-                });
-                if let Some(c) = crossing {
+                if let Some(c) = crossing(from, pt) {
                     if c.to != pt && SetCursorPos(c.to.0, c.to.1).is_ok() {
                         if let Some(t0) = started {
                             let us = t0.elapsed().as_secs_f64() * 1e6;

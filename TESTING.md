@@ -79,6 +79,7 @@ Use a small client that opens `\\.\pipe\seam-<your username>` and writes one JSO
 ## Settings panel
 
 - [ ] **Open.** Choose **Open Seam…** in the tray menu. The panel opens in your Windows theme on the last page you used, and the sidebar shows the current remap state.
+- [ ] **Icon.** The Seam mark shows on the title bar, the taskbar button, and both exes in Explorer.
 - [ ] **Single panel.** Choose **Open Seam…** again. The open panel comes to the front and no second one starts.
 - [ ] **By hand.** Close the panel and run `seam-settings.exe` directly, with Seam running and then with it closed. Each time the panel opens through the tray, and in the second case the tray starts too.
 - [ ] **Tray quits.** Quit Seam with the panel open. The panel says Seam isn't running, and **Start** brings it back without restarting the panel by hand.

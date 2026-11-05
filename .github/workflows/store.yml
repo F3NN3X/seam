@@ -46,7 +46,7 @@ jobs:
           name: store-msix
           path: dist
       - name: Set up msstore
-        uses: microsoft/microsoft-store-apppublisher@v1.1
+        uses: microsoft/microsoft-store-apppublisher@15abd1c50fcc164b19cb240fb04ef3c49bf715a2 # v1.1
       - name: Configure msstore
         shell: pwsh
         env:
@@ -70,7 +70,7 @@ jobs:
     environment: store # approval 2 of 2, after looking at the draft. Never edit it in the web UI
     steps:
       - name: Set up msstore
-        uses: microsoft/microsoft-store-apppublisher@v1.1
+        uses: microsoft/microsoft-store-apppublisher@15abd1c50fcc164b19cb240fb04ef3c49bf715a2 # v1.1
       - name: Configure msstore
         shell: pwsh
         env:

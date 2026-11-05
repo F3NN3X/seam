@@ -63,7 +63,7 @@ To cross-compile from Linux, use `./build-cross.sh`. It needs `mingw-w64` and Ru
 
 `cargo test` runs the geometry and config tests on any OS.
 
-## Limits (v0.1)
+## Limits
 
 - Borders are found from the Windows arrangement: two screens must touch there. Screens that touch on your desk but have a gap in the layout ("glue") aren't supported yet.
 - Rotated screens work as long as Windows reports their rotated size, which it does. Mirrored screens have nothing to line up.

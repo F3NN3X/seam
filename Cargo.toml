@@ -3,7 +3,7 @@ members = ["settings"]
 
 [package]
 name = "seam"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2021"
 description = "Line up your screens on Windows 11 so the pointer crosses where they physically meet."
 license = "MIT"

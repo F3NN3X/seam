@@ -63,6 +63,8 @@ pub struct ZoneSettings {
     pub restore_size: bool,
     /// Experimental: after a screen change, put snapped windows back in their zones.
     pub refit: bool,
+    /// Edit layouts on the screen itself. Off shows a live view there and edits in the panel.
+    pub edit_on_screen: bool,
     /// Exe file names, case-insensitive.
     pub exclude: Vec<String>,
 }
@@ -76,6 +78,7 @@ impl Default for ZoneSettings {
             gap: 8,
             restore_size: true,
             refit: false,
+            edit_on_screen: true,
             exclude: Vec::new(),
         }
     }

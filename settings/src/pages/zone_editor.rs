@@ -17,7 +17,7 @@ use std::rc::Rc;
 actions!(seam_zone_editor, [DiscardEdit, UndoEdit]);
 
 /// Esc and Ctrl+Z only mean something to an element inside this context.
-const CONTEXT: &str = "SeamZoneEditor";
+pub(super) const CONTEXT: &str = "SeamZoneEditor";
 /// Room for a pointer to grab a divider, in preview pixels.
 const GRAB: f32 = 10.;
 
@@ -38,14 +38,14 @@ struct Step {
     selected: usize,
 }
 
-struct Dragging {
-    path: Vec<bool>,
+pub(super) struct Dragging {
+    pub(super) path: Vec<bool>,
     before: Node,
 }
 
 /// What a divider drag carries. The pointer's position does the rest.
 #[derive(Clone)]
-struct DragDivider;
+pub(super) struct DragDivider;
 
 impl Render for DragDivider {
     fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
@@ -57,17 +57,14 @@ pub struct Editor {
     /// The desk and screen being edited.
     pub sig: String,
     pub screen: String,
-    tree: Node,
+    pub(super) tree: Node,
     start: Node,
     /// What Reset goes back to: the template, or the tree the session began with.
     base: Node,
-    selected: usize,
+    pub(super) selected: usize,
     history: Vec<Step>,
-    dragging: Option<Dragging>,
+    pub(super) dragging: Option<Dragging>,
     focus: FocusHandle,
-    /// Set when drawn, so a drag can turn the pointer back into a ratio.
-    scale: f64,
-    area: Rect,
 }
 
 impl Editor {
@@ -99,7 +96,6 @@ pub fn open(panel: &mut Panel, window: &mut Window, cx: &mut Context<Panel>) {
     let base = saved.as_ref().and_then(|l| zones::template_tree(l.template)).unwrap_or_else(|| tree.clone());
     let focus = cx.focus_handle();
     focus.focus(window, cx);
-    let area = Rect { x: 0, y: 0, w: 1, h: 1 };
     let editor = Editor {
         sig,
         screen,
@@ -110,8 +106,6 @@ pub fn open(panel: &mut Panel, window: &mut Window, cx: &mut Context<Panel>) {
         history: Vec::new(),
         dragging: None,
         focus,
-        scale: 1.,
-        area,
     };
     panel.editor = Some(editor);
     cx.notify();
@@ -144,12 +138,12 @@ pub fn guard(panel: &mut Panel, window: &mut Window, cx: &mut Context<Panel>, th
     });
 }
 
-fn discard(panel: &mut Panel, cx: &mut Context<Panel>) {
+pub(super) fn discard(panel: &mut Panel, cx: &mut Context<Panel>) {
     panel.editor = None;
     cx.notify();
 }
 
-fn undo(panel: &mut Panel, cx: &mut Context<Panel>) {
+pub(super) fn undo(panel: &mut Panel, cx: &mut Context<Panel>) {
     if let Some(editor) = panel.editor.as_mut() {
         editor.undo();
     }
@@ -157,7 +151,7 @@ fn undo(panel: &mut Panel, cx: &mut Context<Panel>) {
 }
 
 /// Save the tree as the screen's layout, which is now Custom.
-fn done(panel: &mut Panel, window: &mut Window, cx: &mut Context<Panel>) {
+pub(super) fn done(panel: &mut Panel, window: &mut Window, cx: &mut Context<Panel>) {
     let Some(editor) = panel.editor.take() else { return };
     cx.notify();
     if !editor.dirty() {
@@ -199,27 +193,34 @@ fn reset(panel: &mut Panel, cx: &mut Context<Panel>) {
     cx.notify();
 }
 
-fn select(panel: &mut Panel, zone: usize, cx: &mut Context<Panel>) {
+pub(super) fn select(panel: &mut Panel, zone: usize, cx: &mut Context<Panel>) {
     if let Some(editor) = panel.editor.as_mut() {
         editor.selected = zone.min(zones::leaf_count(&editor.tree) - 1);
     }
     cx.notify();
 }
 
-fn begin_drag(panel: &mut Panel, path: Vec<bool>) {
+pub(super) fn begin_drag(panel: &mut Panel, path: Vec<bool>) {
     if let Some(editor) = panel.editor.as_mut() {
         editor.dragging = Some(Dragging { path, before: editor.tree.clone() });
     }
 }
 
-/// The pointer moved with a divider held. `origin` is the preview's top-left.
-fn drag_to(panel: &mut Panel, pointer: Point<Pixels>, origin: Point<Pixels>, cx: &mut Context<Panel>) {
+/// The pointer moved with a divider held. `origin` is the drawing's top-left, and
+/// `scale` how many window pixels a screen pixel takes.
+pub(super) fn drag_to(
+    panel: &mut Panel,
+    pointer: Point<Pixels>,
+    origin: Point<Pixels>,
+    (scale, area): (f64, Rect),
+    cx: &mut Context<Panel>,
+) {
     let Some(editor) = panel.editor.as_mut() else { return };
     let Some(path) = editor.dragging.as_ref().map(|d| d.path.clone()) else { return };
-    let Some(divider) = zones::dividers(&editor.tree, editor.area).into_iter().find(|d| d.path == path) else {
+    let Some(divider) = zones::dividers(&editor.tree, area).into_iter().find(|d| d.path == path) else {
         return;
     };
-    let (x, y) = (f64::from(pointer.x - origin.x) / editor.scale, f64::from(pointer.y - origin.y) / editor.scale);
+    let (x, y) = (f64::from(pointer.x - origin.x) / scale, f64::from(pointer.y - origin.y) / scale);
     let ratio = match divider.dir {
         Dir::Vertical => (x - f64::from(divider.area.x)) / f64::from(divider.area.w.max(1)),
         Dir::Horizontal => (y - f64::from(divider.area.y)) / f64::from(divider.area.h.max(1)),
@@ -229,7 +230,7 @@ fn drag_to(panel: &mut Panel, pointer: Point<Pixels>, origin: Point<Pixels>, cx:
 }
 
 /// One drag is one Undo step.
-fn end_drag(panel: &mut Panel, cx: &mut Context<Panel>) {
+pub(super) fn end_drag(panel: &mut Panel, cx: &mut Context<Panel>) {
     if let Some(editor) = panel.editor.as_mut() {
         if let Some(Dragging { before, .. }) = editor.dragging.take() {
             if before != editor.tree {
@@ -266,12 +267,10 @@ pub fn view(
     cx: &mut Context<Panel>,
 ) -> AnyElement {
     let p = palette(cx);
-    let (w, h) = (mon.rect.width(), mon.rect.height());
+    let work = super::screen_editor::work_of(mon);
+    let (w, h) = (work.w, work.h);
     let scale = ((room - 34.) / f64::from(w)).min((f64::from(height) - 34.) / f64::from(h)).max(0.01);
     let area = Rect { x: 0, y: 0, w, h };
-    if let Some(editor) = panel.editor.as_mut() {
-        (editor.scale, editor.area) = (scale, area);
-    }
     let Some(editor) = panel.editor.as_ref() else { return div().into_any_element() };
     let (tree, selected, focus) = (editor.tree.clone(), editor.selected, editor.focus.clone());
     let dragging = editor.dragging.as_ref().map(|d| d.path.clone());
@@ -293,8 +292,8 @@ pub fn view(
             "right" | "down" => select(panel, (selected + 1).min(count - 1), cx),
             _ => {}
         }))
-        .on_drag_move(cx.listener(|panel, e: &DragMoveEvent<DragDivider>, _, cx| {
-            drag_to(panel, e.event.position, e.bounds.origin, cx);
+        .on_drag_move(cx.listener(move |panel, e: &DragMoveEvent<DragDivider>, _, cx| {
+            drag_to(panel, e.event.position, e.bounds.origin, (scale, area), cx);
         }))
         .on_mouse_up(MouseButton::Left, cx.listener(|panel, _, _, cx| end_drag(panel, cx)))
         .on_mouse_up_out(MouseButton::Left, cx.listener(|panel, _, _, cx| end_drag(panel, cx)));

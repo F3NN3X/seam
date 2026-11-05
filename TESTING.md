@@ -130,6 +130,22 @@ Set up first: on Zones, pick **Priority** for screen 1 and **Grid** for screen 2
 - [ ] **Every screen.** Edit the layout of the portrait U3477 and the 1920x550 panel, which are the tricky shapes. Dividers, px widths and the saved layout follow the real screen size.
 - [ ] **Screens change.** With the editor open, unplug a screen. The editor closes without saving.
 
+## On-screen editor
+
+Do each of these in both modes where it says so, on every screen of the test desk: the 125% screen, the 100% screen, and the portrait U3477.
+
+- [ ] **Open, edit on screen (default).** On Zones, press **Edit layout**. A borderless window appears over the selected screen's work area (the taskbar stays visible). It is dimmed, shows each zone's number and width in px centred, and you can see windows behind it. The Seam window stays in front with its toolbar, and the editor has no taskbar button and doesn't show in Alt+Tab.
+- [ ] **Real pixels, each scaling.** Put a 1 px-accurate reference on the screen (a ruler or a screenshot). With a half-and-half layout the width tag reads half the work area in pixels, and the divider sits at the middle of the work area at 125%, 100% and on the portrait screen.
+- [ ] **Select and drag.** Click a zone on the screen: it gets the amber outline and fill, and the preview shows the same selection. Drag a divider: it snaps like the preview (quarters and thirds), the tag shows the two widths in real px, and the preview follows. Drag one in the preview: the screen follows.
+- [ ] **Toolbar.** Split, Merge, Undo, Reset and Done in the Seam window change the on-screen zones at once. Clicking on the screen doesn't bring the screen window in front of the Seam window.
+- [ ] **Esc and Ctrl+Z.** With focus in the Seam window, then after clicking a zone on the screen: Ctrl+Z undoes one step and Esc closes the editor without saving, both times.
+- [ ] **Live view.** Turn off **Edit layouts on the screen**, then press Edit layout. The same window appears, but clicking anywhere on it reaches the app underneath (try a link in a browser, and a title bar), the pointer doesn't change over dividers, and nothing selects. Edit in the preview: the screen follows live.
+- [ ] **Switching mode.** Turn the setting on and off while the editor is open. The window is replaced with the other kind. Edits aren't lost.
+- [ ] **Another screen.** With the editor open, pick another screen tab. If there are unsaved edits one dialog asks first. The window then moves to that screen, drawn at that screen's size and scaling.
+- [ ] **Closing.** Done, Esc, another page in the sidebar, closing the panel, and quitting from the tray each close the window. Restart the tray while editing: the window closes. Unplug a screen, or change a resolution, while editing: it closes and `config.json` doesn't change.
+- [ ] **Only Done writes.** Watch `config.json` while editing in either mode. It changes only on Done.
+- [ ] **Edges.** Look for any gap, blur or offset between the window edge and the work area at 125%. Note what you see.
+
 ## Re-fit after a display change (experimental)
 
 Snap a few windows first: a normal one on screen 1, a spanning one across two zones, one on the 125% screen and a fixed-size one. Do each check with **Keep windows in their zones** on Zones turned on, then again with it off.

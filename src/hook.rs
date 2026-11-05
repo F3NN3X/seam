@@ -8,11 +8,22 @@ use std::time::Instant;
 use windows::Win32::Foundation::{LPARAM, LRESULT, POINT, RECT, WPARAM};
 use windows::Win32::UI::WindowsAndMessaging::*;
 
+/// Hook timing in ns since the last `log_stats`. Only updated while logging.
+#[derive(Clone, Copy, Default)]
+struct Stats {
+    events: u64,
+    total: u64,
+    max: u64,
+    own_max: u64,
+    next_max: u64,
+}
+
 thread_local! {
     static LIVE: RefCell<Live> = RefCell::new(Live::default());
     static HOOK: Cell<Option<HHOOK>> = const { Cell::new(None) };
-    /// Events, total ns and slowest ns since the last `log_stats`. Only updated while logging.
-    static STATS: Cell<(u64, u64, u64)> = const { Cell::new((0, 0, 0)) };
+    static STATS: Cell<Stats> = Cell::new(Stats::default());
+    /// Time the current event spent in hooks after ours.
+    static NEXT_NS: Cell<u64> = const { Cell::new(0) };
 }
 
 pub fn set_live(live: Live) {
@@ -64,20 +75,45 @@ unsafe extern "system" fn ll_proc(code: i32, wparam: WPARAM, lparam: LPARAM) -> 
     let started = Instant::now();
     let res = on_mouse(code, wparam, lparam);
     let ns = started.elapsed().as_nanos() as u64;
+    let next = NEXT_NS.take();
     STATS.with(|s| {
-        let (events, total, max) = s.get();
-        s.set((events + 1, total + ns, max.max(ns)));
+        let t = s.get();
+        s.set(Stats {
+            events: t.events + 1,
+            total: t.total + ns,
+            max: t.max.max(ns),
+            own_max: t.own_max.max(ns - next),
+            next_max: t.next_max.max(next),
+        });
     });
     res
 }
 
-/// Log the hook's timing since the last call. Covers every event, not just remaps.
+/// Log the hook's timing since the last call. Covers every event, not just
+/// remaps, and separates our own time from hooks later in the chain.
 pub fn log_stats() {
-    let (events, total, max) = STATS.with(Cell::take);
-    if events > 0 {
-        let avg = total as f64 / events as f64 / 1e3;
-        log::info!("hook stats: {events} events, avg {avg:.1}us, max {:.1}us", max as f64 / 1e3);
+    let t = STATS.with(Cell::take);
+    if t.events > 0 {
+        let us = |ns: u64| ns as f64 / 1e3;
+        log::info!(
+            "hook stats: {} events, avg {:.1}us, max {:.1}us, own max {:.1}us, next hooks max {:.1}us",
+            t.events,
+            t.total as f64 / t.events as f64 / 1e3,
+            us(t.max),
+            us(t.own_max),
+            us(t.next_max)
+        );
     }
+}
+
+unsafe fn call_next(code: i32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
+    if !log::enabled() {
+        return CallNextHookEx(None, code, wparam, lparam);
+    }
+    let started = Instant::now();
+    let res = CallNextHookEx(None, code, wparam, lparam);
+    NEXT_NS.set(started.elapsed().as_nanos() as u64);
+    res
 }
 
 unsafe fn on_mouse(code: i32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
@@ -114,5 +150,5 @@ unsafe fn on_mouse(code: i32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
             }
         }
     }
-    CallNextHookEx(None, code, wparam, lparam)
+    call_next(code, wparam, lparam)
 }

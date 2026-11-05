@@ -11,6 +11,7 @@ use seam::winutil;
 use seam::zones::{self, Rect, ZoneLayout};
 use std::cell::RefCell;
 use std::collections::{HashMap, VecDeque};
+use std::time::Instant;
 use windows::Win32::Foundation::*;
 use windows::Win32::Graphics::Gdi::*;
 use windows::Win32::UI::Accessibility::*;
@@ -133,7 +134,6 @@ struct Engine {
     hook: Option<HWINEVENTHOOK>,
     drag: Option<Drag>,
     snapped: HashMap<isize, Snapped>,
-    overlays: HashMap<String, HWND>,
     pending: Option<Pending>,
     warned: bool,
     refit: refit::Refit,
@@ -231,12 +231,29 @@ pub fn update(owner: HWND, cfg: &Config, sig: &str, mons: &[Mon]) {
         if !e.settings.refit {
             e.refit_stop();
         }
-        // The screens may have changed, and the windows are made again when needed.
-        for (_, overlay) in e.overlays.drain() {
-            zone_paint::destroy(overlay);
-        }
         e.sync_hook();
+        e.sync_overlay();
     });
+}
+
+/// The work area changed (a moved taskbar, a scaling change), so the zones' pixels did.
+pub fn work_area_changed() {
+    with_engine(Engine::sync_overlay);
+}
+
+/// The tray is quitting: free the overlay's windows and bitmaps.
+pub fn shutdown() {
+    zone_paint::clear();
+}
+
+fn specs(geometry: &[Placed]) -> Vec<zone_paint::ScreenSpec> {
+    let spec = |g: &Placed| zone_paint::ScreenSpec {
+        id: g.id.clone(),
+        work: g.work,
+        scale: g.dpi as f32 / 96.0,
+        zones: g.zones.clone(),
+    };
+    geometry.iter().map(spec).collect()
 }
 
 /// Move the foreground window to the next or previous zone, across screens.
@@ -270,6 +287,16 @@ unsafe extern "system" fn on_settle(_: HWND, _: u32, id: usize, _: u32) {
 }
 
 impl Engine {
+    /// Have the overlay thread draw ahead of time what a drag will show, or free it all.
+    fn sync_overlay(&mut self) {
+        let wanted = self.enabled && self.screens.iter().any(|s| s.layout.is_some());
+        if wanted {
+            zone_paint::build(specs(&self.geometry()));
+        } else {
+            zone_paint::clear();
+        }
+    }
+
     fn sync_hook(&mut self) {
         let wanted = self.enabled && self.screens.iter().any(|s| s.layout.is_some());
         match (wanted, self.hook) {
@@ -345,6 +372,8 @@ impl Engine {
         if geometry.is_empty() {
             return;
         }
+        // The work area may have moved since the overlay was last drawn. This only posts a list.
+        zone_paint::build(specs(&geometry));
         let was_snapped = self.current(hwnd).map(|s| s.old);
         let stamped = winutil::has_zone_stamp(hwnd);
         let button = Some(main_button()).filter(|b| held(*b));
@@ -449,33 +478,24 @@ impl Engine {
         self.drag = Some(drag);
     }
 
-    fn overlay_for(&mut self, id: &str) -> Option<HWND> {
-        if !self.overlays.contains_key(id) {
-            self.overlays.insert(id.to_string(), zone_paint::create()?);
-        }
-        self.overlays.get(id).copied()
-    }
-
     fn hide_all(&self) {
-        for overlay in self.overlays.values() {
-            zone_paint::hide(*overlay);
-        }
+        zone_paint::hide_all();
     }
 
     fn present(&mut self, drag: &mut Drag, view: Option<View>) {
+        let started = log::enabled().then(Instant::now);
         if let Some(previous) = drag.shown.filter(|p| view.is_none_or(|v| v.screen != p.screen)) {
-            if let Some(overlay) = self.overlays.get(&drag.geometry[previous.screen].id) {
-                zone_paint::hide(*overlay);
-            }
+            zone_paint::hide(&drag.geometry[previous.screen].id);
         }
         if let Some(view) = view {
             let g = &drag.geometry[view.screen];
-            if let Some(overlay) = self.overlay_for(&g.id) {
-                let lit = view.hit.map(|(a, b)| zones::span(g.zones[a], g.zones[b]));
-                zone_paint::paint(overlay, g.work, g.dpi as f32 / 96.0, &g.zones, lit);
-            }
+            let lit = view.hit.map(|(a, b)| zones::span(g.zones[a], g.zones[b]));
+            zone_paint::show(&g.id, lit);
         }
         drag.shown = view;
+        if let Some(started) = started {
+            log::info!("zone overlay: main {:.0}us", started.elapsed().as_secs_f64() * 1e6);
+        }
     }
 
     fn cancel_drag(&mut self) {

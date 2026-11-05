@@ -108,6 +108,8 @@ Set up first: on Zones, pick **Priority** for screen 1 and **Grid** for screen 2
 - [ ] **Game with ClipCursor.** With zones on, run a game that confines the pointer. No overlay appears and the game isn't disturbed.
 - [ ] **Windows snap flyout.** Dragging a window to the top edge still shows Windows' own layouts. Seam leaves that setting alone.
 - [ ] **Hook timing.** Note `hook stats`, then drag windows with Shift held for 10 s. `own max` and `avg` match a run with nothing dragged, and the pointer stays smooth.
+- [ ] **Overlay timing.** With `--log`, drag windows with Shift held across every screen of the test desk. `zone overlay: main` lines are the tray's time per change (expected well under 2000 us). `zone overlay: worker` lines give the overlay thread's own time: drawing a base once per screen after start-up or a screen change, `worker show` per change. The first drag after start-up shows zones on a screen only once its base is drawn, and later drags find them ready. Compare `hook stats` `own max` in the same minute with and without drags.
+- [ ] **Changing screens.** Change a screen's resolution, then drag with Shift held. The zones match the new size, with no leftover overlay at the old one. Turn Zones off, and Task Manager's memory for `seam.exe` drops back.
 - [ ] **Overlay clean-up.** After every drag no overlay stays on any screen, including when you press Esc mid-drag or close the dragged window.
 
 ## Re-fit after a display change (experimental)

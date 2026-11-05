@@ -886,6 +886,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
         // The work area changed, which is what a scaling change or a moved taskbar does.
         WM_SETTINGCHANGE => {
             if wparam.0 == SPI_SETWORKAREA.0 as usize {
+                snap::work_area_changed();
                 snap::display_changed();
             }
             DefWindowProcW(hwnd, msg, wparam, lparam)
@@ -965,6 +966,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
         }
         WM_DESTROY => {
             hook::enable(false);
+            snap::shutdown();
             with_app(|a| {
                 let nid = tray_data(a);
                 let _ = Shell_NotifyIconW(NIM_DELETE, &nid);

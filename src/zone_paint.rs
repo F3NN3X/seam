@@ -1,18 +1,30 @@
 //! The zone overlay: click-through layered windows, painted into premultiplied
-//! bitmaps. No blur and no animation. Each screen has a base window with every
-//! zone and number, drawn once, and the lit zone is its own small window drawn
-//! once per zone, so changing what is lit only shows and hides windows.
+//! bitmaps. No blur and no animation.
+//!
+//! All of it lives on one overlay thread of its own: the windows, the bitmaps
+//! and every window call. The tray's main thread only posts commands to it
+//! (`build`, `show`, `hide`, `clear`), each a queue push and one wake-up, so a
+//! drag never waits on pixels or on the window system. When zones are set up
+//! the thread draws, ahead of time and one piece per turn, a base window per
+//! screen with every zone and number, and a small lit window per zone. Showing
+//! a zone is then a show of windows that already exist. A zone or span that
+//! wasn't drawn yet is drawn when asked for, and a screen whose base isn't
+//! ready yet shows as soon as it is, with nobody waiting for it.
 
 use crate::{log, overlay};
 use seam::zones::Rect;
-use std::cell::RefCell;
 use std::collections::hash_map::Entry;
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
+use std::sync::mpsc::channel;
+use std::sync::{Mutex, OnceLock};
 use std::time::Instant;
 use windows::core::{w, PCWSTR};
 use windows::Win32::Foundation::*;
 use windows::Win32::Graphics::Gdi::*;
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
+use windows::Win32::System::Threading::{
+    GetCurrentThread, GetCurrentThreadId, SetThreadPriority, THREAD_PRIORITY_BELOW_NORMAL,
+};
 use windows::Win32::UI::WindowsAndMessaging::*;
 
 const CLASS: PCWSTR = w!("SeamZones");
@@ -23,6 +35,7 @@ const INK: (u8, u8, u8) = (0xF3, 0xF3, 0xF3);
 const SHADE: (u8, u8, u8) = (0x20, 0x20, 0x20);
 /// The seam colour, `#FFB020`.
 const AMBER: (u8, u8, u8) = (0xFF, 0xB0, 0x20);
+const WM_APP_WAKE: u32 = WM_APP + 1;
 
 type Key = (i32, i32, i32, i32);
 type MaskKey = (String, i32, i32, i32);
@@ -31,27 +44,130 @@ fn key(r: &Rect) -> Key {
     (r.x, r.y, r.w, r.h)
 }
 
-/// What is drawn for one screen's base window, and the lit windows made for it.
-struct Layers {
-    work: Rect,
-    scale: u32,
-    zones: Vec<Rect>,
-    lit: HashMap<Key, HWND>,
-    shown: Option<Key>,
+/// What the overlay needs to know about one screen, in screen pixels.
+#[derive(Clone, PartialEq)]
+pub struct ScreenSpec {
+    pub id: String,
+    pub work: Rect,
+    /// The screen's DPI over 96.
+    pub scale: f32,
+    pub zones: Vec<Rect>,
 }
 
-thread_local! {
-    static LAYERS: RefCell<HashMap<isize, Layers>> = RefCell::new(HashMap::new());
+enum Command {
+    Build(u64, Vec<ScreenSpec>),
+    Show(String, Option<Rect>),
+    Hide(String),
+    HideAll,
+    Clear,
+}
+
+struct Shared {
+    queue: Mutex<VecDeque<Command>>,
+    thread: u32,
+}
+
+static SHARED: OnceLock<Shared> = OnceLock::new();
+static GENERATION: Mutex<u64> = Mutex::new(0);
+
+/// The overlay thread's queue, starting the thread on first use. `None` if it couldn't start.
+fn shared() -> Option<&'static Shared> {
+    let shared = SHARED.get_or_init(|| {
+        let (ready, wait) = channel();
+        let spawned = std::thread::Builder::new().name("seam-zones".into()).spawn(move || {
+            unsafe {
+                let mut msg = MSG::default();
+                // Creates this thread's queue, so posting to it can't fail once `ready` is sent.
+                let _ = PeekMessageW(&mut msg, None, 0, 0, PM_NOREMOVE);
+                let _ = SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_BELOW_NORMAL);
+                let _ = ready.send(GetCurrentThreadId());
+            }
+            Overlay::default().run();
+        });
+        let thread = spawned.ok().and_then(|_| wait.recv().ok()).unwrap_or(0);
+        Shared { queue: Mutex::new(VecDeque::new()), thread }
+    });
+    (shared.thread != 0).then_some(shared)
+}
+
+/// Hand the overlay thread one command. A queue push and, if it was idle, one post.
+fn send(command: Command) {
+    let Some(shared) = shared() else { return };
+    let mut queue = shared.queue.lock().unwrap_or_else(|e| e.into_inner());
+    let was_empty = queue.is_empty();
+    queue.push_back(command);
+    drop(queue);
+    if was_empty {
+        unsafe {
+            let _ = PostThreadMessageW(shared.thread, WM_APP_WAKE, WPARAM(0), LPARAM(0));
+        }
+    }
+}
+
+/// Tell the overlay thread which screens have zones and where. Drawing starts
+/// at once on that thread, and screens that haven't changed keep what they have.
+pub fn build(screens: Vec<ScreenSpec>) {
+    let generation = {
+        let mut g = GENERATION.lock().unwrap_or_else(|e| e.into_inner());
+        *g += 1;
+        *g
+    };
+    send(Command::Build(generation, screens));
+}
+
+/// Show the overlay of screen `id`, with `lit` lit. If its drawing isn't ready
+/// it shows when it is. Returns at once.
+pub fn show(id: &str, lit: Option<Rect>) {
+    send(Command::Show(id.to_string(), lit));
+}
+
+pub fn hide(id: &str) {
+    send(Command::Hide(id.to_string()));
+}
+
+pub fn hide_all() {
+    send(Command::HideAll);
+}
+
+/// Zones are off or there is nothing to show: free every window and bitmap.
+pub fn clear() {
+    if SHARED.get().is_some() {
+        send(Command::Clear);
+    }
+}
+
+/// One screen on the overlay thread.
+struct Screen {
+    spec: ScreenSpec,
+    base: Option<HWND>,
+    base_shown: bool,
+    lit: HashMap<Key, HWND>,
+    shown: Option<Key>,
+    /// What was asked for before the base was drawn: show this once it is.
+    want: Option<Option<Rect>>,
+}
+
+enum Unit {
+    Base(String),
+    Lit(String, usize),
+}
+
+#[derive(Default)]
+struct Overlay {
+    generation: u64,
+    screens: HashMap<String, Screen>,
+    /// Drawing still to do, one piece per turn so commands are answered in between.
+    todo: VecDeque<Unit>,
     /// Digit coverage by label, glyph size and mask size.
-    static MASKS: RefCell<HashMap<MaskKey, Vec<u8>>> = RefCell::new(HashMap::new());
+    masks: HashMap<MaskKey, Vec<u8>>,
 }
 
 unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
     DefWindowProcW(hwnd, msg, wparam, lparam)
 }
 
-/// A hidden overlay window. It is placed and shown by `paint`.
-pub fn create() -> Option<HWND> {
+/// A hidden overlay window.
+fn create() -> Option<HWND> {
     unsafe {
         let hinst = GetModuleHandleW(None).unwrap_or_default();
         let wc = WNDCLASSEXW {
@@ -68,31 +184,213 @@ pub fn create() -> Option<HWND> {
     }
 }
 
-/// Hide the base window and whatever is lit.
-pub fn hide(hwnd: HWND) {
-    LAYERS.with(|layers| {
-        if let Some(layers) = layers.borrow_mut().get_mut(&(hwnd.0 as isize)) {
-            if let Some(lit) = layers.shown.take().and_then(|k| layers.lit.get(&k)) {
-                hide_window(*lit);
-            }
-        }
-    });
-    hide_window(hwnd);
-}
-
 fn hide_window(hwnd: HWND) {
     unsafe {
         let _ = ShowWindow(hwnd, SW_HIDE);
     }
 }
 
-pub fn destroy(hwnd: HWND) {
-    let layers = LAYERS.with(|layers| layers.borrow_mut().remove(&(hwnd.0 as isize)));
+fn show_on_top(hwnd: HWND) {
     unsafe {
-        for lit in layers.iter().flat_map(|l| l.lit.values()) {
-            let _ = DestroyWindow(*lit);
+        let flags = SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW;
+        let _ = SetWindowPos(hwnd, Some(HWND_TOPMOST), 0, 0, 0, 0, flags);
+    }
+}
+
+impl Screen {
+    fn destroy(self) {
+        unsafe {
+            for window in self.lit.into_values().chain(self.base) {
+                let _ = DestroyWindow(window);
+            }
         }
-        let _ = DestroyWindow(hwnd);
+    }
+
+    fn hide(&mut self) {
+        self.want = None;
+        if let Some(lit) = self.shown.take().and_then(|k| self.lit.get(&k)) {
+            hide_window(*lit);
+        }
+        if let Some(base) = self.base.filter(|_| self.base_shown) {
+            hide_window(base);
+        }
+        self.base_shown = false;
+    }
+}
+
+impl Overlay {
+    fn run(&mut self) {
+        let mut msg = MSG::default();
+        loop {
+            if !self.drain() {
+                return;
+            }
+            unsafe {
+                // Windows messages first, so nothing is left waiting while pieces are drawn.
+                while PeekMessageW(&mut msg, None, 0, 0, PM_REMOVE).as_bool() {
+                    let _ = TranslateMessage(&msg);
+                    DispatchMessageW(&msg);
+                }
+                if self.todo.is_empty() {
+                    // Asleep until the main thread posts, or a window message comes.
+                    if !GetMessageW(&mut msg, None, 0, 0).as_bool() {
+                        return;
+                    }
+                    let _ = TranslateMessage(&msg);
+                    DispatchMessageW(&msg);
+                } else {
+                    self.draw_next();
+                }
+            }
+        }
+    }
+
+    /// Carry out every queued command. False once the thread should end.
+    fn drain(&mut self) -> bool {
+        let Some(shared) = SHARED.get() else { return true };
+        let commands = std::mem::take(&mut *shared.queue.lock().unwrap_or_else(|e| e.into_inner()));
+        for command in commands {
+            match command {
+                Command::Build(generation, specs) => self.build(generation, specs),
+                Command::Show(id, lit) => self.show(&id, lit),
+                Command::Hide(id) => {
+                    if let Some(screen) = self.screens.get_mut(&id) {
+                        screen.hide();
+                    }
+                }
+                Command::HideAll => self.screens.values_mut().for_each(Screen::hide),
+                Command::Clear => self.clear(),
+            }
+        }
+        true
+    }
+
+    fn clear(&mut self) {
+        self.todo.clear();
+        for (_, screen) in self.screens.drain() {
+            screen.destroy();
+        }
+        self.masks = HashMap::new();
+    }
+
+    /// A newer description of the screens. What is already drawn for an
+    /// unchanged screen stays, and drawing that was still to do is replaced.
+    fn build(&mut self, generation: u64, specs: Vec<ScreenSpec>) {
+        self.generation = generation;
+        self.todo.clear();
+        let wanted: Vec<&str> = specs.iter().map(|s| s.id.as_str()).collect();
+        let gone: Vec<String> = self.screens.keys().filter(|id| !wanted.contains(&id.as_str())).cloned().collect();
+        for id in gone {
+            if let Some(screen) = self.screens.remove(&id) {
+                screen.destroy();
+            }
+        }
+        for spec in specs {
+            if self.screens.get(&spec.id).is_some_and(|s| s.spec == spec) {
+                continue;
+            }
+            if let Some(old) = self.screens.remove(&spec.id) {
+                old.destroy();
+            }
+            let blank = Screen {
+                spec: spec.clone(),
+                base: None,
+                base_shown: false,
+                lit: HashMap::new(),
+                shown: None,
+                want: None,
+            };
+            self.screens.insert(spec.id.clone(), blank);
+        }
+        // Bases first, because they decide when a drag can show anything.
+        let ids: Vec<String> = self.screens.keys().cloned().collect();
+        self.todo.extend(ids.iter().filter(|id| self.screens[*id].base.is_none()).map(|id| Unit::Base(id.clone())));
+        for id in &ids {
+            let zones = self.screens[id].spec.zones.len();
+            self.todo.extend((0..zones).map(|i| Unit::Lit(id.clone(), i)));
+        }
+    }
+
+    /// Draw one piece of what is still to do.
+    fn draw_next(&mut self) {
+        let Some(unit) = self.todo.pop_front() else { return };
+        let started = log::enabled().then(Instant::now);
+        match unit {
+            Unit::Base(id) => {
+                let Some(screen) = self.screens.get_mut(&id).filter(|s| s.base.is_none()) else { return };
+                let Some(base) = create() else { return };
+                let spec = screen.spec.clone();
+                render(base, spec.work, |canvas| draw_base(canvas, &mut self.masks, &spec));
+                let screen = self.screens.get_mut(&id).map(|s| s.base = Some(base));
+                if screen.is_some() {
+                    if let Some(started) = started {
+                        let ms = started.elapsed().as_secs_f64() * 1e3;
+                        log::info!(
+                            "zone overlay: worker drew a {}x{} base in {ms:.1} ms (generation {})",
+                            spec.work.w,
+                            spec.work.h,
+                            self.generation
+                        );
+                    }
+                    // Something asked for it while it was being drawn.
+                    if let Some(lit) = self.screens.get_mut(&id).and_then(|s| s.want.take()) {
+                        self.show(&id, lit);
+                    }
+                }
+            }
+            Unit::Lit(id, zone) => {
+                let Some(screen) = self.screens.get(&id) else { return };
+                let Some(rect) = screen.spec.zones.get(zone).copied() else { return };
+                if !screen.lit.contains_key(&key(&rect)) {
+                    let scale = screen.spec.scale;
+                    if let Some(window) = lit_window(rect, scale) {
+                        if let Some(screen) = self.screens.get_mut(&id) {
+                            screen.lit.insert(key(&rect), window);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    fn show(&mut self, id: &str, lit: Option<Rect>) {
+        let started = log::enabled().then(Instant::now);
+        let Some(screen) = self.screens.get_mut(id) else { return };
+        let Some(base) = screen.base else {
+            // Not drawn yet: show it when it is.
+            screen.want = Some(lit);
+            return;
+        };
+        if !screen.base_shown {
+            unsafe {
+                let _ = ShowWindow(base, SW_SHOWNOACTIVATE);
+            }
+            screen.base_shown = true;
+        }
+        let wanted = lit.as_ref().map(key);
+        let mut made = false;
+        if screen.shown != wanted {
+            if let Some(previous) = screen.shown.and_then(|k| screen.lit.get(&k)) {
+                hide_window(*previous);
+            }
+            if let (Some(zone), Some(k)) = (lit, wanted) {
+                // A span's box isn't one of the zones, and any zone may still be waiting its turn.
+                if let Entry::Vacant(slot) = screen.lit.entry(k) {
+                    if let Some(window) = lit_window(zone, screen.spec.scale) {
+                        slot.insert(window);
+                        made = true;
+                    }
+                }
+                if let Some(window) = screen.lit.get(&k) {
+                    show_on_top(*window);
+                }
+            }
+            screen.shown = wanted;
+        }
+        if let Some(started) = started {
+            let us = started.elapsed().as_secs_f64() * 1e6;
+            log::info!("zone overlay: worker show {us:.0}us, lit window drawn: {made}");
+        }
     }
 }
 
@@ -172,19 +470,16 @@ impl Canvas<'_> {
     }
 
     /// Lay `label` in `ink` over the middle of `r`, using GDI only for the glyph shapes.
-    fn label(&mut self, r: Rect, label: &str, ink: u32, s: f32) {
+    fn label(&mut self, masks: &mut HashMap<MaskKey, Vec<u8>>, r: Rect, label: &str, ink: u32, s: f32) {
         let (mw, mh, size) = ((80. * s) as i32, (56. * s) as i32, (28. * s) as i32);
         let (left, top) = (r.x + (r.w - mw) / 2, r.y + (r.h - mh) / 2);
-        MASKS.with(|masks| {
-            let mut masks = masks.borrow_mut();
-            let mask = masks
-                .entry((label.to_string(), size, mw, mh))
-                .or_insert_with(|| glyph_mask(label, size, mw, mh).unwrap_or_default());
-            for (i, cover) in mask.iter().enumerate().filter(|(_, c)| **c > 0) {
-                let (x, y) = (i as i32 % mw, i as i32 / mw);
-                self.blend(left + x, top + y, scale(ink, *cover as f32 / 255.));
-            }
-        });
+        let mask = masks
+            .entry((label.to_string(), size, mw, mh))
+            .or_insert_with(|| glyph_mask(label, size, mw, mh).unwrap_or_default());
+        for (i, cover) in mask.iter().enumerate().filter(|(_, c)| **c > 0) {
+            let (x, y) = (i as i32 % mw, i as i32 / mw);
+            self.blend(left + x, top + y, scale(ink, *cover as f32 / 255.));
+        }
     }
 }
 
@@ -280,71 +575,12 @@ fn lit_window(zone: Rect, s: f32) -> Option<HWND> {
     Some(hwnd)
 }
 
-fn show_on_top(hwnd: HWND) {
-    unsafe {
-        let flags = SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW;
-        let _ = SetWindowPos(hwnd, Some(HWND_TOPMOST), 0, 0, 0, 0, flags);
-    }
-}
-
-/// The base: every zone and its number, in screen pixels turned local to `work`.
-fn draw_base(canvas: &mut Canvas, work: Rect, zones: &[Rect], s: f32) {
+/// The base: every zone and its number, in screen pixels turned local to the work area.
+fn draw_base(canvas: &mut Canvas, masks: &mut HashMap<MaskKey, Vec<u8>>, spec: &ScreenSpec) {
     let (fill, outline, ink) = (pm(SHADE, 0.35), pm(INK, 0.4), pm(INK, 0.4));
-    for (i, zone) in zones.iter().enumerate() {
-        let zone = Rect { x: zone.x - work.x, y: zone.y - work.y, ..*zone };
-        canvas.rounded(zone, RADIUS, fill, Some((outline, OUTLINE)), s);
-        canvas.label(zone, &(i + 1).to_string(), ink, s);
-    }
-}
-
-/// Show the overlay over `work` with `highlight` lit. Zones and the highlight
-/// are in screen pixels, and `s` is the screen's DPI over 96. The base and
-/// each zone's lit window are drawn the first time they are needed, so later
-/// changes only show and hide windows.
-pub fn paint(hwnd: HWND, work: Rect, s: f32, zones: &[Rect], highlight: Option<Rect>) {
-    let started = log::enabled().then(Instant::now);
-    let (mut redrawn, mut made) = (false, false);
-    LAYERS.with(|layers| {
-        let mut layers = layers.borrow_mut();
-        let id = hwnd.0 as isize;
-        let stale = layers.get(&id).is_none_or(|l| l.work != work || l.scale != s.to_bits() || l.zones != zones);
-        if stale {
-            for lit in layers.remove(&id).iter().flat_map(|l| l.lit.values()) {
-                unsafe {
-                    let _ = DestroyWindow(*lit);
-                }
-            }
-            render(hwnd, work, |canvas| draw_base(canvas, work, zones, s));
-            let lit = zones.iter().filter_map(|z| Some((key(z), lit_window(*z, s)?))).collect();
-            layers.insert(id, Layers { work, scale: s.to_bits(), zones: zones.to_vec(), lit, shown: None });
-            redrawn = true;
-        }
-        let Some(current) = layers.get_mut(&id) else { return };
-        unsafe {
-            let _ = ShowWindow(hwnd, SW_SHOWNOACTIVATE);
-        }
-        let wanted = highlight.as_ref().map(key);
-        if current.shown != wanted {
-            if let Some(previous) = current.shown.and_then(|k| current.lit.get(&k)) {
-                hide_window(*previous);
-            }
-            if let (Some(zone), Some(k)) = (highlight, wanted) {
-                // A span: its bounding box isn't one of the zones.
-                if let Entry::Vacant(slot) = current.lit.entry(k) {
-                    if let Some(window) = lit_window(zone, s) {
-                        slot.insert(window);
-                        made = true;
-                    }
-                }
-                if let Some(window) = current.lit.get(&k) {
-                    show_on_top(*window);
-                }
-            }
-            current.shown = wanted;
-        }
-    });
-    if let Some(t0) = started {
-        let us = t0.elapsed().as_secs_f64() * 1e6;
-        log::info!("zone overlay: {us:.0}us, base redrawn: {redrawn}, lit window drawn: {made}");
+    for (i, zone) in spec.zones.iter().enumerate() {
+        let zone = Rect { x: zone.x - spec.work.x, y: zone.y - spec.work.y, ..*zone };
+        canvas.rounded(zone, RADIUS, fill, Some((outline, OUTLINE)), spec.scale);
+        canvas.label(masks, zone, &(i + 1).to_string(), ink, spec.scale);
     }
 }

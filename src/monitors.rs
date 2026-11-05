@@ -61,7 +61,11 @@ fn target_names() -> Vec<(String, String, String)> {
             if DisplayConfigGetDeviceInfo(&mut tgt.header) != 0 {
                 continue;
             }
-            out.push((wstr(&src.viewGdiDeviceName), wstr(&tgt.monitorDevicePath), wstr(&tgt.monitorFriendlyDeviceName)));
+            out.push((
+                wstr(&src.viewGdiDeviceName),
+                wstr(&tgt.monitorDevicePath),
+                wstr(&tgt.monitorFriendlyDeviceName),
+            ));
         }
     }
     out

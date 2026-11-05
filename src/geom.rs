@@ -68,11 +68,19 @@ impl Rect {
     }
     /// Origin of the rect along the axis of an edge on `side`.
     pub fn along_origin(&self, side: Side) -> i32 {
-        if side.along_is_y() { self.top } else { self.left }
+        if side.along_is_y() {
+            self.top
+        } else {
+            self.left
+        }
     }
     /// Length of the rect along the axis of an edge on `side`.
     pub fn along_len(&self, side: Side) -> i32 {
-        if side.along_is_y() { self.height() } else { self.width() }
+        if side.along_is_y() {
+            self.height()
+        } else {
+            self.width()
+        }
     }
 }
 
@@ -133,11 +141,7 @@ pub fn touching(a: &Rect, b: &Rect) -> Option<Side> {
 /// DPI (from EDID), offset so the middle of the current layout overlap lines up.
 pub fn predict(a: &Rect, b: &Rect, side: Side, dpi_a: f64, dpi_b: f64) -> EdgeMap {
     let ratio = dpi_b / dpi_a;
-    let s = if dpi_a > 0.0 && dpi_b > 0.0 && ratio.is_finite() && (0.25..=4.0).contains(&ratio) {
-        ratio
-    } else {
-        1.0
-    };
+    let s = if dpi_a > 0.0 && dpi_b > 0.0 && ratio.is_finite() && (0.25..=4.0).contains(&ratio) { ratio } else { 1.0 };
     let (ao, al) = (a.along_origin(side), a.along_len(side));
     let (bo, bl) = (b.along_origin(side), b.along_len(side));
     let lo = ao.max(bo);
@@ -155,7 +159,11 @@ pub fn overlap_in_a(m: &EdgeMap, len_a: i32, len_b: i32) -> Option<(f64, f64)> {
     let x1 = inv.apply(len_b as f64);
     let lo = x0.min(x1).max(0.0);
     let hi = x0.max(x1).min(len_a as f64);
-    if hi - lo >= 2.0 { Some((lo, hi)) } else { None }
+    if hi - lo >= 2.0 {
+        Some((lo, hi))
+    } else {
+        None
+    }
 }
 
 /// The two fixed calibration lines on A: 20% and 80% into the (predicted)
@@ -186,7 +194,13 @@ pub fn exit_of(a: &Rect, prev: (i32, i32), pt: (i32, i32)) -> Option<(Side, f64,
         (None, None) => return None,
         (Some(x), None) => x,
         (None, Some(y)) => y,
-        (Some(x), Some(y)) => if y.1 > x.1 { y } else { x },
+        (Some(x), Some(y)) => {
+            if y.1 > x.1 {
+                y
+            } else {
+                x
+            }
+        }
     };
     // Interpolate where the straight move from prev to pt crossed the edge.
     let (p0, p1, q0, q1, edge) = match side {
@@ -203,7 +217,14 @@ pub fn exit_of(a: &Rect, prev: (i32, i32), pt: (i32, i32)) -> Option<(Side, f64,
 
 /// Where the pointer should enter `b` after leaving `a` on `side`. `None` means
 /// there's no physical screen there, so the move is left to Windows.
-pub fn remap_crossing(a: &Rect, b: &Rect, side: Side, m: &EdgeMap, along_abs: f64, overshoot: i32) -> Option<(i32, i32)> {
+pub fn remap_crossing(
+    a: &Rect,
+    b: &Rect,
+    side: Side,
+    m: &EdgeMap,
+    along_abs: f64,
+    overshoot: i32,
+) -> Option<(i32, i32)> {
     let a_rel = along_abs - a.along_origin(side) as f64;
     let b_rel = m.apply(a_rel).round();
     let len_b = b.along_len(side) as f64;
@@ -246,8 +267,12 @@ mod tests {
     use super::*;
 
     // 27" 4K (163 dpi) left, 27" 1440p (109 dpi) right, tops aligned in Windows.
-    fn uhd() -> Rect { Rect::new(0, 0, 3840, 2160) }
-    fn qhd() -> Rect { Rect::new(3840, 0, 2560, 1440) }
+    fn uhd() -> Rect {
+        Rect::new(0, 0, 3840, 2160)
+    }
+    fn qhd() -> Rect {
+        Rect::new(3840, 0, 2560, 1440)
+    }
 
     #[test]
     fn touching_sides() {
@@ -292,7 +317,7 @@ mod tests {
         assert_eq!(over, 2);
         let dest = remap_crossing(&uhd(), &qhd(), side, &m, along, over).unwrap();
         assert_eq!(dest, (3842, 1080)); // 75% down the 1440p screen
-        // And back again: 1080 on the QHD maps to 1620 on the UHD.
+                                        // And back again: 1080 on the QHD maps to 1620 on the UHD.
         let (side2, along2, over2) = exit_of(&qhd(), (3840, 1080), (3839, 1080)).unwrap();
         assert_eq!(side2, Side::Left);
         let back = remap_crossing(&qhd(), &uhd(), side2, &m.inverse(), along2, over2).unwrap();

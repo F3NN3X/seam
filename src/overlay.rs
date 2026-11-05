@@ -109,11 +109,7 @@ fn build_steps(mons: &[Mon], saved: &[SavedBorder]) -> Vec<Step> {
 /// Push the in-progress maps to the hook so the pointer behaves as calibrated
 /// while you adjust ("try while adjusting").
 fn push_live(c: &Calib) {
-    let links = c
-        .steps
-        .iter()
-        .filter_map(|s| s.map().map(|map| Link { a: s.a, b: s.b, side: s.side, map }))
-        .collect();
+    let links = c.steps.iter().filter_map(|s| s.map().map(|map| Link { a: s.a, b: s.b, side: s.side, map })).collect();
     hook::set_live(Live { rects: c.mons.iter().map(|m| m.rect).collect(), links });
 }
 
@@ -229,7 +225,11 @@ fn pointer_along(side: Side) -> i32 {
     unsafe {
         let _ = GetCursorPos(&mut p);
     }
-    if side.along_is_y() { p.y } else { p.x }
+    if side.along_is_y() {
+        p.y
+    } else {
+        p.x
+    }
 }
 
 fn set_b(step: &mut Step, which: Which, base: (f64, f64), delta: f64) {
@@ -275,7 +275,10 @@ fn handle(hwnd: HWND, idx: usize, msg: u32, wparam: WPARAM, lparam: LPARAM) -> O
                 } else {
                     Which::Both
                 };
-                c.sel = match which { Which::One(i) => i, Which::Both => 2 };
+                c.sel = match which {
+                    Which::One(i) => i,
+                    Which::Both => 2,
+                };
                 c.drag = Some(Drag { which, start: pointer_along(side), b0: step.b_pts });
                 after = After::Capture(hwnd);
                 changed = true;
@@ -348,7 +351,11 @@ fn handle(hwnd: HWND, idx: usize, msg: u32, wparam: WPARAM, lparam: LPARAM) -> O
             }
             WM_SETCURSOR => {
                 let id = if is_b {
-                    if side.along_is_y() { IDC_SIZENS } else { IDC_SIZEWE }
+                    if side.along_is_y() {
+                        IDC_SIZENS
+                    } else {
+                        IDC_SIZEWE
+                    }
                 } else {
                     IDC_ARROW
                 };
@@ -423,11 +430,32 @@ unsafe fn fill(dc: HDC, r: RECT, c: (u8, u8, u8)) {
     let _ = DeleteObject(br.into());
 }
 
-unsafe fn text(dc: HDC, s: &str, mut r: RECT, px: i32, bold: bool, c: (u8, u8, u8), flags: DRAW_TEXT_FORMAT, panel: bool) {
+unsafe fn text(
+    dc: HDC,
+    s: &str,
+    mut r: RECT,
+    px: i32,
+    bold: bool,
+    c: (u8, u8, u8),
+    flags: DRAW_TEXT_FORMAT,
+    panel: bool,
+) {
     let weight = if bold { FW_SEMIBOLD.0 } else { FW_NORMAL.0 } as i32;
     let font = CreateFontW(
-        -px, 0, 0, 0, weight, 0, 0, 0,
-        DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY, 0, w!("Segoe UI"),
+        -px,
+        0,
+        0,
+        0,
+        weight,
+        0,
+        0,
+        0,
+        DEFAULT_CHARSET,
+        OUT_DEFAULT_PRECIS,
+        CLIP_DEFAULT_PRECIS,
+        CLEARTYPE_QUALITY,
+        0,
+        w!("Segoe UI"),
     );
     let old = SelectObject(dc, font.into());
     let mut buf: Vec<u16> = s.encode_utf16().collect();
@@ -438,7 +466,11 @@ unsafe fn text(dc: HDC, s: &str, mut r: RECT, px: i32, bold: bool, c: (u8, u8, u
         let cx = (r.left + r.right) / 2;
         let pad = px;
         let top = r.top;
-        fill(dc, RECT { left: cx - w / 2 - pad, top: top - pad, right: cx + w / 2 + pad, bottom: top + h + pad }, PANEL);
+        fill(
+            dc,
+            RECT { left: cx - w / 2 - pad, top: top - pad, right: cx + w / 2 + pad, bottom: top + h + pad },
+            PANEL,
+        );
         r = RECT { left: cx - w / 2, top, right: cx + w / 2 + 1, bottom: top + h };
     }
     SetBkMode(dc, TRANSPARENT);

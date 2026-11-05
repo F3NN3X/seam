@@ -196,7 +196,12 @@ fn start_lineup(app: &mut App) {
     let sig = signature(mons.iter().map(|m| m.id.as_str()));
     let saved = app.cfg.layouts.get(&sig).cloned().unwrap_or_default();
     if !overlay::start(app.hwnd, mons, &saved) {
-        notify(app, "Nothing to line up", "Seam needs two or more screens that touch in the Windows arrangement.", false);
+        notify(
+            app,
+            "Nothing to line up",
+            "Seam needs two or more screens that touch in the Windows arrangement.",
+            false,
+        );
     }
 }
 

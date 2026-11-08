@@ -13,7 +13,7 @@ use windows::Win32::Foundation::{ERROR_SUCCESS, POINTL};
 pub fn align(mons: &[Mon], links: &[Link]) -> Result<bool, String> {
     let rects: Vec<Rect> = mons.iter().map(|m| m.rect).collect();
     let primary = mons.iter().position(|m| m.primary).unwrap_or(0);
-    let new = plan(&rects, primary, links)?;
+    let new = plan(&rects, primary, links).map_err(|e| e.to_string())?;
     log::info!("arrangement plan: {rects:?} -> {new:?}");
     if new == rects {
         return Ok(false);

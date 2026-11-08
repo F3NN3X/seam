@@ -50,9 +50,35 @@ pub fn decide(live: &Live, prev: (i32, i32), pt: (i32, i32)) -> Option<Crossing>
     None
 }
 
+/// Why `plan` refused an arrangement. Indices are into the monitor list; the
+/// text shows them as screen numbers, counting from 1.
+#[derive(Debug, PartialEq, Eq)]
+pub enum PlanError {
+    /// Moving `a` would put it on top of `b`.
+    Overlap { a: usize, b: usize },
+    /// Moving `moved` would take it away from `other`, which it touches now.
+    Separates { moved: usize, other: usize },
+    /// The border between `a` and `b` can't hold alongside the others.
+    Unhonoured { a: usize, b: usize },
+}
+
+impl std::fmt::Display for PlanError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match *self {
+            Self::Overlap { a, b } => write!(f, "Moving screen {} would overlap screen {}", a + 1, b + 1),
+            Self::Separates { moved, other } => {
+                write!(f, "Moving screen {} would break its border with screen {}", moved + 1, other + 1)
+            }
+            Self::Unhonoured { a, b } => {
+                write!(f, "The border between screen {} and screen {} can't hold with the others", a + 1, b + 1)
+            }
+        }
+    }
+}
+
 /// New rects for every monitor, moving each neighbour only along its shared
 /// edge, starting from the primary (which Windows pins at 0,0).
-pub fn plan(rects: &[Rect], primary: usize, links: &[Link]) -> Result<Vec<Rect>, String> {
+pub fn plan(rects: &[Rect], primary: usize, links: &[Link]) -> Result<Vec<Rect>, PlanError> {
     if rects.is_empty() {
         return Ok(Vec::new());
     }
@@ -82,11 +108,13 @@ pub fn plan(rects: &[Rect], primary: usize, links: &[Link]) -> Result<Vec<Rect>,
     // Every pair that touched before must still touch, and nothing may overlap.
     for i in 0..rects.len() {
         for j in (i + 1)..rects.len() {
+            // Name the screen that moved first; when both did, the lower one.
+            let (moved, other) = if out[i] == rects[i] && out[j] != rects[j] { (j, i) } else { (i, j) };
             if out[i].intersects(&out[j]) {
-                return Err("aligning would make screens overlap".into());
+                return Err(PlanError::Overlap { a: moved, b: other });
             }
             if touching(&rects[i], &rects[j]).is_some() && touching(&out[i], &out[j]).is_none() {
-                return Err("this layout is too complex to align automatically".into());
+                return Err(PlanError::Separates { moved, other });
             }
         }
     }
@@ -95,7 +123,7 @@ pub fn plan(rects: &[Rect], primary: usize, links: &[Link]) -> Result<Vec<Rect>,
     for l in &links {
         let origin = out[l.b].along_origin(l.side);
         if aligned_along_origin(&out[l.a], &out[l.b], l.side, &l.map).is_some_and(|want| (want - origin).abs() > 1) {
-            return Err("this layout is too complex to align automatically".into());
+            return Err(PlanError::Unhonoured { a: l.a, b: l.b });
         }
     }
     Ok(out)
@@ -431,7 +459,7 @@ mod tests {
             link(1, 3, Side::Bottom, 1.0, -100.0),
             link(2, 3, Side::Right, 1.0, 0.0),
         ];
-        assert!(plan(&grid(), 0, &links).unwrap_err().contains("too complex"));
+        assert_eq!(plan(&grid(), 0, &links), Err(PlanError::Separates { moved: 3, other: 2 }));
     }
 
     #[test]
@@ -442,7 +470,7 @@ mod tests {
             link(1, 3, Side::Bottom, 1.0, 100.0),
             link(2, 3, Side::Right, 1.0, 0.0),
         ];
-        assert!(plan(&grid(), 0, &links).unwrap_err().contains("overlap"));
+        assert_eq!(plan(&grid(), 0, &links), Err(PlanError::Overlap { a: 3, b: 2 }));
     }
 
     #[test]
@@ -455,7 +483,7 @@ mod tests {
             link(1, 3, Side::Bottom, 1.0, 0.0),
             link(2, 3, Side::Right, 1.0, 0.0),
         ];
-        assert!(plan(&grid(), 0, &links).is_err());
+        assert_eq!(plan(&grid(), 0, &links), Err(PlanError::Unhonoured { a: 2, b: 3 }));
     }
 
     #[test]
@@ -501,6 +529,19 @@ mod tests {
             link(0, 3, Side::Right, 0.7870036101083029, 1721.036101083033),
             link(3, 2, Side::Bottom, 1.0, 7.0),
         ];
-        assert!(plan(&rects, 0, &links).unwrap_err().contains("overlap"));
+        assert_eq!(plan(&rects, 0, &links), Err(PlanError::Overlap { a: 2, b: 0 }));
+    }
+
+    #[test]
+    fn plan_errors_name_screens_counting_from_one() {
+        assert_eq!(PlanError::Overlap { a: 2, b: 0 }.to_string(), "Moving screen 3 would overlap screen 1");
+        assert_eq!(
+            PlanError::Separates { moved: 3, other: 2 }.to_string(),
+            "Moving screen 4 would break its border with screen 3"
+        );
+        assert_eq!(
+            PlanError::Unhonoured { a: 2, b: 3 }.to_string(),
+            "The border between screen 3 and screen 4 can't hold with the others"
+        );
     }
 }

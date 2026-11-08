@@ -38,6 +38,15 @@ pub struct DeskRef {
     pub name: String,
 }
 
+/// A screen's place in Windows' arrangement, in pixels.
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ScreenRect {
+    pub x: i32,
+    pub y: i32,
+    pub w: i32,
+    pub h: i32,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Screen {
     /// Line Up number, from 1.
@@ -45,6 +54,8 @@ pub struct Screen {
     pub id: String,
     pub name: String,
     pub primary: bool,
+    #[serde(default)]
+    pub rect: ScreenRect,
 }
 
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]

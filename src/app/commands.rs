@@ -117,6 +117,10 @@ pub(super) fn run_command(app: &mut App, queued: Queued) {
             }
             None => Err(RpcError::new(api::NOT_FOUND, "no such screen")),
         },
+        Command::LayoutShow(view) => {
+            showlayout::show(view, &app.mons, &app.links);
+            ok()
+        }
         Command::PanelOpen(page) if open_panel(app, page.as_deref()) => ok(),
         Command::PanelOpen(_) => refused("seam-settings.exe needs to be next to seam.exe"),
         Command::AppQuit => {

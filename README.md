@@ -59,6 +59,9 @@ Windows arranges screens in **raw pixels**. When two monitors have different pix
 ![The Displays page](docs/images/displays.png)
 
 - **Line Up** opens a full-screen overlay on every monitor, with big numbers so you know which screen is which. For each border you drag two lines until they run straight across the bezel. No measuring.
+- The **Physical layout** card on Displays has two views. **Seam** is the map of your desk, with each border drawn by kind: a solid amber line when it's lined up, a dashed one when it's glued, and a muted dotted one with "Not on your desk" when Windows has the screens touching but your desk doesn't. **Windows** is the arrangement exactly as Windows has it, in pixels, with a note such as "18 px gap" where two screens face each other across a gap. Clicking a screen in either view flashes its number on it. **Show on screens** draws the chosen view on every real screen for a few seconds, with each screen's number and model and a band along each edge that has a neighbour. Esc or a click closes it.
+- Each border's **...** menu on Displays has **Not on my desk** (or **On my desk**, to undo it) for screens that touch in Windows, so you can set that without opening Line Up.
+- **Type measurements in Line Up** (off by default) adds a field to Line Up where you type how far the screens are offset, in cm.
 - **Remap pointer at borders** pauses and resumes the hook, from the tray or with Ctrl+Shift+Alt+P.
 - **Also align Windows arrangement** (on by default) moves your monitors in the Windows arrangement so each border lines up at the middle of its physical overlap. Dragging a window between screens then looks right even with Seam closed. You can undo it anytime in Display settings.
 - Each set of screens is a **desk**, with its own borders, zones and workspaces. **Saved desks** lists them, and each desk's menu has **Rename** and **Forget**. Reconnect the same screens and the layout comes back.

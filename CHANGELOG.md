@@ -6,6 +6,10 @@ All notable changes to Seam. The format follows [Keep a Changelog](https://keepa
 
 ### Added
 
+- **Two views of the layout** on Displays: **Seam** (your desk, with glued borders dashed and borders that aren't on your desk dotted) and **Windows** (the arrangement as Windows has it, in pixels, with "18 px gap" labels). The choice is remembered while the Seam window is open. `rect` on each of the state's `screens`.
+- **Show on screens** on Displays draws the chosen view on every real screen for a few seconds, with each screen's number and model and a band along each edge that has a neighbour. Esc, a click or 8 seconds closes it. `layout.show` in the API, for the Seam window only.
+- **Not on my desk** and **On my desk** in a border's **...** menu on Displays, for screens that touch in Windows.
+- **Type measurements in Line Up** on Displays, off by default. `lineup_measure` in `config.json`.
 - **Glue** in Line Up: screens that touch on your desk but have a gap between them in Windows can be glued with G, and the pointer crosses the gap where they physically meet. Align arrangement keeps glued screens apart, and Displays marks a glued border "Glued to the right edge of 1". `glued` on a border in `config.json` and in the state's `borders`.
 - A glued edge holds the pointer until you push about 60 px past it, so an auto-hide taskbar on that edge still shows.
 - **Not on your desk** in Line Up: press N on a border Windows has but your desk doesn't, and the pointer stops there, or crosses to a glued screen past that edge. Displays shows such a border as "Not on your desk". `not_on_desk` on a border in `config.json` and in the state's `borders`.

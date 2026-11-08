@@ -79,6 +79,13 @@ pub enum PinKind {
     Sticky,
 }
 
+/// Which layout `layout.show` draws on the screens.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LayoutView {
+    Seam,
+    Windows,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub enum Command {
     Hello {
@@ -137,6 +144,7 @@ pub enum Command {
     LineupStart,
     ArrangementAlign,
     ScreenIdentify(u32),
+    LayoutShow(LayoutView),
     PanelOpen(Option<String>),
     EventsSubscribe(Vec<String>),
     UpdateReady,
@@ -261,6 +269,11 @@ fn command(method: &str, p: &Value) -> Result<Command, RpcError> {
                 .and_then(|n| u32::try_from(n).ok())
                 .ok_or_else(|| RpcError::new(INVALID_PARAMS, "number must be a screen number"))?,
         ),
+        "layout.show" => match p.get("view").and_then(Value::as_str) {
+            Some("seam") => Command::LayoutShow(LayoutView::Seam),
+            Some("windows") => Command::LayoutShow(LayoutView::Windows),
+            _ => return Err(RpcError::new(INVALID_PARAMS, "view must be seam or windows")),
+        },
         "panel.open" => Command::PanelOpen(str_param(p, "page")?),
         "events.subscribe" => Command::EventsSubscribe(
             p.get("topics")
@@ -283,7 +296,10 @@ fn allowed(command: &Command, peer: Peer) -> Result<(), RpcError> {
         return Err(RpcError::new(DISABLED, "Other apps can't control Seam right now"));
     }
     let permitted = match command {
-        Command::ConfigPatch(_) | Command::WorkspaceUpdate { .. } | Command::CursorEasingSet(_) => peer.panel,
+        Command::ConfigPatch(_)
+        | Command::WorkspaceUpdate { .. }
+        | Command::CursorEasingSet(_)
+        | Command::LayoutShow(_) => peer.panel,
         Command::AppQuit
         | Command::WorkspaceCapture { .. }
         | Command::SessionRestore
@@ -563,6 +579,7 @@ mod tests {
                 Command::WorkspaceCapture { name: None, into: Some("ws_1".into()), row: Some(2) },
             ),
             (request("cursor_easing.set", r#"{"on":true}"#), panel, Command::CursorEasingSet(true)),
+            (request("layout.show", r#"{"view":"windows"}"#), panel, Command::LayoutShow(LayoutView::Windows)),
             (request("app.quit", "{}"), panel, Command::AppQuit),
             (request("app.quit", "{}"), own, Command::AppQuit),
             (request("update.ready", "{}"), own, Command::UpdateReady),
@@ -598,6 +615,8 @@ mod tests {
             (request("cursor_easing.set", r#"{"on":true}"#), anyone, FORBIDDEN),
             (request("cursor_easing.set", r#"{"on":true}"#), own, FORBIDDEN),
             (request("update.ready", "{}"), panel, FORBIDDEN),
+            (request("layout.show", r#"{"view":"seam"}"#), anyone, FORBIDDEN),
+            (request("layout.show", r#"{"view":"map"}"#), panel, INVALID_PARAMS),
             (request("state.get", "{}"), off, DISABLED),
             (request("remap.set", r#"{"on":true}"#), off, DISABLED),
         ];

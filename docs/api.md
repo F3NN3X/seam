@@ -118,8 +118,9 @@ A desk is one set of connected screens, with its own borders, zones and workspac
 | `lineup.start` | none | `{ok: true}` | Any | 2 | `{"method":"lineup.start"}` |
 | `arrangement.align` | none | `{ok: true}` | Any | 2, 3 | `{"method":"arrangement.align"}` |
 | `screen.identify` | `number`: Line Up number, from 1 | `{ok: true}` | Any | 1 | `{"method":"screen.identify","params":{"number":2}}` |
+| `layout.show` | `view`: `"seam"` or `"windows"` | `{ok: true}` | Panel | 4 | `{"method":"layout.show","params":{"view":"windows"}}` |
 
-`lineup.start` answers at once and opens the overlay. Watch for `lineup.finished`. `arrangement.align` moves the screens in the Windows arrangement to match the saved borders. It answers when done, and its refusal text (for example that moving a screen would break another border) is in `error.message` and in the state's `last_align`. `screen.identify` shows the screen's number on it for 1.5 seconds.
+`lineup.start` answers at once and opens the overlay. Watch for `lineup.finished`. `arrangement.align` moves the screens in the Windows arrangement to match the saved borders. It answers when done, and its refusal text (for example that moving a screen would break another border) is in `error.message` and in the state's `last_align`. `screen.identify` shows the screen's number on it for 1.5 seconds. `layout.show` draws the layout on every screen: each screen's number and model, and a band along each edge that has a neighbour, labelled with it. `"seam"` marks the lined-up borders, and `"windows"` the neighbours and gaps in the Windows arrangement. It answers at once, and Esc, a click or 8 seconds closes it.
 
 ### Zones and windows
 
@@ -210,7 +211,7 @@ Subscribe with `events.subscribe` and a list of topics. An event belongs to the 
     "pin_color": "amber"
   },
   "desk": { "sig": "<signature>", "name": "Home desk" },
-  "screens": [{ "number": 1, "id": "<device path>", "name": "PG32UCDM", "primary": true }],
+  "screens": [{ "number": 1, "id": "<device path>", "name": "PG32UCDM", "primary": true, "rect": { "x": 0, "y": 0, "w": 3840, "h": 2160 } }],
   "borders": [{ "a": 2, "b": 1, "side": "Bottom", "state": "lined_up", "glued": false, "not_on_desk": false }],
   "workspace": { "id": "ws_7f3a", "name": "Coding", "drifted": false },
   "session": { "saved_at": 1793890000, "windows": 6 },
@@ -234,7 +235,7 @@ Subscribe with `events.subscribe` and a list of topics. An event belongs to the 
 | `wm.focus_border` | "Focus border" is on |
 | `wm.focus_color`, `wm.pin_color` | The border colours as stored: `none`, a swatch name, or `#RRGGBB` |
 | `desk` | The connected set of screens. `sig` is its stable signature, and `name` is what you called it |
-| `screens` | One entry per connected screen. `number` is the Line Up number from 1, `id` the device path, `name` the model name, and `primary` whether it is the Windows main screen |
+| `screens` | One entry per connected screen. `number` is the Line Up number from 1, `id` the device path, `name` the model name, and `primary` whether it is the Windows main screen. `rect` is its place in the Windows arrangement, in pixels: `x` and `y` of its top left corner, then `w` and `h`. It is zero in an older Seam |
 | `borders` | The borders between screens, by Line Up number. `a` and `b` are the two screens, and `side` is which side of `a` the screen `b` is on (`Left`, `Right`, `Top` or `Bottom`). `state` is `lined_up` or `not_lined_up`. `glued` is true when the two screens touch on the desk across a gap in the Windows arrangement, and false when an older Seam leaves it out. `not_on_desk` is true when the two screens touch in Windows but not on the desk, so the pointer stops at that border, and false when an older Seam leaves it out |
 | `workspace` | The workspace in use on this desk, or `null`. `drifted` is true once one of its windows was moved or minimized, so Snap back has work to do |
 | `session` | The last session saved for this desk, or `null`. `saved_at` is Unix seconds and `windows` how many windows it holds |

@@ -96,6 +96,8 @@ pub struct Panel {
     pub mons: Vec<Mon>,
     pub links: Vec<Link>,
     pub layout: Vec<Placed>,
+    /// The layout the Displays map shows. It is the panel's memory only, not a setting.
+    pub layout_view: seam::api::LayoutView,
     pub ease_on: bool,
     /// The screen whose zones the Zones page shows, as an index into `mons`.
     pub zone_screen: usize,
@@ -222,6 +224,7 @@ impl Panel {
             mons: Vec::new(),
             links: Vec::new(),
             layout: Vec::new(),
+            layout_view: seam::api::LayoutView::Seam,
             ease_on: seam::ease::is_on(),
             zone_screen: 0,
             editor: None,

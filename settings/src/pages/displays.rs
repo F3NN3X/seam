@@ -11,10 +11,11 @@ use gpui_kit::component::notification::Notification;
 use gpui_kit::component::{Disableable, Icon, WindowExt};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
-use seam::config::Desk;
+use seam::api::LayoutView;
+use seam::config::{Desk, SavedBorder};
 use seam::desk::{month_day, relative_day, Placed};
-use seam::geom::Side;
-use seam::state::{BorderState, State};
+use seam::geom::{corridor, facing_gap, touching, EdgeMap, Rect, Side};
+use seam::state::{Border, BorderState, State};
 use seam::winutil;
 use serde_json::json;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -26,6 +27,10 @@ const SCALE_BAR_MM: f64 = 200.;
 /// Below this height a screen's number and name sit side by side.
 const SHORT_TILE: f64 = 48.;
 const BORDER_NAME_WIDTH: f32 = 242.;
+/// A line shorter than this has no room for its note.
+const NOTE_FITS: f64 = 96.;
+/// The widest gap or overlap in Windows' arrangement that the Windows view labels.
+const LABEL_PX: i32 = 400;
 const UNDO_FOR: Duration = Duration::from_secs(8);
 
 struct View {
@@ -34,12 +39,15 @@ struct View {
     top: f64,
 }
 
+/// A screen's rectangle on the map: x, y, width, height.
+type Frame = (f64, f64, f64, f64);
+
 /// Fit the screens into the map, keeping real proportions.
-fn fit(layout: &[Placed], width: f64) -> View {
-    let min_x = layout.iter().map(|s| s.x).fold(f64::MAX, f64::min);
-    let min_y = layout.iter().map(|s| s.y).fold(f64::MAX, f64::min);
-    let max_x = layout.iter().map(|s| s.x + s.w).fold(f64::MIN, f64::max);
-    let max_y = layout.iter().map(|s| s.y + s.h).fold(f64::MIN, f64::max);
+fn fit(frames: &[Frame], width: f64) -> View {
+    let min_x = frames.iter().map(|f| f.0).fold(f64::MAX, f64::min);
+    let min_y = frames.iter().map(|f| f.1).fold(f64::MAX, f64::min);
+    let max_x = frames.iter().map(|f| f.0 + f.2).fold(f64::MIN, f64::max);
+    let max_y = frames.iter().map(|f| f.1 + f.3).fold(f64::MIN, f64::max);
     let room = (MAP_PADDING * 2.) as f64;
     let (span_x, span_y) = ((max_x - min_x).max(1.), (max_y - min_y).max(1.));
     let scale = ((width - room) / span_x).min((MAP_HEIGHT as f64 - room) / span_y);
@@ -50,18 +58,26 @@ fn fit(layout: &[Placed], width: f64) -> View {
     }
 }
 
-fn screen_tile(panel: &Panel, s: &Placed, view: &View, p: Palette, cx: &mut Context<Panel>) -> impl IntoElement {
-    let number = s.index + 1;
-    let name = panel.mons.get(s.index).map_or("", |m| m.name.as_str()).to_string();
-    let primary = panel.mons.get(s.index).is_some_and(|m| m.primary);
+fn screen_tile(
+    panel: &Panel,
+    index: usize,
+    (x, y, w, h): Frame,
+    sized: bool,
+    view: &View,
+    p: Palette,
+    cx: &mut Context<Panel>,
+) -> impl IntoElement {
+    let number = index + 1;
+    let name = panel.mons.get(index).map_or("", |m| m.name.as_str()).to_string();
+    let primary = panel.mons.get(index).is_some_and(|m| m.primary);
     let label = if primary { format!("{name}, main") } else { name };
-    let height = s.h * view.scale;
+    let height = h * view.scale;
     div()
-        .id(("screen", s.index))
+        .id(("screen", index))
         .absolute()
-        .left(px((s.x * view.scale + view.left) as f32))
-        .top(px((s.y * view.scale + view.top) as f32))
-        .w(px((s.w * view.scale) as f32))
+        .left(px((x * view.scale + view.left) as f32))
+        .top(px((y * view.scale + view.top) as f32))
+        .w(px((w * view.scale) as f32))
         .h(px(height as f32))
         .flex()
         .when(height >= SHORT_TILE, |d| d.flex_col())
@@ -72,7 +88,7 @@ fn screen_tile(panel: &Panel, s: &Placed, view: &View, p: Palette, cx: &mut Cont
         .bg(p.card)
         .border_1()
         .border_color(p.hairline_strong)
-        .when(!s.sized, |d| d.border_dashed())
+        .when(!sized, |d| d.border_dashed())
         .rounded(px(4.))
         .cursor_pointer()
         .child(div().text_size(px(16.)).child(number.to_string()))
@@ -82,16 +98,27 @@ fn screen_tile(panel: &Panel, s: &Placed, view: &View, p: Palette, cx: &mut Cont
         }))
 }
 
-/// A bar over the part of the edge two screens physically share.
-fn seam_bar(a: &Placed, b: &Placed, side: Side, lined_up: bool, view: &View, p: Palette) -> Option<Div> {
-    let bar = div().absolute();
-    let color = if lined_up { p.accent } else { p.muted };
-    let along_y = side.along_is_y();
-    let (from, to) =
-        if along_y { (a.y.max(b.y), (a.y + a.h).min(b.y + b.h)) } else { (a.x.max(b.x), (a.x + a.w).min(b.x + b.w)) };
+#[derive(Clone, Copy, PartialEq)]
+enum Line {
+    Solid,
+    Dashed,
+    Dotted,
+}
+
+/// Where a line runs on the map, in map pixels.
+struct Run {
+    along_y: bool,
+    start: f64,
+    end: f64,
+    across: f64,
+}
+
+/// The stretch `from` to `to` of `a`'s edge on `side`, in the map's units.
+fn edge_run(a: &Placed, side: Side, from: f64, to: f64, view: &View) -> Option<Run> {
     if to <= from {
         return None;
     }
+    let along_y = side.along_is_y();
     let edge = match side {
         Side::Right => a.x + a.w,
         Side::Left => a.x,
@@ -103,27 +130,102 @@ fn seam_bar(a: &Placed, b: &Placed, side: Side, lined_up: bool, view: &View, p: 
     } else {
         (from * view.scale + view.left, to * view.scale + view.left, edge * view.scale + view.top)
     };
-    let half = SEAM_WIDTH / 2.;
-    let length = px((end - start) as f32);
-    let placed = if along_y {
-        bar.left(px(across as f32 - half)).top(px(start as f32)).w(px(SEAM_WIDTH)).h(length)
-    } else {
-        bar.top(px(across as f32 - half)).left(px(start as f32)).h(px(SEAM_WIDTH)).w(length)
-    };
-    Some(if lined_up { placed.bg(color) } else { placed.border_1().border_dashed().border_color(color) })
+    Some(Run { along_y, start, end, across })
 }
 
-fn map(panel: &Panel, state: &State, width: f64, p: Palette, cx: &mut Context<Panel>) -> Div {
-    let view = fit(&panel.layout, width);
+/// The part of the edge two screens physically share.
+fn seam_run(a: &Placed, b: &Placed, side: Side, view: &View) -> Option<Run> {
+    let (from, to) = if side.along_is_y() {
+        (a.y.max(b.y), (a.y + a.h).min(b.y + b.h))
+    } else {
+        (a.x.max(b.x), (a.x + a.w).min(b.x + b.w))
+    };
+    edge_run(a, side, from, to, view)
+}
+
+/// Where Windows has two screens touching, drawn along the first one's edge. For a
+/// border that isn't on the desk, where the screens don't sit together.
+fn windows_run(panel: &Panel, a: &Placed, b: &Placed, side: Side, view: &View) -> Option<Run> {
+    let (ra, rb) = (&panel.mons.get(a.index)?.rect, &panel.mons.get(b.index)?.rect);
+    let (from, to, own, mm, size) = if side.along_is_y() {
+        (ra.top.max(rb.top), ra.bottom.min(rb.bottom), ra.top, a.y, a.h / f64::from(ra.height()))
+    } else {
+        (ra.left.max(rb.left), ra.right.min(rb.right), ra.left, a.x, a.w / f64::from(ra.width()))
+    };
+    edge_run(a, side, mm + f64::from(from - own) * size, mm + f64::from(to - own) * size, view)
+}
+
+/// A line along one axis, solid or in dashes or dots.
+fn stroke(run: &Run, width: f32, style: Line, color: Hsla) -> Vec<Div> {
+    let (on, off) = match style {
+        Line::Solid => (run.end - run.start, 0.),
+        Line::Dashed => (8., 5.),
+        Line::Dotted => (2., 4.),
+    };
+    let half = width / 2.;
+    let mut parts = vec![];
+    let mut at = run.start;
+    while at < run.end {
+        let length = px(on.min(run.end - at) as f32);
+        let part = div().absolute().bg(color);
+        parts.push(if run.along_y {
+            part.left(px(run.across as f32 - half)).top(px(at as f32)).w(px(width)).h(length)
+        } else {
+            part.top(px(run.across as f32 - half)).left(px(at as f32)).h(px(width)).w(length)
+        });
+        at += on + off;
+    }
+    parts
+}
+
+/// A small note centred on a point of the map.
+fn note_at(x: f64, y: f64, text: String, p: Palette) -> Div {
+    const WIDTH: f32 = 120.;
+    const HEIGHT: f32 = 16.;
+    div()
+        .absolute()
+        .left(px(x as f32 - WIDTH / 2.))
+        .top(px(y as f32 - HEIGHT / 2.))
+        .w(px(WIDTH))
+        .h(px(HEIGHT))
+        .flex()
+        .items_center()
+        .justify_center()
+        .child(div().px(px(4.)).bg(p.page).rounded(px(4.)).text_size(px(11.)).text_color(p.muted).child(text))
+}
+
+/// The line, and its note if it fits, for one border on the Seam view.
+fn seam_border(panel: &Panel, a: &Placed, other: &Placed, b: &Border, view: &View, p: Palette) -> Vec<Div> {
+    let lined_up = b.state == BorderState::LinedUp;
+    let (style, color) = match (b.not_on_desk, b.glued, lined_up) {
+        (true, ..) => (Line::Dotted, p.muted),
+        (_, true, _) => (Line::Dashed, p.accent),
+        (_, _, true) => (Line::Solid, p.accent),
+        _ => (Line::Dashed, p.muted),
+    };
+    let run = if b.not_on_desk { windows_run(panel, a, other, b.side, view) } else { seam_run(a, other, b.side, view) };
+    let Some(run) = run else { return vec![] };
+    let mut parts = stroke(&run, SEAM_WIDTH, style, color);
+    if b.not_on_desk && run.end - run.start >= NOTE_FITS {
+        let mid = (run.start + run.end) / 2.;
+        let (x, y) = if run.along_y { (run.across, mid) } else { (mid, run.across) };
+        parts.push(note_at(x, y, "Not on your desk".into(), p));
+    }
+    parts
+}
+
+/// Where each screen sits on the desk, joined where you lined them up.
+fn seam_map(panel: &Panel, state: &State, width: f64, p: Palette, cx: &mut Context<Panel>) -> Div {
+    let frames: Vec<Frame> = panel.layout.iter().map(|s| (s.x, s.y, s.w, s.h)).collect();
+    let view = fit(&frames, width);
     let mut surface = div().relative().w_full().h(px(MAP_HEIGHT)).bg(p.page).rounded(px(8.));
-    for s in &panel.layout {
-        surface = surface.child(screen_tile(panel, s, &view, p, cx));
+    for (s, frame) in panel.layout.iter().zip(&frames) {
+        surface = surface.child(screen_tile(panel, s.index, *frame, s.sized, &view, p, cx));
     }
     for b in &state.borders {
         let find = |number: u32| panel.layout.iter().find(|s| s.index + 1 == number as usize);
         if let (Some(a), Some(other)) = (find(b.a), find(b.b)) {
-            let lined_up = b.state == BorderState::LinedUp;
-            surface = surface.children(seam_bar(a, other, b.side, lined_up, &view, p));
+            surface = surface.children(seam_border(panel, a, other, b, &view, p));
         }
     }
     surface.child(
@@ -141,7 +243,87 @@ fn map(panel: &Panel, state: &State, width: f64, p: Palette, cx: &mut Context<Pa
     )
 }
 
-fn border_rows(panel: &Panel, state: &State, p: Palette) -> Vec<AnyElement> {
+/// What the Windows view draws between two screens: a line where they touch, or
+/// a note where they face each other across a gap or overlap.
+enum Between {
+    Touch { side: Side, from: i32, to: i32, edge: i32 },
+    Note { x: i32, y: i32, text: String },
+}
+
+fn windows_between(rects: &[Rect]) -> Vec<Between> {
+    let mut found = vec![];
+    for (i, a) in rects.iter().enumerate() {
+        for b in &rects[i + 1..] {
+            if let Some(side) = touching(a, b) {
+                let (from, to) = if side.along_is_y() {
+                    (a.top.max(b.top), a.bottom.min(b.bottom))
+                } else {
+                    (a.left.max(b.left), a.right.min(b.right))
+                };
+                let edge = match side {
+                    Side::Right => a.right,
+                    Side::Left => a.left,
+                    Side::Bottom => a.bottom,
+                    Side::Top => a.top,
+                };
+                found.push(Between::Touch { side, from, to, edge });
+            } else if let Some((side, gap)) = facing_gap(a, b) {
+                let c = corridor(a, b, side);
+                let text = format!("{gap} px gap");
+                found.push(Between::Note { x: (c.left + c.right) / 2, y: (c.top + c.bottom) / 2, text });
+            } else if a.intersects(b) {
+                let (left, right) = (a.left.max(b.left), a.right.min(b.right));
+                let (top, bottom) = (a.top.max(b.top), a.bottom.min(b.bottom));
+                let overlap = (right - left).min(bottom - top);
+                if (1..=LABEL_PX).contains(&overlap) {
+                    let text = format!("{overlap} px overlap");
+                    found.push(Between::Note { x: (left + right) / 2, y: (top + bottom) / 2, text });
+                }
+            }
+        }
+    }
+    found
+}
+
+/// The screens as Windows arranges them, in pixels.
+fn windows_map(panel: &Panel, state: &State, width: f64, p: Palette, cx: &mut Context<Panel>) -> Div {
+    let frames: Vec<Frame> = state
+        .screens
+        .iter()
+        .map(|s| (f64::from(s.rect.x), f64::from(s.rect.y), f64::from(s.rect.w), f64::from(s.rect.h)))
+        .collect();
+    let rects: Vec<Rect> = state.screens.iter().map(|s| Rect::new(s.rect.x, s.rect.y, s.rect.w, s.rect.h)).collect();
+    let view = fit(&frames, width);
+    let (x_at, y_at) = (|v: i32| f64::from(v) * view.scale + view.left, |v: i32| f64::from(v) * view.scale + view.top);
+    let mut surface = div().relative().w_full().h(px(MAP_HEIGHT)).bg(p.page).rounded(px(8.));
+    for (s, frame) in state.screens.iter().zip(&frames) {
+        surface = surface.child(screen_tile(panel, (s.number as usize).saturating_sub(1), *frame, true, &view, p, cx));
+    }
+    for between in windows_between(&rects) {
+        match between {
+            Between::Touch { side, from, to, edge } => {
+                let along_y = side.along_is_y();
+                let run = if along_y {
+                    Run { along_y, start: y_at(from), end: y_at(to), across: x_at(edge) }
+                } else {
+                    Run { along_y, start: x_at(from), end: x_at(to), across: y_at(edge) }
+                };
+                surface = surface.children(stroke(&run, 2., Line::Solid, p.secondary));
+            }
+            Between::Note { x, y, text } => surface = surface.child(note_at(x_at(x), y_at(y), text, p)),
+        }
+    }
+    surface
+}
+
+fn map(panel: &Panel, state: &State, width: f64, p: Palette, cx: &mut Context<Panel>) -> Div {
+    match panel.layout_view {
+        LayoutView::Seam => seam_map(panel, state, width, p, cx),
+        LayoutView::Windows => windows_map(panel, state, width, p, cx),
+    }
+}
+
+fn border_rows(panel: &Panel, state: &State, p: Palette, cx: &mut Context<Panel>) -> Vec<AnyElement> {
     let edge = |side: Side| match side {
         Side::Left => "Left",
         Side::Right => "Right",
@@ -149,7 +331,7 @@ fn border_rows(panel: &Panel, state: &State, p: Palette) -> Vec<AnyElement> {
         Side::Bottom => "Bottom",
     };
     let lined_up_when = panel.config.desks.get(&state.desk.sig).and_then(|d| d.lined_up_at).and_then(relative);
-    let rows = state.borders.iter().map(|b| {
+    let rows = state.borders.iter().enumerate().map(|(i, b)| {
         let (a, other) = (b.a as usize, b.b as usize);
         let link = panel.links.iter().find(|l| (l.a + 1, l.b + 1) == (a, other));
         let no_size = [a, other].into_iter().find(|n| panel.mons.get(n - 1).is_some_and(|m| m.raw_dpi <= 0.));
@@ -199,9 +381,59 @@ fn border_rows(panel: &Panel, state: &State, p: Palette) -> Vec<AnyElement> {
             )
             .child(ui::tabular(ui::description(detail, p)).flex_1().min_w_0())
             .child(status)
+            .child(border_menu(panel, b, i, cx))
             .into_any_element()
     });
     rows.collect()
+}
+
+/// The "..." of a border that touches in Windows, which can be marked as not on the desk.
+/// Other borders get an empty space of its size, so the rows line up.
+fn border_menu(panel: &Panel, b: &Border, i: usize, cx: &mut Context<Panel>) -> AnyElement {
+    let touch = |n: u32| panel.mons.get(n as usize - 1).map(|m| m.rect);
+    let touching_now = touch(b.a).zip(touch(b.b)).is_some_and(|(a, other)| touching(&a, &other).is_some());
+    if !touching_now {
+        return div().w(px(32.)).flex_none().into_any_element();
+    }
+    let view = cx.entity().downgrade();
+    let border = b.clone();
+    let label = if b.not_on_desk { "On my desk" } else { "Not on my desk" };
+    ui::secondary(("border-more", i), "", cx)
+        .ghost()
+        .icon(Icon::new(assets::IconName::Ellipsis))
+        .accessibility_label(format!("More for screen {} to screen {}", b.a, b.b))
+        .dropdown_menu(move |menu, _, _| {
+            let (view, border) = (view.clone(), border.clone());
+            menu.item(PopupMenuItem::new(label).on_click(move |_, window, cx| {
+                let border = border.clone();
+                let _ = view.update(cx, |panel, cx| toggle_not_on_desk(panel, &border, window, cx));
+            }))
+        })
+        .into_any_element()
+}
+
+/// Mark a border as not on the desk, or back. A border that was never lined up gets a
+/// stand-in map, which "On my desk" takes away again, because nothing was measured.
+fn toggle_not_on_desk(panel: &mut Panel, border: &Border, window: &mut Window, cx: &mut Context<Panel>) {
+    let Some(state) = panel.state.as_ref() else { return };
+    let id = |n: u32| state.screens.iter().find(|s| s.number == n).map(|s| s.id.clone());
+    let (Some(a), Some(b)) = (id(border.a), id(border.b)) else { return };
+    let sig = state.desk.sig.clone();
+    let known = panel.config.desks.get(&sig);
+    let mut saved = known.map(|d| d.borders.clone()).unwrap_or_default();
+    let stand_in = EdgeMap { s: 1., o: 0. };
+    match saved.iter().position(|s| (&s.a, &s.b) == (&a, &b) || (&s.a, &s.b) == (&b, &a)) {
+        Some(at) if saved[at].not_on_desk && saved[at].map == stand_in => {
+            saved.remove(at);
+        }
+        Some(at) => saved[at].not_on_desk = !saved[at].not_on_desk,
+        None => saved.push(SavedBorder { a, b, side: border.side, map: stand_in, glued: false, not_on_desk: true }),
+    }
+    let mut desk = json!({ "borders": saved });
+    if known.is_none() {
+        desk["name"] = json!(state.desk.name);
+    }
+    panel.patch(json!({ "desks": { sig: desk } }), window, cx);
 }
 
 /// "today", "3 days ago" or "12 Oct", by the local calendar.
@@ -391,18 +623,47 @@ pub fn render(panel: &mut Panel, window: &mut Window, cx: &mut Context<Panel>) -
     let width = f64::from(window.viewport_size().width) - 240. - 64. - 34.;
     let mut content = vec![];
     if let Some(state) = panel.state.clone() {
+        let seam_view = panel.layout_view == LayoutView::Seam;
+        let caption = if seam_view {
+            "Real sizes from each screen's EDID, joined where you lined them up"
+        } else {
+            "How Windows arranges them, in pixels"
+        };
+        let view = cx.entity();
+        let views = ui::segmented(
+            "layout-view",
+            "Layout view",
+            &["Windows", "Seam"],
+            usize::from(seam_view),
+            window,
+            cx,
+            move |at, _, cx| {
+                view.update(cx, |panel, cx| {
+                    panel.layout_view = if at == 1 { LayoutView::Seam } else { LayoutView::Windows };
+                    cx.notify();
+                });
+            },
+        );
+        let show = ui::secondary("show-layout", "Show on screens", cx).on_click(cx.listener(|panel, _, window, cx| {
+            let view = if panel.layout_view == LayoutView::Seam { "seam" } else { "windows" };
+            panel.command("layout.show", json!({ "view": view }), window, cx);
+        }));
         let title = div()
             .flex()
             .items_center()
             .justify_between()
             .gap(px(16.))
-            .child(div().text_size(px(16.)).child("Physical layout"))
             .child(
                 div()
-                    .text_size(px(12.))
-                    .text_color(p.muted)
-                    .child("Real sizes from each screen's EDID. Click a screen to identify it"),
-            );
+                    .flex()
+                    .flex_col()
+                    .gap(px(2.))
+                    .child(div().text_size(px(16.)).child("Physical layout"))
+                    .child(div().text_size(px(12.)).text_color(p.muted).child(caption)),
+            )
+            .when(!one_screen, |d| {
+                d.child(div().flex().flex_none().items_center().gap(px(8.)).child(views).child(show))
+            });
         let body = if one_screen {
             div()
                 .text_size(px(13.))
@@ -413,7 +674,7 @@ pub fn render(panel: &mut Panel, window: &mut Window, cx: &mut Context<Panel>) -
         };
         let top = div().flex().flex_col().gap(px(12.)).p(px(16.)).child(title).child(body).into_any_element();
         let mut rows = vec![top];
-        rows.extend(border_rows(panel, &state, p));
+        rows.extend(border_rows(panel, &state, p, cx));
         content.push(card(rows, p).into_any_element());
     }
 
@@ -421,6 +682,12 @@ pub fn render(panel: &mut Panel, window: &mut Window, cx: &mut Context<Panel>) -
     let remap = switch("remap", "Remap pointer at borders", panel.config.enabled, window, cx, {
         let view = view.clone();
         move |on, window, cx| view.update(cx, |panel, cx| panel.patch(json!({ "enabled": on }), window, cx))
+    });
+    let measure = switch("lineup-measure", "Type measurements in Line Up", panel.config.lineup_measure, window, cx, {
+        let view = view.clone();
+        move |on, window, cx| {
+            view.update(cx, |panel, cx| panel.patch(json!({ "lineup_measure": on }), window, cx));
+        }
     });
     let also_align = switch(
         "align-arrangement",
@@ -439,6 +706,12 @@ pub fn render(panel: &mut Panel, window: &mut Window, cx: &mut Context<Panel>) -
                 "Also align Windows arrangement",
                 Some("Move screens in Display settings to match".into()),
                 also_align,
+                p,
+            ),
+            row(
+                "Type measurements in Line Up",
+                Some("Adds a field to type how far the screens are offset, in cm".into()),
+                measure,
                 p,
             ),
         ],

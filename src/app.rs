@@ -21,14 +21,14 @@ use crate::switcher::{
 };
 use crate::tray::{CLASS, WM_APP_API, WM_APP_LINEUP, WM_APP_WINDOWS_CHANGED};
 use crate::wm::{Pinned, WM_APP_WS_MOVED};
-use crate::{arrange, ease, hotkey, identify, live, overlay, wincontrol, wm};
+use crate::{arrange, ease, hotkey, identify, live, overlay, showlayout, wincontrol, wm};
 use commands::{align_finished, busy, drain_api, patch_config, refused};
 use seam::api::{self, Client, Command, PinKind, Reply, RpcError, WindowVerb};
 use seam::config::{RestoreApps, TrayClick};
 use seam::direction::Dir;
 use seam::state::{
-    self, AlignResult, DeskRef, HotkeyError, Remap, Screen, SessionRef, Snapshot, State, UpdateState, WmState,
-    WorkspaceRef,
+    self, AlignResult, DeskRef, HotkeyError, Remap, Screen, ScreenRect, SessionRef, Snapshot, State, UpdateState,
+    WmState, WorkspaceRef,
 };
 use seam::workspace::{self, Rule, Session, Workspace, SESSION_ID};
 use seam::zones;
@@ -367,6 +367,7 @@ fn snapshot(app: &App) -> Snapshot {
         id: m.id.clone(),
         name: m.name.clone(),
         primary: m.primary,
+        rect: ScreenRect { x: m.rect.left, y: m.rect.top, w: m.rect.width(), h: m.rect.height() },
     });
     let saved_name = app.cfg.desks.get(&app.sig).map(|d| d.name.clone()).filter(|n| !n.is_empty());
     let workspace = app.workspace.as_ref().and_then(|id| {

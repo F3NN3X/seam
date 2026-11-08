@@ -27,6 +27,7 @@ All notable changes to Seam. The format follows [Keep a Changelog](https://keepa
 - An app you open while a switch is still starting the others now goes to its place once the switch ends, with **Put apps in place when they open** on.
 - After a quick save, **Update from screen** or **Where it is now**, moving a saved window counts as moved at once, and reopening a saved app puts it back, without switching first.
 - A workspace app icon that couldn't load is tried again when you come back to the Workspaces page a minute later.
+- Running `seam-settings.exe --page` or `panel.open` with a page while the Seam window is already open now switches that window to the page. Before, it only came to the front.
 
 ## [0.6.0] - 2026-11-08
 

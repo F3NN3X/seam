@@ -258,7 +258,7 @@ impl Panel {
             _subscriptions: subscriptions,
         };
         panel.read_screens();
-        panel._link = panel.link(cx);
+        panel._link = panel.link(window, cx);
         if package::is_packaged() {
             panel.refresh_startup(cx);
         }
@@ -298,9 +298,9 @@ impl Panel {
     }
 
     /// Stay connected, and redraw from events. There's no polling.
-    fn link(&self, cx: &mut Context<Self>) -> Task<()> {
+    fn link(&self, window: &Window, cx: &mut Context<Self>) -> Task<()> {
         let token = self.token.clone();
-        cx.spawn(async move |this, cx| loop {
+        cx.spawn_in(window, async move |this, cx| loop {
             let session = {
                 let token = token.clone();
                 cx.background_executor().spawn(async move { connect(&token) }).await
@@ -347,7 +347,12 @@ impl Panel {
                         .spawn(async move { client.lock().ok()?.call("config.get", json!({})).ok() })
                         .await
                 };
-                let updated = this.update(cx, |this, cx| {
+                let updated = this.update_in(cx, |this, window, cx| {
+                    if event.kind == "panel.show" {
+                        if let Some(page) = event.data["page"].as_str().and_then(Page::from_arg) {
+                            this.show(page, None, window, cx);
+                        }
+                    }
                     // A moved window of another workspace changes nothing on show.
                     let moved_here = event.kind == "workspace.moved"
                         && this.status.as_ref().is_some_and(|(id, _)| event.data["id"].as_str() == Some(id));
@@ -789,7 +794,7 @@ type Session = (Client, Receiver<Event>, State, Value);
 
 fn connect(token: &str) -> Result<Session, CallError> {
     let mut client = Client::connect("panel", Some(token))?;
-    let events = Client::subscribe("panel", Some(token), &["state", "desk", "workspace", "update", "lineup"])?;
+    let events = Client::subscribe("panel", Some(token), &["state", "desk", "workspace", "update", "lineup", "panel"])?;
     let state = client.call("state.get", json!({}))?;
     let state = serde_json::from_value(state).map_err(std::io::Error::other)?;
     let config = client.call("config.get", json!({}))?;

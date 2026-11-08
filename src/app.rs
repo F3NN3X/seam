@@ -494,6 +494,10 @@ fn open_panel(app: &mut App, page: Option<&str>) -> bool {
     let panel = std::env::current_exe().map(|exe| exe.with_file_name("seam-settings.exe"));
     // Lets an already open panel come to the front.
     let _ = unsafe { AllowSetForegroundWindow(ASFW_ANY) };
+    // An open panel switches page itself. One that's starting reads `--page`.
+    if let Some(page) = page {
+        api_server::broadcast_to_panels("panel.show", &json!({ "page": page }));
+    }
     let started = panel.and_then(|p| {
         let mut command = std::process::Command::new(p);
         command.args(["--token", &app.token]);

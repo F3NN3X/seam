@@ -4,6 +4,7 @@
 //! bezel. Two line pairs fix both scale and offset; no measuring needed.
 
 use crate::config::SavedBorder;
+use crate::desk::{apart_neighbours, resolve};
 use crate::geom::{anchor_points, overlap_in_a, predict, touching, EdgeMap, Side};
 use crate::hook;
 use crate::layout::{Link, Live};
@@ -30,6 +31,8 @@ struct Step {
     a_pts: (f64, f64),
     /// Adjustable line positions on B (B-relative).
     b_pts: (f64, f64),
+    /// The first guess, which R goes back to.
+    guess: EdgeMap,
 }
 
 impl Step {
@@ -75,22 +78,23 @@ pub fn take_result() -> Option<Vec<SavedBorder>> {
     RESULT.with(|r| r.borrow_mut().take())
 }
 
-fn initial_map(mons: &[Mon], a: usize, b: usize, side: Side, saved: &[SavedBorder]) -> EdgeMap {
+fn saved_map(mons: &[Mon], a: usize, b: usize, side: Side, saved: &[SavedBorder]) -> Option<EdgeMap> {
     let (ia, ib) = (&mons[a].id, &mons[b].id);
-    for s in saved.iter().filter(|s| s.map.is_valid()) {
+    saved.iter().filter(|s| s.map.is_valid()).find_map(|s| {
         if &s.a == ia && &s.b == ib && s.side == side {
-            return s.map;
+            Some(s.map)
+        } else if &s.a == ib && &s.b == ia && s.side == side.opposite() {
+            Some(s.map.inverse())
+        } else {
+            None
         }
-        if &s.a == ib && &s.b == ia && s.side == side.opposite() {
-            return s.map.inverse();
-        }
-    }
-    predict(&mons[a].rect, &mons[b].rect, side, mons[a].raw_dpi, mons[b].raw_dpi)
+    })
 }
 
-/// Every touching pair becomes one step, oriented so B is right of / below A.
+/// Every touching pair becomes one step, oriented so B is right of / below A,
+/// then every pair that only meets on the desk.
 fn build_steps(mons: &[Mon], saved: &[SavedBorder]) -> Vec<Step> {
-    let mut steps = Vec::new();
+    let mut pairs = Vec::new();
     for i in 0..mons.len() {
         for j in (i + 1)..mons.len() {
             let Some(side) = touching(&mons[i].rect, &mons[j].rect) else { continue };
@@ -98,13 +102,20 @@ fn build_steps(mons: &[Mon], saved: &[SavedBorder]) -> Vec<Step> {
                 Side::Right | Side::Bottom => (i, j, side),
                 Side::Left | Side::Top => (j, i, side.opposite()),
             };
-            let m = initial_map(mons, a, b, side, saved);
-            let (la, lb) = (mons[a].rect.along_len(side), mons[b].rect.along_len(side));
-            let a_pts = anchor_points(&m, la, lb);
-            steps.push(Step { a, b, side, a_pts, b_pts: (m.apply(a_pts.0), m.apply(a_pts.1)) });
+            pairs.push((a, b, side, predict(&mons[a].rect, &mons[b].rect, side, mons[a].raw_dpi, mons[b].raw_dpi)));
         }
     }
-    steps
+    let links = resolve(mons, Some(saved));
+    pairs.extend(apart_neighbours(mons, &links).into_iter().map(|p| (p.a, p.b, p.side, p.guess)));
+    pairs
+        .into_iter()
+        .map(|(a, b, side, guess)| {
+            let m = saved_map(mons, a, b, side, saved).unwrap_or(guess);
+            let (la, lb) = (mons[a].rect.along_len(side), mons[b].rect.along_len(side));
+            let a_pts = anchor_points(&m, la, lb);
+            Step { a, b, side, a_pts, b_pts: (m.apply(a_pts.0), m.apply(a_pts.1)), guess }
+        })
+        .collect()
 }
 
 /// Push the in-progress maps to the hook so the pointer behaves as calibrated
@@ -341,7 +352,7 @@ fn handle(hwnd: HWND, idx: usize, msg: u32, wparam: WPARAM, lparam: LPARAM) -> O
                         }
                         VK_R => {
                             let (ma, mb) = (&c.mons[step.a], &c.mons[step.b]);
-                            let m = predict(&ma.rect, &mb.rect, side, ma.raw_dpi, mb.raw_dpi);
+                            let m = step.guess;
                             step.a_pts = anchor_points(&m, ma.rect.along_len(side), mb.rect.along_len(side));
                             step.b_pts = (m.apply(step.a_pts.0), m.apply(step.a_pts.1));
                             changed = true;

@@ -2,7 +2,7 @@
 //! it from here, so they always agree on what's lined up.
 
 use crate::config::{Config, Desk, SavedBorder};
-use crate::geom::{touching, Rect, Side};
+use crate::geom::{touching, EdgeMap, Rect, Side};
 use crate::layout::Link;
 use crate::log;
 use crate::state::{Border, BorderState};
@@ -26,13 +26,14 @@ pub struct Mon {
 }
 
 /// Resolve saved borders against the monitors that are connected right now.
-/// A border only applies if the two screens still touch on the same side.
+/// A border applies if the two screens still touch on the same side, or if
+/// they still sit side by side on the desk without touching in Windows.
 pub fn resolve(mons: &[Mon], saved: Option<&[SavedBorder]>) -> Vec<Link> {
     let Some(saved) = saved else {
         log::info!("no saved layout for these screens");
         return Vec::new();
     };
-    let links: Vec<Link> = saved
+    let known: Vec<Link> = saved
         .iter()
         .filter_map(|s| {
             let a = mons.iter().position(|m| m.id == s.a)?;
@@ -41,13 +42,23 @@ pub fn resolve(mons: &[Mon], saved: Option<&[SavedBorder]>) -> Vec<Link> {
                 log::info!("link {a}->{b} dropped: invalid map {:?}", s.map);
                 return None;
             }
-            let now = touching(&mons[a].rect, &mons[b].rect);
-            if now != Some(s.side) {
-                log::info!("link {a}->{b} dropped: saved side {:?}, now {now:?}", s.side);
-            }
-            (now == Some(s.side)).then_some(Link { a, b, side: s.side, map: s.map })
+            Some(Link { a, b, side: s.side, map: s.map })
         })
         .collect();
+    let now = |l: &Link| touching(&mons[l.a].rect, &mons[l.b].rect);
+    let mut links: Vec<Link> = known.iter().copied().filter(|l| now(l) == Some(l.side)).collect();
+    // Screens apart in Windows are placed through the touching borders, so those come first.
+    let apart = apart_neighbours(mons, &links);
+    for l in known.iter().filter(|l| now(l) != Some(l.side)) {
+        let still = apart
+            .iter()
+            .any(|p| (p.a, p.b, p.side) == (l.a, l.b, l.side) || (p.a, p.b, p.side) == (l.b, l.a, l.side.opposite()));
+        if still && now(l).is_none() {
+            links.push(*l);
+        } else {
+            log::info!("link {}->{} dropped: saved side {:?}, now {:?}", l.a, l.b, l.side, now(l));
+        }
+    }
     log::info!("resolved {} of {} saved link(s)", links.len(), saved.len());
     for l in &links {
         log::info!("link {}->{} {:?} s={} o={}", l.a, l.b, l.side, l.map.s, l.map.o);
@@ -69,7 +80,13 @@ pub fn border_states(mons: &[Mon], links: &[Link]) -> Vec<Border> {
         let side = touching(&mons[i].rect, &mons[j].rect).filter(|_| !linked(i, j))?;
         Some(Border { a: number(i), b: number(j), side, state: BorderState::NotLinedUp })
     });
-    lined_up.chain(open).collect()
+    let apart = apart_neighbours(mons, links).into_iter().filter(|p| !linked(p.a, p.b)).map(|p| Border {
+        a: number(p.a),
+        b: number(p.b),
+        side: p.side,
+        state: BorderState::NotLinedUp,
+    });
+    lined_up.chain(open).chain(apart).collect()
 }
 
 /// A screen's place on the desk, in millimetres from the primary's corner.
@@ -154,6 +171,68 @@ pub fn physical_layout(mons: &[Mon], links: &[Link]) -> Vec<Placed> {
         }
     }
     placed
+}
+
+/// How far apart two edges can be on the desk and still count as side by side, in mm.
+const NEAR_MM: f64 = 25.0;
+/// How much of an edge two screens must share to count as neighbours, in mm.
+const SHARED_MM: f64 = 50.0;
+
+/// Two screens that sit side by side on the desk but don't touch in Windows'
+/// pixel layout, so Line Up can still give them a border.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Apart {
+    pub a: usize,
+    /// Right of or below `a`.
+    pub b: usize,
+    pub side: Side,
+    /// Where the screens' sizes put the border, before it's lined up.
+    pub guess: EdgeMap,
+}
+
+fn shared(a0: f64, a1: f64, b0: f64, b1: f64) -> f64 {
+    a1.min(b1) - a0.max(b0)
+}
+
+/// Whether `q` sits against the `side` (Right or Bottom) of `p` on the desk.
+fn beside(p: &Placed, q: &Placed, side: Side) -> bool {
+    match side {
+        Side::Right => (q.x - (p.x + p.w)).abs() <= NEAR_MM && shared(p.y, p.y + p.h, q.y, q.y + q.h) >= SHARED_MM,
+        Side::Bottom => (q.y - (p.y + p.h)).abs() <= NEAR_MM && shared(p.x, p.x + p.w, q.x, q.x + q.w) >= SHARED_MM,
+        Side::Left | Side::Top => false,
+    }
+}
+
+/// Screens that meet on the desk but not in Windows, such as a tall screen
+/// beside two stacked ones. Windows must still have them the same way round,
+/// so a move off that edge heads towards the other screen.
+pub fn apart_neighbours(mons: &[Mon], links: &[Link]) -> Vec<Apart> {
+    let placed = physical_layout(mons, links);
+    let at = |i: usize| placed.iter().find(|p| p.index == i).filter(|p| p.sized);
+    let mut out = Vec::new();
+    for i in 0..mons.len() {
+        for j in (i + 1)..mons.len() {
+            let (ri, rj) = (&mons[i].rect, &mons[j].rect);
+            let (Some(pi), Some(pj)) = (at(i), at(j)) else { continue };
+            if touching(ri, rj).is_some() {
+                continue;
+            }
+            let found = [
+                (rj.left >= ri.right && beside(pi, pj, Side::Right)).then_some((i, j, Side::Right)),
+                (ri.left >= rj.right && beside(pj, pi, Side::Right)).then_some((j, i, Side::Right)),
+                (rj.top >= ri.bottom && beside(pi, pj, Side::Bottom)).then_some((i, j, Side::Bottom)),
+                (ri.top >= rj.bottom && beside(pj, pi, Side::Bottom)).then_some((j, i, Side::Bottom)),
+            ];
+            if let Some((a, b, side)) = found.into_iter().flatten().next() {
+                let (pa, pb) = if a == i { (pi, pj) } else { (pj, pi) };
+                let (start_a, start_b) = if side.along_is_y() { (pa.y, pb.y) } else { (pa.x, pb.x) };
+                let (da, db) = (dpi(&mons[a]), dpi(&mons[b]));
+                let guess = EdgeMap { s: db / da, o: (start_a - start_b) / 25.4 * db };
+                out.push(Apart { a, b, side, guess });
+            }
+        }
+    }
+    out
 }
 
 /// "PG32UCDM + 3 more", or the generic name when no screen reports a name.

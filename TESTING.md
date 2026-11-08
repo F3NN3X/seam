@@ -76,6 +76,9 @@ Use a small client that opens `\\.\pipe\seam-<your username>` and writes one JSO
 - [ ] **Enter during a drag, middle border.** Hold the mouse button mid-drag and press Enter. The drag ends, the next border opens, and the app stays up. Releasing the button later moves nothing.
 - [ ] **Enter during a drag, last border.** Same, on border 3. Line Up finishes and the app stays up.
 - [ ] **Finish.** Press Enter on the last border. A balloon appears, the saved layout has 3 borders, and the log shows `resolved 3 of 3 saved link(s)`.
+- [ ] **Screens that only meet on the desk.** With screen 2 above 1 and screen 4 to the right of both, open Line Up again after the first run. A fourth border, screen 2 to screen 4 on the right edge of 2, follows the other three, even though 2 and 4 don't touch in Windows. Line it up and finish: the log shows `resolved 4 of 4 saved link(s)`, and Displays lists it as lined up.
+- [ ] **Crossing it.** Move left off the upper part of screen 4. The pointer enters screen 2 where the lines meet, not the top-right of screen 1. Lower down it still enters screen 1. Move right off screen 2 and it enters screen 4.
+- [ ] **Align arrangement.** With that border saved, Align arrangement only moves screens along borders that touch in Windows, and the 2 to 4 border stays lined up afterwards.
 
 ## Zones
 

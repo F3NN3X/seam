@@ -56,12 +56,15 @@ pub fn plan(rects: &[Rect], primary: usize, links: &[Link]) -> Result<Vec<Rect>,
     if rects.is_empty() {
         return Ok(Vec::new());
     }
+    // A border between screens that don't touch in Windows can't place either one.
+    let links: Vec<Link> =
+        links.iter().copied().filter(|l| touching(&rects[l.a], &rects[l.b]) == Some(l.side)).collect();
     let mut out = rects.to_vec();
     let mut placed = vec![false; rects.len()];
     let mut queue = VecDeque::from([primary]);
     placed[primary] = true;
     while let Some(m) = queue.pop_front() {
-        for l in links {
+        for l in &links {
             let (n, side, map) = if l.a == m && !placed[l.b] {
                 (l.b, l.side, l.map)
             } else if l.b == m && !placed[l.a] {
@@ -89,7 +92,7 @@ pub fn plan(rects: &[Rect], primary: usize, links: &[Link]) -> Result<Vec<Rect>,
     }
     // Placing each screen follows only one border, so a loop of borders can
     // leave the last one misaligned. A rounding pixel is fine.
-    for l in links {
+    for l in &links {
         let origin = out[l.b].along_origin(l.side);
         if aligned_along_origin(&out[l.a], &out[l.b], l.side, &l.map).is_some_and(|want| (want - origin).abs() > 1) {
             return Err("this layout is too complex to align automatically".into());

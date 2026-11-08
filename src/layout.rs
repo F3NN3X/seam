@@ -12,7 +12,13 @@ pub struct Link {
     /// Side of `a` that `b` sits on.
     pub side: Side,
     pub map: EdgeMap,
+    /// The screens meet on the desk across a gap in Windows' arrangement.
+    pub glued: bool,
 }
+
+/// How far past the edge a move must go before it crosses a gap. None: the
+/// first event past the edge crosses.
+pub const GLUE_RESISTANCE_PX: i32 = 0;
 
 #[derive(Default)]
 pub struct Live {
@@ -33,6 +39,8 @@ pub struct Crossing {
 pub fn decide(live: &Live, prev: (i32, i32), pt: (i32, i32)) -> Option<Crossing> {
     let src = live.rects.iter().position(|r| r.contains(prev.0, prev.1))?;
     let a = live.rects[src];
+    // The screen under the raw point, looked up once and only for a glued link.
+    let mut under: Option<Option<usize>> = None;
     for (side, along, over) in exits_of(&a, prev, pt).into_iter().flatten() {
         for l in &live.links {
             let (dst, map) = if l.a == src && l.side == side {
@@ -42,6 +50,13 @@ pub fn decide(live: &Live, prev: (i32, i32), pt: (i32, i32)) -> Option<Crossing>
             } else {
                 continue;
             };
+            if l.glued {
+                // A screen Windows has under the point wins over a glued one.
+                let on = *under.get_or_insert_with(|| live.rects.iter().position(|r| r.contains(pt.0, pt.1)));
+                if over < GLUE_RESISTANCE_PX || on.is_some_and(|i| i != dst) {
+                    continue;
+                }
+            }
             if let Some(to) = remap_crossing(&a, &live.rects[dst], side, &map, along, over) {
                 return Some(Crossing { to, src, dst, side });
             }
@@ -137,7 +152,7 @@ mod tests {
     const SIDES: [Side; 4] = [Side::Left, Side::Right, Side::Top, Side::Bottom];
 
     fn link(a: usize, b: usize, side: Side, s: f64, o: f64) -> Link {
-        Link { a, b, side, map: EdgeMap { s, o } }
+        Link { a, b, side, map: EdgeMap { s, o }, glued: false }
     }
 
     fn live(rects: &[Rect], links: &[Link]) -> Live {
@@ -153,6 +168,17 @@ mod tests {
             Side::Bottom => ((along, r.bottom - 1), (along, r.bottom + past)),
             Side::Top => ((along, r.top), (along, r.top - 1 - past)),
         }
+    }
+
+    /// `r` moved `gap` pixels further out on `side`.
+    fn beyond(r: Rect, side: Side, gap: i32) -> Rect {
+        let (dx, dy) = match side {
+            Side::Right => (gap, 0),
+            Side::Left => (-gap, 0),
+            Side::Bottom => (0, gap),
+            Side::Top => (0, -gap),
+        };
+        Rect::new(r.left + dx, r.top + dy, r.width(), r.height())
     }
 
     fn along_of(side: Side, p: (i32, i32)) -> i32 {
@@ -297,6 +323,20 @@ mod tests {
     }
 
     #[test]
+    fn decide_leaves_a_glued_crossing_to_a_screen_windows_has_under_the_point() {
+        let a = Rect::new(0, 0, 1000, 1000);
+        let b = Rect::new(1100, 0, 1000, 1000);
+        let between = Rect::new(1000, 600, 100, 400);
+        let glue = Link { glued: true, ..link(0, 1, Side::Right, 1.0, 0.0) };
+        let l = live(&[a, b, between], &[glue]);
+        assert_eq!(decide(&l, (999, 700), (1010, 700)), None);
+        let c = decide(&l, (999, 300), (1010, 300)).unwrap();
+        assert_eq!((c.dst, c.to), (1, (1110, 300)));
+        // Far enough to land on the glued screen itself still lines it up.
+        assert_eq!(decide(&l, (999, 300), (1150, 300)).unwrap().to, (1250, 300));
+    }
+
+    #[test]
     fn decide_never_acts_on_a_map_that_cannot_be_inverted() {
         // `s` of 0 can reach us from a hand-edited config.
         let a = Rect::new(0, 0, 1000, 1000);
@@ -349,19 +389,20 @@ mod tests {
             sides in (prop::sample::select(&SIDES[..]), prop::sample::select(&SIDES[..])),
             sizes in prop::array::uniform3((400..4000i32, 400..4000i32)),
             shifts in (-1500..1500i32, -1500..1500i32),
+            gaps in (0..400i32, 0..400i32),
             maps in prop::array::uniform2((0.1..10.0f64, -5000.0..5000.0f64)),
             from in (0..3usize, 0.0..1.0f64, 0.0..1.0f64),
             to in (-9000..9000i32, -9000..9000i32),
         ) {
             let r = |i: usize| Rect::new(0, 0, sizes[i].0, sizes[i].1);
             let a = r(0);
-            let b = place_against(&a, &r(1), sides.0, shifts.0);
-            let c = place_against(&b, &r(2), sides.1, shifts.1);
+            let b = beyond(place_against(&a, &r(1), sides.0, shifts.0), sides.0, gaps.0);
+            let c = beyond(place_against(&b, &r(2), sides.1, shifts.1), sides.1, gaps.1);
             prop_assume!(!c.intersects(&a));
             let rects = [a, b, c];
             let links = [
-                link(0, 1, sides.0, maps[0].0, maps[0].1),
-                link(1, 2, sides.1, maps[1].0, maps[1].1),
+                Link { glued: gaps.0 > 0, ..link(0, 1, sides.0, maps[0].0, maps[0].1) },
+                Link { glued: gaps.1 > 0, ..link(1, 2, sides.1, maps[1].0, maps[1].1) },
             ];
             let l = live(&rects, &links);
             let src = rects[from.0];

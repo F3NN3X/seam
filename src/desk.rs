@@ -2,7 +2,7 @@
 //! it from here, so they always agree on what's lined up.
 
 use crate::config::{Config, Desk, SavedBorder, WindowSize};
-use crate::geom::{touching, EdgeMap, Rect, Side};
+use crate::geom::{facing, touching, EdgeMap, Rect, Side};
 use crate::layout::Link;
 use crate::log;
 use crate::state::{Border, BorderState};
@@ -27,7 +27,8 @@ pub struct Mon {
 }
 
 /// Resolve saved borders against the monitors that are connected right now.
-/// A border applies if the two screens still touch on the same side, or if
+/// A border applies if the two screens still touch on the same side, if it is
+/// glued and the screens still face each other that way across a gap, or if
 /// they still sit side by side on the desk without touching in Windows.
 pub fn resolve(mons: &[Mon], saved: Option<&[SavedBorder]>) -> Vec<Link> {
     let Some(saved) = saved else {
@@ -43,7 +44,7 @@ pub fn resolve(mons: &[Mon], saved: Option<&[SavedBorder]>) -> Vec<Link> {
                 log::info!("link {a}->{b} dropped: invalid map {:?}", s.map);
                 return None;
             }
-            Some(Link { a, b, side: s.side, map: s.map })
+            Some(Link { a, b, side: s.side, map: s.map, glued: s.glued })
         })
         .collect();
     let now = |l: &Link| touching(&mons[l.a].rect, &mons[l.b].rect);
@@ -51,11 +52,13 @@ pub fn resolve(mons: &[Mon], saved: Option<&[SavedBorder]>) -> Vec<Link> {
     // Screens apart in Windows are placed through the touching borders, so those come first.
     let apart = apart_neighbours(mons, &links);
     for l in known.iter().filter(|l| now(l) != Some(l.side)) {
-        let still = apart
-            .iter()
-            .any(|p| (p.a, p.b, p.side) == (l.a, l.b, l.side) || (p.a, p.b, p.side) == (l.b, l.a, l.side.opposite()));
+        let still = l.glued && facing(&mons[l.a].rect, &mons[l.b].rect, l.side)
+            || apart.iter().any(|p| {
+                (p.a, p.b, p.side) == (l.a, l.b, l.side) || (p.a, p.b, p.side) == (l.b, l.a, l.side.opposite())
+            });
         if still && now(l).is_none() {
-            links.push(*l);
+            // Across a gap the link only acts where Windows has no screen under the pointer.
+            links.push(Link { glued: true, ..*l });
         } else {
             log::info!("link {}->{} dropped: saved side {:?}, now {:?}", l.a, l.b, l.side, now(l));
         }
@@ -347,4 +350,33 @@ pub fn note_active(cfg: &mut Config, sig: &str, mons: &[Mon], now: u64) {
         desk.name = default_name(mons);
     }
     desk.last_seen = now;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A screen with no reported size, so only the pixel layout can place it.
+    fn mon(id: &str, rect: Rect) -> Mon {
+        Mon { id: id.into(), gdi: String::new(), name: id.into(), named: true, rect, raw_dpi: 0.0, primary: false }
+    }
+
+    #[test]
+    fn a_glued_border_holds_across_a_gap_and_when_it_closes_but_not_when_it_flips() {
+        let saved = [SavedBorder {
+            a: "a".into(),
+            b: "b".into(),
+            side: Side::Right,
+            map: EdgeMap { s: 1.0, o: 0.0 },
+            glued: true,
+        }];
+        let left = mon("a", Rect::new(0, 0, 1000, 1000));
+        let sides = |b: Rect| {
+            resolve(&[left.clone(), mon("b", b)], Some(&saved)).iter().map(|l| (l.side, l.glued)).collect::<Vec<_>>()
+        };
+        assert_eq!(sides(Rect::new(1150, 0, 1000, 1000)), [(Side::Right, true)]);
+        assert_eq!(sides(Rect::new(1000, 0, 1000, 1000)), [(Side::Right, true)]);
+        assert_eq!(sides(Rect::new(-1150, 0, 1000, 1000)), []);
+        assert_eq!(sides(Rect::new(900, 0, 1000, 1000)), []);
+    }
 }

@@ -140,6 +140,17 @@ pub fn touching(a: &Rect, b: &Rect) -> Option<Side> {
     }
 }
 
+/// Whether `b` lies wholly beyond `a`'s edge on `side`, touching it or across a
+/// gap, so a glued border between them still points the right way.
+pub fn facing(a: &Rect, b: &Rect, side: Side) -> bool {
+    match side {
+        Side::Right => b.left >= a.right,
+        Side::Left => b.right <= a.left,
+        Side::Bottom => b.top >= a.bottom,
+        Side::Top => b.bottom <= a.top,
+    }
+}
+
 /// First guess before the user calibrates: scale from the monitors' physical
 /// DPI (from EDID), offset so the middle of the current layout overlap lines up.
 pub fn predict(a: &Rect, b: &Rect, side: Side, dpi_a: f64, dpi_b: f64) -> EdgeMap {

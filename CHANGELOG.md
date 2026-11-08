@@ -9,10 +9,12 @@ All notable changes to Seam. The format follows [Keep a Changelog](https://keepa
 - **Set as default** on a workspace's "..." menu: when no workspace is remembered, it's the one in use when Seam starts. `workspace.set_default` in the API, and `default` in `workspaces.list`.
 - A **Help** page in the Seam window, with a topic for each part of Seam and a button to its page. Search finds the topics by their text.
 - Seam can turn on Windows' **Ease cursor movement between displays** for you: the Seam window asks once while it's off, and the Displays alert has **Turn it on**. Seam never turns it off. `cursor_easing.set` in the API, and `windows_cursor_easing` in the state.
+- **Saved desks** and the border rows on Displays show when a desk was lined up ("Lined up today", "yesterday", "3 days ago", then the date), and dates are in your local time. A desk lined up by an earlier version shows plain "Lined up" until you line it up again. `lined_up_at` in `config.json`.
 
 ### Changed
 
 - The sidebar's App group (Shortcuts, General, Help and About) sits at the bottom, above the version. About's Help section is now called Support.
+- The Seam window opens centred on the screen the mouse pointer is on, instead of always the primary screen.
 - The settings window opens a little wider, and the workspace list is narrower, so the workspace editor's columns show in full. Workspace cards show up to six app icons before "+n".
 - The workspace in use shows a green dot and "Active" in the Workspaces list, instead of "in use", and "Active, moved" once one of its windows moved.
 - After a restart or a desk change, the workspace last in use on that desk shows as active again, else the default, else the only one whose open apps are all in place. Nothing moves.
@@ -28,6 +30,7 @@ All notable changes to Seam. The format follows [Keep a Changelog](https://keepa
 - An app you open while a switch is still starting the others now goes to its place once the switch ends, with **Put apps in place when they open** on.
 - After a quick save, **Update from screen** or **Where it is now**, moving a saved window counts as moved at once, and reopening a saved app puts it back, without switching first.
 - A workspace app icon that couldn't load is tried again when you come back to the Workspaces page a minute later.
+- Running `seam-settings.exe --page` or `panel.open` with a page while the Seam window is already open now switches that window to the page. Before, it only came to the front.
 
 ## [0.6.0] - 2026-11-08
 

@@ -301,6 +301,44 @@ pub fn default_name(mons: &[Mon]) -> String {
     }
 }
 
+/// A calendar day.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Date {
+    pub year: i32,
+    pub month: u32,
+    pub day: u32,
+}
+
+impl Date {
+    /// Days since 1970-01-01 (Howard Hinnant's algorithm).
+    fn days(self) -> i64 {
+        let y = i64::from(self.year) - i64::from(self.month <= 2);
+        let era = y.div_euclid(400);
+        let yoe = y - era * 400;
+        let mp = i64::from((self.month + 9) % 12);
+        let doy = (153 * mp + 2) / 5 + i64::from(self.day) - 1;
+        let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+        era * 146_097 + doe - 719_468
+    }
+}
+
+/// "12 Oct".
+pub fn month_day(date: Date) -> String {
+    let names = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+    format!("{} {}", date.day, names[(date.month as usize).clamp(1, 12) - 1])
+}
+
+/// How long ago `then` was, by the calendar: "today", "yesterday", "3 days ago",
+/// then the date from a week on. A day in the future counts as today.
+pub fn relative_day(today: Date, then: Date) -> String {
+    match today.days() - then.days() {
+        ..=0 => "today".to_string(),
+        1 => "yesterday".to_string(),
+        n @ 2..=6 => format!("{n} days ago"),
+        _ => month_day(then),
+    }
+}
+
 /// Record that this desk is the connected one, creating it the first time and
 /// replacing a migrated desk's generic name now that the screens can be asked.
 pub fn note_active(cfg: &mut Config, sig: &str, mons: &[Mon], now: u64) {

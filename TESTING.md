@@ -454,6 +454,7 @@ Turn the debug log on. Set **Save windows to the active workspace** on Shortcuts
 - [ ] **Remap switch.** Turn it off. Crossings stop remapping and the sidebar says paused. Turn it on and they work again.
 - [ ] **Align switch.** Turn it off, then open the tray menu. **Also align Windows arrangement** is unticked. Turn it back on.
 - [ ] **Rename.** Rename a desk from its **…** menu. The sidebar and tray menu show the new name.
+- [ ] **Desk dates.** Finish Line Up: the border rows on Displays say "Lined up today" and **Saved desks** says "N screens, lined up today". A desk you haven't used since says "last connected" with a date in local time (check one connected just after local midnight, and one just before UTC midnight if your zone is not UTC). Set `lined_up_at` in `config.json` to a time one, three and ten days ago, and restart Seam: the text reads "yesterday", "3 days ago" and the date. Remove the field: both say plain "Lined up". Seam doesn't write `lined_up_at` for a desk that was never lined up.
 - [ ] **Forget and Undo.** Forget the desk in use. The borders go to "Not lined up", the page keeps a sensible desk name, and **Saved desks** says there are none. Press **Undo** within 8 seconds and everything comes back. Forget it again, wait, and the notification goes on its own. Line up to save it again.
 - [ ] **Record a shortcut.** On Shortcuts, press **Change**, then Ctrl+Alt+Shift+K. The new keys show and work from another app.
 - [ ] **Recorder keys.** Press **Change** then Esc: nothing changes. Press **Change** then Backspace: the row says "Not set" and stays that way after quitting and restarting Seam. **Record** a shortcut again.
@@ -477,6 +478,7 @@ Turn the debug log on. Set **Save windows to the active workspace** on Shortcuts
 - [ ] **Topic buttons.** The button under each other topic opens its page: Pointer and borders Displays, Zones Zones, Moving windows Shortcuts, Pins and borders Zones, Workspaces Workspaces, Last session General, Shortcuts Shortcuts, Stream Deck General, Local API General, Updates About.
 - [ ] **Search.** Type "snap back": the results include Help's Workspaces topic, and pressing it opens Help with that topic picked. Type "stream deck", "sign-in" and "pre-releases": each lists its Help topic. Type "help": every topic is listed.
 - [ ] **Remembered page.** Close the panel on Help and open it again: it opens on Help. Run `seam-settings.exe --page help`: it opens on Help.
+- [ ] **Page on an open panel.** With the panel open on Displays, run `seam-settings.exe --page help` and send `panel.open` with `{"page":"about"}`: each switches the open window to that page and brings it to the front, and no second window starts. On Zones, start a layout edit and run it again with another page: the "Discard layout changes?" dialog asks first, and Keep editing leaves the page as it was. An unknown page leaves the open window where it is.
 - [ ] **About.** About's last section is called Support and still has **Copy diagnostics**, **Report a problem**, **Source on GitHub** and **Licenses**, each working as before.
 
 ## Starting and signing in
@@ -677,6 +679,7 @@ Turn off **Settings → System → Display → Multiple displays → Ease cursor
 - [ ] **First-run ask.** With `cursor_easing_asked` false or missing in `config.json`, open the Seam window on any page but Displays. A dashed note at the top says "Seam needs Windows' Ease cursor movement between displays…" with **Not now** and **Turn it on**. On Displays the note doesn't show, and the alert does.
 - [ ] **Not now.** Press **Not now**. The note goes, `cursor_easing_asked` is true, and it doesn't come back after restarting Seam or turning the remap off and on. The Displays alert stays while the setting is off.
 - [ ] **Turn it on.** Set it off again and `cursor_easing_asked` back to false. Press **Turn it on** in the note. Without signing out: the Windows Settings toggle shows on (reopen the page), the pointer crosses where it used to stop at an edge, and the log shows `cursor easing: Some(false) to Some(true), Ok(())` plus the `SPI_SETCURSORS` and `WM_SETTINGCHANGE` lines. "Turned on Ease cursor movement" shows, the alert goes, and the note never comes back. Record whether the crossing works straight away or only after a sign-out.
+- [ ] **Didn't stick.** Can't be forced by hand. If **Turn it on** ever shows "Ease cursor movement left as it was" with "Windows didn't keep Ease cursor movement on", the log's `cursor easing:` line shows what the registry held afterwards, and `cursor_easing_asked` stays false.
 - [ ] **Alert button.** Turn it off in Windows Settings, come back to Displays: the alert shows **Open Display settings** and **Turn it on**. **Turn it on** works as above. With it on, there's no alert.
 - [ ] **State.** `state.get` has `windows_cursor_easing` false while off and true after. `cursor_easing.set` from a client without the panel's token is refused, and `{"on":false}` is refused with nothing changed.
 - [ ] **Search.** Type "deadzone", "easing" and "jump": each finds "Ease cursor movement between displays", which opens Displays at the top.
@@ -686,7 +689,7 @@ Turn off **Settings → System → Display → Multiple displays → Ease cursor
 
 Finishing Line Up with the setting on calls `SetDisplayConfig` only if the plan is accepted.
 
-- [ ] **Refusal on this desk.** With **Also align Windows arrangement** ticked, finish Line Up. The balloon says the arrangement is unchanged, the log shows `arrangement result: Err("aligning would make screens overlap")`, and nothing moves. Moving screen 4 up for its border would take screen 3 with it, and screen 3's 7 px offset to the left would collide with screen 1.
+- [ ] **Refusal on this desk.** With **Also align Windows arrangement** ticked, finish Line Up. The balloon reads "Pointer remap is on. Windows arrangement unchanged. Moving screen 3 would overlap screen 1.", the log shows `arrangement result: Err("Moving screen 3 would overlap screen 1")`, and nothing moves. Moving screen 4 up for its border would take screen 3 with it, and screen 3's 7 px offset to the left would collide with screen 1.
 - [ ] **Setting off.** Untick it and finish Line Up. The log shows `arrangement skipped: setting is off`.
 - [ ] **Undo in Settings.** Only if an arrangement was actually applied: drag the screens back in Display settings, press Apply, and confirm the log shows `display change` and borders resolve again. If a screen no longer touches on its calibrated side, the log shows `dropped` for that border.
 
@@ -713,6 +716,14 @@ Use Narrator (Win+Ctrl+Enter) or Accessibility Insights for Windows, and open th
 - [ ] **Switches.** On General, Displays, Workspaces, Zones and Updates, each switch is read as its row title with "switch" and "on" or "off", and the state changes after you press it.
 - [ ] **Choices.** Each segmented control (Show zones, Left-click, Other windows, Show as and the rest) is read as a group named for its row, and each option as its own text with selected or not.
 - [ ] **Nothing unnamed.** In Accessibility Insights' live tree, no button, switch or tab on any page has an empty Name.
+
+## Window opens under the pointer
+
+- [ ] **Each screen.** With two or more screens, put the pointer on each one in turn and open Seam from the tray (and from `seam-settings.exe --page general`). The window opens centred in that screen's work area, never partly under the taskbar, and never flashes on the primary screen first.
+- [ ] **Different scaling.** With screens at different scaling (say 100% and 150%), open it on each. It's the same apparent size on both, about 1160 x 780 logical, and fully on the screen.
+- [ ] **Screen left of the primary.** Place a screen left of or above the primary, so its origin is negative, and open it there. It's centred on that screen.
+- [ ] **Small screen.** On a screen smaller than the window (or with a very large taskbar), the window fits inside the work area.
+- [ ] **Already open.** With the window open on one screen, open Seam from another screen. The existing window comes forward where it is; it doesn't move.
 
 ## Report back
 

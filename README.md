@@ -204,7 +204,7 @@ Each comes in two builds. **x64** is for most PCs. **ARM64** (`Seam-Setup-X.Y.Z-
 
 The installer and the zip are unsigned, so Windows SmartScreen warns about an unknown publisher the first time. Choose **More info**, then **Run anyway**. See [Troubleshooting](#troubleshooting). To update the zip by hand, download the new zip, quit Seam, and replace both exes.
 
-Seam has a built-in updater, but it only installs releases signed with Seam's key, and no release is signed yet. About shows the result of each check.
+Seam has a built-in updater that only installs releases signed with Seam's key. It checks once a day, and About shows the result of each check.
 
 ### First run
 
@@ -240,7 +240,7 @@ Windows doesn't let a normal app move the windows of an app running as administr
 They behave the same, apart from how they update and install. The Store build is updated by the Microsoft Store, has no built-in updater, and removes its settings when you uninstall it. The GitHub build (installer or portable zip) is unsigned, so SmartScreen warns the first time, and it has Seam's own updater. Both come in x64 and ARM64.
 
 **How are updates verified?**
-The updater, which runs in `seam-settings.exe` and never in the tray, downloads a `latest.json` manifest from Seam's GitHub releases and checks its minisign signature against the public key built into Seam. It only follows download links on Seam's own releases, and checks each file's size and SHA-256 against the manifest before it installs. No release is signed yet, so for now it installs nothing and About says why. Download new versions from GitHub.
+The updater, which runs in `seam-settings.exe` and never in the tray, downloads a `latest.json` manifest from Seam's GitHub releases and checks its minisign signature against the public key built into Seam. It only follows download links on Seam's own releases, and checks each file's size and SHA-256 against the manifest before it installs. A release that fails any of these checks isn't installed, and About says why.
 
 **Where do the config and the log live?**
 In `%APPDATA%\Seam`: `config.json` holds your settings, desks, layouts and workspaces, and `seam.log` is the debug log, which exists only if you turn logging on (see [Debug log](#debug-log)). The updater keeps what it found in `%LOCALAPPDATA%\Seam\updates`. The Store build's settings are kept in its own package folder, because Windows redirects its writes.

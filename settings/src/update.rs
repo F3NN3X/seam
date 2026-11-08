@@ -4,7 +4,7 @@
 //! Installing swaps the files and restarts. The Store copy skips all of it.
 
 use minisign_verify::{PublicKey, Signature};
-use seam::api::Client;
+use seam::api::{CallError, Client};
 use seam::updates::{self, UpdateFile};
 use seam::{package, process};
 use semver::Version;
@@ -99,7 +99,9 @@ fn parse_manifest(bytes: &[u8]) -> Option<Manifest> {
             })
         })
         .collect();
-    if !EXES.iter().all(|exe| files.iter().any(|f| f.name == *exe)) {
+    // Exactly the two exes: nothing missing, and no other name to join onto a path.
+    let only_exes = files.iter().all(|f| EXES.contains(&f.name.as_str()));
+    if !only_exes || !EXES.iter().all(|exe| files.iter().any(|f| f.name == *exe)) {
         return None;
     }
     Some(Manifest {
@@ -301,12 +303,25 @@ fn own_dir() -> PathBuf {
     std::env::current_exe().ok().and_then(|exe| exe.parent().map(Path::to_path_buf)).unwrap_or_default()
 }
 
-/// The folder of the running `seam.exe`, and its process if it is running.
-fn running_tray() -> (PathBuf, Option<u32>) {
-    let info = Client::connect("seam-settings", None).ok().and_then(|mut tray| tray.call("app.info", Value::Null).ok());
+/// The running tray's process, if there is one. It has to be the `seam.exe`
+/// next to this exe: files are only ever replaced in our own folder, whatever
+/// the other end of the pipe says.
+fn running_tray(dir: &Path) -> Result<Option<u32>, InstallError> {
+    let mut tray = match Client::connect("seam-settings", None) {
+        Ok(tray) => tray,
+        Err(CallError::Io(e)) if e.kind() == std::io::ErrorKind::PermissionDenied => {
+            return Err(failed("Something else is using Seam's pipe, so nothing was changed"));
+        }
+        Err(_) => return Ok(None),
+    };
+    let info = tray.call("app.info", Value::Null).ok();
     let pid = info.and_then(|i| i["pid"].as_u64()).and_then(|pid| u32::try_from(pid).ok());
-    let dir = pid.and_then(process::image_path).and_then(|exe| exe.parent().map(Path::to_path_buf));
-    (dir.unwrap_or_else(own_dir), pid)
+    let image = pid.and_then(process::image_path).map(|exe| exe.to_string_lossy().to_lowercase());
+    let ours = dir.join("seam.exe").to_string_lossy().to_lowercase();
+    match (pid, image) {
+        (Some(pid), Some(image)) if image == ours => Ok(Some(pid)),
+        _ => Err(failed("Seam is running from another folder, so nothing was changed")),
+    }
 }
 
 fn writable(dir: &Path) -> bool {
@@ -316,16 +331,33 @@ fn writable(dir: &Path) -> bool {
     made
 }
 
+/// Copy a staged file next to its target and check the copy against the
+/// manifest, so a swap of the staged file after it was verified is caught.
+fn copy_checked(from: &Path, to: &Path, file: &File) -> std::io::Result<()> {
+    let new = to.with_file_name(format!("{}.new", file.name));
+    let copied = std::fs::copy(from, &new).and_then(|_| std::fs::read(&new)).and_then(|bytes| {
+        let same = bytes.len() as u64 == file.size && sha256_hex(Sha256::digest(&bytes)) == file.sha256;
+        same.then_some(()).ok_or_else(|| std::io::Error::other(format!("{} changed after it was checked", file.name)))
+    });
+    match copied {
+        Ok(()) => std::fs::rename(&new, to),
+        Err(e) => {
+            let _ = std::fs::remove_file(&new);
+            Err(e)
+        }
+    }
+}
+
 /// Renaming a running exe works on NTFS, so each exe can replace itself.
-fn swap(dir: &Path, staged: &Path, renamed: &mut Vec<&'static str>) -> std::io::Result<()> {
+fn swap(dir: &Path, staged: &Path, manifest: &Manifest, renamed: &mut Vec<&'static str>) -> std::io::Result<()> {
     for name in EXES {
         let old = dir.join(format!("{name}.old"));
         let _ = std::fs::remove_file(&old);
         std::fs::rename(dir.join(name), old)?;
         renamed.push(name);
     }
-    for name in EXES {
-        std::fs::copy(staged.join(name), dir.join(name))?;
+    for file in &manifest.files {
+        copy_checked(&staged.join(&file.name), &dir.join(&file.name), file)?;
     }
     Ok(())
 }
@@ -354,11 +386,15 @@ impl InstallError {
 
 /// The staged files are what the signed manifest says, checked now and not
 /// only when they were downloaded. `version` has to be plain semver, because
-/// it becomes part of a path.
-fn staged_and_signed(version: &str) -> Result<PathBuf, InstallError> {
+/// it becomes part of a path, and newer than this build, so an old signed
+/// release can't be put back.
+fn staged_and_signed(version: &str) -> Result<(PathBuf, Manifest), InstallError> {
     let incomplete = || failed("The download isn't complete. Check for updates again");
-    if Version::parse(version).map_or(true, |v| v.to_string() != version) {
+    let Some(parsed) = Version::parse(version).ok().filter(|v| v.to_string() == version) else {
         return Err(failed("That isn't a version Seam can install"));
+    };
+    if Version::parse(env!("CARGO_PKG_VERSION")).map_or(true, |current| parsed <= current) {
+        return Err(failed("That isn't newer than this version of Seam"));
     }
     let staged = updates::version_dir(version);
     let manifest = std::fs::read(staged.join(MANIFEST)).map_err(|_| incomplete())?;
@@ -368,7 +404,7 @@ fn staged_and_signed(version: &str) -> Result<PathBuf, InstallError> {
     if manifest.version != version || !staged_ok(&staged, &manifest) {
         return Err(incomplete());
     }
-    Ok(staged)
+    Ok((staged, manifest))
 }
 
 /// Swap in the downloaded version and start it. On any failure the old files
@@ -383,8 +419,9 @@ pub fn install(version: &str) -> Result<(), InstallError> {
 }
 
 fn install_signed(version: &str) -> Result<(), InstallError> {
-    let staged = staged_and_signed(version)?;
-    let (dir, tray) = running_tray();
+    let (staged, manifest) = staged_and_signed(version)?;
+    let dir = own_dir();
+    let tray = running_tray(&dir)?;
     if !writable(&dir) {
         return Err(InstallError::NotWritable);
     }
@@ -402,7 +439,7 @@ fn install_signed(version: &str) -> Result<(), InstallError> {
         }
     }
     let mut renamed = Vec::new();
-    if let Err(e) = swap(&dir, &staged, &mut renamed) {
+    if let Err(e) = swap(&dir, &staged, &manifest, &mut renamed) {
         roll_back(&dir, &renamed);
         start_tray(&dir, &["--tray-only"]);
         return Err(failed(format!("Seam is back on its old version. {e}")));

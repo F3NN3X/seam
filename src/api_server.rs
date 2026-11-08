@@ -15,6 +15,7 @@ use seam::api::{
     desks_list, error_line, event_line, parse_request, pipe_name, result_line, topic_of, workspaces_list, Command,
     Peer, Reply, RpcError, API_VERSION, BUSY, DISABLED, MAX_LINE, MAX_QUEUED_EVENTS,
 };
+use seam::process;
 use seam::state::Snapshot;
 use serde_json::{json, Value};
 use std::collections::VecDeque;
@@ -23,15 +24,11 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{channel, Sender};
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock, RwLock};
 use std::time::Duration;
-use windows::core::{PCWSTR, PWSTR};
+use windows::core::PCWSTR;
 use windows::Win32::Foundation::*;
-use windows::Win32::Security::Authorization::{
-    ConvertSidToStringSidW, ConvertStringSecurityDescriptorToSecurityDescriptorW, SDDL_REVISION_1,
-};
+use windows::Win32::Security::Authorization::{ConvertStringSecurityDescriptorToSecurityDescriptorW, SDDL_REVISION_1};
 use windows::Win32::Security::Cryptography::{BCryptGenRandom, BCRYPT_USE_SYSTEM_PREFERRED_RNG};
-use windows::Win32::Security::{
-    GetTokenInformation, TokenUser, PSECURITY_DESCRIPTOR, SECURITY_ATTRIBUTES, TOKEN_QUERY, TOKEN_USER,
-};
+use windows::Win32::Security::{PSECURITY_DESCRIPTOR, SECURITY_ATTRIBUTES};
 use windows::Win32::Storage::FileSystem::{
     ReadFile, WriteFile, FILE_FLAG_FIRST_PIPE_INSTANCE, FILE_FLAG_OVERLAPPED, PIPE_ACCESS_DUPLEX,
 };
@@ -40,8 +37,7 @@ use windows::Win32::System::Pipes::{
     PIPE_REJECT_REMOTE_CLIENTS, PIPE_TYPE_BYTE, PIPE_WAIT,
 };
 use windows::Win32::System::Threading::{
-    CreateEventW, GetCurrentProcess, OpenProcess, OpenProcessToken, QueryFullProcessImageNameW, ResetEvent, SetEvent,
-    WaitForMultipleObjects, WaitForSingleObject, INFINITE, PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION,
+    CreateEventW, GetCurrentProcess, ResetEvent, SetEvent, WaitForMultipleObjects, WaitForSingleObject, INFINITE,
 };
 use windows::Win32::System::IO::{CancelIoEx, GetOverlappedResult, OVERLAPPED};
 use windows::Win32::UI::WindowsAndMessaging::PostMessageW;
@@ -95,23 +91,7 @@ fn wide(s: &str) -> Vec<u16> {
 }
 
 fn user_sid() -> Option<String> {
-    unsafe {
-        let mut token = HANDLE::default();
-        OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut token).ok()?;
-        let mut len = 0u32;
-        let _ = GetTokenInformation(token, TokenUser, None, 0, &mut len);
-        // u64 so the buffer is aligned for the pointer inside TOKEN_USER.
-        let mut buf = vec![0u64; (len as usize).div_ceil(8)];
-        let read = GetTokenInformation(token, TokenUser, Some(buf.as_mut_ptr().cast()), len, &mut len);
-        let _ = CloseHandle(token);
-        read.ok()?;
-        let user = &*(buf.as_ptr() as *const TOKEN_USER);
-        let mut text = PWSTR::null();
-        ConvertSidToStringSidW(user.User.Sid, &mut text).ok()?;
-        let sid = text.to_string().ok();
-        let _ = LocalFree(Some(HLOCAL(text.0.cast())));
-        sid
-    }
+    process::user_sid(unsafe { GetCurrentProcess() })
 }
 
 /// A descriptor only the current user can open. It lives as long as the process.
@@ -223,9 +203,13 @@ fn accept_loop(first: isize, descriptor: isize) {
                 }
             }
         } else {
+            // Keep this instance rather than closing it and creating another, so
+            // the name is never free for someone else to create first.
             unsafe {
-                let _ = CloseHandle(HANDLE(pipe as *mut c_void));
+                let _ = DisconnectNamedPipe(HANDLE(pipe as *mut c_void));
             }
+            std::thread::sleep(Duration::from_millis(250));
+            continue;
         }
         // With every instance in use this fails until a client leaves.
         pipe = loop {
@@ -237,24 +221,18 @@ fn accept_loop(first: isize, descriptor: isize) {
     }
 }
 
+/// The client is `seam.exe` or `seam-settings.exe` from the folder this one runs from.
 fn client_is_seam(pipe: HANDLE) -> bool {
-    unsafe {
-        let mut pid = 0u32;
-        if GetNamedPipeClientProcessId(pipe, &mut pid).is_err() {
-            return false;
-        }
-        let Ok(process) = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid) else { return false };
-        let mut buf = [0u16; 1024];
-        let mut len = buf.len() as u32;
-        let read = QueryFullProcessImageNameW(process, PROCESS_NAME_WIN32, PWSTR(buf.as_mut_ptr()), &mut len);
-        let _ = CloseHandle(process);
-        if read.is_err() {
-            return false;
-        }
-        let path = String::from_utf16_lossy(&buf[..len as usize]);
-        let exe = path.rsplit('\\').next().unwrap_or_default();
-        exe.eq_ignore_ascii_case("seam.exe") || exe.eq_ignore_ascii_case("seam-settings.exe")
+    let mut pid = 0u32;
+    if unsafe { GetNamedPipeClientProcessId(pipe, &mut pid) }.is_err() {
+        return false;
     }
+    let Some(image) = process::image_path(pid) else { return false };
+    let Some(dir) = std::env::current_exe().ok().and_then(|exe| exe.parent().map(|d| d.to_path_buf())) else {
+        return false;
+    };
+    let image = image.to_string_lossy().to_lowercase();
+    ["seam.exe", "seam-settings.exe"].iter().any(|name| dir.join(name).to_string_lossy().to_lowercase() == image)
 }
 
 /// Write one line, giving up on a client that has stopped reading.
@@ -308,7 +286,8 @@ impl Session {
     }
 
     fn hello(&mut self, shared: &Shared, client: String, token: Option<String>) -> Reply {
-        self.panel = token.is_some_and(|t| t == shared.token);
+        // An empty token (the RNG failed) never matches, so nobody is the panel.
+        self.panel = !shared.token.is_empty() && token.is_some_and(|t| t == shared.token);
         let peer = self.peer(shared);
         if !peer.api_enabled && !peer.panel && !peer.own_image {
             return Err(RpcError::new(DISABLED, "Other apps can't control Seam right now"));

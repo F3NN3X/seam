@@ -22,6 +22,7 @@ mod live;
 #[cfg(windows)]
 mod overlay;
 #[cfg(windows)]
+mod showlayout;
 mod snap;
 #[cfg(windows)]
 mod switcher;

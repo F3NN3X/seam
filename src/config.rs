@@ -295,6 +295,8 @@ pub struct Config {
     /// After lining up, also move monitors in the Windows arrangement so the
     /// pixel layout matches at the middle of each border.
     pub align_arrangement: bool,
+    /// Line Up adds a field to type how far the screens are offset, in cm.
+    pub lineup_measure: bool,
     /// Offer to line up a set of screens we haven't seen before.
     pub ask_new_desks: bool,
     /// "When a window moves to another screen": what size a key, API or workspace move
@@ -339,6 +341,7 @@ impl Default for Config {
             version: CURRENT_VERSION,
             enabled: true,
             align_arrangement: true,
+            lineup_measure: false,
             ask_new_desks: true,
             window_size_on_move: WindowSize::Windows,
             window_size_on_drag: false,

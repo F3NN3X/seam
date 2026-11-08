@@ -35,9 +35,16 @@ const ENTRIES: &[Entry] = &[
     entry(Page::Displays, "Line up screens", "Line up where your screens physically meet", "calibrate border"),
     entry(Page::Displays, "Align arrangement", "Move screens in Display settings to match", "windows"),
     entry(Page::Displays, "Physical layout", "Real sizes from each screen's EDID", "map identify"),
+    entry(Page::Displays, "Show on screens", "Draw the layout on each screen for a few seconds", "windows seam view"),
     entry(Page::Displays, "Saved desks", "Rename or forget a desk", "layouts"),
     entry(Page::Displays, "Remap pointer at borders", "Cross where the screens physically meet", "pause mouse"),
     entry(Page::Displays, "Also align Windows arrangement", "Move screens in Display settings to match", ""),
+    entry(
+        Page::Displays,
+        "Type measurements in Line Up",
+        "Adds a field to type how far the screens are offset, in cm",
+        "measure offset cm type",
+    ),
     entry(
         Page::Displays,
         "Ease cursor movement between displays",

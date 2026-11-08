@@ -6,40 +6,44 @@ All notable changes to Seam. The format follows [Keep a Changelog](https://keepa
 
 ### Added
 
+- **Glue** in Line Up: screens that touch on your desk but have a gap between them in Windows can be glued with G, and the pointer crosses the gap where they physically meet. Line Up offers each such pair after the touching borders. A pair found from the screens' sizes starts glued, and a pair found only from the pixel layout starts off. Align arrangement keeps glued screens apart. Displays marks a glued border "Glued to the right edge of 1". `glued` on a border in `config.json` and in the state's `borders`.
+- A glued edge holds the pointer until you push about 60 px past it, so an auto-hide taskbar on that edge still shows. Past the end of a glue, the edge is a dead edge that Seam holds.
+- **Not on my desk**: press N in Line Up, or use the border's **...** menu on Displays (**On my desk** undoes it), for screens that touch in Windows but not on your desk. The pointer stops at that edge both ways, or crosses to a glued screen past it. Displays shows such a border as "Not on your desk". `not_on_desk` on a border in `config.json` and in the state's `borders`.
+- Line Up names both screens with their model in each step, such as "Line up screen 3 (HDMI) with screen 4 (U3477)", and says which way to move each line, such as "straight below" or "level with".
+- Line Up draws a band of faint diagonal stripes along the shared edge of the two screens, 10 mm apart on the desk, so you can see at a glance whether the edge runs straight across.
+- **Type measurements in Line Up** on Displays, off by default. With it on, M in Line Up takes the offset between two screens as a number in cm and moves the lines to match. `lineup_measure` in `config.json`.
 - **Two views of the layout** on Displays: **Seam** (your desk, with glued borders dashed and borders that aren't on your desk dotted) and **Windows** (the arrangement as Windows has it, in pixels, with "18 px gap" labels). The choice is remembered while the Seam window is open. `rect` on each of the state's `screens`.
 - **Show on screens** on Displays draws the chosen view on every real screen for a few seconds, with each screen's number and model and a band along each edge that has a neighbour. Esc, a click or 8 seconds closes it. `layout.show` in the API, for the Seam window only.
-- **Not on my desk** and **On my desk** in a border's **...** menu on Displays, for screens that touch in Windows.
-- **Type measurements in Line Up** on Displays, off by default. `lineup_measure` in `config.json`.
-- Line Up draws faint diagonal stripes along the shared edge of the two screens, 10 mm apart on the desk, so you can see at a glance whether the edge runs straight across. Each step now names both screens with their model, such as "Line up screen 3 (HDMI) with screen 4 (U3477)".
-- Line Up can take the offset between two screens as a typed number in cm (M), once `lineup_measure` is on in `config.json`. It sets the map from the screens' physical sizes and moves the lines to match.
-- **Glue** in Line Up: screens that touch on your desk but have a gap between them in Windows can be glued with G, and the pointer crosses the gap where they physically meet. Align arrangement keeps glued screens apart, and Displays marks a glued border "Glued to the right edge of 1". `glued` on a border in `config.json` and in the state's `borders`.
-- A glued edge holds the pointer until you push about 60 px past it, so an auto-hide taskbar on that edge still shows.
-- **Not on your desk** in Line Up: press N on a border Windows has but your desk doesn't, and the pointer stops there, or crosses to a glued screen past that edge. Displays shows such a border as "Not on your desk". `not_on_desk` on a border in `config.json` and in the state's `borders`.
-- **Set as default** on a workspace's "..." menu: when no workspace is remembered, it's the one in use when Seam starts. `workspace.set_default` in the API, and `default` in `workspaces.list`.
+- **Saved desks** and the border rows on Displays show when a desk was lined up ("Lined up today", "yesterday", "3 days ago", then the date), and dates are in your local time. A desk lined up by an earlier version shows plain "Lined up" until you line it up again. `lined_up_at` in `config.json`.
 - A **Help** page in the Seam window, with a topic for each part of Seam and a button to its page. Search finds the topics by their text.
 - Seam can turn on Windows' **Ease cursor movement between displays** for you: the Seam window asks once while it's off, and the Displays alert has **Turn it on**. Seam never turns it off. `cursor_easing.set` in the API, and `windows_cursor_easing` in the state.
-- **Saved desks** and the border rows on Displays show when a desk was lined up ("Lined up today", "yesterday", "3 days ago", then the date), and dates are in your local time. A desk lined up by an earlier version shows plain "Lined up" until you line it up again. `lined_up_at` in `config.json`.
+- **Set as default** on a workspace's "..." menu: when no workspace is remembered, it's the one in use when Seam starts. `workspace.set_default` in the API, and `default` in `workspaces.list`.
+- A screen reader now reads the Seam window's sidebar rows, switches, choices, pause button and "..." buttons by name, such as "More for Desk" and "Remap pointer at borders, switch, on".
+- The debug log's once-a-minute hook line has histograms of Seam's own time and of other apps' hooks, and counts of events over 1 ms, to find where hook spikes come from.
 
 ### Changed
 
-- The sidebar's App group (Shortcuts, General, Help and About) sits at the bottom, above the version. About's Help section is now called Support.
 - The Seam window opens centred on the screen the mouse pointer is on, instead of always the primary screen.
+- A refused arrangement names the screens, such as "Moving screen 3 would overlap screen 1", instead of a general reason.
+- The sidebar's App group (Shortcuts, General, Help and About) sits at the bottom, above the version. About's Help section is now called Support.
 - The settings window opens a little wider, and the workspace list is narrower, so the workspace editor's columns show in full. Workspace cards show up to six app icons before "+n".
 - The workspace in use shows a green dot and "Active" in the Workspaces list, instead of "in use", and "Active, moved" once one of its windows moved.
 - After a restart or a desk change, the workspace last in use on that desk shows as active again, else the default, else the only one whose open apps are all in place. Nothing moves.
 
 ### Fixed
 
-- A screen reader now reads the Seam window's sidebar rows, switches, choices, pause button and "..." buttons by name, such as "More for Desk" and "Remap pointer at borders, switch, on".
+- **Turn it on** for Ease cursor movement now checks that Windows kept the setting, and says so if it didn't.
+- Seam is listed in Installed apps as "Seam", without a version in its name that went stale after an in-app update.
+- A debug build of the tray no longer aborts on a window no workspace placed.
+- Running `seam-settings.exe --page` or `panel.open` with a page while the Seam window is already open now switches that window to the page. Before, it only came to the front.
 - Apps that close to the tray, such as Stream Deck, Spotify, Discord and Steam, show "Running in background" in the workspace editor instead of "Not running", and don't count as moved.
+- A workspace card's name gets the full width, with its marks on a line under it, instead of a few letters.
 - The "..." on each app in the workspace editor no longer gets cut off: the name and Goes to columns shrink and end in "..." instead, down to the panel's smallest size.
-
 - A workspace counts as moved as soon as you snap one of its windows with Win+arrow or use the maximize button, not only after a drag.
 - Reordering or removing apps in a workspace no longer mixes up which open window belongs to which app, so Snap back and opening apps put them in the right place.
 - An app you open while a switch is still starting the others now goes to its place once the switch ends, with **Put apps in place when they open** on.
 - After a quick save, **Update from screen** or **Where it is now**, moving a saved window counts as moved at once, and reopening a saved app puts it back, without switching first.
 - A workspace app icon that couldn't load is tried again when you come back to the Workspaces page a minute later.
-- Running `seam-settings.exe --page` or `panel.open` with a page while the Seam window is already open now switches that window to the page. Before, it only came to the front.
 
 ## [0.6.0] - 2026-11-08
 

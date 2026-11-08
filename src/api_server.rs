@@ -23,7 +23,7 @@ use std::ffi::c_void;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{channel, Sender};
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock, RwLock};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use windows::core::PCWSTR;
 use windows::Win32::Foundation::*;
 use windows::Win32::Security::Authorization::{ConvertStringSecurityDescriptorToSecurityDescriptorW, SDDL_REVISION_1};
@@ -37,7 +37,7 @@ use windows::Win32::System::Pipes::{
     PIPE_REJECT_REMOTE_CLIENTS, PIPE_TYPE_BYTE, PIPE_WAIT,
 };
 use windows::Win32::System::Threading::{
-    CreateEventW, GetCurrentProcess, ResetEvent, SetEvent, WaitForMultipleObjects, WaitForSingleObject, INFINITE,
+    CreateEventW, GetCurrentProcess, ResetEvent, SetEvent, WaitForMultipleObjects, WaitForSingleObject,
 };
 use windows::Win32::System::IO::{CancelIoEx, GetOverlappedResult, OVERLAPPED};
 use windows::Win32::UI::WindowsAndMessaging::PostMessageW;
@@ -46,6 +46,8 @@ const MAX_CLIENTS: u32 = 8;
 const PIPE_BUFFER: u32 = 64 * 1024;
 const WRITE_TIMEOUT_MS: u32 = 2000;
 const COMMAND_TIMEOUT: Duration = Duration::from_secs(60);
+/// A client with no `events.subscribe` that sends no request line for this long is dropped.
+const IDLE_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// A command waiting for the main thread.
 pub struct Queued {
@@ -396,6 +398,11 @@ fn serve(pipe: isize) {
     }
 }
 
+/// The connection has asked for events, so it's idle by design.
+fn subscribed(shared: &Shared, conn_id: u64) -> bool {
+    guard(&shared.conns).iter().any(|c| c.id == conn_id && !c.topics.is_empty())
+}
+
 fn pump(shared: &Shared, pipe: HANDLE, read_event: HANDLE, write_event: HANDLE, wake: HANDLE) {
     let outbox = Arc::new(Outbox {
         lines: Mutex::new(VecDeque::new()),
@@ -410,6 +417,7 @@ fn pump(shared: &Shared, pipe: HANDLE, read_event: HANDLE, write_event: HANDLE, 
     let mut session = Session { pipe, write_event, conn_id, outbox, panel: false, own_image };
     let mut buffer = vec![0u8; 8192];
     let mut input = Vec::new();
+    let mut deadline = Instant::now() + IDLE_TIMEOUT;
 
     'connection: loop {
         let mut overlapped = OVERLAPPED { hEvent: read_event, ..Default::default() };
@@ -423,9 +431,23 @@ fn pump(shared: &Shared, pipe: HANDLE, read_event: HANDLE, write_event: HANDLE, 
         }
         // The read stays pending while events go out.
         loop {
-            let waited = unsafe { WaitForMultipleObjects(&[read_event, wake], false, INFINITE) };
+            let left = deadline.saturating_duration_since(Instant::now()).as_millis() as u32;
+            let waited = unsafe { WaitForMultipleObjects(&[read_event, wake], false, left) };
             if waited == WAIT_OBJECT_0 {
                 break;
+            }
+            if waited == WAIT_TIMEOUT {
+                if subscribed(shared, conn_id) {
+                    deadline = Instant::now() + IDLE_TIMEOUT;
+                    continue;
+                }
+                log::info!("api client dropped: no request in {} s", IDLE_TIMEOUT.as_secs());
+                unsafe {
+                    let mut n = 0;
+                    let _ = CancelIoEx(pipe, Some(&overlapped));
+                    let _ = GetOverlappedResult(pipe, &overlapped, &mut n, true);
+                }
+                break 'connection;
             }
             if waited.0 != WAIT_OBJECT_0.0 + 1 || !session.flush() {
                 unsafe {
@@ -441,6 +463,9 @@ fn pump(shared: &Shared, pipe: HANDLE, read_event: HANDLE, write_event: HANDLE, 
             break;
         }
         input.extend_from_slice(&buffer[..read as usize]);
+        if input.contains(&b'\n') {
+            deadline = Instant::now() + IDLE_TIMEOUT;
+        }
         if !session.handle_input(shared, &mut input) || !session.flush() {
             break;
         }

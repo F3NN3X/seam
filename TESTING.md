@@ -64,6 +64,8 @@ Use a small client that opens `\\.\pipe\seam-<your username>` and writes one JSO
 - [ ] **Capture.** A test client that isn't Seam gets error 4 from `workspace.capture`, and `workspace.switch` still works.
 - [ ] **Bad input.** Send a line that isn't JSON, an unknown method, and a line over 1 MB. You get errors, or the connection closes, and Seam keeps running.
 - [ ] **Slow client.** Subscribe and stop reading while a second client toggles the remap for 30 s. Events go out at most 10 times a second, so the first client is dropped after about 26 s, and crossings stay smooth.
+- [ ] **Idle client.** In PowerShell run `$c = [System.IO.Pipes.NamedPipeClientStream]::new('.', "seam-$env:USERNAME", 'InOut'); $c.Connect()` and send nothing. After 30 s the log says `api client dropped: no request in 30 s`, and `$c.ReadByte()` returns -1. Connect again, send a `state.get` line every 20 s for a minute. It stays open.
+- [ ] **Subscriber stays.** Connect the same way, send `{"jsonrpc":"2.0","id":1,"method":"events.subscribe","params":{"topics":["state"]}}` and a newline, then wait 2 minutes without sending anything. It's still connected, nothing is logged about it, and toggling the remap from the tray still delivers `state.changed`. The Stream Deck plugin and the panel stay connected the same way.
 - [ ] **Busy.** Open the tray menu and send `remap.set`. It's answered once the menu closes.
 - [ ] **Hook timing.** Note `hook stats` with a client spamming `state.get`. It matches a run without one.
 

@@ -5,10 +5,12 @@ use crate::panel::Panel;
 use crate::theme::{palette, Palette};
 use crate::ui::{self, card, row, section, switch};
 use gpui_kit::component::slider::Slider;
+use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::component::ThemeStyled;
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 use seam::desk::Mon;
+use seam::palette as colours;
 use seam::state;
 use seam::zones::{self, Dir, LeafTag, Node, Rect, Template, ZoneLayout};
 use serde_json::{json, Value};
@@ -118,6 +120,76 @@ fn tile(
         .border_color(if selected { p.accent.opacity(0.4) } else { hsla(0., 0., 0., 0.) })
         .child(face)
         .into_any_element()
+}
+
+/// What a swatch is filled with. Windows' accent is read here, and None means
+/// it couldn't be, so the swatch is neutral and says "A".
+fn swatch_fill(swatch: &colours::Swatch) -> Option<Hsla> {
+    let hex = match swatch.rgb {
+        Some(hex) => hex,
+        None => colours::colorref(colours::accent_colorref()?),
+    };
+    Some(rgb(hex).into())
+}
+
+/// A row of round swatches for one `windows` colour setting. A swatch is one
+/// tab stop, and Enter or Space picks it. Off, the row shows `why` and does nothing.
+fn swatches(
+    prefix: &'static str,
+    field: &'static str,
+    current: &str,
+    default: &str,
+    why_off: Option<&'static str>,
+    window: &mut Window,
+    cx: &mut Context<Panel>,
+) -> Div {
+    let p = palette(cx);
+    let chosen = colours::find(current, default).name;
+    let mut group = div().flex().items_center().gap(px(4.));
+    for swatch in &colours::SWATCHES {
+        let selected = swatch.name == chosen;
+        let id = ElementId::Name(format!("swatch-{prefix}-{}", swatch.name).into());
+        let fill = swatch_fill(swatch);
+        let dot = div()
+            .flex()
+            .items_center()
+            .justify_center()
+            .size(px(20.))
+            .rounded_full()
+            .border_1()
+            .border_color(p.hairline_strong)
+            .bg(fill.unwrap_or(p.raised))
+            .when(fill.is_none(), |d| d.text_size(px(11.)).text_color(p.secondary).child("A"));
+        let tip = why_off.unwrap_or(swatch.title);
+        let mut face = div()
+            .id(id.clone())
+            .p(px(2.))
+            .rounded_full()
+            .child(dot)
+            .tooltip(move |window, cx| Tooltip::new(tip).build(window, cx));
+        if why_off.is_none() {
+            let name = swatch.name;
+            let focus = window.use_keyed_state(id, cx, |_, cx| cx.focus_handle()).read(cx).clone();
+            let pick = move |panel: &mut Panel, window: &mut Window, cx: &mut Context<Panel>| {
+                panel.patch(json!({ "windows": { field: name } }), window, cx)
+            };
+            face = face
+                .track_focus(&focus)
+                .tab_index(0)
+                .cursor_pointer()
+                .when(selected || ui::focused(&focus, window), |d| d.focus_ring_style(window, cx))
+                .on_click(cx.listener(move |panel, _, window, cx| pick(panel, window, cx)))
+                .on_key_down(cx.listener(move |panel, e: &KeyDownEvent, window, cx| {
+                    if matches!(e.keystroke.key.as_str(), "space" | "enter") {
+                        pick(panel, window, cx);
+                    }
+                }));
+        } else {
+            face = face.when(selected, |d| d.focus_ring_style(window, cx));
+        }
+        group = group.child(face);
+    }
+    group
 }
 
 /// The screen the page is showing, with the layout saved for it on this desk.
@@ -357,9 +429,26 @@ pub fn render(panel: &mut Panel, window: &mut Window, cx: &mut Context<Panel>) -
         Some(name) => format!("{} found running", state::other_wm_title(name)),
         None => "Snapping and window moves step aside. The pointer remap keeps working.".to_string(),
     };
+    let border_off = (!windows_cfg.focus_border).then_some("Turn on Focus border to pick a colour");
+    let focus_swatches =
+        swatches("focus", "focus_color", &windows_cfg.focus_color, colours::FOCUS_DEFAULT, border_off, window, cx);
+    let pin_swatches = swatches("pin", "pin_color", &windows_cfg.pin_color, colours::PIN_DEFAULT, None, window, cx);
+    let focus_colour_row = row(
+        "Focus border colour",
+        Some("Windows accent follows Settings > Personalisation > Colours".into()),
+        focus_swatches,
+        p,
+    );
     let windows_card = card(
         vec![
             row("Focus border", Some("Colour the border of the window that has focus".into()), border, p),
+            div().when(border_off.is_some(), |d| d.opacity(0.4)).child(focus_colour_row).into_any_element(),
+            row(
+                "Pin border colour",
+                Some("Border of a window pinned on top or kept out of workspace switches".into()),
+                pin_swatches,
+                p,
+            ),
             row("Another window manager handles my windows", Some(other_about.into()), manual, p),
         ],
         p,

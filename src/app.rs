@@ -19,7 +19,7 @@ use seam::state::{
 };
 use seam::workspace::{self, Workspace};
 use seam::zones;
-use seam::{autostart, install, package, process, updates};
+use seam::{autostart, install, package, palette, process, updates};
 use serde_json::{json, Value};
 use std::cell::RefCell;
 use std::os::windows::process::CommandExt;
@@ -323,7 +323,8 @@ fn relink(app: &mut App) {
     app.links = resolve(&app.mons, app.cfg.desks.get(&app.sig).map(|d| d.borders.as_slice()));
     hook::set_live(Live { rects: app.mons.iter().map(|m| m.rect).collect(), links: app.links.clone() });
     snap::update(app.hwnd, &app.cfg, &app.sig, &app.mons, aside(app).as_deref());
-    wm::configure(app.hwnd.0 as isize, app.cfg.windows.focus_border);
+    let windows = &app.cfg.windows;
+    wm::configure(app.hwnd.0 as isize, windows.focus_border, &windows.focus_color, &windows.pin_color);
     arm_hook(app);
     update_tip(app);
 }
@@ -387,6 +388,8 @@ fn snapshot(app: &App) -> Snapshot {
             other_wm: app.other_wm.map(String::from),
             manual_other_wm: app.cfg.windows.other_wm,
             focus_border: app.cfg.windows.focus_border,
+            focus_color: palette::find(&app.cfg.windows.focus_color, palette::FOCUS_DEFAULT).name.into(),
+            pin_color: palette::find(&app.cfg.windows.pin_color, palette::PIN_DEFAULT).name.into(),
         },
         desk: DeskRef { sig: app.sig.clone(), name: saved_name.unwrap_or_else(|| desk::default_name(&app.mons)) },
         screens: screens.collect(),

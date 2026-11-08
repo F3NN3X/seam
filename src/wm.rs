@@ -9,21 +9,18 @@
 use crate::log;
 use crate::wincontrol;
 use seam::api::{self, PinKind, Reply, RpcError};
+use seam::palette::{self, FOCUS_DEFAULT, PIN_DEFAULT};
 use seam::state::OTHER_WMS;
 use seam::{winutil, winver};
 use serde_json::json;
 use std::sync::mpsc::{channel, Sender};
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
-use windows::core::w;
 use windows::Win32::Foundation::*;
-use windows::Win32::Graphics::Dwm::{
-    DwmGetColorizationColor, DwmSetWindowAttribute, DWMWA_BORDER_COLOR, DWMWA_COLOR_DEFAULT,
-};
+use windows::Win32::Graphics::Dwm::{DwmSetWindowAttribute, DWMWA_BORDER_COLOR, DWMWA_COLOR_DEFAULT};
 use windows::Win32::System::Diagnostics::ToolHelp::{
     CreateToolhelp32Snapshot, Process32FirstW, Process32NextW, PROCESSENTRY32W, TH32CS_SNAPPROCESS,
 };
-use windows::Win32::System::Registry::{RegGetValueW, HKEY_CURRENT_USER, RRF_RT_REG_DWORD};
 use windows::Win32::System::Threading::GetCurrentThreadId;
 use windows::Win32::UI::Accessibility::{SetWinEventHook, UnhookWinEvent, HWINEVENTHOOK};
 use windows::Win32::UI::WindowsAndMessaging::*;
@@ -40,10 +37,13 @@ const CHECK_EVERY_MS: u32 = 30_000;
 const BORDER_BUILD: u32 = 22000;
 
 pub enum Command {
-    /// Who to tell about another window manager, and whether the focus border is on.
+    /// Who to tell about another window manager, whether the focus border is on,
+    /// and the swatch names of the two border colours.
     Configure {
         owner: isize,
         focus_border: bool,
+        focus_color: String,
+        pin_color: String,
     },
     Pin {
         kind: PinKind,
@@ -82,8 +82,8 @@ fn send(command: Command) {
     }
 }
 
-pub fn configure(owner: isize, focus_border: bool) {
-    send(Command::Configure { owner, focus_border });
+pub fn configure(owner: isize, focus_border: bool, focus_color: &str, pin_color: &str) {
+    send(Command::Configure { owner, focus_border, focus_color: focus_color.into(), pin_color: pin_color.into() });
 }
 
 pub fn pin(kind: PinKind, on: Option<bool>, hwnd: isize, reply: Option<Sender<Reply>>) {
@@ -148,33 +148,6 @@ unsafe extern "system" fn on_event(_: HWINEVENTHOOK, event: u32, hwnd: HWND, obj
 
 fn hwnd_of(key: isize) -> HWND {
     HWND(key as *mut _)
-}
-
-/// Windows' accent colour as a COLORREF (0x00BBGGRR). `DWM\AccentColor` is
-/// the one Settings shows under Colours, stored as 0xAABBGGRR, so dropping the
-/// alpha leaves a COLORREF. The colorization colour (0xAARRGGBB) is the fallback.
-fn accent_colour() -> u32 {
-    let mut value = 0u32;
-    let mut size = 4u32;
-    let read = unsafe {
-        RegGetValueW(
-            HKEY_CURRENT_USER,
-            w!(r"Software\Microsoft\Windows\DWM"),
-            w!("AccentColor"),
-            RRF_RT_REG_DWORD,
-            None,
-            Some(&mut value as *mut u32 as _),
-            Some(&mut size),
-        )
-    };
-    if read.is_ok() {
-        return value & 0x00FF_FFFF;
-    }
-    let (mut argb, mut opaque) = (0u32, windows::core::BOOL(0));
-    if unsafe { DwmGetColorizationColor(&mut argb, &mut opaque) }.is_err() {
-        return DWMWA_COLOR_DEFAULT;
-    }
-    (argb >> 16 & 0xFF) | (argb & 0xFF00) | (argb & 0xFF) << 16
 }
 
 fn set_border_colour(h: HWND, colour: u32) -> bool {
@@ -254,8 +227,12 @@ struct Wm {
     focus_border: bool,
     /// The window Seam coloured last.
     bordered: Option<isize>,
-    /// Windows' accent colour, read when the border is turned on or the colour changes.
-    colour: u32,
+    /// The focus and pin border colours, as COLORREFs. A colour that follows Windows'
+    /// accent is read again when the setting changes or the accent does.
+    focus_colour: u32,
+    pin_colour: u32,
+    focus_accent: bool,
+    pin_accent: bool,
     /// Windows that carry `Seam_pin`.
     pinned: Vec<isize>,
     foreground_hook: Option<HWINEVENTHOOK>,
@@ -313,23 +290,34 @@ impl Wm {
 
     fn run(&mut self, command: Command) {
         match command {
-            Command::Configure { owner, focus_border } => {
+            Command::Configure { owner, focus_border, focus_color, pin_color } => {
                 // A window manager found before the tray first said who it is.
                 let first = self.owner == 0;
                 self.owner = owner;
                 if first && self.other_wm.is_some() {
                     self.tell_tray();
                 }
-                if focus_border == self.focus_border {
-                    return;
+                self.focus_accent = palette::find(&focus_color, FOCUS_DEFAULT).rgb.is_none();
+                self.pin_accent = palette::find(&pin_color, PIN_DEFAULT).rgb.is_none();
+                let focus_colour = palette::resolve(&focus_color, FOCUS_DEFAULT);
+                let pin_colour = palette::resolve(&pin_color, PIN_DEFAULT);
+                let (focus_changed, pin_changed) =
+                    (focus_colour != self.focus_colour, first || pin_colour != self.pin_colour);
+                (self.focus_colour, self.pin_colour) = (focus_colour, pin_colour);
+                if focus_border != self.focus_border {
+                    self.focus_border = focus_border;
+                    self.sync_hooks();
+                    if focus_border {
+                        self.border(unsafe { GetForegroundWindow() });
+                    } else if let Some(old) = self.bordered.take() {
+                        reset_border(hwnd_of(old));
+                    }
+                } else if focus_changed {
+                    self.paint_focus();
                 }
-                self.focus_border = focus_border;
-                self.sync_hooks();
-                if focus_border {
-                    self.colour = accent_colour();
-                    self.border(unsafe { GetForegroundWindow() });
-                } else if let Some(old) = self.bordered.take() {
-                    reset_border(hwnd_of(old));
+                // The tray that starts again gives adopted pins their colour back here.
+                if pin_changed {
+                    self.paint_pins();
                 }
             }
             Command::Pin { kind, on, hwnd, reply } => {
@@ -345,15 +333,16 @@ impl Wm {
                     (Err(why), None) => log::info!("pin {kind:?}: {why}"),
                 }
             }
-            Command::AccentChanged if self.focus_border => {
-                self.colour = accent_colour();
-                if let Some(h) = self.bordered.map(hwnd_of) {
-                    if set_border_colour(h, self.colour) {
-                        winutil::mark_border(h, Some(self.colour));
-                    }
+            Command::AccentChanged => {
+                if self.focus_accent {
+                    self.focus_colour = palette::resolve("accent", FOCUS_DEFAULT);
+                    self.paint_focus();
+                }
+                if self.pin_accent {
+                    self.pin_colour = palette::resolve("accent", PIN_DEFAULT);
+                    self.paint_pins();
                 }
             }
-            Command::AccentChanged => {}
             Command::Release { reply } => {
                 let released = self.release();
                 log::info!("released {released} pinned windows");
@@ -408,9 +397,33 @@ impl Wm {
         if let Some(old) = self.bordered.take() {
             reset_border(hwnd_of(old));
         }
-        if ours_to_touch(h).is_ok() && set_border_colour(h, self.colour) {
-            winutil::mark_border(h, Some(self.colour));
+        // A pinned window keeps its pin colour (D117).
+        if !self.pinned.contains(&key) && ours_to_touch(h).is_ok() && set_border_colour(h, self.focus_colour) {
+            winutil::mark_border(h, Some(self.focus_colour));
             self.bordered = Some(key);
+        }
+    }
+
+    /// Give the window that has the focus border the focus colour again.
+    fn paint_focus(&self) {
+        if let Some(h) = self.bordered.map(hwnd_of) {
+            if set_border_colour(h, self.focus_colour) {
+                winutil::mark_border(h, Some(self.focus_colour));
+            }
+        }
+    }
+
+    fn paint_pin(&self, h: HWND) {
+        if borders_supported() && set_border_colour(h, self.pin_colour) {
+            winutil::mark_border(h, Some(self.pin_colour));
+        }
+    }
+
+    fn paint_pins(&self) {
+        for h in self.pinned.iter().copied().map(hwnd_of) {
+            if unsafe { IsWindow(Some(h)) }.as_bool() {
+                self.paint_pin(h);
+            }
         }
     }
 
@@ -437,6 +450,17 @@ impl Wm {
         self.pinned.retain(|p| *p != key);
         if now != 0 {
             self.pinned.push(key);
+            // The pin colour takes the border from the focus colour.
+            if self.bordered == Some(key) {
+                self.bordered = None;
+            }
+            self.paint_pin(h);
+        } else if bits != 0 {
+            reset_border(h);
+            // Still the focused window: it gets the focus colour back.
+            if self.focus_border && unsafe { GetForegroundWindow() } == h {
+                self.border(h);
+            }
         }
         self.sync_hooks();
         Ok(want)

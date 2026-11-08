@@ -2,6 +2,7 @@
 
 use crate::geom::{EdgeMap, Side};
 use crate::log;
+use crate::palette;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -152,13 +153,27 @@ impl Default for ZoneSettings {
 }
 
 /// Pins, the focus border and other window managers.
-#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(default)]
 pub struct WindowSettings {
-    /// Colour the focused window's border in Windows' accent colour (D108).
+    /// Colour the focused window's border (D108).
     pub focus_border: bool,
     /// "Another window manager handles my windows" (D110).
     pub other_wm: bool,
+    /// A name from `palette::SWATCHES`. An unknown one reads as the default (D118).
+    pub focus_color: String,
+    pub pin_color: String,
+}
+
+impl Default for WindowSettings {
+    fn default() -> Self {
+        WindowSettings {
+            focus_border: false,
+            other_wm: false,
+            focus_color: palette::FOCUS_DEFAULT.into(),
+            pin_color: palette::PIN_DEFAULT.into(),
+        }
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]

@@ -391,6 +391,39 @@ Turn the debug log on, and **Put apps in place when they open** on, at the botto
 - [ ] **Another window manager.** With komorebi running, auto-apply does nothing.
 - [ ] **Release all and quit.** Release pinned windows, then open an already placed app's second window: it's still left alone. Quit Seam and start it again: the windows placed before keep their stamp, so opening the workspace's apps again only places the ones with a free row.
 
+### Keep physical size
+
+Turn the debug log on. Use two screens of different density side by side, for example the 4K 27" at 150% and a 1440p 27" at 100%, plus the 1920×550 HDMI panel, which reports no size. Keep a ruler at hand. Every resize logs `physical size: <app> screen A → B, W×H px → W×H px (mm W×H)`.
+
+- [ ] **Displays page.** Under Pointer, **Keep window size in centimetres between screens** is on, and **Keep size in centimetres when I drag between screens** is off. Its description says "Screen N doesn't report its size, so windows keep their pixel size there" with the HDMI panel's number. Unplug the HDMI panel: it says "Moves by key, by other apps and by workspaces to a screen of another density". Turn the first switch off: the second dims and a click on it changes nothing. Search finds both by "centimetres" and "dpi". `config.get` has `keep_physical_size` and `keep_physical_size_drag`.
+- [ ] **Key move, no zones there.** Turn zones off on the 1440p screen. Put Notepad at its own size on the 4K screen, measure it, and press Shift+Win+Alt+Right until it moves to the 1440p screen. It measures the same, its centre is where the move put it, and the log has the line with screen numbers. Back again: same size.
+- [ ] **Key move, too big.** Make Notepad nearly as wide as the 4K screen and move it. It's clamped to the 1440p work area, with no part off screen.
+- [ ] **Key move into a zone.** With zones on the 1440p screen, move a window in a zone across. It takes the zone's size, and no `physical size` line is logged.
+- [ ] **Swap.** Set a Swap key. Swap a free window on the 4K screen with a free one on the 1440p screen. Each keeps its own size in centimetres, centred where the other was.
+- [ ] **API.** `window.move {dir:"right"}` from a script does what the key does, with the log line.
+- [ ] **Setting off.** Turn the first switch off and move Notepad across: it's sized by Windows' scaling, as before, with no log line.
+- [ ] **No EDID size.** Move Notepad onto the HDMI panel: it keeps its pixel size, and the log has one line saying the screen doesn't report its size.
+- [ ] **Maximized and full screen.** Move a maximized window across: it's maximized on the other screen and nothing is logged.
+- [ ] **Workspace, same screen.** Capture a workspace with Notepad at its own size. Move the taskbar to the left or turn auto-hide on, then switch: Notepad uses the saved fractions as before, with no `physical size` line.
+- [ ] **Workspace, other screen.** Capture with Notepad at its own size on the 4K screen. Copy the workspace with Export, unplug the 4K screen, and switch: Notepad goes to the same place on the screen it's on now, at the size it measured at capture, and the log has `physical size: notepad screen at capture → N`. A workspace captured before this version (no `size_mm`) leaves it where it is, as before. Import the exported file on a desk where its screen number is the 1440p screen and switch: same size in centimetres.
+- [ ] **Workspace on a screen with no size.** Capture on the HDMI panel: the rule has no `size_mm` in config.json, and switching always uses the fractions.
+- [ ] **Auto-apply.** With the 4K screen unplugged and **Put apps in place when they open** on, open Notepad from that workspace by hand. It's placed once at its captured size in centimetres, with the log line.
+- [ ] **Free drag, off.** With the drag switch off, drag Notepad from the 4K screen to the 1440p screen with the mouse. Windows' own scaling decides, and nothing is logged.
+- [ ] **Free drag, on.** Turn the drag switch on and drag it again. About 120 ms after you let go it resizes to the same centimetres, centred where you dropped it, with the log line. A drag within one screen, a drag into a zone with the show key, and a drag of a maximized window off the top don't resize. A snapped window dragged out with **Restore size when dragged out** on gets its old size, not this one.
+- [ ] **Free drag with zones off.** Turn zones off altogether: the drag switch still works. With komorebi running, or **Another window manager handles my windows** on, nothing resizes after a drag.
+- [ ] **Hook timings.** With the drag switch on, drag windows across the borders for 60 s. `hook stats` `own max` and `avg` match a run with it off.
+
+### Quick save
+
+Turn the debug log on. Set **Save windows to the active workspace** on Shortcuts (it has no key until you set one).
+
+- [ ] **Into the workspace in use.** Switch to a workspace, move two of its windows and open an app it doesn't have. Press the key. A notification says "Saved <name>" and "N windows saved. Click to undo". The editor shows the moved rows at their new places, the new app at the end, and the launch details and order of the rest as they were, the same as **Update from screen**. The log has `quick save: N windows into <name>`.
+- [ ] **Undo.** Do it again and click the notification within 8 s. The workspace is as it was before the save, and the log has `quick save: undone`. Click a quick save's notification after 8 s (from the Action Center): nothing changes and the log says `quick save: too late to undo`.
+- [ ] **No workspace in use.** Plug a screen in or out, so no workspace is in use, and press the key. A new workspace "Workspace N", with the next free number, appears on this desk, the notification says it's now in use, and the Stream Deck workspace key for it lights. Click the notification within 8 s: the workspace goes, and none is in use again.
+- [ ] **Busy.** Press the key twice quickly: the second press logs `quick save hotkey: Already capturing`.
+- [ ] **API.** `workspace.quick_save` answers `{id, created}` once the capture is saved, with the same notification. Any client may call it.
+- [ ] **Stream Deck.** Put the **Save windows** action on a key and press it: the same as the hotkey.
+
 ## Settings panel
 
 - [ ] **Open.** Choose **Open Seam…** in the tray menu. The panel opens in your Windows theme on the last page you used, and the sidebar shows the current remap state.
@@ -546,7 +579,7 @@ Quit any GitHub copy first, unless the step says otherwise.
 
 Build the plugin with `pnpm install`, `pnpm build` and `pnpm run pack` in `integrations/streamdeck`. Run these with Seam running and **Let other apps control Seam** on, and the Stream Deck app open.
 
-- [ ] **Install the packed file.** Double-click `dist\co.f3nn3x.seam.streamDeckPlugin`. Stream Deck installs it, and a Seam group with twelve actions appears in the action list. General in Seam lists "streamdeck" among the connected apps.
+- [ ] **Install the packed file.** Double-click `dist\co.f3nn3x.seam.streamDeckPlugin`. Stream Deck installs it, and a Seam group with thirteen actions appears in the action list. General in Seam lists "streamdeck" among the connected apps.
 - [ ] **Switch workspace.** Drag the action to a key and pick a workspace in the dropdown, which lists the current desk's workspaces. The key shows its name. Press it: the workspace is applied, and the key lights once it's in use. Switch to another workspace by hotkey. The key goes dark.
 - [ ] **Drift dot.** With the key's workspace in use, drag one of its windows away. Within a second a small amber dot shows in the key's top-right corner. Press the key: the window goes back and the dot goes. Switch to another workspace: the key goes dark with no dot. Quit Seam while the dot shows: the key says "Seam isn't running" with no dot.
 - [ ] **Snap back.** Drag the action to a key. Move a window of the workspace in use and press it: the window goes back. With no workspace in use the key shows an alert.

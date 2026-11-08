@@ -9,6 +9,7 @@ use crate::wincontrol;
 use crate::wm::Pinned;
 use seam::api::PinKind;
 use seam::classify::{classify, Verdict, WindowFacts};
+use seam::desk;
 use seam::winutil;
 use seam::workspace::{
     self, Candidate, OtherWindows, Pin, RowState, RowStatus, Rule, Shown, Target, WinState, Workspace, SESSION_ID,
@@ -49,22 +50,31 @@ const ARRANGE_POLL: Duration = Duration::from_millis(500);
 const SETTLE: Duration = Duration::from_millis(120);
 /// A window this close to where it was put counts as there.
 const CLOSE_ENOUGH: i32 = 4;
+/// A free place whose saved fractions come within this share of its size in
+/// millimetres at capture is on the screen it was captured on.
+const SAME_SIZE: f32 = 0.1;
 /// The gap slider's end, as in the snapping.
 const MAX_GAP: u32 = 32;
 
 /// A connected screen and its zones, as the tray knows them.
 pub struct Screen {
     pub id: String,
+    /// Line Up number.
+    pub number: usize,
     pub bounds: Rect,
     pub layout: Option<ZoneLayout>,
+    /// Physical pixels per inch from EDID, 0 when the screen doesn't report its size.
+    pub raw_dpi: f64,
 }
 
 /// A screen with its work area and zones in pixels, worked out when a job runs so a moved taskbar counts.
 struct Geo {
     id: String,
+    number: usize,
     bounds: Rect,
     work: Rect,
     dpi: u32,
+    raw_dpi: f64,
     zones: Vec<Rect>,
 }
 
@@ -73,7 +83,7 @@ fn geometry(screens: &[Screen], gap: u32) -> Vec<Geo> {
         let (work, dpi) = winutil::work_area(s.bounds)?;
         let gap = (gap.min(MAX_GAP) as f32 * dpi as f32 / 96.0).round() as i32;
         let zones = s.layout.as_ref().map(|l| zones::rects(&l.tree, work, gap)).unwrap_or_default();
-        Some(Geo { id: s.id.clone(), bounds: s.bounds, work, dpi, zones })
+        Some(Geo { id: s.id.clone(), number: s.number, bounds: s.bounds, work, dpi, raw_dpi: s.raw_dpi, zones })
     });
     placed.collect()
 }
@@ -298,6 +308,10 @@ fn capture_rules(job: &CaptureJob, session: bool) -> Vec<Rule> {
             _ => workspace::target_of(visible, &geo.zones)
                 .unwrap_or_else(|| Target::Rect { rect: workspace::to_fractions(visible, geo.work) }),
         };
+        // Its size in millimetres, for a restore on a screen of another density.
+        let size_mm = matches!(shown, Shown::Normal | Shown::Minimized)
+            .then(|| desk::size_mm(visible.w, visible.h, geo.raw_dpi))
+            .flatten();
         let c = seen.cand;
         rules.push(Rule {
             exe: c.exe,
@@ -312,6 +326,7 @@ fn capture_rules(job: &CaptureJob, session: bool) -> Vec<Rule> {
             shown,
             z: rules.len() as u32,
             focused: c.hwnd == foreground,
+            size_mm,
             ..Rule::default()
         });
     }
@@ -333,6 +348,8 @@ pub struct SwitchJob {
     pub arrange_for: Option<Duration>,
     /// "Pinned windows stay when I switch workspaces".
     pub pins_stay: bool,
+    /// "Keep window size in centimetres between screens".
+    pub physical: bool,
 }
 
 /// How a switch went: what the event says.
@@ -531,6 +548,47 @@ fn plan(rule: &Rule, geo: &Geo) -> Option<Kind> {
     })
 }
 
+/// Where a rule puts its window, and on which screen. A free place restored on a
+/// screen other than the one it was captured on keeps its size in millimetres
+/// (§11.4): on its own screen when the saved fractions no longer give that size, or,
+/// with that screen gone, on the one the window is on now. Then it comes with the
+/// line to log once it's moved. `tell` logs a window left alone because its screen
+/// doesn't report its size. `None` leaves the window where it is.
+fn destination<'g>(rule: &Rule, geos: &'g [Geo], h: HWND, physical: bool, tell: bool) -> Option<Planned<'g>> {
+    let saved = geos.iter().find(|g| g.id == rule.monitor);
+    let mm = rule.size_mm.filter(|_| physical && matches!(rule.target, Target::Rect { .. }));
+    let Some(mm) = mm else { return saved.and_then(|geo| Some((geo, plan(rule, geo)?, None))) };
+    let geo = match saved {
+        Some(geo) => geo,
+        None => {
+            let now = winutil::visible_rect(h)?;
+            geos.iter().find(|g| g.bounds.contains(centre(now).0, centre(now).1))?
+        }
+    };
+    let kind = plan(rule, geo)?;
+    let (Kind::Rect(at) | Kind::Min(at)) = kind else { return Some((geo, kind, None)) };
+    let near = |now: [f32; 2]| (0..2).all(|i| (now[i] - mm[i]).abs() <= mm[i] * SAME_SIZE);
+    if saved.is_some() && desk::size_mm(at.w, at.h, geo.raw_dpi).is_none_or(near) {
+        return Some((geo, kind, None));
+    }
+    let size = (f64::from(mm[0]), f64::from(mm[1]));
+    let Some(r) = desk::physical_rect(size, desk::MM_PER_INCH, geo.raw_dpi, at, geo.work) else {
+        if tell {
+            log::info!("physical size: {} left alone, screen {} doesn't report its size", app_name(rule), geo.number);
+        }
+        return None;
+    };
+    let (app, to) = (app_name(rule), geo.number);
+    let note = format!(
+        "physical size: {app} screen at capture → {to}, {}×{} px → {}×{} px (mm {:.0}×{:.0})",
+        at.w, at.h, r.w, r.h, mm[0], mm[1]
+    );
+    Some((geo, if matches!(kind, Kind::Min(_)) { Kind::Min(r) } else { Kind::Rect(r) }, Some(note)))
+}
+
+/// A window's screen and place, and what to log when it's moved there.
+type Planned<'g> = (&'g Geo, Kind, Option<String>);
+
 /// Whether the window already is where, and as, the plan wants it. Such a
 /// window takes no call at all.
 fn in_place(kind: &Kind, now: &Now, screen: Rect) -> bool {
@@ -700,6 +758,7 @@ struct Run<'a> {
     ws: &'a Workspace,
     geos: Vec<Geo>,
     pins_stay: bool,
+    physical: bool,
     cancelled: &'a dyn Fn() -> bool,
     /// The `Seam_ws` key the matched windows are stamped with. The last session stamps none.
     stamp: Option<u32>,
@@ -718,12 +777,11 @@ fn place_rules(run: &Run, found: &[Option<isize>], which: &[usize], seen: &[Seen
         if let Some(key) = run.stamp {
             winutil::set_ws_stamp(h, key, *i);
         }
-        // A screen that isn't connected, or a window to keep where it is, isn't moved.
-        let Some(geo) = run.geos.iter().find(|g| g.id == rule.monitor) else { continue };
-        let Some(kind) = plan(rule, geo) else { continue };
         if !unsafe { IsWindow(Some(h)) }.as_bool() {
             continue;
         }
+        // A screen that isn't connected, or a window to keep where it is, isn't moved.
+        let Some((geo, kind, note)) = destination(rule, &run.geos, h, run.physical, true) else { continue };
         let app = app_name(rule);
         let pin = winutil::pin_bits(h);
         if stays(pin, run.pins_stay) {
@@ -747,6 +805,9 @@ fn place_rules(run: &Run, found: &[Option<isize>], which: &[usize], seen: &[Seen
         }
         let on_screen = geo.bounds.contains(centre(now.window).0, centre(now.window).1);
         let crosses = winutil::monitor_dpi(h) != geo.dpi;
+        if let Some(note) = note {
+            log::info!("{note}");
+        }
         moves.push(Move { hwnd, app, kind, was: now.shown, on_screen, crosses, dpi: geo.dpi, before: now.window });
     }
     tally.plan += started.elapsed();
@@ -956,7 +1017,7 @@ fn run_switch(job: &SwitchJob, mine: u64) -> Option<Switched> {
     let ws = &job.workspace;
     let stamp = (ws.id != SESSION_ID).then(|| workspace::stamp_key(&ws.id));
     let geos = geometry(&job.screens, job.gap);
-    let run = Run { ws, geos, pins_stay: job.pins_stay, cancelled: &cancelled, stamp };
+    let run = Run { ws, geos, pins_stay: job.pins_stay, physical: job.physical, cancelled: &cancelled, stamp };
     let mut tally = Tally::default();
     let mut procs = Procs::new();
 
@@ -1123,6 +1184,8 @@ pub struct LiveWorkspace {
     pub pins_stay: bool,
     /// Lower-case exe names Seam never manages: auto-apply leaves them alone.
     pub exclude: Vec<String>,
+    /// "Keep window size in centimetres between screens".
+    pub physical: bool,
 }
 
 /// How each row's app is doing, the way a switch would see it. Runs on a worker.
@@ -1133,24 +1196,24 @@ pub fn status(live: &LiveWorkspace) -> Vec<RowStatus> {
     let cands: Vec<Candidate> = seen.iter().map(|s| s.cand.clone()).collect();
     let found = workspace::assign(&live.workspace.windows, &cands);
     let rows = live.workspace.windows.iter().zip(found).enumerate();
-    let row = |(i, (rule, hit))| RowStatus { rule_index: i, state: row_state(rule, hit, &seen, &geos, live.pins_stay) };
+    let row = |(i, (rule, hit))| RowStatus { rule_index: i, state: row_state(rule, hit, &seen, &geos, live) };
     rows.map(row).collect()
 }
 
 /// One row's state. What a switch would leave where it is counts as in place,
 /// so Snap back only shows when it has something to do.
-fn row_state(rule: &Rule, hit: Option<isize>, seen: &[Seen], geos: &[Geo], pins_stay: bool) -> RowState {
+fn row_state(rule: &Rule, hit: Option<isize>, seen: &[Seen], geos: &[Geo], live: &LiveWorkspace) -> RowState {
     let Some(hwnd) = hit else { return RowState::NotRunning };
     let known = seen.iter().find(|s| s.cand.hwnd == hwnd);
     if known.is_some_and(|s| s.elevated) {
         return RowState::CantMove;
     }
-    if known.is_some_and(|s| stays(s.pin, pins_stay)) {
+    if known.is_some_and(|s| stays(s.pin, live.pins_stay)) {
         return RowState::InPlace;
     }
-    let Some(geo) = geos.iter().find(|g| g.id == rule.monitor) else { return RowState::InPlace };
-    let Some(kind) = plan(rule, geo) else { return RowState::InPlace };
-    let Some(now) = now_of(hwnd_of(hwnd), geo.dpi) else { return RowState::InPlace };
+    let h = hwnd_of(hwnd);
+    let Some((geo, kind, _)) = destination(rule, geos, h, live.physical, false) else { return RowState::InPlace };
+    let Some(now) = now_of(h, geo.dpi) else { return RowState::InPlace };
     if now.shown == Shown::Minimized && !matches!(kind, Kind::Min(_)) {
         RowState::Minimized
     } else if in_place(&kind, &now, geo.bounds) {
@@ -1189,10 +1252,13 @@ pub fn place_opened(live: &LiveWorkspace, hwnd: isize) -> Option<String> {
     let (row, rule) = (free[hit], &ws.windows[free[hit]]);
     let app = app_name(rule);
     let geos = geometry(&live.screens, live.gap);
-    let target = geos.iter().find(|g| g.id == rule.monitor).and_then(|geo| Some((geo, plan(rule, geo)?)));
-    let now = target.as_ref().and_then(|(geo, _)| now_of(h, geo.dpi));
+    let target = destination(rule, &geos, h, live.physical, true);
+    let now = target.as_ref().and_then(|(geo, ..)| now_of(h, geo.dpi));
     let moved = match (target, now) {
-        (Some((geo, kind)), Some(now)) if !in_place(&kind, &now, geo.bounds) => {
+        (Some((geo, kind, note)), Some(now)) if !in_place(&kind, &now, geo.bounds) => {
+            if let Some(note) = note {
+                log::info!("{note}");
+            }
             let on_screen = geo.bounds.contains(centre(now.window).0, centre(now.window).1);
             let crosses = winutil::monitor_dpi(h) != geo.dpi;
             let (was, before, dpi) = (now.shown, now.window, geo.dpi);

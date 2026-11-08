@@ -42,6 +42,8 @@ Experimental: turn on **Keep windows in their zones** on the Zones page and Seam
 - **Ctrl+Shift+Alt+arrows** focus the nearest window that way.
 - **Swap** trades places with the nearest window that way, zones included. It has no key until you set one.
 
+A window that goes to a screen with another pixel density keeps its size in centimetres, not in pixels: a move or swap by key or by another app onto a screen with no zones there, and a workspace app put back at its own size on a screen other than the one it was saved on. Turn it off with **Keep window size in centimetres between screens** under Pointer on the Displays page. **Keep size in centimetres when I drag between screens**, under it, does the same after you drop a window on another screen with the mouse, and is off until you turn it on. Zones, maximized and full screen windows always take the size of their place. A screen that doesn't report its size (some TVs and small panels) keeps pixels, and the Displays page says which.
+
 Seam leaves windows from apps running as administrator, windows that aren't responding and its own windows alone. Next and previous zone are still on the Shortcuts page and in the API. New installs give them no key, and an earlier `config.json` keeps the keys it has. Win+Alt+arrows aren't the move keys because some Windows builds hold them already.
 
 - **Pin window on top** keeps the focused window above the others until you press it again.
@@ -58,7 +60,7 @@ If komorebi, GlazeWM or LeopardWM is running, Seam notices within 30 seconds and
 
 ### Workspaces
 
-Arrange your windows the way you like them, then press **Capture current windows** on the Workspaces page. Seam saves which app is on which screen and in which zone (or at its own size), whether it's minimized, maximized or full screen, which window is in front of which, and which had the focus, for the desk you have connected. Only app windows with a taskbar button are saved, so overlays, helper windows and apps closed to the tray aren't, and nor are the apps the zones leave alone. **Switch now**, the workspace's shortcut, or **Workspaces** in the tray menu then puts each app back the same way. A minimized window stays minimized and restores into its zone later, and windows already in place aren't touched. Apps that aren't running are started if they're ticked under Launch and **Start missing apps** is on, and Seam waits up to 15 seconds for each window. **Update from screen** saves the windows as they are now into a workspace, and keeps each app's launch details, its place in the order, and the apps that aren't running. In the list, each workspace shows its apps as a row of icons, up to eight and then "+n".
+Arrange your windows the way you like them, then press **Capture current windows** on the Workspaces page. Seam saves which app is on which screen and in which zone (or at its own size), whether it's minimized, maximized or full screen, which window is in front of which, and which had the focus, for the desk you have connected. Only app windows with a taskbar button are saved, so overlays, helper windows and apps closed to the tray aren't, and nor are the apps the zones leave alone. **Switch now**, the workspace's shortcut, or **Workspaces** in the tray menu then puts each app back the same way. A minimized window stays minimized and restores into its zone later, and windows already in place aren't touched. Apps that aren't running are started if they're ticked under Launch and **Start missing apps** is on, and Seam waits up to 15 seconds for each window. **Update from screen** saves the windows as they are now into a workspace, and keeps each app's launch details, its place in the order, and the apps that aren't running. **Save windows to the active workspace**, a shortcut with no key until you set one, does the same for the workspace in use without opening Seam, and says "Saved Coding". Click that notification within 8 seconds to undo it. With no workspace in use it saves a new one, "Workspace 3" say, and that becomes the one in use. In the list, each workspace shows its apps as a row of icons, up to eight and then "+n".
 
 The workspace's table is an editor, and each change saves at once with Undo. Pick where an app goes, including **Where it is now**, and how it shows: normal, minimized, maximized or full screen. The rows are the start order: drag one by its grip, or press Alt+Up and Alt+Down on it. Click an app's name for its launch details: a delay of up to 30 seconds, and **Wait for this app's window before opening the next**, which shows as a "then wait" line. Apps that are already running are put in place first, and each started app as soon as its window shows. **Add an app** picks one from the windows open now or from the Start menu's apps. The **...** on a row removes the app, or with **Never include this app** also keeps it out of every capture and of the zones. **Never manage these apps** on General lists those apps.
 
@@ -93,7 +95,7 @@ Running `seam.exe` again while it's already running opens the Seam window. `seam
 - **Shift+Win+Alt+arrows**: move the focused window that way on the desk.
 - **Ctrl+Shift+Alt+arrows**: focus the window that way.
 - Swap, next or previous zone, and the three pin keys have no key until you set one.
-- One per workspace, one to capture the current windows, and **Snap back to this workspace**, all set on the Shortcuts page. Ctrl+Shift+Alt plus a number is a good choice, since Ctrl+Alt alone types characters on many keyboards.
+- One per workspace, one to capture the current windows, **Snap back to this workspace**, and **Save windows to the active workspace**, all set on the Shortcuts page. Ctrl+Shift+Alt plus a number is a good choice, since Ctrl+Alt alone types characters on many keyboards.
 
 If another app already holds one, Seam keeps running without it.
 
@@ -103,6 +105,7 @@ A Stream Deck plugin in `integrations/streamdeck` puts Seam on keys. It talks to
 
 - **Switch workspace**: pick a workspace on the current desk. The key lights while it's in use, with an amber dot once a window of it was moved or minimized. Pressing it puts them back.
 - **Snap back**: puts the windows of the workspace in use back.
+- **Save windows**: saves the windows into the workspace in use, as **Save windows to the active workspace** does.
 - **Line up screens**: opens Line Up.
 - **Pause or resume remap** and **Zones on or off**: two-state keys that follow Seam, so they stay right when you change a setting elsewhere.
 - **Next zone** and **Previous zone**: move the focused window.

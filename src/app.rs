@@ -113,6 +113,8 @@ const HOTKEY_SNAP_BACK: i32 = 9;
 /// The twelve directional shortcuts, in `Hotkeys::directional` order, from here up.
 const HOTKEY_WINDOW: i32 = 10;
 const WINDOW_KEYS: i32 = 12;
+/// After the directional ones.
+const HOTKEY_QUICK_SAVE: i32 = 22;
 /// One hotkey id per workspace on the desk, from here up.
 const HOTKEY_WORKSPACE: i32 = 100;
 const NIN_KEYSELECT: u32 = NIN_SELECT | NINF_KEY;
@@ -135,6 +137,8 @@ enum BalloonAction {
     Reopen,
     /// Restore the last session offered at sign-in (D120).
     RestoreSession,
+    /// Put back what the last quick save changed.
+    UndoQuickSave,
 }
 
 /// Writes config.json on its own thread, so the main thread never does file I/O.
@@ -175,6 +179,22 @@ struct Capturing {
     row: Option<usize>,
     /// The desk it was started on.
     sig: String,
+    /// A quick save (§7): it says so, can be undone, and a new workspace becomes the one in use.
+    quick: bool,
+}
+
+/// How long a quick save can be undone.
+const QUICK_UNDO_FOR: Duration = Duration::from_secs(8);
+
+/// What Undo puts back after a quick save.
+struct QuickUndo {
+    sig: String,
+    id: String,
+    /// The workspace as it was, or `None` when the quick save created it.
+    before: Option<Value>,
+    /// The workspace in use before a created one took over.
+    in_use: Option<String>,
+    until: Instant,
 }
 
 /// An `arrangement.align` running on a worker.
@@ -211,6 +231,8 @@ struct App {
     /// A switch finished, so the drift timer looks again whatever moved.
     recheck: bool,
     capturing: Option<Capturing>,
+    /// The last quick save, while it can still be undone.
+    quick_undo: Option<QuickUndo>,
     clients: Vec<String>,
     last_state_event: Option<Instant>,
     /// The Store copy: Windows updates it, so the updater stays off.
@@ -500,6 +522,7 @@ fn apply_hotkeys(app: &mut App) {
         (HOTKEY_PIN_STICKY, "pin_sticky".to_string(), keys.pin_sticky.clone()),
         (HOTKEY_RELEASE, "release_all".to_string(), keys.release_all.clone()),
         (HOTKEY_SNAP_BACK, "snap_back".to_string(), keys.snap_back.clone()),
+        (HOTKEY_QUICK_SAVE, "quick_save".to_string(), keys.quick_save.clone()),
     ];
     for (id, (verb, dir, combo)) in (HOTKEY_WINDOW..).zip(keys.directional()) {
         wanted.push((id, format!("{verb}_{dir}"), combo.cloned()));
@@ -530,12 +553,14 @@ fn apply_hotkeys(app: &mut App) {
 
 fn job_screens(app: &App) -> Vec<SwitchScreen> {
     let desk = app.cfg.desks.get(&app.sig);
-    let screen = |m: &Mon| SwitchScreen {
+    let screen = |(i, m): (usize, &Mon)| SwitchScreen {
         id: m.id.clone(),
+        number: i + 1,
         bounds: zones::Rect { x: m.rect.left, y: m.rect.top, w: m.rect.width(), h: m.rect.height() },
         layout: desk.and_then(|d| d.zones.get(&m.id)).and_then(zones::layout_of),
+        raw_dpi: m.raw_dpi,
     };
-    app.mons.iter().map(screen).collect()
+    app.mons.iter().enumerate().map(screen).collect()
 }
 
 /// A capture of this desk. The apps the zones leave alone are never captured either.
@@ -568,8 +593,8 @@ fn start_switch_job(app: &mut App, workspace: Workspace, arrange_for: Option<Dur
     // A hotkey gives the tray the right to take focus. For anyone else this is all it can do.
     let _ = unsafe { AllowSetForegroundWindow(std::process::id()) };
     let (owner, screens, gap) = (app.hwnd.0 as isize, job_screens(app), app.cfg.zones.gap);
-    let pins_stay = app.cfg.windows.pins_stay_on_switch;
-    let job = SwitchJob { owner, workspace, screens, gap, arrange_for, pins_stay };
+    let (pins_stay, physical) = (app.cfg.windows.pins_stay_on_switch, app.cfg.keep_physical_size);
+    let job = SwitchJob { owner, workspace, screens, gap, arrange_for, pins_stay, physical };
     if switcher::switch(job) {
         Ok(json!({ "ok": true }))
     } else {
@@ -621,6 +646,7 @@ fn start_window(app: &App, verb: WindowVerb, dir: Dir, reply: Option<Sender<Repl
         layouts: app.mons.iter().map(layout).collect(),
         gap: app.cfg.zones.gap,
         exclude: app.cfg.zones.exclude.iter().map(|x| x.to_lowercase()).collect(),
+        physical: app.cfg.keep_physical_size,
         // A hotkey gives the tray the right to take focus. The API has to earn it.
         from_api: reply.is_some(),
         reply,
@@ -664,7 +690,7 @@ fn active_workspace(app: &App) -> Option<Workspace> {
 fn live_of(app: &App, workspace: Workspace) -> LiveWorkspace {
     let exclude = app.cfg.zones.exclude.iter().map(|x| x.to_lowercase()).collect();
     let (screens, gap, pins_stay) = (job_screens(app), app.cfg.zones.gap, app.cfg.windows.pins_stay_on_switch);
-    LiveWorkspace { workspace, screens, gap, pins_stay, exclude }
+    LiveWorkspace { workspace, screens, gap, pins_stay, exclude, physical: app.cfg.keep_physical_size }
 }
 
 /// Hand the workspace in use to the live worker, and tell the seam-wm thread what to
@@ -740,12 +766,74 @@ fn start_capture(
     if row.is_some_and(|row| target.flatten().is_none_or(|w| row >= w.windows.len())) {
         return Some(Err(RpcError::new(api::NOT_FOUND, "no such row in that workspace")));
     }
-    app.capturing = Some(Capturing { reply, name, into, row, sig: app.sig.clone() });
+    app.capturing = Some(Capturing { reply, name, into, row, sig: app.sig.clone(), quick: false });
     if switcher::capture(capture_job(app)) {
         return None;
     }
     app.capturing = None;
     Some(refused("Couldn't start the capture"))
+}
+
+/// Quick save (§7): the same capture as "Update from screen", into the workspace in
+/// use, or with none in use into a new "Workspace N" that becomes the one in use.
+/// Returns an answer only if it can't start.
+fn quick_save(app: &mut App, reply: Option<Sender<Reply>>) -> Option<Reply> {
+    let into = active_workspace(app).map(|w| w.id);
+    let refusal = start_capture(app, None, into, None, reply);
+    if let Some(job) = app.capturing.as_mut().filter(|_| refusal.is_none()) {
+        job.quick = true;
+    }
+    refusal
+}
+
+/// A quick save went through: say so, and keep what Undo puts back. Undo is a
+/// click on the notification, because a tray balloon can't carry a button.
+fn quick_saved(app: &mut App, saved: &Workspace, before: Option<Value>) {
+    let created = before.is_none();
+    let in_use = app.workspace.clone();
+    if created {
+        app.workspace = Some(saved.id.clone());
+    }
+    sync_live(app);
+    let until = Instant::now() + QUICK_UNDO_FOR;
+    app.quick_undo = Some(QuickUndo { sig: app.sig.clone(), id: saved.id.clone(), before, in_use, until });
+    let n = saved.windows.len();
+    let body = if created {
+        format!("{n} windows saved in a new workspace, now in use. Click to undo")
+    } else {
+        format!("{n} windows saved. Click to undo")
+    };
+    log::info!("quick save: {n} windows into {}{}", saved.name, if created { ", created" } else { "" });
+    notify(app, &format!("Saved {}", saved.name), &body, BalloonAction::UndoQuickSave);
+}
+
+/// The quick save's notification was clicked: put the workspace back as it was, or
+/// remove the one it created, while that's still within 8 s.
+fn undo_quick_save(app: &mut App) {
+    let Some(undo) = app.quick_undo.take() else { return };
+    if Instant::now() > undo.until {
+        log::info!("quick save: too late to undo");
+        return;
+    }
+    let Some(desk) = app.cfg.desks.get_mut(&undo.sig) else { return };
+    let same = |v: &Value| workspace::parse(v).is_some_and(|w| w.id == undo.id);
+    match undo.before {
+        Some(before) => {
+            if let Some(slot) = desk.workspaces.iter_mut().find(|v| same(v)) {
+                *slot = before;
+            }
+        }
+        None => {
+            desk.workspaces.retain(|v| !same(v));
+            if app.workspace.as_deref() == Some(undo.id.as_str()) {
+                app.workspace = undo.in_use;
+            }
+        }
+    }
+    log::info!("quick save: undone");
+    persist(app);
+    sync_live(app);
+    publish(app);
 }
 
 /// A capture finished: save it as a new workspace, or over the one it was asked to update.
@@ -758,6 +846,8 @@ fn captured(app: &mut App) {
     };
     let Some(desk) = app.cfg.desks.get_mut(&job.sig) else { return answer(refused("That desk is gone")) };
     let existing = workspace::list(&desk.workspaces);
+    // The workspace as it was, for a quick save's Undo.
+    let mut before = None;
     let saved = match &job.into {
         Some(into) => {
             let Some(old) = existing.iter().find(|w| w.id == *into) else {
@@ -772,7 +862,7 @@ fn captured(app: &mut App) {
             };
             let same = |v: &&mut Value| workspace::parse(v).is_some_and(|w| w.id == *into);
             if let Some(slot) = desk.workspaces.iter_mut().find(same) {
-                *slot = workspace::to_value(&updated);
+                before = Some(std::mem::replace(slot, workspace::to_value(&updated)));
             }
             updated
         }
@@ -789,6 +879,12 @@ fn captured(app: &mut App) {
         }
     };
     persist(app);
+    if job.quick {
+        let created = before.is_none();
+        quick_saved(app, &saved, before);
+        publish(app);
+        return answer(Ok(json!({ "id": saved.id, "created": created })));
+    }
     publish(app);
     if job.reply.is_some() {
         return answer(Ok(json!({ "id": saved.id })));
@@ -1062,6 +1158,12 @@ fn run_command(app: &mut App, queued: Queued) {
             None => Err(RpcError::new(api::NOT_FOUND, "no such workspace on this desk")),
         },
         Command::WorkspaceSnapBack => snap_back(app),
+        Command::WorkspaceQuickSave => {
+            if let Some(refusal) = quick_save(app, Some(reply.clone())) {
+                let _ = reply.send(refusal);
+            }
+            return;
+        }
         Command::AutoApplySet(on) => {
             app.cfg.auto_apply = on;
             persist(app);
@@ -1222,6 +1324,9 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                         Some(BalloonAction::Reopen) => {
                             with_app(reopen_closed);
                         }
+                        Some(BalloonAction::UndoQuickSave) => {
+                            with_app(undo_quick_save);
+                        }
                         Some(BalloonAction::RestoreSession) => {
                             with_app(|a| {
                                 if let Some(Err(e)) = a.session_offer.take().map(|s| restore_session(a, s)) {
@@ -1268,6 +1373,11 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                 HOTKEY_SNAP_BACK => {
                     if let Some(Err(e)) = with_app(snap_back) {
                         log::info!("snap back hotkey: {}", e.message);
+                    }
+                }
+                HOTKEY_QUICK_SAVE => {
+                    if let Some(Some(Err(e))) = with_app(|a| quick_save(a, None)) {
+                        log::info!("quick save hotkey: {}", e.message);
                     }
                 }
                 id if (HOTKEY_WINDOW..HOTKEY_WINDOW + WINDOW_KEYS).contains(&id) => {
@@ -1618,6 +1728,7 @@ pub fn run() {
             moved: Vec::new(),
             recheck: false,
             capturing: None,
+            quick_undo: None,
             clients: Vec::new(),
             last_state_event: None,
             packaged: package::is_packaged(),

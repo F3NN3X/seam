@@ -6,7 +6,7 @@
 use crate::tray::WM_APP_WINDOWS_CHANGED;
 use crate::{log, overlay, zone_paint};
 use seam::config::{Config, ZoneSettings};
-use seam::desk::Mon;
+use seam::desk::{self, Mon};
 use seam::geom;
 use seam::winutil::{self, work_area};
 use seam::zones::{self, Rect, ZoneLayout};
@@ -44,6 +44,8 @@ struct Screen {
     id: String,
     bounds: Rect,
     layout: Option<ZoneLayout>,
+    /// Physical pixels per inch from EDID, 0 when the screen doesn't report its size.
+    raw_dpi: f64,
 }
 
 /// A screen's zones in pixels, worked out when they're needed so a moved taskbar counts.
@@ -78,6 +80,8 @@ struct Drag {
     phase: Phase,
     /// The window's rect when the drag began.
     start: Rect,
+    /// Its visible frame then, for keeping its size in millimetres (§11.4).
+    frame: Option<Rect>,
     was_maximized: bool,
     /// The window carried a zone stamp when the drag began.
     stamped: bool,
@@ -131,6 +135,8 @@ struct Engine {
     settings: ZoneSettings,
     /// Lower case.
     exclude: Vec<String>,
+    /// "Keep size in centimetres when I drag between screens", and nothing steps aside.
+    physical_drag: bool,
     screens: Vec<Screen>,
     hook: Option<HWINEVENTHOOK>,
     drag: Option<Drag>,
@@ -207,8 +213,10 @@ pub fn update(owner: HWND, cfg: &Config, sig: &str, mons: &[Mon], aside: Option<
         id: m.id.clone(),
         bounds: rect_of(&m.rect),
         layout: desk.and_then(|d| d.zones.get(&m.id)).and_then(zones::layout_of),
+        raw_dpi: m.raw_dpi,
     });
     let screens: Vec<Screen> = screens.collect();
+    let physical_drag = cfg.keep_physical_size && cfg.keep_physical_size_drag && aside.is_none();
     let exclude: Vec<String> = cfg.zones.exclude.iter().map(|x| x.to_lowercase()).collect();
     with_engine(|e| {
         // A change that isn't about zones mustn't cut a drag short.
@@ -217,6 +225,7 @@ pub fn update(owner: HWND, cfg: &Config, sig: &str, mons: &[Mon], aside: Option<
             && e.aside.as_deref() == aside
             && e.settings == cfg.zones
             && e.exclude == exclude
+            && e.physical_drag == physical_drag
             && e.screens == screens;
         if same {
             return;
@@ -227,6 +236,7 @@ pub fn update(owner: HWND, cfg: &Config, sig: &str, mons: &[Mon], aside: Option<
         e.aside = aside.map(String::from);
         e.settings = cfg.zones.clone();
         e.exclude = exclude;
+        e.physical_drag = physical_drag;
         e.screens = screens;
         if !e.settings.refit || e.aside.is_some() {
             e.refit_stop();
@@ -327,7 +337,9 @@ impl Engine {
     }
 
     fn sync_hook(&mut self) {
-        let wanted = self.active() && self.screens.iter().any(|s| s.layout.is_some());
+        let zoning = self.active() && self.screens.iter().any(|s| s.layout.is_some());
+        // A free drag between screens is seen at its end, zones or not.
+        let wanted = zoning || self.physical_drag;
         match (wanted, self.hook) {
             (true, None) => unsafe {
                 let flags = WINEVENT_OUTOFCONTEXT | WINEVENT_SKIPOWNPROCESS;
@@ -391,20 +403,27 @@ impl Engine {
                 }
             }
         }
-        if !self.active() || !winutil::is_snappable(hwnd, std::process::id(), &self.exclude) {
+        let wanted = self.active() || self.physical_drag;
+        if !wanted || !winutil::is_snappable(hwnd, std::process::id(), &self.exclude) {
             return;
         }
         // Windows keeps a lower process from moving this one, so don't offer zones for it (D12).
         if winutil::is_elevated_over_us(hwnd) {
-            self.blocked();
+            if self.active() {
+                self.blocked();
+            }
             return;
         }
-        let (Some(start), geometry) = (winutil::window_rect(hwnd), self.geometry()) else { return };
-        if geometry.is_empty() {
+        let geometry = if self.active() { self.geometry() } else { Vec::new() };
+        let Some(start) = winutil::window_rect(hwnd) else { return };
+        if geometry.is_empty() && !self.physical_drag {
             return;
         }
-        // The work area may have moved since the overlay was last drawn. This only posts a list.
-        zone_paint::build(specs(&geometry));
+        if !geometry.is_empty() {
+            // The work area may have moved since the overlay was last drawn. This only posts a list.
+            zone_paint::build(specs(&geometry));
+        }
+        let frame = if self.physical_drag { winutil::visible_rect(hwnd) } else { None };
         let was_snapped = self.current(hwnd).map(|s| s.old);
         let stamped = winutil::has_zone_stamp(hwnd);
         let button = Some(main_button()).filter(|b| held(*b));
@@ -414,6 +433,7 @@ impl Engine {
             hwnd: key,
             phase: Phase::Waiting,
             start,
+            frame,
             was_maximized,
             stamped,
             was_snapped,
@@ -573,17 +593,43 @@ impl Engine {
         let lit = drag.shown.and_then(|view| Some((view.screen, view.hit?)));
         let Some((screen, (a, b))) = lit else {
             // Dropped outside every zone, so a snapped window gets its old size back.
+            let mut restored = false;
             if let (Some(Some(old)), true) = (drag.was_snapped, self.settings.restore_size) {
                 if !winutil::is_maximized(hwnd) && winutil::is_resizable(hwnd) {
                     self.restore_size(hwnd, old);
+                    restored = true;
                 }
             }
             self.unsnap(hwnd, drag.stamped);
+            if !restored && !drag.was_maximized {
+                self.keep_physical(drag, hwnd);
+            }
             return;
         };
         let g = &drag.geometry[screen];
         let rect = zones::span(g.zones[a], g.zones[b]);
         self.snap_to(hwnd, g, (a.min(b), a.max(b)), rect, drag.was_snapped);
+    }
+
+    /// A free drag that ended on another screen: with "Keep size in centimetres when I
+    /// drag between screens" on, a worker gives the window its size in millimetres
+    /// back (§11.4). Only the screens are looked up here.
+    fn keep_physical(&self, drag: &Drag, hwnd: HWND) {
+        let Some(frame) = drag.frame.filter(|_| self.physical_drag) else { return };
+        if winutil::is_maximized(hwnd) || !winutil::is_resizable(hwnd) {
+            return;
+        }
+        let Some(now) = winutil::window_rect(hwnd) else { return };
+        let at = |r: Rect| self.screens.iter().position(|s| s.bounds.contains(r.x + r.w / 2, r.y + r.h / 2));
+        let (Some(from), Some(to)) = (at(frame), at(now)) else { return };
+        if from == to {
+            return;
+        }
+        let (a, b) = (&self.screens[from], &self.screens[to]);
+        let job = DragJob { hwnd: drag.hwnd, frame, from: (from + 1, a.raw_dpi), to: (to + 1, b.raw_dpi, b.bounds) };
+        if std::thread::Builder::new().name("seam-physical".into()).spawn(move || job.run()).is_err() {
+            log::info!("physical size: couldn't start the worker");
+        }
     }
 
     /// The window stopped being in a zone, so forget it, including the stamp on the window.
@@ -774,5 +820,44 @@ impl Engine {
         let g = &geometry[screen];
         self.snap_to(hwnd, g, (zone, zone), g.zones[zone], None);
         Ok(())
+    }
+}
+
+/// A free drag between screens, for its worker.
+struct DragJob {
+    hwnd: isize,
+    /// The visible frame before the drag.
+    frame: Rect,
+    /// Line Up number and raw density of the screen it left.
+    from: (usize, f64),
+    /// The same of the screen it was dropped on, and its bounds.
+    to: (usize, f64, Rect),
+}
+
+impl DragJob {
+    /// Once the app has answered the DPI change of the drop (D8), fit the frame to its
+    /// size in millimetres, centred where it was dropped. Only the frame is made physical.
+    fn run(self) {
+        std::thread::sleep(std::time::Duration::from_millis(SETTLE_MS.into()));
+        let h = hwnd_of(self.hwnd);
+        let ((from, src), (to, dst, bounds)) = (self.from, self.to);
+        let (Some(now), Some((work, _))) = (winutil::visible_rect(h), work_area(bounds)) else { return };
+        let app = winutil::exe_name(h).unwrap_or_default();
+        let (w, ht) = (self.frame.w, self.frame.h);
+        let Some(r) = desk::physical_rect((w as f64, ht as f64), src, dst, now, work) else {
+            log::info!("physical size: {app} keeps its pixel size, screen {from} or {to} doesn't report its size");
+            return;
+        };
+        let mm = desk::size_mm(w, ht, src).unwrap_or_default();
+        log::info!(
+            "physical size: {app} screen {from} → {to}, {w}×{ht} px → {}×{} px (mm {:.0}×{:.0})",
+            r.w,
+            r.h,
+            mm[0],
+            mm[1]
+        );
+        if !winutil::is_hung(h) {
+            winutil::fit(h, r);
+        }
     }
 }

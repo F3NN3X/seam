@@ -114,6 +114,17 @@ const snapBack = (p) => {
   return { ...base, h: 28, svg: base.svg + drifted + placed + arrowBelow(p) };
 };
 
+/** A window on the right screen, and the arrow down onto the line it's saved to. */
+const quickSave = (p) => {
+  const base = mark(p);
+  const window = `<rect x="22" y="5" width="6" height="10" rx="1" fill="${p.line}"/>`;
+  const arrow =
+    `<line x1="16" y1="20.5" x2="16" y2="25" stroke="${p.line}" stroke-width="${p.width}" stroke-linecap="round"/>` +
+    `<polyline points="13.5,22.5 16,25 18.5,22.5" fill="none" stroke="${p.line}" stroke-width="${p.width}" stroke-linecap="round" stroke-linejoin="round"/>` +
+    `<line x1="10" y1="27.5" x2="22" y2="27.5" stroke="${p.line}" stroke-width="${p.width}" stroke-linecap="round"/>`;
+  return { ...base, h: 28, svg: base.svg + window + arrow };
+};
+
 const place = (glyph, scale, cx, cy) =>
   `<g transform="translate(${cx - (glyph.w * scale) / 2} ${cy - (glyph.h * scale) / 2}) scale(${scale})">${glyph.svg}</g>`;
 
@@ -154,6 +165,7 @@ const actions = {
   "pin-top": { draw: pinTop, states: ["lit"] },
   release: { draw: release, states: ["lit"] },
   "snap-back": { draw: snapBack, states: ["lit"] },
+  "quick-save": { draw: quickSave, states: ["lit"] },
 };
 
 for (const [name, { draw, states }] of Object.entries(actions)) {

@@ -56,6 +56,8 @@ pub struct Hotkeys {
     pub release_all: Option<String>,
     /// "Snap back to this workspace": switch to the active workspace again.
     pub snap_back: Option<String>,
+    /// "Save windows to the active workspace": capture into the workspace in use (§7).
+    pub quick_save: Option<String>,
 }
 
 impl Default for Hotkeys {
@@ -84,6 +86,7 @@ impl Default for Hotkeys {
             pin_sticky: None,
             release_all: None,
             snap_back: None,
+            quick_save: None,
         }
     }
 }
@@ -263,6 +266,12 @@ pub struct Config {
     pub align_arrangement: bool,
     /// Offer to line up a set of screens we haven't seen before.
     pub ask_new_desks: bool,
+    /// "Keep window size in centimetres between screens": a key, API or workspace move
+    /// to a screen of another density keeps the window's size in millimetres (§11.4).
+    pub keep_physical_size: bool,
+    /// "Keep size in centimetres when I drag between screens": the same after a free
+    /// drag with the mouse. Only counts while `keep_physical_size` is on.
+    pub keep_physical_size_drag: bool,
     pub tray_click: TrayClick,
     pub debug_log: bool,
     pub hotkeys: Hotkeys,
@@ -297,6 +306,8 @@ impl Default for Config {
             enabled: true,
             align_arrangement: true,
             ask_new_desks: true,
+            keep_physical_size: true,
+            keep_physical_size_drag: false,
             tray_click: TrayClick::Open,
             debug_log: false,
             hotkeys: Hotkeys::default(),

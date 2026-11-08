@@ -8,6 +8,7 @@ import {
 	ReleasePinned,
 	Remap,
 	Desk,
+	SaveWindows,
 	SnapBack,
 	Zones,
 } from "./actions/simple.js";
@@ -18,6 +19,7 @@ streamDeck.logger.setLevel("info");
 
 streamDeck.actions.registerAction(new SwitchWorkspace());
 streamDeck.actions.registerAction(new SnapBack());
+streamDeck.actions.registerAction(new SaveWindows());
 streamDeck.actions.registerAction(new LineUp());
 streamDeck.actions.registerAction(new Remap());
 streamDeck.actions.registerAction(new Zones());

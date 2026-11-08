@@ -58,11 +58,15 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          # An API error counts as "not green", so the gate fails closed.
+          # An API error counts as "not green", so the gate fails closed. Every
+          # check main requires has to have passed: the x64 build and the ARM64 one.
           green() {
-            local n
-            n=$(gh api "repos/$GITHUB_REPOSITORY/commits/$1/check-runs?check_name=build"               --jq '[.check_runs[] | select(.conclusion == "success")] | length' 2>/dev/null) || n=0
-            echo "${n:-0}"
+            local check n
+            for check in build arm64; do
+              n=$(gh api "repos/$GITHUB_REPOSITORY/commits/$1/check-runs?check_name=$check" --jq '[.check_runs[] | select(.conclusion == "success")] | length' 2>/dev/null) || n=0
+              if [ "${n:-0}" -eq 0 ]; then echo 0; return; fi
+            done
+            echo 1
           }
           if [ "$(green "$GITHUB_SHA")" -gt 0 ]; then echo "CI passed on $GITHUB_SHA"; exit 0; fi
           heads=$(gh api "repos/$GITHUB_REPOSITORY/commits/$GITHUB_SHA/pulls"             --jq '.[] | select(.merged_at != null) | .head.sha' 2>/dev/null) || heads=""

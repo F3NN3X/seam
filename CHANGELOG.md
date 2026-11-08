@@ -4,8 +4,15 @@ All notable changes to Seam. The format follows [Keep a Changelog](https://keepa
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-11-08
+
 ### Added
 
+- Windows by direction on the desk: Shift+Win+Alt+arrows moves the focused window to the next zone or screen that way, and Ctrl+Shift+Alt+arrows focuses the nearest window that way. Swap trades places with it, and has no key until you set one.
+- **Pin window on top**, and **Keep window out of workspace switches** for a window a switch should leave alone. **Release pinned windows**, in the tray menu, takes every pin back.
+- A focus border in your Windows accent colour, off until you turn it on, and an amber border on pinned windows. Both colours can be changed on the Zones page: a swatch, None, or your own from a colour picker.
+- Seam leaves placing windows to komorebi, GlazeWM or LeopardWM when one is running, or to any other window manager when you say so on the Zones page.
+- A Stream Deck plugin with keys for workspaces, Line Up, the remap and zones, moving, focusing and pinning windows, and the current desk.
 - Each workspace on the Workspaces page shows its apps as a row of icons under the name, up to eight and then "+n", instead of a window count.
 - An installer for the GitHub version. It installs for you only, with no admin prompt, and adds Seam to the Start menu and to Installed apps.
 - **Tell me when a pinned window closes**, on the Zones page. A click on the notification starts the app again and pins its new window. Off until you turn it on.
@@ -21,6 +28,7 @@ All notable changes to Seam. The format follows [Keep a Changelog](https://keepa
 ### Security
 
 - The updater only downloads from Seam's own GitHub releases.
+- The local API closes a connection that sends nothing for 30 s, unless it listens for events, so idle clients can't use up its connections.
 
 ## [0.4.0] - 2026-11-08
 

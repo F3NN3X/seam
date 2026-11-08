@@ -460,13 +460,24 @@ Turn the debug log on. Set **Save windows to the active workspace** on Shortcuts
 - [ ] **Shortcut problems.** Record Ctrl+Alt+K: the row warns that it types characters. Record a shortcut another app holds: the row says so and the keycaps turn red.
 - [ ] **Keyboard.** Ctrl+F jumps to search and Esc clears it. Tab walks the sidebar then the page, with a ring on each control, and no ring appears after a mouse click. Space flips a switch. Left and Right change the Tray icon choice.
 - [ ] **Search.** Type "log" and press a result. It opens that page.
-- [ ] **Search scrolls to the row.** Make the panel window short enough that every page scrolls. On each page, open a search result for a row near the bottom and check the row is in view with some room above it, starting from the top and from the bottom of another page: Displays "Also align Windows arrangement", Zones "Pin border colour" and "Another window manager handles my windows", Workspaces "Other windows" (with a workspace selected), Shortcuts "Capture current windows", General "Debug log", About "Licenses" (shows the Help section) and "Include pre-releases". A result at the top of its page, such as Displays "Line up screens", opens the page at the top. Scrolling by hand afterwards works as before, and picking a page in the sidebar keeps working as it did.
+- [ ] **Search scrolls to the row.** Make the panel window short enough that every page scrolls. On each page, open a search result for a row near the bottom and check the row is in view with some room above it, starting from the top and from the bottom of another page: Displays "Also align Windows arrangement", Zones "Pin border colour" and "Another window manager handles my windows", Workspaces "Other windows" (with a workspace selected), Shortcuts "Capture current windows", General "Debug log", About "Licenses" (shows the Support section) and "Include pre-releases". A result at the top of its page, such as Displays "Line up screens", opens the page at the top. Scrolling by hand afterwards works as before, and picking a page in the sidebar keeps working as it did.
 - [ ] **Left-click.** Choose **Open Seam** under Tray icon, then left-click the tray icon. The panel opens. Set it back.
 - [ ] **Start with Windows.** Turn it on, sign out and in. Seam starts, and the panel doesn't. Turn it off.
 - [ ] **Debug log.** Turn it on, cross a border, and check `seam.log` grows. Turn it off.
 - [ ] **Files.** **Open** shows the folder holding `config.json`. **Export…** then **Import…** round-trips your settings, and importing a broken file is refused with nothing changed.
 - [ ] **About.** **Copy diagnostics** puts your version, Windows build, screens and borders on the clipboard, with no window titles or file paths.
 - [ ] **Panel missing.** Rename `seam-settings.exe`, choose **Open Seam…**. A balloon says it's unavailable and Seam keeps running. Rename it back.
+
+## Sidebar and Help
+
+- [ ] **Sidebar.** Displays, Zones and Workspaces are at the top. The App heading with Shortcuts, General, Help and About sits at the bottom, right above "Seam" and the version. Make the window as short as it goes: the two groups don't overlap. The update dot still shows on About.
+- [ ] **Open Help.** Click Help. The topics are on the left, in this order: Getting started, Pointer and borders, Zones, Moving windows, Pins and borders, Workspaces, Last session, Shortcuts, Stream Deck, Local API, Updates. Getting started is picked the first time.
+- [ ] **Every topic.** Click each one. The picked card is raised, its text shows on the right with the labels in bold, nothing is cut off at the panel's smallest size, and it reads correctly in light and dark.
+- [ ] **Getting started buttons.** **Open Displays**, **Open Zones** and **Open Workspaces** on the three steps each open that page.
+- [ ] **Topic buttons.** The button under each other topic opens its page: Pointer and borders Displays, Zones Zones, Moving windows Shortcuts, Pins and borders Zones, Workspaces Workspaces, Last session General, Shortcuts Shortcuts, Stream Deck General, Local API General, Updates About.
+- [ ] **Search.** Type "snap back": the results include Help's Workspaces topic, and pressing it opens Help with that topic picked. Type "stream deck", "sign-in" and "pre-releases": each lists its Help topic. Type "help": every topic is listed.
+- [ ] **Remembered page.** Close the panel on Help and open it again: it opens on Help. Run `seam-settings.exe --page help`: it opens on Help.
+- [ ] **About.** About's last section is called Support and still has **Copy diagnostics**, **Report a problem**, **Source on GitHub** and **Licenses**, each working as before.
 
 ## Starting and signing in
 

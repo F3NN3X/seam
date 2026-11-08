@@ -1,4 +1,4 @@
-//! Version, updates, help and diagnostics.
+//! Version, updates, support links and diagnostics.
 
 use crate::pages::updates;
 use crate::panel::Panel;
@@ -105,7 +105,7 @@ pub fn render(panel: &mut Panel, window: &mut Window, cx: &mut Context<Panel>) -
         }
     }
     page.child(updates::group(panel, window, cx)).child(ui::section(
-        "Help",
+        "Support",
         div()
             .flex()
             .flex_col()

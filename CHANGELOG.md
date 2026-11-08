@@ -7,9 +7,11 @@ All notable changes to Seam. The format follows [Keep a Changelog](https://keepa
 ### Added
 
 - **Set as default** on a workspace's "..." menu: when no workspace is remembered, it's the one in use when Seam starts. `workspace.set_default` in the API, and `default` in `workspaces.list`.
+- A **Help** page in the Seam window, with a topic for each part of Seam and a button to its page. Search finds the topics by their text.
 
 ### Changed
 
+- The sidebar's App group (Shortcuts, General, Help and About) sits at the bottom, above the version. About's Help section is now called Support.
 - The settings window opens a little wider, and the workspace list is narrower, so the workspace editor's columns show in full. Workspace cards show up to six app icons before "+n".
 - The workspace in use shows a green dot and "Active" in the Workspaces list, instead of "in use", and "Active, moved" once one of its windows moved.
 - After a restart or a desk change, the workspace last in use on that desk shows as active again, else the default, else the only one whose open apps are all in place. Nothing moves.

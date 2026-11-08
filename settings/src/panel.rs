@@ -40,6 +40,7 @@ pub enum Page {
     Workspaces,
     Shortcuts,
     General,
+    Help,
     About,
 }
 
@@ -51,6 +52,7 @@ impl Page {
             Page::Workspaces => "Workspaces",
             Page::Shortcuts => "Shortcuts",
             Page::General => "General",
+            Page::Help => "Help",
             Page::About => "About",
         }
     }
@@ -62,18 +64,21 @@ impl Page {
             Page::Workspaces => assets::IconName::Layers,
             Page::Shortcuts => assets::IconName::Keyboard,
             Page::General => assets::IconName::SlidersHorizontal,
+            Page::Help => assets::IconName::CircleQuestionMark,
             Page::About => assets::IconName::Info,
         }
     }
 
     pub fn from_arg(arg: &str) -> Option<Page> {
-        [Page::Displays, Page::Zones, Page::Workspaces, Page::Shortcuts, Page::General, Page::About]
-            .into_iter()
-            .find(|p| p.title().eq_ignore_ascii_case(arg))
+        Page::top_group().into_iter().chain(Page::app_group()).find(|p| p.title().eq_ignore_ascii_case(arg))
     }
 
     fn top_group() -> Vec<Page> {
         vec![Page::Displays, Page::Zones, Page::Workspaces]
+    }
+
+    fn app_group() -> Vec<Page> {
+        vec![Page::Shortcuts, Page::General, Page::Help, Page::About]
     }
 }
 
@@ -113,6 +118,8 @@ pub struct Panel {
     pub status: Option<(String, Vec<RowStatus>)>,
     pub asking_status: Option<String>,
     status_again: bool,
+    /// The topic the Help page shows, as an index into `help::TOPICS`.
+    pub help_topic: usize,
     /// The pickers behind the Custom swatch of the focus and pin colour rows, and a
     /// counter so only the last colour picked in a burst is sent.
     pub focus_picker: Entity<ColorPickerState>,
@@ -228,6 +235,7 @@ impl Panel {
             status: None,
             asking_status: None,
             status_again: false,
+            help_topic: 0,
             focus_picker,
             pin_picker,
             colour_generation: 0,
@@ -534,7 +542,7 @@ impl Panel {
     }
 
     /// Show a page. A search result also names the row to scroll to on it.
-    fn show(&mut self, page: Page, reveal: Option<&'static str>, window: &mut Window, cx: &mut Context<Self>) {
+    pub fn show(&mut self, page: Page, reveal: Option<&'static str>, window: &mut Window, cx: &mut Context<Self>) {
         // Unsaved zone edits ask before they're lost.
         if self.editor.is_some() {
             let then: pages::zone_editor::Then =
@@ -650,7 +658,7 @@ impl Panel {
             top = top.child(self.nav_row(page, window, cx));
         }
         let mut app = div().flex().flex_col().gap(px(2.));
-        for page in [Page::Shortcuts, Page::General, Page::About] {
+        for page in Page::app_group() {
             app = app.child(self.nav_row(page, window, cx));
         }
         div()
@@ -677,11 +685,13 @@ impl Panel {
             )
             .child(self.status_row(cx))
             .child(top)
+            // The app's own pages sit at the bottom, above the version.
+            .child(div().flex_1())
             .child(div().mt(px(24.)).mb(px(8.)).px(px(8.)).text_size(px(12.)).text_color(p.muted).child("App"))
             .child(app)
-            .child(div().flex_1())
             .child(
                 div()
+                    .mt(px(12.))
                     .px(px(8.))
                     .text_size(px(12.))
                     .text_color(p.muted)
@@ -723,13 +733,18 @@ impl Panel {
             p,
         ));
         let rows = matches.iter().enumerate().map(|(i, hit)| {
-            let (page, anchor) = (hit.page, hit.anchor());
+            let (page, anchor, topic) = (hit.page, hit.anchor(), hit.topic);
             div()
                 .id(i)
                 .cursor_pointer()
                 .hover(|d| d.bg(p.raised))
                 .child(ui::row(hit.title, Some(page.title().into()), div(), p))
-                .on_click(cx.listener(move |this, _, window, cx| this.show(page, Some(anchor), window, cx)))
+                .on_click(cx.listener(move |this, _, window, cx| {
+                    if let Some(topic) = topic {
+                        this.help_topic = topic;
+                    }
+                    this.show(page, Some(anchor), window, cx);
+                }))
                 .into_any_element()
         });
         let rows: Vec<AnyElement> = rows.collect();
@@ -780,6 +795,7 @@ impl Render for Panel {
                 Page::Workspaces => pages::workspaces::render(self, window, cx).into_any_element(),
                 Page::Shortcuts => pages::shortcuts::render(self, window, cx).into_any_element(),
                 Page::General => pages::general::render(self, window, cx).into_any_element(),
+                Page::Help => pages::help::render(self, cx).into_any_element(),
                 Page::About => pages::about::render(self, window, cx).into_any_element(),
             }
         };

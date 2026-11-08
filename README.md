@@ -18,6 +18,8 @@ This is a Windows take on [Shim](https://screenshim.app/) for macOS, with one ad
 
 When you finish, Seam saves the layout for that exact set of screens and turns on the remap. If **Also align Windows arrangement** is checked (it is by default), Seam also moves your monitors in the Windows arrangement. Each border then lines up at the middle of its physical overlap, so things like dragging a window between screens look right even with Seam closed. You can undo this anytime in Display settings.
 
+**Help**, at the bottom of the Seam window's sidebar, explains each part of Seam in a short topic, starting with Getting started, and each topic has a button to the page it's about. Search finds the topics too.
+
 ### Zones
 
 Open **Zones** in the Seam window, pick a layout for each screen (Columns, Rows, Grid or Priority), and hold **Shift** while you drag a window. The zones show on the screen under the pointer, the one under it turns amber, and letting go snaps the window into it. Hold **Ctrl** as well to cover several zones with one window. Both keys, the gap between zones and whether a window gets its old size back when you drop it outside a zone are on the same page.

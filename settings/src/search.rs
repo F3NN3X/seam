@@ -1,6 +1,8 @@
 //! Search across the rows of every page.
 
+use crate::help;
 use crate::panel::Page;
+use std::sync::LazyLock;
 
 pub struct Entry {
     pub page: Page,
@@ -9,6 +11,8 @@ pub struct Entry {
     keywords: &'static str,
     /// The row or section that holds it, when it's a button rather than a row of its own.
     within: Option<&'static str>,
+    /// The Help topic it opens, by index into `help::TOPICS`. Its text is searched too.
+    pub topic: Option<usize>,
 }
 
 impl Entry {
@@ -19,12 +23,12 @@ impl Entry {
 }
 
 const fn entry(page: Page, title: &'static str, about: &'static str, keywords: &'static str) -> Entry {
-    Entry { page, title, about, keywords, within: None }
+    Entry { page, title, about, keywords, within: None, topic: None }
 }
 
-/// A button in About's Help section.
-const fn help(title: &'static str, about: &'static str, keywords: &'static str) -> Entry {
-    Entry { page: Page::About, title, about, keywords, within: Some("Help") }
+/// A button in About's Support section.
+const fn support(title: &'static str, about: &'static str, keywords: &'static str) -> Entry {
+    Entry { page: Page::About, title, about, keywords, within: Some("Support"), topic: None }
 }
 
 const ENTRIES: &[Entry] = &[
@@ -174,16 +178,30 @@ const ENTRIES: &[Entry] = &[
     entry(Page::About, "Check for updates every day", "Last checked, and check now", "update version"),
     entry(Page::About, "Install updates on their own", "Only while you're away from the computer", "update"),
     entry(Page::About, "Include pre-releases", "Get new features early", "update beta"),
-    help("Copy diagnostics", "Your version, Windows build, screens and saved borders", "support"),
-    help("Report a problem", "Opens a new GitHub issue", "bug"),
-    help("Source on GitHub", "", "code"),
-    help("Licenses", "", "open source"),
+    support("Copy diagnostics", "Your version, Windows build, screens and saved borders", "support"),
+    support("Report a problem", "Opens a new GitHub issue", "bug"),
+    support("Source on GitHub", "", "code"),
+    support("Licenses", "", "open source"),
 ];
+
+/// One entry for each Help topic, found by any word of its text.
+static TOPICS: LazyLock<Vec<Entry>> = LazyLock::new(|| {
+    let topic = |(i, t): (usize, &help::Topic)| Entry {
+        page: Page::Help,
+        title: t.title,
+        about: "",
+        keywords: "",
+        within: None,
+        topic: Some(i),
+    };
+    help::TOPICS.iter().enumerate().map(topic).collect()
+});
 
 pub fn find(query: &str) -> Vec<&'static Entry> {
     let query = query.trim().to_lowercase();
-    ENTRIES
-        .iter()
-        .filter(|e| [e.title, e.about, e.keywords, e.page.title()].iter().any(|t| t.to_lowercase().contains(&query)))
-        .collect()
+    let hit = |e: &&Entry| {
+        [e.title, e.about, e.keywords, e.page.title()].iter().any(|t| t.to_lowercase().contains(&query))
+            || e.topic.is_some_and(|i| help::TOPICS[i].mentions(&query))
+    };
+    ENTRIES.iter().chain(TOPICS.iter()).filter(hit).collect()
 }

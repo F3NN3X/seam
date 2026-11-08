@@ -60,6 +60,9 @@ ArchitecturesInstallIn64BitMode={#Allowed}
 WizardStyle=modern
 SetupIconFile=..\assets\seam.ico
 UninstallDisplayIcon={app}\seam.exe
+; Just the name: Installed apps shows the version beside it, and the updater
+; rewrites only the version, so a name with one in it went stale.
+UninstallDisplayName=Seam
 LicenseFile=..\LICENSE
 OutputBaseFilename=Seam-Setup-{#AppVersion}{#Suffix}
 Compression=lzma2

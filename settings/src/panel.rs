@@ -29,6 +29,8 @@ use std::time::Duration;
 actions!(seam_panel, [FocusSearch, ClearSearch]);
 
 const CONTEXT: &str = "SeamPanel";
+/// How long Undo stays offered after a change.
+const UNDO_FOR: Duration = Duration::from_secs(8);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Page {
@@ -104,6 +106,8 @@ pub struct Panel {
     /// The name field should take focus when it next draws.
     pub focus_name: bool,
     pub name_input: Entity<InputState>,
+    /// The workspace editor's open row, delay slider and app picker.
+    pub editing: pages::workspace_editor::Editing,
     /// The pickers behind the Custom swatch of the focus and pin colour rows, and a
     /// counter so only the last colour picked in a burst is sent.
     pub focus_picker: Entity<ColorPickerState>,
@@ -193,8 +197,10 @@ impl Panel {
         focus.focus(window, cx);
         // The editor's window is the panel's, so it goes with it.
         let release = cx.on_release(|panel, cx| pages::screen_editor::close_all(panel.screen_window.as_ref(), cx));
+        let (editing, editing_subscriptions) = pages::workspace_editor::Editing::new(window, cx);
         let mut subscriptions = subscriptions;
         subscriptions.push(release);
+        subscriptions.extend(editing_subscriptions);
         let mut panel = Panel {
             page,
             client: None,
@@ -213,6 +219,7 @@ impl Panel {
             naming: false,
             focus_name: false,
             name_input,
+            editing,
             focus_picker,
             pin_picker,
             colour_generation: 0,
@@ -440,6 +447,39 @@ impl Panel {
                 cx.notify();
             }
         });
+    }
+
+    /// Say what just happened, with Undo for 8 s. A newer one replaces it.
+    pub fn offer_undo(
+        &mut self,
+        message: String,
+        undo: impl Fn(&mut Panel, &mut Window, &mut Context<Panel>) + 'static,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        struct Undo;
+        let view = cx.entity().downgrade();
+        let undo = std::rc::Rc::new(undo);
+        let note = Notification::new().id::<Undo>().message(message).action(move |_, _, cx| {
+            let (view, undo) = (view.clone(), undo.clone());
+            ui::primary("undo", "Undo").on_click(cx.listener(move |note: &mut Notification, _, window, cx| {
+                let undo = undo.clone();
+                let _ = view.update(cx, |panel, cx| undo(panel, window, cx));
+                note.dismiss(window, cx);
+            }))
+        });
+        window.push_notification(note, cx);
+        self.toast_generation += 1;
+        let generation = self.toast_generation;
+        cx.spawn_in(window, async move |this, cx| {
+            cx.background_executor().timer(UNDO_FOR).await;
+            let _ = this.update_in(cx, |panel, window, cx| {
+                if panel.toast_generation == generation {
+                    window.remove_notification::<Undo>(cx);
+                }
+            });
+        })
+        .detach();
     }
 
     /// Replace every setting with `next`.

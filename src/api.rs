@@ -98,9 +98,16 @@ pub enum Command {
         id: Option<String>,
         name: Option<String>,
     },
+    /// `row` with `into` takes only that row's window ("Where it is now").
     WorkspaceCapture {
         name: Option<String>,
         into: Option<String>,
+        row: Option<usize>,
+    },
+    /// The editor saving one workspace of the current desk.
+    WorkspaceUpdate {
+        id: String,
+        workspace: Value,
     },
     RemapSet(bool),
     ZonesSet(bool),
@@ -173,7 +180,29 @@ fn command(method: &str, p: &Value) -> Result<Command, RpcError> {
             }
             Command::WorkspaceSwitch { id, name }
         }
-        "workspace.capture" => Command::WorkspaceCapture { name: str_param(p, "name")?, into: str_param(p, "into")? },
+        "workspace.capture" => {
+            let row = match p.get("row") {
+                None | Some(Value::Null) => None,
+                Some(v) => Some(
+                    v.as_u64()
+                        .and_then(|n| usize::try_from(n).ok())
+                        .ok_or_else(|| RpcError::new(INVALID_PARAMS, "row must be a row number"))?,
+                ),
+            };
+            let into = str_param(p, "into")?;
+            if row.is_some() && into.is_none() {
+                return Err(RpcError::new(INVALID_PARAMS, "row needs into"));
+            }
+            Command::WorkspaceCapture { name: str_param(p, "name")?, into, row }
+        }
+        "workspace.update" => Command::WorkspaceUpdate {
+            id: str_param(p, "id")?.ok_or_else(|| RpcError::new(INVALID_PARAMS, "id is required"))?,
+            workspace: p
+                .get("workspace")
+                .filter(|v| v.is_object())
+                .cloned()
+                .ok_or_else(|| RpcError::new(INVALID_PARAMS, "workspace must be an object"))?,
+        },
         "remap.set" => Command::RemapSet(on_param(p)?),
         "zones.set" => Command::ZonesSet(on_param(p)?),
         "zone.move" => match p.get("dir").and_then(Value::as_str) {
@@ -232,7 +261,7 @@ fn allowed(command: &Command, peer: Peer) -> Result<(), RpcError> {
         return Err(RpcError::new(DISABLED, "Other apps can't control Seam right now"));
     }
     let permitted = match command {
-        Command::ConfigPatch(_) => peer.panel,
+        Command::ConfigPatch(_) | Command::WorkspaceUpdate { .. } => peer.panel,
         Command::AppQuit | Command::WorkspaceCapture { .. } | Command::SessionRestore => peer.panel || peer.own_image,
         Command::UpdateReady => peer.own_image,
         _ => true,
@@ -492,6 +521,16 @@ mod tests {
             (request("config.patch", r#"{"patch":{"enabled":false}}"#), panel, {
                 Command::ConfigPatch(json!({ "enabled": false }))
             }),
+            (
+                request("workspace.update", r#"{"id":"ws_1","workspace":{"id":"ws_1"}}"#),
+                panel,
+                Command::WorkspaceUpdate { id: "ws_1".into(), workspace: json!({ "id": "ws_1" }) },
+            ),
+            (
+                request("workspace.capture", r#"{"into":"ws_1","row":2}"#),
+                panel,
+                Command::WorkspaceCapture { name: None, into: Some("ws_1".into()), row: Some(2) },
+            ),
             (request("app.quit", "{}"), panel, Command::AppQuit),
             (request("app.quit", "{}"), own, Command::AppQuit),
             (request("update.ready", "{}"), own, Command::UpdateReady),
@@ -519,6 +558,8 @@ mod tests {
             (request("workspace.switch", "{}"), anyone, INVALID_PARAMS),
             (request("config.patch", r#"{"patch":3}"#), panel, INVALID_PARAMS),
             (request("config.patch", r#"{"patch":{}}"#), anyone, FORBIDDEN),
+            (request("workspace.update", r#"{"id":"ws_1","workspace":{}}"#), anyone, FORBIDDEN),
+            (request("workspace.capture", r#"{"row":1}"#), panel, INVALID_PARAMS),
             (request("app.quit", "{}"), anyone, FORBIDDEN),
             (request("update.ready", "{}"), panel, FORBIDDEN),
             (request("state.get", "{}"), off, DISABLED),

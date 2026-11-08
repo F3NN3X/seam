@@ -18,6 +18,8 @@ pub mod zones;
 #[cfg(windows)]
 pub mod appicon;
 #[cfg(windows)]
+pub mod apps;
+#[cfg(windows)]
 pub mod autostart;
 #[cfg(windows)]
 pub mod ease;

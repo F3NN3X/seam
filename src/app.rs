@@ -162,8 +162,10 @@ struct Capturing {
     /// The API client waiting for the id. A hotkey has none.
     reply: Option<Sender<Reply>>,
     name: Option<String>,
-    /// The workspace to overwrite, if this is "Update from screen".
+    /// The workspace to update, if this is "Update from screen".
     into: Option<String>,
+    /// Only this row of `into` takes its window's place ("Where it is now").
+    row: Option<usize>,
     /// The desk it was started on.
     sig: String,
 }
@@ -551,7 +553,8 @@ fn start_switch_job(app: &mut App, workspace: Workspace, arrange_for: Option<Dur
     // A hotkey gives the tray the right to take focus. For anyone else this is all it can do.
     let _ = unsafe { AllowSetForegroundWindow(std::process::id()) };
     let (owner, screens, gap) = (app.hwnd.0 as isize, job_screens(app), app.cfg.zones.gap);
-    let job = SwitchJob { owner, workspace, screens, gap, arrange_for };
+    let pins_stay = app.cfg.windows.pins_stay_on_switch;
+    let job = SwitchJob { owner, workspace, screens, gap, arrange_for, pins_stay };
     if switcher::switch(job) {
         Ok(json!({ "ok": true }))
     } else {
@@ -637,15 +640,20 @@ fn start_capture(
     app: &mut App,
     name: Option<String>,
     into: Option<String>,
+    row: Option<usize>,
     reply: Option<Sender<Reply>>,
 ) -> Option<Reply> {
     if app.capturing.is_some() {
         return Some(busy("Already capturing"));
     }
-    if into.as_ref().is_some_and(|into| !desk_workspaces(app).iter().any(|w| w.id == *into)) {
+    let target = into.as_ref().map(|into| desk_workspaces(app).into_iter().find(|w| w.id == *into));
+    if matches!(target, Some(None)) {
         return Some(Err(RpcError::new(api::NOT_FOUND, "no such workspace on this desk")));
     }
-    app.capturing = Some(Capturing { reply, name, into, sig: app.sig.clone() });
+    if row.is_some_and(|row| target.flatten().is_none_or(|w| row >= w.windows.len())) {
+        return Some(Err(RpcError::new(api::NOT_FOUND, "no such row in that workspace")));
+    }
+    app.capturing = Some(Capturing { reply, name, into, row, sig: app.sig.clone() });
     if switcher::capture(capture_job(app)) {
         return None;
     }
@@ -668,8 +676,13 @@ fn captured(app: &mut App) {
             let Some(old) = existing.iter().find(|w| w.id == *into) else {
                 return answer(Err(RpcError::new(api::NOT_FOUND, "no such workspace on this desk")));
             };
-            let windows = workspace::keep_launch_flags(old, rules);
-            let updated = Workspace { windows, ..old.clone() };
+            let updated = match job.row {
+                Some(row) => match workspace::recapture_row(old, row, &rules) {
+                    Some(updated) => updated,
+                    None => return answer(refused("That app isn't open, so where it goes stays as it was")),
+                },
+                None => Workspace { windows: workspace::merge_capture(old, rules), ..old.clone() },
+            };
             let same = |v: &&mut Value| workspace::parse(v).is_some_and(|w| w.id == *into);
             if let Some(slot) = desk.workspaces.iter_mut().find(same) {
                 *slot = workspace::to_value(&updated);
@@ -695,6 +708,39 @@ fn captured(app: &mut App) {
     }
     let body = format!("{} windows saved as {}", saved.windows.len(), saved.name);
     notify(app, "Workspace captured", &body, BalloonAction::OpenPanel("workspaces"));
+}
+
+/// The editor saved a workspace of this desk. It's checked as `checked_update`
+/// says, then saved and applied through the same path as `config.patch`.
+fn update_workspace(app: &mut App, id: &str, sent: Value) -> Reply {
+    let Some(desk) = app.cfg.desks.get(&app.sig) else { return refused("This desk has no workspaces") };
+    let Some(old) = workspace::list(&desk.workspaces).into_iter().find(|w| w.id == id) else {
+        return Err(RpcError::new(api::NOT_FOUND, "no such workspace on this desk"));
+    };
+    let sent: Workspace = match serde_json::from_value(sent) {
+        Ok(ws) => ws,
+        Err(e) => return refused(format!("That isn't a workspace: {e}")),
+    };
+    let zones = |monitor: &str| {
+        let layout = desk.zones.get(monitor).and_then(zones::layout_of);
+        layout.map_or(0, |l| zones::leaf_count(&l.tree))
+    };
+    let checked = match workspace::checked_update(&old, sent, &zones) {
+        Ok(ws) => ws,
+        Err(why) => return refused(why),
+    };
+    let others: Vec<String> =
+        workspace::list(&desk.workspaces).into_iter().filter(|w| w.id != id).map(|w| w.name).collect();
+    let checked = Workspace { name: workspace::unique_name(&checked.name, &others), ..checked };
+    let list: Vec<Value> = desk
+        .workspaces
+        .iter()
+        .map(
+            |v| if workspace::parse(v).is_some_and(|w| w.id == id) { workspace::to_value(&checked) } else { v.clone() },
+        )
+        .collect();
+    let patch = json!({ "desks": { app.sig.clone(): { "workspaces": list } } });
+    patch_config(app, &patch)
 }
 
 fn set_remap(app: &mut App, on: bool) {
@@ -920,8 +966,9 @@ fn run_command(app: &mut App, queued: Queued) {
             None => Err(RpcError::new(api::NOT_FOUND, "No last session is saved for this desk")),
         },
         Command::WorkspaceSwitch { id, name } => start_switch(app, id.as_deref(), name.as_deref()),
-        Command::WorkspaceCapture { name, into } => {
-            if let Some(refusal) = start_capture(app, name, into, Some(reply.clone())) {
+        Command::WorkspaceUpdate { id, workspace } => update_workspace(app, &id, workspace),
+        Command::WorkspaceCapture { name, into, row } => {
+            if let Some(refusal) = start_capture(app, name, into, row, Some(reply.clone())) {
                 let _ = reply.send(refusal);
             }
             return;
@@ -1109,7 +1156,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                     }
                 }
                 HOTKEY_CAPTURE => {
-                    with_app(|a| start_capture(a, None, None, None));
+                    with_app(|a| start_capture(a, None, None, None, None));
                 }
                 id @ (HOTKEY_PIN_TOP | HOTKEY_PIN_STICKY) => {
                     let kind = if id == HOTKEY_PIN_TOP { PinKind::Top } else { PinKind::Sticky };

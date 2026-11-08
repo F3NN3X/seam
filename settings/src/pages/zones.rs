@@ -566,6 +566,12 @@ pub fn render(panel: &mut Panel, window: &mut Window, cx: &mut Context<Panel>) -
             view.update(cx, |panel, cx| panel.patch(json!({ "windows": { "notify_pinned_close": on } }), window, cx))
         }
     });
+    let pins_stay = switch("pins-stay-on-switch", windows_cfg.pins_stay_on_switch, window, cx, {
+        let view = view.clone();
+        move |on, window, cx| {
+            view.update(cx, |panel, cx| panel.patch(json!({ "windows": { "pins_stay_on_switch": on } }), window, cx))
+        }
+    });
     let other_about = match &detected {
         Some(name) => format!("{} found running", state::other_wm_title(name)),
         None => "Snapping and window moves step aside. The pointer remap keeps working.".to_string(),
@@ -604,6 +610,12 @@ pub fn render(panel: &mut Panel, window: &mut Window, cx: &mut Context<Panel>) -
                 "Tell me when a pinned window closes",
                 Some("Click the notification to start the app again and pin its window".into()),
                 notify_close,
+                p,
+            ),
+            row(
+                "Pinned windows stay when I switch workspaces",
+                Some("A window pinned on top isn't moved, minimized or closed, and capture still saves it".into()),
+                pins_stay,
                 p,
             ),
             row("Another window manager handles my windows", Some(other_about.into()), manual, p),

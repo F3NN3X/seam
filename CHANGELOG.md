@@ -7,11 +7,18 @@ All notable changes to Seam. The format follows [Keep a Changelog](https://keepa
 ### Added
 
 - Workspaces remember whether each window was minimized, maximized or full screen, which window was in front of which, and which had the focus, and a switch brings all of that back. A minimized window stays minimized and restores into its zone later.
+- Edit a workspace on the Workspaces page: where each app goes (including where it is now), how it shows, the start order by drag or Alt+Up and Alt+Down, and removing an app. Each change saves at once, with Undo.
+- **Add an app** to a workspace from the windows open now or from the Start menu's apps, Store apps included.
+- Launch details per app: a delay of up to 30 s, and waiting for an app's window before the next ones start.
+- **Never include this app** on a workspace's app, and the **Never manage these apps** list on General to take it back.
+- **Pinned windows stay when I switch workspaces**, on the Zones page: a switch leaves a window pinned on top where it is. Off until you turn it on.
 
 ### Changed
 
 - Capturing a workspace only saves app windows with a taskbar button. Overlays (Discord, GPU, Xbox Game Bar), helper and input windows are left out, and so are the apps the zones leave alone.
 - A switch that has nothing to move now changes nothing and takes a few milliseconds, and one that does only pauses for windows going to a screen with another scale.
+- A switch places each app it starts as soon as its window shows, instead of waiting for the slowest one, and apps that are already running go first.
+- **Update from screen** keeps each app's launch details and place in the order, and no longer drops apps that aren't running.
 
 ## [0.5.0] - 2026-11-08
 

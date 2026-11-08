@@ -237,6 +237,33 @@ pub fn render(panel: &mut Panel, window: &mut Window, cx: &mut Context<Panel>) -
         startup_rows.push(row("Who reopens the apps", Some(reopen_about.into()), reopen_choice, p));
     }
 
+    // Zones, window moves and workspace capture all leave these alone.
+    let excluded = panel.config.zones.exclude.clone();
+    let mut never_rows: Vec<AnyElement> = excluded
+        .iter()
+        .enumerate()
+        .map(|(i, name)| {
+            let name = name.clone();
+            let remove = ui::secondary(("never-manage", i), "Remove", cx).on_click(cx.listener({
+                let name = name.clone();
+                move |panel, _, window, cx| {
+                    let before = panel.config.zones.exclude.clone();
+                    let rest: Vec<String> = before.iter().filter(|x| **x != name).cloned().collect();
+                    panel.patch(json!({ "zones": { "exclude": rest } }), window, cx);
+                    let undo = move |panel: &mut Panel, window: &mut Window, cx: &mut Context<Panel>| {
+                        panel.patch(json!({ "zones": { "exclude": before.clone() } }), window, cx)
+                    };
+                    panel.offer_undo(format!("Removed {name}"), undo, window, cx);
+                }
+            }));
+            row(name, None, remove, p)
+        })
+        .collect();
+    if never_rows.is_empty() {
+        let about = "Choose Never include this app on a workspace's app to add one";
+        never_rows.push(row("No apps yet", Some(about.into()), div(), p));
+    }
+
     div()
         .flex()
         .flex_col()
@@ -255,6 +282,16 @@ pub fn render(panel: &mut Panel, window: &mut Window, cx: &mut Context<Panel>) -
         .child(section(
             "Other apps",
             card(vec![row("Let other apps control Seam", Some(api_about.into()), api, p)], p),
+            p,
+        ))
+        .child(section(
+            "Never manage these apps",
+            div()
+                .flex()
+                .flex_col()
+                .gap(px(8.))
+                .child(ui::description("Seam doesn't snap, move or capture their windows", p))
+                .child(card(never_rows, p)),
             p,
         ))
         .child(section(

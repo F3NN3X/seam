@@ -15,6 +15,7 @@ use seam::zones::{self, Rect, ZoneLayout};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::mpsc::RecvTimeoutError;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 use windows::core::{w, PCWSTR};
@@ -35,6 +36,11 @@ pub const WM_APP_SESSION: u32 = WM_APP + 25;
 /// How long a started app gets to show its window.
 const LAUNCH_WAIT: Duration = Duration::from_secs(15);
 const POLL: Duration = Duration::from_millis(250);
+/// While a switch waits for windows, how often it looks for itself, for an app
+/// whose window shows without the event (or before it has a title).
+const LAUNCH_POLL: Duration = Duration::from_secs(1);
+/// What `skipped` says about an app whose window didn't show in time.
+const TOOK_TOO_LONG: &str = "Took too long to open";
 /// How often an arranging switch looks for windows that have appeared.
 const ARRANGE_POLL: Duration = Duration::from_millis(500);
 /// Time for an app to react to a move before the next step.
@@ -100,8 +106,14 @@ impl Drop for Com {
 struct Seen {
     cand: Candidate,
     elevated: bool,
-    /// Pinned as sticky, so a switch never moves, minimizes or closes it (D106).
-    sticky: bool,
+    /// `Seam_pin` bits. A sticky window is never moved, minimized or closed by a
+    /// switch (D106), and with pins staying neither is one pinned on top.
+    pin: usize,
+}
+
+/// A window a switch leaves alone: sticky, or pinned on top while pins stay.
+fn stays(pin: usize, pins_stay: bool) -> bool {
+    pin & winutil::PIN_STICKY != 0 || (pins_stay && pin & winutil::PIN_TOP != 0)
 }
 
 /// What a capture or a switch knows about a process, read once per process ID.
@@ -122,40 +134,51 @@ fn snapshot(procs: &mut Procs) -> Vec<Seen> {
 /// `skip` why each other window was left out. The window's own facts decide first,
 /// so only windows that pass them open their process.
 fn snapshot_with(exclude: &[String], procs: &mut Procs, skip: &mut dyn FnMut(&'static str, &WindowFacts)) -> Vec<Seen> {
-    let own = std::process::id();
-    let excluded = |name: &str| exclude.iter().any(|x| x == name);
     let mut seen = Vec::new();
     for h in winutil::top_level_windows() {
-        let mut facts = winutil::window_facts(h, own);
-        if let Verdict::Skip(why) = classify(&facts, &excluded) {
-            skip(why, &facts);
-            continue;
-        }
-        let pid = winutil::process_id(h);
-        let proc = procs
-            .entry(pid)
-            .or_insert_with(|| Proc { path: winutil::exe_path_of(pid), elevated: winutil::elevated_over_us(pid) });
-        let Some(exe) = proc.path.clone().and_then(|path| winutil::exe_path_from(h, path)) else {
-            skip("no exe", &facts);
-            continue;
-        };
-        facts.exe_name = winutil::file_name(&exe);
-        if let Verdict::Skip(why) = classify(&facts, &excluded) {
-            skip(why, &facts);
-            continue;
-        }
-        let elevated = proc.elevated;
-        let cand = Candidate {
-            hwnd: h.0 as isize,
-            exe,
-            aumid: winutil::aumid(h),
-            class: facts.class,
-            title: winutil::title(h),
-            z: seen.len(),
-        };
-        seen.push(Seen { cand, elevated, sticky: winutil::is_sticky(h) });
+        let z = seen.len();
+        seen.extend(seen_of(h, z, exclude, procs, skip));
     }
     seen
+}
+
+/// One window as a snapshot sees it, or `None` if it isn't a real app window.
+fn seen_of(
+    h: HWND,
+    z: usize,
+    exclude: &[String],
+    procs: &mut Procs,
+    skip: &mut dyn FnMut(&'static str, &WindowFacts),
+) -> Option<Seen> {
+    let excluded = |name: &str| exclude.iter().any(|x| x == name);
+    let mut facts = winutil::window_facts(h, std::process::id());
+    if let Verdict::Skip(why) = classify(&facts, &excluded) {
+        skip(why, &facts);
+        return None;
+    }
+    let pid = winutil::process_id(h);
+    let proc = procs
+        .entry(pid)
+        .or_insert_with(|| Proc { path: winutil::exe_path_of(pid), elevated: winutil::elevated_over_us(pid) });
+    let Some(exe) = proc.path.clone().and_then(|path| winutil::exe_path_from(h, path)) else {
+        skip("no exe", &facts);
+        return None;
+    };
+    facts.exe_name = winutil::file_name(&exe);
+    if let Verdict::Skip(why) = classify(&facts, &excluded) {
+        skip(why, &facts);
+        return None;
+    }
+    let elevated = proc.elevated;
+    let cand = Candidate {
+        hwnd: h.0 as isize,
+        exe,
+        aumid: winutil::aumid(h),
+        class: facts.class,
+        title: winutil::title(h),
+        z,
+    };
+    Some(Seen { cand, elevated, pin: winutil::pin_bits(h) })
 }
 
 /// How the window is shown now.
@@ -254,7 +277,7 @@ fn capture_rules(job: &CaptureJob, session: bool) -> Vec<Rule> {
     let foreground = unsafe { GetForegroundWindow() }.0 as isize;
     let mut rules = Vec::new();
     // A sticky window belongs to no workspace. The last session keeps it, pinned.
-    for seen in seen.into_iter().filter(|s| session || !s.sticky) {
+    for seen in seen.into_iter().filter(|s| session || s.pin & winutil::PIN_STICKY == 0) {
         let h = hwnd_of(seen.cand.hwnd);
         let shown = shown_of(h);
         let normal = winutil::normal_rect(h);
@@ -287,6 +310,7 @@ fn capture_rules(job: &CaptureJob, session: bool) -> Vec<Rule> {
             shown,
             z: rules.len() as u32,
             focused: c.hwnd == foreground,
+            ..Rule::default()
         });
     }
     let skipped: Vec<String> = skips.iter().map(|(why, n)| format!("{why} {n}")).collect();
@@ -305,6 +329,8 @@ pub struct SwitchJob {
     /// Start nothing, and wait this long for the windows to appear, placing each as it
     /// does: a last session whose apps Windows reopens (D128).
     pub arrange_for: Option<Duration>,
+    /// "Pinned windows stay when I switch workspaces".
+    pub pins_stay: bool,
 }
 
 /// How a switch went: what the event says.
@@ -643,31 +669,34 @@ fn place_all(moves: &[Move], skipped: &mut Vec<(String, String)>, cancelled: &dy
     moved
 }
 
+/// What every step of a switch reads.
+struct Run<'a> {
+    ws: &'a Workspace,
+    geos: Vec<Geo>,
+    pins_stay: bool,
+    cancelled: &'a dyn Fn() -> bool,
+}
+
 /// Place the windows of the rules `which` that have one, then pin again what the
 /// rule says was pinned. A window already in place takes no call. Adds to `tally`.
-fn place_rules(
-    ws: &Workspace,
-    found: &[Option<isize>],
-    which: &[usize],
-    geos: &[Geo],
-    seen: &[Seen],
-    tally: &mut Tally,
-    cancelled: &dyn Fn() -> bool,
-) {
+fn place_rules(run: &Run, found: &[Option<isize>], which: &[usize], seen: &[Seen], tally: &mut Tally) {
+    let (ws, cancelled) = (run.ws, run.cancelled);
     let started = Instant::now();
     let (mut moves, mut ready) = (Vec::new(), 0);
     for i in which {
         let (rule, Some(hwnd)) = (&ws.windows[*i], found[*i]) else { continue };
         let h = hwnd_of(hwnd);
         // A screen that isn't connected, or a window to keep where it is, isn't moved.
-        let Some(geo) = geos.iter().find(|g| g.id == rule.monitor) else { continue };
+        let Some(geo) = run.geos.iter().find(|g| g.id == rule.monitor) else { continue };
         let Some(kind) = plan(rule, geo) else { continue };
         if !unsafe { IsWindow(Some(h)) }.as_bool() {
             continue;
         }
         let app = app_name(rule);
-        if winutil::is_sticky(h) {
-            tally.skipped.push((app, "sticky".into()));
+        let pin = winutil::pin_bits(h);
+        if stays(pin, run.pins_stay) {
+            let why = if pin & winutil::PIN_STICKY != 0 { "sticky" } else { "pinned" };
+            tally.skipped.push((app, why.into()));
             continue;
         }
         let elevated = seen.iter().find(|s| s.cand.hwnd == hwnd).map(|s| s.elevated);
@@ -729,12 +758,171 @@ fn to_focus(stack: &[Stacked]) -> Option<isize> {
     focused.or_else(|| stack.iter().min_by_key(|s| s.z)).map(|s| s.hwnd)
 }
 
+/// The apps a switch has started.
+#[derive(Default)]
+struct Starts {
+    /// Started by this switch.
+    launched: usize,
+    /// Rows started by this switch or a replaced one.
+    started: Vec<usize>,
+    /// Rows still waiting for their window, and since when.
+    waiting: Vec<(usize, Instant)>,
+    /// A replaced switch's launches this one took over.
+    reused: Vec<usize>,
+}
+
+impl Starts {
+    /// Start the app of row `i`, unless a switch this one replaced already did.
+    fn start(&mut self, ws: &Workspace, i: usize, mine: u64, tally: &mut Tally) {
+        let rule = &ws.windows[i];
+        let key = launch_key(rule);
+        if let Some(at) = earlier_launch(&key, mine, &mut self.reused) {
+            self.started.push(i);
+            self.waiting.push((i, at));
+            return;
+        }
+        match launch(rule) {
+            Ok(()) => {
+                note_launch(key, mine);
+                self.launched += 1;
+                self.started.push(i);
+                self.waiting.push((i, Instant::now()));
+            }
+            Err(reason) => tally.skipped.push((app_name(rule), reason.into())),
+        }
+    }
+
+    fn is_waiting(&self, i: usize) -> bool {
+        self.waiting.iter().any(|(w, _)| *w == i)
+    }
+}
+
+/// What a switch waiting for windows reads and changes.
+struct Waits<'a> {
+    found: &'a mut Vec<Option<isize>>,
+    known: &'a mut Vec<Candidate>,
+    procs: &'a mut Procs,
+    seen: &'a [Seen],
+}
+
+/// Give the rows still waiting the windows in `cands` that no row has, and place
+/// each one that got its window at once.
+fn catch(run: &Run, cands: Vec<Candidate>, waits: &mut Waits, starts: &mut Starts, tally: &mut Tally) {
+    let claimed: HashSet<isize> = waits.found.iter().flatten().copied().collect();
+    let fresh: Vec<Candidate> = cands.iter().filter(|c| !claimed.contains(&c.hwnd)).cloned().collect();
+    waits.known.extend(cands);
+    if fresh.is_empty() || starts.waiting.is_empty() {
+        return;
+    }
+    let rules: Vec<Rule> = starts.waiting.iter().map(|(i, _)| run.ws.windows[*i].clone()).collect();
+    let mut caught = Vec::new();
+    for ((i, since), hit) in starts.waiting.iter().zip(workspace::assign(&rules, &fresh)) {
+        if let Some(hwnd) = hit {
+            waits.found[*i] = Some(hwnd);
+            caught.push(*i);
+            let app = app_name(&run.ws.windows[*i]);
+            log::info!("{}: {app} showed after {} ms", run.ws.name, since.elapsed().as_millis());
+        }
+    }
+    starts.waiting.retain(|(i, _)| !caught.contains(i));
+    place_rules(run, waits.found, &caught, waits.seen, tally);
+}
+
+/// Start the apps in stages and place each window as soon as it shows (§11.3).
+/// Apps in a stage start together, each after its own delay. The next stage
+/// starts when the stage's waiting apps have a window or took too long. Windows
+/// come from `seam-wm`'s shown events, with a look every second as the fallback.
+/// Returns `None` if a newer switch replaced this one.
+fn run_stages(
+    run: &Run,
+    mine: u64,
+    starting: &[usize],
+    waits: &mut Waits,
+    starts: &mut Starts,
+    tally: &mut Tally,
+) -> Option<()> {
+    let ws = run.ws;
+    let stages = workspace::stages(&ws.windows, starting);
+    let shown = crate::wm::watch_shown(mine);
+    let delay = |i: usize| Duration::from_millis(workspace::tame_delay(ws.windows[i].delay_ms) as u64);
+    let (mut stage, mut stage_began) = (0, Instant::now());
+    let mut due: Vec<(usize, Instant)> = stages[0].iter().map(|&i| (i, stage_began + delay(i))).collect();
+    let (mut looked, mut late) = (Instant::now(), Vec::new());
+    let finished = loop {
+        let now = Instant::now();
+        for (i, _) in due.iter().filter(|(_, at)| *at <= now) {
+            starts.start(ws, *i, mine, tally);
+        }
+        due.retain(|(_, at)| *at > now);
+        // Each app's time runs from when it started.
+        for (i, _) in starts.waiting.iter().filter(|(_, since)| since.elapsed() >= LAUNCH_WAIT) {
+            tally.skipped.push((app_name(&ws.windows[*i]), TOOK_TOO_LONG.into()));
+            late.push(*i);
+        }
+        starts.waiting.retain(|(_, since)| since.elapsed() < LAUNCH_WAIT);
+        let holds = |i: &usize| ws.windows[*i].wait_for_window && starts.is_waiting(*i);
+        let held = stages.get(stage).is_some_and(|s| s.iter().any(holds));
+        if stage < stages.len() && due.is_empty() && !held {
+            let names: Vec<String> =
+                stages[stage].iter().filter(|i| late.contains(*i)).map(|i| app_name(&ws.windows[*i])).collect();
+            let names = if names.is_empty() { String::new() } else { format!(", too long: {}", names.join(", ")) };
+            let (n, ms) = (stages[stage].len(), stage_began.elapsed().as_millis());
+            log::info!("{}: stage {} of {}, {n} apps, {ms} ms{names}", ws.name, stage + 1, stages.len());
+            stage += 1;
+            stage_began = Instant::now();
+            if let Some(next) = stages.get(stage) {
+                due = next.iter().map(|&i| (i, stage_began + delay(i))).collect();
+                continue;
+            }
+        }
+        if stage >= stages.len() && starts.waiting.is_empty() {
+            break true;
+        }
+        // Sleep until an app is due, a window shows, the next look, or an app's time runs out.
+        let wake = due
+            .iter()
+            .map(|(_, at)| *at)
+            .chain(starts.waiting.iter().map(|(_, since)| *since + LAUNCH_WAIT))
+            .chain([looked + LAUNCH_POLL])
+            .min()
+            .unwrap_or(looked + LAUNCH_POLL);
+        let left = wake.saturating_duration_since(Instant::now());
+        let mut hwnds = Vec::new();
+        match shown.recv_timeout(left) {
+            Ok(h) => hwnds.push(h),
+            // The window thread isn't there, so only the looks find windows.
+            Err(RecvTimeoutError::Disconnected) => std::thread::sleep(left),
+            Err(RecvTimeoutError::Timeout) => {}
+        }
+        hwnds.extend(shown.try_iter());
+        if (run.cancelled)() {
+            break false;
+        }
+        let cands: Vec<Candidate> = if looked.elapsed() >= LAUNCH_POLL {
+            looked = Instant::now();
+            snapshot(waits.procs).into_iter().map(|s| s.cand).collect()
+        } else {
+            let mut cands = Vec::new();
+            for h in hwnds {
+                let z = waits.known.len() + cands.len();
+                cands.extend(seen_of(hwnd_of(h), z, &[], waits.procs, &mut |_, _| {}).map(|s| s.cand));
+            }
+            cands
+        };
+        if !cands.is_empty() {
+            catch(run, cands, waits, starts, tally);
+        }
+    };
+    crate::wm::unwatch_shown(mine);
+    finished.then_some(())
+}
+
 /// Does the whole switch. Returns `None` if a newer one replaced it.
 fn run_switch(job: &SwitchJob, mine: u64) -> Option<Switched> {
     let begun = Instant::now();
     let cancelled = || SWITCH_GEN.load(Ordering::SeqCst) != mine;
     let ws = &job.workspace;
-    let geos = geometry(&job.screens, job.gap);
+    let run = Run { ws, geos: geometry(&job.screens, job.gap), pins_stay: job.pins_stay, cancelled: &cancelled };
     let mut tally = Tally::default();
     let mut procs = Procs::new();
 
@@ -742,56 +930,7 @@ fn run_switch(job: &SwitchJob, mine: u64) -> Option<Switched> {
     let seen = snapshot(&mut procs);
     let mut known: Vec<Candidate> = seen.iter().map(|s| s.cand.clone()).collect();
     let mut found = workspace::assign(&ws.windows, &known);
-
-    // Launch what has no window, all at once, then wait for the windows to appear.
-    let mut launched = 0;
-    let mut waiting: Vec<(usize, Instant)> = Vec::new();
-    let mut started: Vec<usize> = Vec::new();
-    let mut reused: Vec<usize> = Vec::new();
-    // A switch that only arranges starts nothing.
-    let launching = ws.launch_missing && job.arrange_for.is_none();
-    let wanted = ws.windows.iter().enumerate().filter(|(i, r)| launching && found[*i].is_none() && r.launch);
-    for (i, rule) in wanted {
-        let key = launch_key(rule);
-        // A switch that was replaced already started this app, so wait for its window.
-        if let Some(at) = earlier_launch(&key, mine, &mut reused) {
-            started.push(i);
-            waiting.push((i, at));
-            continue;
-        }
-        match launch(rule) {
-            Ok(()) => {
-                note_launch(key, mine);
-                launched += 1;
-                started.push(i);
-                waiting.push((i, Instant::now()));
-            }
-            Err(reason) => tally.skipped.push((app_name(rule), reason.into())),
-        }
-    }
-    while !waiting.is_empty() {
-        std::thread::sleep(POLL);
-        if cancelled() {
-            return None;
-        }
-        let claimed: HashSet<isize> = found.iter().flatten().copied().collect();
-        let now: Vec<Candidate> = snapshot(&mut procs).into_iter().map(|s| s.cand).collect();
-        let fresh: Vec<Candidate> = now.iter().filter(|c| !claimed.contains(&c.hwnd)).cloned().collect();
-        known.extend(now);
-        let rules: Vec<Rule> = waiting.iter().map(|(i, _)| ws.windows[*i].clone()).collect();
-        let hits = workspace::assign(&rules, &fresh);
-        let mut still = Vec::new();
-        for ((i, since), hit) in waiting.into_iter().zip(hits) {
-            match hit {
-                Some(hwnd) => found[i] = Some(hwnd),
-                None if since.elapsed() >= LAUNCH_WAIT => {
-                    tally.skipped.push((app_name(&ws.windows[i]), "timeout".into()))
-                }
-                None => still.push((i, since)),
-            }
-        }
-        waiting = still;
-    }
+    let mut starts = Starts::default();
 
     if let Some(wait) = job.arrange_for {
         // Something else opens the windows, so place each one as it appears, once per rule.
@@ -800,7 +939,7 @@ fn run_switch(job: &SwitchJob, mine: u64) -> Option<Switched> {
         loop {
             let ready: Vec<usize> = (0..done.len()).filter(|i| !done[*i] && found[*i].is_some()).collect();
             if !ready.is_empty() {
-                place_rules(ws, &found, &ready, &geos, &seen, &mut tally, &cancelled);
+                place_rules(&run, &found, &ready, &seen, &mut tally);
                 ready.iter().for_each(|i| done[*i] = true);
             }
             if done.iter().all(|d| *d) || since.elapsed() >= wait {
@@ -825,8 +964,18 @@ fn run_switch(job: &SwitchJob, mine: u64) -> Option<Switched> {
         log::info!("{}: placed {shown} of {}, never showed: {}", ws.name, found.len(), absent.join(", "));
         tally.skipped.extend(absent.into_iter().map(|app| (app, "timeout".to_string())));
     } else {
-        let all: Vec<usize> = (0..found.len()).collect();
-        place_rules(ws, &found, &all, &geos, &seen, &mut tally, &cancelled);
+        // What is running already goes in one pass, before anything starts.
+        let running: Vec<usize> = (0..found.len()).filter(|i| found[*i].is_some()).collect();
+        place_rules(&run, &found, &running, &seen, &mut tally);
+        if cancelled() {
+            return None;
+        }
+        let wanted = |(i, r): (usize, &Rule)| (ws.launch_missing && found[i].is_none() && r.launch).then_some(i);
+        let starting: Vec<usize> = ws.windows.iter().enumerate().filter_map(wanted).collect();
+        if !starting.is_empty() {
+            let mut waits = Waits { found: &mut found, known: &mut known, procs: &mut procs, seen: &seen };
+            run_stages(&run, mine, &starting, &mut waits, &mut starts, &mut tally)?;
+        }
     }
     if cancelled() {
         return None;
@@ -852,7 +1001,8 @@ fn run_switch(job: &SwitchJob, mine: u64) -> Option<Switched> {
     } else if ws.other_windows != OtherWindows::Leave {
         let claimed: HashSet<isize> = found.iter().flatten().copied().collect();
         let (mut exes, mut aumids): (HashSet<String>, HashSet<String>) = (HashSet::new(), HashSet::new());
-        let mine_rules = ws.windows.iter().enumerate().filter(|(i, _)| found[*i].is_some() || started.contains(i));
+        let mine_rules =
+            ws.windows.iter().enumerate().filter(|(i, _)| found[*i].is_some() || starts.started.contains(i));
         for (_, rule) in mine_rules {
             exes.insert(rule.exe.to_lowercase());
             aumids.extend(rule.aumid.clone());
@@ -861,7 +1011,8 @@ fn run_switch(job: &SwitchJob, mine: u64) -> Option<Switched> {
             exes.insert(c.exe.to_lowercase());
             aumids.extend(c.aumid.clone());
         }
-        let others = seen.iter().filter(|s| !s.elevated && !s.sticky && !claimed.contains(&s.cand.hwnd));
+        let others =
+            seen.iter().filter(|s| !s.elevated && !stays(s.pin, job.pins_stay) && !claimed.contains(&s.cand.hwnd));
         for s in others.filter(|s| !exes.contains(&s.cand.exe.to_lowercase())) {
             if s.cand.aumid.as_ref().is_some_and(|a| aumids.contains(a)) {
                 continue;
@@ -873,7 +1024,7 @@ fn run_switch(job: &SwitchJob, mine: u64) -> Option<Switched> {
                 continue;
             }
             let on_desk = winutil::window_rect(h)
-                .is_some_and(|r| geos.iter().any(|g| g.bounds.contains(centre(r).0, centre(r).1)));
+                .is_some_and(|r| run.geos.iter().any(|g| g.bounds.contains(centre(r).0, centre(r).1)));
             if !on_desk {
                 continue;
             }
@@ -904,6 +1055,7 @@ fn run_switch(job: &SwitchJob, mine: u64) -> Option<Switched> {
         tally.moves,
         tally.in_place
     );
+    let launched = starts.launched;
     Some(Switched { id: ws.id.clone(), name: ws.name.clone(), launched, placed: tally.placed, skipped: tally.skipped })
 }
 

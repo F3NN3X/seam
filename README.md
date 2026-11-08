@@ -38,11 +38,11 @@ Experimental: turn on **Keep windows in their zones** on the Zones page and Seam
 
 "Left" here means left on your desk, as the screens physically stand, not in Windows' pixel layout. So left from the top of a tall screen beside two stacked ones goes to the upper one.
 
-- **Win+Alt+arrows** move the focused window. A window in a zone goes to the next zone that way, and at the edge onto the nearest zone of the screen next to it. A window in no zone goes to the next screen, in the same place there.
+- **Shift+Win+Alt+arrows** move the focused window. A window in a zone goes to the next zone that way, and at the edge onto the nearest zone of the screen next to it. A window in no zone goes to the next screen, in the same place there.
 - **Ctrl+Shift+Alt+arrows** focus the nearest window that way.
 - **Swap** trades places with the nearest window that way, zones included. It has no key until you set one.
 
-Seam leaves windows from apps running as administrator, windows that aren't responding and its own windows alone. Next and previous zone are still on the Shortcuts page and in the API, with no key by default. If a `config.json` from an earlier version still has them on Win+Alt+Left and Right, Seam clears them once, so the moves get those keys.
+Seam leaves windows from apps running as administrator, windows that aren't responding and its own windows alone. Next and previous zone are still on the Shortcuts page and in the API. New installs give them no key, and an earlier `config.json` keeps the keys it has. Win+Alt+arrows aren't the move keys because some Windows builds hold them already.
 
 ### Workspaces
 
@@ -69,7 +69,7 @@ Running `seam.exe` again while it's already running opens the Seam window. `seam
 
 - **Ctrl+Shift+Alt+L**: Line Up.
 - **Ctrl+Shift+Alt+P**: pause or resume the remap.
-- **Win+Alt+arrows**: move the focused window that way on the desk.
+- **Shift+Win+Alt+arrows**: move the focused window that way on the desk.
 - **Ctrl+Shift+Alt+arrows**: focus the window that way.
 - Swap, and next or previous zone, have no key until you set one.
 - One per workspace, and one to capture the current windows, all set on the Shortcuts page. Ctrl+Shift+Alt plus a number is a good choice, since Ctrl+Alt alone types characters on many keyboards.

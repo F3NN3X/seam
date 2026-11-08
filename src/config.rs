@@ -57,15 +57,15 @@ impl Default for Hotkeys {
         Hotkeys {
             line_up: Some("Ctrl+Shift+Alt+L".into()),
             pause: Some("Ctrl+Shift+Alt+P".into()),
-            // Win+Alt+arrows moves the window now (D107). The tray clears these in a
-            // saved file that still has them on a directional key.
+            // New installs leave these unset (D107). The tray clears either one in a
+            // saved file where it sits on a directional key.
             next_zone: None,
             prev_zone: None,
             capture_workspace: None,
-            move_left: Some("Win+Alt+Left".into()),
-            move_right: Some("Win+Alt+Right".into()),
-            move_up: Some("Win+Alt+Up".into()),
-            move_down: Some("Win+Alt+Down".into()),
+            move_left: Some("Shift+Win+Alt+Left".into()),
+            move_right: Some("Shift+Win+Alt+Right".into()),
+            move_up: Some("Shift+Win+Alt+Up".into()),
+            move_down: Some("Shift+Win+Alt+Down".into()),
             focus_left: Some("Ctrl+Shift+Alt+Left".into()),
             focus_right: Some("Ctrl+Shift+Alt+Right".into()),
             focus_up: Some("Ctrl+Shift+Alt+Up".into()),
@@ -97,9 +97,8 @@ impl Hotkeys {
         ]
     }
 
-    /// A file from before D107 has next and previous zone on Win+Alt+Right and
-    /// Left, which the moves hold now. Clear whichever sits on a directional
-    /// key, and say which.
+    /// Next or previous zone on the same key as a directional command would
+    /// never fire. Clear whichever does, and say which.
     pub fn drop_zone_clashes(&mut self) -> Vec<&'static str> {
         let taken: Vec<_> =
             self.directional().iter().filter_map(|(_, _, c)| crate::hotkey::parse(c.as_ref()?)).collect();

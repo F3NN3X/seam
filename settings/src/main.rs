@@ -15,6 +15,8 @@ mod update;
 use gpui_kit::*;
 use panel::{Page, Panel};
 use seam::api::Client;
+use seam::geom;
+use seam::panelwin;
 use seam::tray;
 use serde_json::json;
 use std::time::{Duration, Instant};
@@ -58,6 +60,28 @@ pub fn restart_panel(cx: &mut App) {
     cx.quit();
 }
 
+/// The window's logical size, which is the same on every screen.
+const WINDOW_SIZE: (f32, f32) = (1160., 780.);
+
+/// Where the window opens: centred in the work area of the screen under the
+/// pointer, and the display gpui should open it on. The sums are in physical
+/// pixels, where the size depends on that screen's scale; gpui is given back the
+/// logical equivalent. Without an answer from Windows it is the primary screen.
+fn opening_bounds(cx: &App) -> (Bounds<Pixels>, Option<DisplayId>) {
+    let (w, h) = WINDOW_SIZE;
+    let Some((monitor, work, dpi)) = panelwin::screen_under_pointer() else {
+        return (Bounds::centered(None, size(px(w), px(h)), cx), None);
+    };
+    let scale = dpi as f32 / 96.;
+    let work = geom::Rect::new(work.x, work.y, work.w, work.h);
+    let at = geom::centre_in(&work, (w * scale).round() as i32, (h * scale).round() as i32);
+    let bounds = Bounds::new(
+        point(px(at.left as f32 / scale), px(at.top as f32 / scale)),
+        size(px(at.width() as f32 / scale), px(at.height() as f32 / scale)),
+    );
+    (bounds, Some(DisplayId::new(monitor)))
+}
+
 fn main() {
     // The updater's headless modes, and the installer's. None opens a window.
     if std::env::args().any(|a| a == "--check-updates") {
@@ -81,9 +105,11 @@ fn main() {
         init(cx);
         theme::install(cx);
         Panel::bind_keys(cx);
+        let (bounds, display_id) = opening_bounds(cx);
         let options = WindowOptions {
             titlebar: Some(TitlebarOptions { title: Some(tray::PANEL_TITLE.into()), ..Default::default() }),
-            window_bounds: Some(WindowBounds::Windowed(Bounds::centered(None, size(px(1160.), px(780.)), cx))),
+            window_bounds: Some(WindowBounds::Windowed(bounds)),
+            display_id,
             window_min_size: Some(size(px(900.), px(640.))),
             ..Default::default()
         };

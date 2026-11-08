@@ -269,6 +269,13 @@ pub fn place_against(a: &Rect, b: &Rect, side: Side, along_origin: i32) -> Rect 
     }
 }
 
+/// A `width` x `height` window centred in `work`, shrunk to fit if the screen is
+/// smaller, so it never reaches past the work area.
+pub fn centre_in(work: &Rect, width: i32, height: i32) -> Rect {
+    let (w, h) = (width.min(work.width()), height.min(work.height()));
+    Rect::new(work.left + (work.width() - w) / 2, work.top + (work.height() - h) / 2, w, h)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -410,5 +417,13 @@ mod tests {
         ] {
             assert!(!m.is_valid(), "{m:?}");
         }
+    }
+
+    #[test]
+    fn window_is_centred_and_kept_on_its_screen() {
+        // A screen left of the primary has a negative origin.
+        assert_eq!(centre_in(&Rect::new(-1920, 0, 1920, 1040), 1160, 780), Rect::new(-1540, 130, 1160, 780));
+        // A screen smaller than the window shrinks it rather than overhanging.
+        assert_eq!(centre_in(&Rect::new(100, 50, 1024, 700), 1160, 780), Rect::new(100, 50, 1024, 700));
     }
 }

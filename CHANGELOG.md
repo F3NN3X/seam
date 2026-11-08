@@ -13,6 +13,7 @@ All notable changes to Seam. The format follows [Keep a Changelog](https://keepa
 ### Changed
 
 - The sidebar's App group (Shortcuts, General, Help and About) sits at the bottom, above the version. About's Help section is now called Support.
+- The Seam window opens centred on the screen the mouse pointer is on, instead of always the primary screen.
 - The settings window opens a little wider, and the workspace list is narrower, so the workspace editor's columns show in full. Workspace cards show up to six app icons before "+n".
 - The workspace in use shows a green dot and "Active" in the Workspaces list, instead of "in use", and "Active, moved" once one of its windows moved.
 - After a restart or a desk change, the workspace last in use on that desk shows as active again, else the default, else the only one whose open apps are all in place. Nothing moves.

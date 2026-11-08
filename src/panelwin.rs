@@ -6,8 +6,11 @@
 use crate::winutil::process_id;
 use crate::zones::Rect;
 use windows::core::BOOL;
-use windows::Win32::Foundation::{COLORREF, HWND, LPARAM, RECT};
-use windows::Win32::Graphics::Gdi::{GetMonitorInfoW, MonitorFromRect, MONITORINFO, MONITOR_DEFAULTTONEAREST};
+use windows::Win32::Foundation::{COLORREF, HWND, LPARAM, POINT, RECT};
+use windows::Win32::Graphics::Gdi::{
+    GetMonitorInfoW, MonitorFromPoint, MonitorFromRect, MONITORINFO, MONITOR_DEFAULTTONEAREST,
+};
+use windows::Win32::UI::HiDpi::{GetDpiForMonitor, MDT_EFFECTIVE_DPI};
 use windows::Win32::UI::WindowsAndMessaging::*;
 
 /// The work area (taskbar excluded) of the screen at `bounds`, in physical pixels.
@@ -21,6 +24,27 @@ pub fn work_area(bounds: Rect) -> Option<Rect> {
         }
         let w = info.rcWork;
         Some(Rect { x: w.left, y: w.top, w: w.right - w.left, h: w.bottom - w.top })
+    }
+}
+
+/// The screen under the mouse pointer: its handle (gpui's display id), work area
+/// in physical pixels, and effective DPI. None if Windows won't say.
+pub fn screen_under_pointer() -> Option<(u64, Rect, u32)> {
+    unsafe {
+        let mut pt = POINT::default();
+        GetCursorPos(&mut pt).ok()?;
+        let monitor = MonitorFromPoint(pt, MONITOR_DEFAULTTONEAREST);
+        let mut info = MONITORINFO { cbSize: size_of::<MONITORINFO>() as u32, ..Default::default() };
+        if !GetMonitorInfoW(monitor, &mut info).as_bool() {
+            return None;
+        }
+        let (mut dx, mut dy) = (0u32, 0u32);
+        let dpi = match GetDpiForMonitor(monitor, MDT_EFFECTIVE_DPI, &mut dx, &mut dy) {
+            Ok(()) if dx > 0 => dx,
+            _ => 96,
+        };
+        let w = info.rcWork;
+        Some((monitor.0 as u64, Rect { x: w.left, y: w.top, w: w.right - w.left, h: w.bottom - w.top }, dpi))
     }
 }
 

@@ -1,0 +1,156 @@
+{
+	"UUID": "co.f3nn3x.seam",
+	"Name": "Seam",
+	"Version": "0.5.0.0",
+	"Author": "F3NN3X",
+	"Description": "Switch workspaces, line up screens, and pause the pointer remap or the zones from a Stream Deck key. Needs Seam running.",
+	"URL": "https://github.com/F3NN3X/seam",
+	"Category": "Seam",
+	"CategoryIcon": "imgs/plugin/category",
+	"Icon": "imgs/plugin/icon",
+	"CodePath": "bin/plugin.js",
+	"SDKVersion": 3,
+	"Software": {
+		"MinimumVersion": "7.1"
+	},
+	"OS": [
+		{
+			"Platform": "windows",
+			"MinimumVersion": "10"
+		}
+	],
+	"Nodejs": {
+		"Version": "24",
+		"Debug": "enabled"
+	},
+	"Actions": [
+		{
+			"UUID": "co.f3nn3x.seam.workspace",
+			"Name": "Switch workspace",
+			"Tooltip": "Switch to a workspace on the current desk. The key lights while that workspace is in use.",
+			"Icon": "imgs/actions/workspace/icon",
+			"PropertyInspectorPath": "ui/workspace.html",
+			"Controllers": [
+				"Keypad"
+			],
+			"States": [
+				{
+					"Image": "imgs/actions/workspace/key-off",
+					"Title": "Workspace",
+					"TitleAlignment": "bottom"
+				},
+				{
+					"Image": "imgs/actions/workspace/key-on",
+					"Title": "Workspace",
+					"TitleAlignment": "bottom"
+				}
+			]
+		},
+		{
+			"UUID": "co.f3nn3x.seam.lineup",
+			"Name": "Line up screens",
+			"Tooltip": "Open Line Up to match the screen edges to your desk.",
+			"Icon": "imgs/actions/lineup/icon",
+			"Controllers": [
+				"Keypad"
+			],
+			"States": [
+				{
+					"Image": "imgs/actions/lineup/key",
+					"Title": "Line up",
+					"TitleAlignment": "bottom"
+				}
+			]
+		},
+		{
+			"UUID": "co.f3nn3x.seam.remap",
+			"Name": "Pause or resume remap",
+			"Tooltip": "Pause or resume the pointer remap across screens. The key follows Seam.",
+			"Icon": "imgs/actions/remap/icon",
+			"Controllers": [
+				"Keypad"
+			],
+			"States": [
+				{
+					"Image": "imgs/actions/remap/key-off",
+					"Title": "Remap paused",
+					"TitleAlignment": "bottom"
+				},
+				{
+					"Image": "imgs/actions/remap/key-on",
+					"Title": "Remap on",
+					"TitleAlignment": "bottom"
+				}
+			]
+		},
+		{
+			"UUID": "co.f3nn3x.seam.zones",
+			"Name": "Zones on or off",
+			"Tooltip": "Turn window zones on or off. The key follows Seam.",
+			"Icon": "imgs/actions/zones/icon",
+			"Controllers": [
+				"Keypad"
+			],
+			"States": [
+				{
+					"Image": "imgs/actions/zones/key-off",
+					"Title": "Zones off",
+					"TitleAlignment": "bottom"
+				},
+				{
+					"Image": "imgs/actions/zones/key-on",
+					"Title": "Zones on",
+					"TitleAlignment": "bottom"
+				}
+			]
+		},
+		{
+			"UUID": "co.f3nn3x.seam.zone-next",
+			"Name": "Next zone",
+			"Tooltip": "Move the focused window to the next zone.",
+			"Icon": "imgs/actions/zone-next/icon",
+			"Controllers": [
+				"Keypad"
+			],
+			"States": [
+				{
+					"Image": "imgs/actions/zone-next/key",
+					"Title": "Next zone",
+					"TitleAlignment": "bottom"
+				}
+			]
+		},
+		{
+			"UUID": "co.f3nn3x.seam.zone-prev",
+			"Name": "Previous zone",
+			"Tooltip": "Move the focused window to the previous zone.",
+			"Icon": "imgs/actions/zone-prev/icon",
+			"Controllers": [
+				"Keypad"
+			],
+			"States": [
+				{
+					"Image": "imgs/actions/zone-prev/key",
+					"Title": "Previous zone",
+					"TitleAlignment": "bottom"
+				}
+			]
+		},
+		{
+			"UUID": "co.f3nn3x.seam.desk",
+			"Name": "Desk",
+			"Tooltip": "Shows the name of the active desk. Press it to open the Displays page.",
+			"Icon": "imgs/actions/desk/icon",
+			"Controllers": [
+				"Keypad"
+			],
+			"States": [
+				{
+					"Image": "imgs/actions/desk/key",
+					"Title": "Desk",
+					"TitleAlignment": "bottom"
+				}
+			]
+		}
+	]
+}

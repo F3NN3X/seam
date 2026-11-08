@@ -1,2 +1,9 @@
 target/
 dist/
+
+# Stream Deck plugin
+integrations/streamdeck/node_modules/
+integrations/streamdeck/dist/
+integrations/streamdeck/*.sdPlugin/bin/
+integrations/streamdeck/*.sdPlugin/logs/
+*.streamDeckPlugin

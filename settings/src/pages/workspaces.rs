@@ -406,7 +406,7 @@ fn auto_apply_row(panel: &Panel, window: &mut Window, cx: &mut Context<Panel>) -
     let p = palette(cx);
     let view = cx.entity();
     let on = panel.config.auto_apply;
-    let toggle = switch("auto-apply", on, window, cx, move |on, window, cx| {
+    let toggle = switch("auto-apply", "Put apps in place when they open", on, window, cx, move |on, window, cx| {
         view.update(cx, |panel, cx| {
             panel.config.auto_apply = on;
             cx.notify();
@@ -455,6 +455,7 @@ fn detail(panel: &mut Panel, ws: Workspace, window: &mut Window, cx: &mut Contex
     let more = ui::secondary("more-workspace", "", cx)
         .ghost()
         .icon(Icon::new(assets::IconName::Ellipsis))
+        .accessibility_label(format!("More for {}", ws.name))
         .dropdown_menu(move |menu, _, _| {
             let (rename, exporting, importing, deleting) = (view.clone(), view.clone(), view.clone(), view.clone());
             let (to_export, id) = (more_ws.clone(), more_ws.id.clone());
@@ -502,7 +503,7 @@ fn detail(panel: &mut Panel, ws: Workspace, window: &mut Window, cx: &mut Contex
 
     let view = cx.entity();
     let id = ws.id.clone();
-    let start_missing = switch("start-missing", ws.launch_missing, window, cx, {
+    let start_missing = switch("start-missing", "Start missing apps", ws.launch_missing, window, cx, {
         let view = view.clone();
         move |on, window, cx| {
             let id = id.clone();
@@ -515,12 +516,19 @@ fn detail(panel: &mut Panel, ws: Workspace, window: &mut Window, cx: &mut Contex
         OtherWindows::Minimize => 1,
         OtherWindows::Close => 2,
     };
-    let others =
-        segmented("other-windows", &["Leave", "Minimize", "Close"], selected, window, cx, move |i, window, cx| {
+    let others = segmented(
+        "other-windows",
+        "Other windows",
+        &["Leave", "Minimize", "Close"],
+        selected,
+        window,
+        cx,
+        move |i, window, cx| {
             let id = id.clone();
             let mode = [OtherWindows::Leave, OtherWindows::Minimize, OtherWindows::Close][i.min(2)];
             view.update(cx, |panel, cx| edit(panel, &id, window, cx, |ws| ws.other_windows = mode));
-        });
+        },
+    );
     rows.push(row("Start missing apps", Some("Ticked apps open if they're closed".into()), start_missing, p));
     rows.push(row(
         "Other windows",

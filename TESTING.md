@@ -703,6 +703,17 @@ Needs workspaces on this desk that hold the apps below.
 - [ ] **150% scaling.** Set display scaling to 150%. Icons are sharp, not blurry, and still 16 logical px.
 - [ ] **No stall.** Open the Workspaces page with a workspace of many apps. The page draws at once and the icons fill in a moment later.
 
+## Screen reader names
+
+Use Narrator (Win+Ctrl+Enter) or Accessibility Insights for Windows, and open the Seam window.
+
+- [ ] **Sidebar.** Each row is read as its page title with "tab", and the open page as selected.
+- [ ] **Pause and resume.** The button beside the remap status is read as "Pause remap" while on and "Resume remap" while paused, not as an unnamed button.
+- [ ] **More menus.** On Displays, each desk's "..." is read as "More for" and the desk's name. On Workspaces, the list card and the editor's "..." read "More for" and the workspace name, or the app's name in the editor.
+- [ ] **Switches.** On General, Displays, Workspaces, Zones and Updates, each switch is read as its row title with "switch" and "on" or "off", and the state changes after you press it.
+- [ ] **Choices.** Each segmented control (Show zones, Left-click, Other windows, Show as and the rest) is read as a group named for its row, and each option as its own text with selected or not.
+- [ ] **Nothing unnamed.** In Accessibility Insights' live tree, no button, switch or tab on any page has an empty Name.
+
 ## Report back
 
 For each failure, give the step, what you saw, and the matching lines from `seam.log`.

@@ -1,12 +1,24 @@
 name: CI
 
-# A pull request checks the change. A push to main (one per merge) also builds
-# the release exes and saves the Rust cache, which every pull request restores:
-# a cache saved by a pull request is only ever read by that pull request.
+# A pull request checks the change, and that run is the proof for its merge.
+# Main runs only to refresh the Rust cache that every pull request restores (a
+# cache saved by a pull request is only ever read by that pull request): when a
+# merge changes what the cache is keyed on or the packaging, once a week for
+# runner toolchain updates, or by hand. Those runs also build the release exes
+# and the setup, so a break that only they show turns up before a tag.
 on:
   pull_request:
   push:
     branches: [main]
+    paths:
+      - Cargo.lock
+      - Cargo.toml
+      - settings/Cargo.toml
+      - packaging/**
+      - .github/workflows/ci.yml
+  schedule:
+    - cron: "17 4 * * 1"
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -38,27 +50,18 @@ jobs:
       - run: cargo fmt --all --check
       - run: cargo clippy --workspace --all-targets -- -D warnings
       - run: cargo test --workspace
-      # Catches a break that only the release profile shows, once per merge.
-      - if: github.event_name == 'push'
+      # Catches a break that only the release profile shows.
+      - if: github.event_name != 'pull_request'
         run: cargo build --release --workspace
-      - if: github.event_name == 'push'
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: seam
-          path: |
-            target/release/seam.exe
-            target/release/seam-settings.exe
-          if-no-files-found: error
-      # A broken seam.iss shows up at merge time, not at tag time. The setup is
-      # only kept as an artifact for testing, and goes nowhere else.
+      # A broken seam.iss shows up before a tag. Nothing keeps the setup.
       - name: Install Inno Setup
-        if: github.event_name == 'push'
+        if: github.event_name != 'pull_request'
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
         run: ./packaging/install-inno.ps1
       - name: Build installer
-        if: github.event_name == 'push'
+        if: github.event_name != 'pull_request'
         shell: pwsh
         run: |
           $id = (Get-Content packaging/installer.json -Raw | ConvertFrom-Json).app_id
@@ -67,17 +70,10 @@ jobs:
           Copy-Item target/release/seam.exe, target/release/seam-settings.exe dist
           & $env:ISCC "/DAppVersion=$version" "/DAppId=$id" "/DSourceDir=$PWD\dist" "/O$PWD\dist" packaging\seam.iss
           if ($LASTEXITCODE -ne 0) { exit 1 }
-      - if: github.event_name == 'push'
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: installer
-          path: dist/Seam-Setup-*.exe
-          retention-days: 3
-          if-no-files-found: error
 
   # A cross build on the x64 runner. The tests can't run on ARM64 here, and the
   # code they cover is the same on both, so this only has to compile and lint.
-  # Not a required check, so `build` stays the one the ruleset names.
+  # Required next to `build`, by the ruleset and the release gate.
   arm64:
     runs-on: windows-latest
     timeout-minutes: 30
@@ -99,16 +95,8 @@ jobs:
       - run: cargo clippy --workspace --all-targets --target aarch64-pc-windows-msvc -- -D warnings
       - if: github.event_name == 'pull_request'
         run: cargo build --workspace --target aarch64-pc-windows-msvc
-      - if: github.event_name == 'push'
+      - if: github.event_name != 'pull_request'
         run: cargo build --release --workspace --target aarch64-pc-windows-msvc
-      - if: github.event_name == 'push'
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: seam-arm64
-          path: |
-            target/aarch64-pc-windows-msvc/release/seam.exe
-            target/aarch64-pc-windows-msvc/release/seam-settings.exe
-          if-no-files-found: error
 
   # The Stream Deck plugin, from its lockfile, with the scripts it defines. Runs
   # on every change: it takes about a minute, and a paths filter would need an

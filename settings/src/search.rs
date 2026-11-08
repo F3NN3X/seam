@@ -36,6 +36,18 @@ const ENTRIES: &[Entry] = &[
     entry(Page::Zones, "Focus border", "Colour the border of the window that has focus", "windows highlight active"),
     entry(
         Page::Zones,
+        "Focus border colour",
+        "Windows accent follows Settings > Personalisation > Colours",
+        "swatch none custom hex amber blue teal green red pink white",
+    ),
+    entry(
+        Page::Zones,
+        "Pin border colour",
+        "Border of a window pinned on top or kept out of workspace switches",
+        "swatch none custom hex amber blue teal green red pink white sticky topmost",
+    ),
+    entry(
+        Page::Zones,
         "Another window manager handles my windows",
         "Snapping and window moves step aside",
         "komorebi glazewm leopardwm tiling coexistence",

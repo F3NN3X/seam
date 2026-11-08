@@ -115,6 +115,8 @@ pub enum Command {
     },
     /// Switch to the active workspace again, so drifted windows go back.
     WorkspaceSnapBack,
+    /// Save the windows on screen into the workspace in use, or a new one (§7).
+    WorkspaceQuickSave,
     /// "Put apps in place when they open".
     AutoApplySet(bool),
     RemapSet(bool),
@@ -215,6 +217,7 @@ fn command(method: &str, p: &Value) -> Result<Command, RpcError> {
             id: str_param(p, "id")?.ok_or_else(|| RpcError::new(INVALID_PARAMS, "id is required"))?,
         },
         "workspace.snap_back" => Command::WorkspaceSnapBack,
+        "workspace.quick_save" => Command::WorkspaceQuickSave,
         "autoapply.set" => Command::AutoApplySet(on_param(p)?),
         "remap.set" => Command::RemapSet(on_param(p)?),
         "zones.set" => Command::ZonesSet(on_param(p)?),
@@ -528,6 +531,7 @@ mod tests {
             ),
             (request("workspace.status", r#"{"id":"ws_1"}"#), anyone, Command::WorkspaceStatus { id: "ws_1".into() }),
             (request("workspace.snap_back", "{}"), anyone, Command::WorkspaceSnapBack),
+            (request("workspace.quick_save", "{}"), anyone, Command::WorkspaceQuickSave),
             (request("autoapply.set", r#"{"on":true}"#), anyone, Command::AutoApplySet(true)),
             (
                 request("events.subscribe", r#"{"topics":["state"]}"#),

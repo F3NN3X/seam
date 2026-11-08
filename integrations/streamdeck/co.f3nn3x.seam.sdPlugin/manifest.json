@@ -1,7 +1,7 @@
 {
 	"UUID": "co.f3nn3x.seam",
 	"Name": "Seam",
-	"Version": "0.7.1.0",
+	"Version": "0.8.0.0",
 	"Author": "F3NN3X",
 	"Description": "Switch workspaces, line up screens, and pause the pointer remap or the zones from a Stream Deck key. Needs Seam running.",
 	"URL": "https://github.com/F3NN3X/seam",
@@ -57,6 +57,22 @@
 				{
 					"Image": "imgs/actions/snap-back/key",
 					"Title": "Snap back",
+					"TitleAlignment": "bottom"
+				}
+			]
+		},
+		{
+			"UUID": "co.f3nn3x.seam.quick-save",
+			"Name": "Save windows",
+			"Tooltip": "Save the windows as they are now into the workspace in use, or into a new one when none is.",
+			"Icon": "imgs/actions/quick-save/icon",
+			"Controllers": [
+				"Keypad"
+			],
+			"States": [
+				{
+					"Image": "imgs/actions/quick-save/key",
+					"Title": "Save windows",
 					"TitleAlignment": "bottom"
 				}
 			]

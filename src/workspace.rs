@@ -119,6 +119,13 @@ pub struct Rule {
     pub delay_ms: u32,
     /// The next stage starts only once this app's window is up, or took too long.
     pub wait_for_window: bool,
+    /// The window's width and height in pixels at capture. A free place restored on
+    /// another screen keeps it with "Keep its pixel size" (§11.4).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub size_px: Option<[i32; 2]>,
+    /// The same in millimetres, when its screen reports a size, for "Keep its real size".
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub size_mm: Option<[f32; 2]>,
 }
 
 impl Default for Rule {
@@ -138,6 +145,8 @@ impl Default for Rule {
             focused: false,
             delay_ms: 0,
             wait_for_window: false,
+            size_px: None,
+            size_mm: None,
         }
     }
 }
@@ -201,6 +210,8 @@ impl Rule {
         self.shown = from.shown;
         self.z = from.z;
         self.focused = from.focused;
+        self.size_px = from.size_px;
+        self.size_mm = from.size_mm;
     }
 }
 

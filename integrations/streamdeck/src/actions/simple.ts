@@ -45,6 +45,14 @@ export class SnapBack extends Plain {
 	}
 }
 
+/** Saves the windows into the workspace in use, the way "Update from screen" does, or into a new one. */
+@action({ UUID: "co.f3nn3x.seam.quick-save" })
+export class SaveWindows extends Plain {
+	protected async press(): Promise<void> {
+		await seam.call("workspace.quick_save");
+	}
+}
+
 @action({ UUID: "co.f3nn3x.seam.release" })
 export class ReleasePinned extends Plain {
 	protected async press(): Promise<void> {

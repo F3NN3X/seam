@@ -56,6 +56,8 @@ pub struct Hotkeys {
     pub release_all: Option<String>,
     /// "Snap back to this workspace": switch to the active workspace again.
     pub snap_back: Option<String>,
+    /// "Save windows to the active workspace": capture into the workspace in use (§7).
+    pub quick_save: Option<String>,
 }
 
 impl Default for Hotkeys {
@@ -84,6 +86,7 @@ impl Default for Hotkeys {
             pin_sticky: None,
             release_all: None,
             snap_back: None,
+            quick_save: None,
         }
     }
 }
@@ -214,6 +217,19 @@ impl Default for UpdateSettings {
     }
 }
 
+/// The size a window gets when Seam moves it to another screen (§11.4).
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum WindowSize {
+    /// "Let Windows scale it": Windows' own DPI scaling, and nothing more.
+    #[default]
+    Windows,
+    /// "Keep its pixel size": the same width and height in pixels as before the move.
+    Pixels,
+    /// "Keep its real size": the same size on the desk, from each screen's EDID size.
+    Real,
+}
+
 /// Who reopens the apps of a restored last session (D128).
 #[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -263,6 +279,12 @@ pub struct Config {
     pub align_arrangement: bool,
     /// Offer to line up a set of screens we haven't seen before.
     pub ask_new_desks: bool,
+    /// "When a window moves to another screen": what size a key, API or workspace move
+    /// to another screen gives it, outside zones (§11.4).
+    pub window_size_on_move: WindowSize,
+    /// "Also when I drag a window to another screen": the same after a free drag with
+    /// the mouse that didn't snap. Does nothing while the size is Windows'.
+    pub window_size_on_drag: bool,
     pub tray_click: TrayClick,
     pub debug_log: bool,
     pub hotkeys: Hotkeys,
@@ -297,6 +319,8 @@ impl Default for Config {
             enabled: true,
             align_arrangement: true,
             ask_new_desks: true,
+            window_size_on_move: WindowSize::Windows,
+            window_size_on_drag: false,
             tray_click: TrayClick::Open,
             debug_log: false,
             hotkeys: Hotkeys::default(),

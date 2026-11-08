@@ -15,6 +15,8 @@ All notable changes to Seam. The format follows [Keep a Changelog](https://keepa
 - The workspace editor shows how each app is doing now: in place, moved, minimized, not running, or can't be moved because it runs as administrator. **Put windows back** shows when something moved.
 - **Snap back to this workspace** puts moved and minimized windows back: a shortcut (no key until you set one), `workspace.snap_back` in the API, and a Stream Deck action. A workspace key on the Stream Deck shows an amber dot while its workspace has drifted.
 - **Put apps in place when they open**, on the Workspaces page: an app of the workspace in use that you open by hand goes to its place once. Off until you turn it on.
+- **When a window moves to another screen**, on the Zones page: a window moved by key or by another app, or put back by a workspace, onto another screen can keep its pixel size or its real size instead of Windows' scaling, which stays the default. **Also when I drag a window to another screen** does the same after a mouse drag, and is off until you turn it on.
+- **Save windows to the active workspace** saves the windows into the workspace in use, with Undo by clicking the notification for 8 s, or into a new "Workspace N" when none is in use: a shortcut (no key until you set one), `workspace.quick_save` in the API, and a **Save windows** Stream Deck action.
 
 ### Changed
 

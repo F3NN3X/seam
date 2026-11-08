@@ -74,6 +74,18 @@ const ENTRIES: &[Entry] = &[
     ),
     entry(
         Page::Zones,
+        "When a window moves to another screen",
+        "Let Windows scale it, keep its pixel size or keep its real size",
+        "size pixels scale scaling dpi real move screen",
+    ),
+    entry(
+        Page::Zones,
+        "Also when I drag a window to another screen",
+        "The same size after you drop a window on another screen",
+        "size pixels scale dpi drag mouse",
+    ),
+    entry(
+        Page::Zones,
         "Another window manager handles my windows",
         "Snapping and window moves step aside",
         "komorebi glazewm leopardwm tiling coexistence",
@@ -128,6 +140,12 @@ const ENTRIES: &[Entry] = &[
         "Snap back to this workspace",
         "Global shortcut",
         "hotkey keyboard workspace drift put back",
+    ),
+    entry(
+        Page::Shortcuts,
+        "Save windows to the active workspace",
+        "Global shortcut",
+        "hotkey keyboard workspace quick save capture update",
     ),
     entry(Page::General, "Start with Windows", "Seam waits in the tray after you sign in", "login autostart"),
     entry(Page::General, "Offer to line up new screens", "Asks once when screens Seam hasn't seen connect", ""),

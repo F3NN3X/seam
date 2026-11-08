@@ -173,6 +173,12 @@ pub fn render(panel: &mut Panel, _: &mut Window, cx: &mut Context<Panel>) -> imp
         .collect();
     workspace_rows.push(row("Capture current windows", "capture_workspace", keys.capture_workspace.as_ref(), 4));
     workspace_rows.push(row("Snap back to this workspace", "snap_back", keys.snap_back.as_ref(), 20 + on_desk.len()));
+    workspace_rows.push(row(
+        "Save windows to the active workspace",
+        "quick_save",
+        keys.quick_save.as_ref(),
+        21 + on_desk.len(),
+    ));
     div()
         .flex()
         .flex_col()

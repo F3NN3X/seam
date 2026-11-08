@@ -7,7 +7,8 @@ use crate::hook::SEAM_INPUT_TAG;
 use crate::log;
 use crate::snap::{self, Placement};
 use seam::api::{self, Reply, RpcError, WindowVerb};
-use seam::desk::Mon;
+use seam::config::WindowSize;
+use seam::desk::{self, Mon};
 use seam::direction::{self, Dir, Found, Screen};
 use seam::layout::Link;
 use seam::winutil;
@@ -44,6 +45,8 @@ pub struct Job {
     pub gap: u32,
     /// Lower-case exe names the zones leave alone.
     pub exclude: Vec<String>,
+    /// "When a window moves to another screen".
+    pub size_mode: WindowSize,
     /// From the API, which has no right to take focus until it sends input.
     pub from_api: bool,
     pub reply: Option<Sender<Reply>>,
@@ -136,9 +139,13 @@ fn centre(r: Rect) -> (i32, i32) {
 /// A screen's work area, scale and zones in pixels, in the order of the desk's screens.
 struct Geo {
     id: String,
+    /// Line Up number.
+    number: usize,
     bounds: Rect,
     work: Rect,
     dpi: u32,
+    /// Physical pixels per inch from EDID, 0 when the screen doesn't report its size.
+    raw_dpi: f64,
     zones: Vec<Rect>,
 }
 
@@ -148,7 +155,8 @@ fn geometry(job: &Job, screens: &[Screen]) -> Vec<Geo> {
         let gap = (job.gap.min(MAX_GAP) as f32 * dpi as f32 / 96.0).round() as i32;
         let layout = job.layouts.get(s.mm.index).and_then(Option::as_ref);
         let zones = layout.map(|l| zones::rects(&l.tree, work, gap)).unwrap_or_default();
-        Geo { id: job.mons[s.mm.index].id.clone(), bounds: s.px, work, dpi, zones }
+        let mon = &job.mons[s.mm.index];
+        Geo { id: mon.id.clone(), number: s.mm.index + 1, bounds: s.px, work, dpi, raw_dpi: mon.raw_dpi, zones }
     };
     screens.iter().map(geo).collect()
 }
@@ -245,6 +253,29 @@ fn relative(rect: Rect, from: &Geo, to: &Geo) -> Rect {
     Rect { x, y, w, h }
 }
 
+/// "When a window moves to another screen": a window whose frame was `size` on
+/// `from` keeps its pixel size or its real size on `to`, centred where the move put
+/// it (§11.4). With Windows' scaling, or a real size where a screen doesn't report
+/// its size, it keeps the place the move worked out.
+fn resized(job: &Job, h: HWND, size: Rect, from: &Geo, to: &Geo, placed: Rect) -> Rect {
+    if job.size_mode == WindowSize::Windows || from.id == to.id {
+        return placed;
+    }
+    let app = winutil::exe_name(h).unwrap_or_default();
+    let px = (size.w as f64, size.h as f64);
+    let Some(r) = desk::moved_rect(job.size_mode, px, (from.raw_dpi, to.raw_dpi), placed, to.work) else {
+        log::info!(
+            "window size: {app} scaled by Windows, screen {} or {} doesn't report its size",
+            from.number,
+            to.number
+        );
+        return placed;
+    };
+    let (a, b, mode) = (from.number, to.number, job.size_mode);
+    log::info!("window size ({mode:?}): {app} screen {a} → {b}, {}×{} px → {}×{} px", size.w, size.h, r.w, r.h);
+    r
+}
+
 fn into_zone(h: HWND, g: &Geo, from: usize, to: usize, target: Rect) -> Placement {
     Placement { hwnd: h.0 as isize, target, zone: Some((g.id.clone(), from, to)), dpi: g.dpi }
 }
@@ -301,15 +332,24 @@ fn run(job: &Job) -> Result<Outcome, &'static str> {
             let (other, other_rect) = list[i];
             movable(other, &job.exclude)?;
             let geo = geometry(job, &screens);
-            // Each takes the other's zones, or failing that its rect.
-            let place = |h: HWND, there: HWND, there_rect: Rect, snapped: Option<&(String, usize, usize)>| match zone_of(
-                &geo, there, there_rect, snapped,
-            ) {
-                Some((s, from, to, span)) => Some(into_zone(h, &geo[s], from, to, span)),
-                None => Some(free(h, &geo[direction::screen_at(&screens, there_rect)?], there_rect)),
-            };
-            let first = place(source, other, other_rect, None);
-            let second = place(other, source, rect, job.snapped.as_ref());
+            // Each takes the other's zones, or failing that its rect, at its own size in
+            // millimetres when that's on another screen.
+            let place =
+                |h: HWND, own: Rect, there: HWND, there_rect: Rect, snapped: Option<&(String, usize, usize)>| {
+                    match zone_of(&geo, there, there_rect, snapped) {
+                        Some((s, from, to, span)) => Some(into_zone(h, &geo[s], from, to, span)),
+                        None => {
+                            let to = &geo[direction::screen_at(&screens, there_rect)?];
+                            let target = match direction::screen_at(&screens, own) {
+                                Some(here) => resized(job, h, own, &geo[here], to, there_rect),
+                                None => there_rect,
+                            };
+                            Some(free(h, to, target))
+                        }
+                    }
+                };
+            let first = place(source, rect, other, other_rect, None);
+            let second = place(other, other_rect, source, rect, job.snapped.as_ref());
             match (first, second) {
                 (Some(a), Some(b)) => Ok(Outcome::Place(vec![a, b])),
                 _ => Err("No window in that direction"),
@@ -343,5 +383,6 @@ fn move_one(job: &Job, screens: &[Screen], geo: &[Geo], h: HWND, rect: Rect) -> 
         return Ok(into_zone(h, to, zone, zone, to.zones[zone]));
     }
     let here = direction::screen_at(screens, from).ok_or("Nothing in that direction")?;
-    Ok(free(h, to, relative(from, &geo[here], to)))
+    let placed = relative(from, &geo[here], to);
+    Ok(free(h, to, resized(job, h, from, &geo[here], to, placed)))
 }

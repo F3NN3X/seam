@@ -2,7 +2,7 @@
 //! it from here, so they always agree on what's lined up.
 
 use crate::config::{Config, Desk, SavedBorder, WindowSize};
-use crate::geom::{facing, touching, EdgeMap, Rect, Side};
+use crate::geom::{corridor, facing, facing_gap, predict, touching, EdgeMap, Rect, Side};
 use crate::layout::Link;
 use crate::log;
 use crate::state::{Border, BorderState};
@@ -290,6 +290,48 @@ pub fn apart_neighbours(mons: &[Mon], links: &[Link]) -> Vec<Apart> {
                 let guess = EdgeMap { s: db / da, o: (start_a - start_b) / 25.4 * db };
                 out.push(Apart { a, b, side, guess });
             }
+        }
+    }
+    out
+}
+
+/// A pair of screens Line Up can offer to glue across a gap in Windows.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Candidate {
+    pub a: usize,
+    /// Right of or below `a`.
+    pub b: usize,
+    pub side: Side,
+    pub guess: EdgeMap,
+    /// True when the screens' sizes put them side by side on the desk, false
+    /// when only the pixel layout has them facing each other.
+    pub apart: bool,
+}
+
+/// Every pair that could be glued: the `apart_neighbours`, then screens that face
+/// each other across a gap of up to `MAX_GLUE_GAP_PX` with nothing in between.
+pub fn glue_candidates(mons: &[Mon], links: &[Link]) -> Vec<Candidate> {
+    let mut out: Vec<Candidate> = apart_neighbours(mons, links)
+        .into_iter()
+        .map(|p| Candidate { a: p.a, b: p.b, side: p.side, guess: p.guess, apart: true })
+        .collect();
+    for i in 0..mons.len() {
+        for j in (i + 1)..mons.len() {
+            let (ri, rj) = (&mons[i].rect, &mons[j].rect);
+            let Some((side, _)) = facing_gap(ri, rj) else { continue };
+            let (a, b, side) = match side {
+                Side::Right | Side::Bottom => (i, j, side),
+                Side::Left | Side::Top => (j, i, side.opposite()),
+            };
+            if out.iter().any(|c| (c.a, c.b) == (a, b)) {
+                continue;
+            }
+            let gap = corridor(&mons[a].rect, &mons[b].rect, side);
+            if mons.iter().enumerate().any(|(k, m)| k != a && k != b && m.rect.intersects(&gap)) {
+                continue;
+            }
+            let guess = predict(&mons[a].rect, &mons[b].rect, side, mons[a].raw_dpi, mons[b].raw_dpi);
+            out.push(Candidate { a, b, side, guess, apart: false });
         }
     }
     out

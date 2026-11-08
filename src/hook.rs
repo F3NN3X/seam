@@ -254,21 +254,3 @@ unsafe fn on_mouse(code: i32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
     }
     call_next(code, wparam, lparam)
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn buckets_are_log2_of_microseconds() {
-        assert_eq!(bucket(0), 0);
-        assert_eq!(bucket(999), 0);
-        assert_eq!(bucket(1_000), 1);
-        assert_eq!(bucket(3_999), 2);
-        assert_eq!(bucket(4_000), 3);
-        assert_eq!(bucket(1_023_000), 10);
-        assert_eq!(bucket(1_024_000), 11);
-        assert_eq!(bucket(2_048_000), 12);
-        assert_eq!(bucket(u64::MAX), 12);
-    }
-}

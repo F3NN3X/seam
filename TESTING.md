@@ -307,6 +307,24 @@ Needs the real minisign key in `SEAM_PUBLIC_KEY`, and a published pre-release on
 - [ ] **No network.** Turn Wi-Fi off and press **Check now**. About shows one line saying what happened, with **Try again**, and the remap keeps working.
 - [ ] **Hook timing.** Compare `hook stats` across a check and an install with a run without one. Own max stays well under 1000 µs.
 
+## Installer
+
+Needs a `Seam-Setup` built by CI (the `installer` artifact of a run on `main`), and the previous release's setup or zip for the upgrade tests. Use a user that has no Seam, or remove `%LOCALAPPDATA%\Programs\Seam` first.
+
+- [ ] **Fresh install.** On a user with no Seam, run the setup. There is no admin prompt, and no folder page. The Start menu has a Seam entry, Installed apps shows Seam and its version, and Seam starts from the finish page.
+- [ ] **Upgrade.** Run a newer setup over an older one while Seam runs. Seam is quit and restarted, your settings are kept, and Installed apps shows the new version.
+- [ ] **Built-in update.** On an installed copy, update from About. Afterwards Installed apps shows the new version, and `*.old` files stay in the folder until the next start.
+- [ ] **Portable to installer.** Run the portable zip with **Start with Windows** on, then install. The portable tray is quit and the installed one runs. After signing out and in, only the installed copy starts.
+- [ ] **Uninstall, keep settings.** Uninstall and answer No to the settings question. Seam is quit, and the folder, the Start menu entry, the Run value, the `*.old` files and `%LOCALAPPDATA%\Seam\updates` are gone. `%APPDATA%\Seam` is still there.
+- [ ] **Uninstall, remove settings.** Answer Yes to the question. `%APPDATA%\Seam` is gone.
+- [ ] **Uninstall with a portable copy owning autostart.** Install, then run a portable copy so the Run value points at it. Uninstall. The Run value is left alone.
+- [ ] **Silent.** `Seam-Setup-x.y.z.exe /VERYSILENT` installs without starting Seam, and `unins000.exe /VERYSILENT` keeps your settings.
+- [ ] **Store test package plus installed copy.** The dual-install guard works as before: the Store copy wins, and the banner names the installed copy.
+- [ ] **Updater rollback when the new tray fails.** Stage an update, then make the new `seam.exe` unable to start, for example by replacing the staged copy with a zero-byte file after verification, in a debug build only. After install, the old version is back and running, About shows the error, and Installed apps still shows the old version.
+- [ ] **Foreign download URL.** In a debug build, point an asset URL somewhere else. The check fails with "The release points somewhere unexpected" and nothing is downloaded.
+- [ ] **Quit still running.** With Seam running from the installed folder, `seam-settings.exe --quit-tray` exits 0 and Seam is gone. With nothing running it also exits 0.
+- [ ] **Hook timing.** Paste the `hook::log_stats` lines. Own max stays well under 1000 µs, as before.
+
 ## Microsoft Store build
 
 Build and install a test package, from an elevated prompt the first time:

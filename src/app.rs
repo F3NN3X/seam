@@ -19,7 +19,7 @@ use seam::state::{
 };
 use seam::workspace::{self, Workspace};
 use seam::zones;
-use seam::{autostart, package, process, updates};
+use seam::{autostart, install, package, process, updates};
 use serde_json::{json, Value};
 use std::cell::RefCell;
 use std::os::windows::process::CommandExt;
@@ -1470,6 +1470,7 @@ pub fn run() {
             package::note_unpackaged_install();
             if let Ok(tray) = std::env::current_exe() {
                 autostart::add_flag(&tray);
+                install::take_over_autostart(&tray);
             }
             with_app(|a| read_update_state(a));
         }

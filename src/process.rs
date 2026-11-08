@@ -1,13 +1,13 @@
 //! Small questions about other processes, for the updater.
 
 use std::path::PathBuf;
-use windows::core::PWSTR;
+use windows::core::{w, PWSTR};
 use windows::Win32::Foundation::{CloseHandle, LocalFree, HANDLE, HLOCAL, WAIT_OBJECT_0};
 use windows::Win32::Security::Authorization::ConvertSidToStringSidW;
 use windows::Win32::Security::{GetTokenInformation, TokenUser, TOKEN_QUERY, TOKEN_USER};
 use windows::Win32::System::Threading::{
-    GetCurrentProcess, OpenProcess, OpenProcessToken, QueryFullProcessImageNameW, WaitForSingleObject,
-    PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_SYNCHRONIZE,
+    GetCurrentProcess, OpenMutexW, OpenProcess, OpenProcessToken, QueryFullProcessImageNameW, WaitForSingleObject,
+    PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_SYNCHRONIZE, SYNCHRONIZATION_SYNCHRONIZE,
 };
 
 /// Where the exe of a running process lives.
@@ -52,6 +52,17 @@ pub fn runs_as_us(pid: u32) -> bool {
         let theirs = user_sid(process);
         let _ = CloseHandle(process);
         theirs.is_some_and(|sid| sid == ours)
+    }
+}
+
+/// A tray is running in this session: it holds the single-instance mutex.
+pub fn tray_running() -> bool {
+    unsafe {
+        let Ok(mutex) = OpenMutexW(SYNCHRONIZATION_SYNCHRONIZE, false, w!("Local\\Seam.SingleInstance")) else {
+            return false;
+        };
+        let _ = CloseHandle(mutex);
+        true
     }
 }
 

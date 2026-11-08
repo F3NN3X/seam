@@ -34,11 +34,12 @@ fn mark(p: Palette) -> Div {
 /// No window titles, exe paths, user name or profile path.
 fn diagnostics(panel: &Panel) -> String {
     let mut text = format!(
-        "Seam {}, build {}\nWindows {} ({})\n\nScreens\n",
+        "Seam {}, build {}\nWindows {} ({})\nInstall: {}\n\nScreens\n",
         env!("CARGO_PKG_VERSION"),
         option_env!("SEAM_BUILD").unwrap_or("dev"),
         winver::display_version(),
         winver::build(),
+        seam::install::kind(),
     );
     for (i, m) in panel.mons.iter().enumerate() {
         text += &format!(

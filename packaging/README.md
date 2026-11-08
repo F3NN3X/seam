@@ -1,12 +1,15 @@
 # Packaging and releases
 
-Seam ships two ways from one build. The same `seam.exe` and `seam-settings.exe` go into both, and `is_packaged()` decides at runtime what differs.
+Seam ships three ways from one build. The same `seam.exe` and `seam-settings.exe` go into all three, and `is_packaged()` decides at runtime what differs.
 
-| | Microsoft Store | GitHub |
-|---|---|---|
-| Format | MSIX from `pack-msix.ps1` | zip, raw exes and a signed `latest.json` from `release.yml` |
-| Signing | Microsoft signs it during certification | unsigned, with a notice in the README |
-| Updates | the Store | Seam's own updater, checked against a minisign key |
+| | Microsoft Store | GitHub installer | GitHub zip |
+|---|---|---|---|
+| Format | MSIX from `pack-msix.ps1` | `Seam-Setup-X.Y.Z.exe` from `seam.iss` | zip and raw exes from `release.yml`, with a signed `latest.json` |
+| Install | Microsoft Store | per user, no admin, in `%LOCALAPPDATA%\Programs\Seam` | unzip anywhere |
+| Signing | Microsoft signs it during certification | unsigned, with a notice in the README | unsigned, with a notice in the README |
+| Updates | the Store | Seam's own updater, checked against a minisign key | the same |
+
+**One build, three packages.** The zip, the installer and the MSIX all contain the *same* `seam.exe` and `seam-settings.exe` that `latest.json` hashes. `release.yml` builds once, stages `dist\`, and checks the hashes again after the installer is built. `store.yml` packs the exes of the published release and checks them against its `latest.json`, instead of building again.
 
 Everything here runs on Windows 11 with Rust and the Windows SDK. Nothing in `packaging/` needs Node or the MSIX Packaging Tool.
 
@@ -20,6 +23,28 @@ pwsh packaging\pack-msix.ps1
 This writes `dist\<IdentityName>_<version>_x64-store.msix`. It is unsigned, and it is the file for Partner Center. The version comes from the workspace `Cargo.toml` (`0.2.0` becomes `0.2.0.0`), and a pre-release tag is refused because the Store can't take one.
 
 The `-store` and `-test` endings are there so the wrong file can't be uploaded.
+
+`-From <dir>` packs the exes in `<dir>` instead of `target\release`. `store.yml` uses it with the exes it downloaded from the release.
+
+## Build the installer
+
+The installer is built with **Inno Setup 7.1.1**. It isn't on Chocolatey or winget, which stop at 6.x, so take it from the [official release](https://github.com/jrsoftware/issrc/releases/tag/is-7_1_1) (`innosetup-7.1.1-x64.exe`, SHA-256 `8a5a6711c3766a6e5fb74f280ba0e3551e719ce94538d901fdbd1f8f9920b3f0`). `pwsh packaging\install-inno.ps1 -Dir <folder>` downloads it, checks the hash and installs it for you into that folder, and it is what the workflows run. The setup is a build tool, not a dependency.
+
+```powershell
+cargo build --release --workspace
+mkdir dist
+copy target\release\seam.exe, target\release\seam-settings.exe dist
+$id = (Get-Content packaging\installer.json -Raw | ConvertFrom-Json).app_id
+& "<folder>\ISCC.exe" /DAppVersion=0.5.0 "/DAppId=$id" "/DSourceDir=$PWD\dist" "/O$PWD\dist" packaging\seam.iss
+```
+
+This writes `dist\Seam-Setup-<version>.exe`. Give `SourceDir` and the output folder as absolute paths, because Inno reads a relative one from `packaging\`. `SourceDir` holds the exes the release is built from, never `target\` directly.
+
+**Never change the `AppId`.** It is in `packaging\installer.json`, and it names the uninstall entry in Installed apps. A different one makes the next setup install beside the old copy instead of over it. `seam.iss` gets it from `/DAppId=`, and the Rust code reads the same file at build time to find the entry.
+
+The installer doesn't apply updates. Seam's own updater swaps the exes, then writes the new version into the uninstall entry. Running a newer setup over an older one also works, and keeps your settings.
+
+To test an upgrade, install the previous release's setup, run Seam, then run the new setup over it. Seam is quit and the new copy is started from the finish page. The steps are in `TESTING.md`, under "Installer".
 
 ## Try it on this PC
 
@@ -132,4 +157,4 @@ git push origin v0.4.0
 
 4. `release.yml` checks the versions, the CHANGELOG section and that CI passed for that commit (or the pull request that merged it). Then it builds, writes and signs `latest.json`, and creates a **draft** release. Look at the draft, then publish it yourself.
 
-The draft holds `seam-X.Y.Z-windows-x64.zip`, `seam.exe`, `seam-settings.exe`, `latest.json` and `latest.json.minisig`. A tag with a hyphen (`v0.3.0-beta.1`) makes a pre-release.
+The draft holds `Seam-Setup-X.Y.Z.exe`, `seam-X.Y.Z-windows-x64.zip`, `seam.exe`, `seam-settings.exe`, `latest.json` and `latest.json.minisig`. All of them come from one build, and the workflow checks the exes against `latest.json` before the draft is made. The setup isn't listed in `latest.json`, because the updater only stages the two exes. A tag with a hyphen (`v0.3.0-beta.1`) makes a pre-release.

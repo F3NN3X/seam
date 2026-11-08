@@ -57,9 +57,12 @@ pub fn restart_panel(cx: &mut App) {
 }
 
 fn main() {
-    // The updater's two headless modes. Neither opens a window.
+    // The updater's headless modes, and the installer's. None opens a window.
     if std::env::args().any(|a| a == "--check-updates") {
         std::process::exit(update::check_main());
+    }
+    if std::env::args().any(|a| a == "--quit-tray") {
+        std::process::exit(update::quit_main());
     }
     if let Some(version) = arg_after("--install") {
         std::process::exit(update::install_main(&version));

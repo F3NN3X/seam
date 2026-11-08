@@ -4,6 +4,18 @@ All notable changes to Seam. The format follows [Keep a Changelog](https://keepa
 
 ## [Unreleased]
 
+### Added
+
+- An installer for the GitHub version. It installs for you only, with no admin prompt, and adds Seam to the Start menu and to Installed apps.
+
+### Fixed
+
+- If an updated Seam doesn't start, the updater puts the old version back and starts it.
+
+### Security
+
+- The updater only downloads from Seam's own GitHub releases.
+
 ## [0.4.0] - 2026-11-08
 
 ### Added

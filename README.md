@@ -107,9 +107,17 @@ To install it, download `co.f3nn3x.seam.streamDeckPlugin` and open it. The Strea
 
 ## Install and update
 
-Download `seam-X.Y.Z-windows-x64.zip` from [Releases](https://github.com/F3NN3X/seam/releases), unzip it and keep both exes together. It's unsigned, so Windows warns about an unknown publisher the first time. See [Troubleshooting](#troubleshooting). A Microsoft Store version is planned for later.
+There are three ways to get Seam:
 
-To update, download the new zip, quit Seam, and replace both exes. Your settings stay in `%APPDATA%\Seam`.
+- **Microsoft Store**, once it's live. The Store updates it, and winget finds it through the `msstore` source.
+- **The installer**, recommended on GitHub. Download `Seam-Setup-X.Y.Z.exe` from [Releases](https://github.com/F3NN3X/seam/releases) and run it. It installs for you only, with no admin prompt, and adds Seam to the Start menu and to Installed apps.
+- **The portable zip.** Download `seam-X.Y.Z-windows-x64.zip` from the same page, unzip it and keep both exes together.
+
+The installer and the zip are unsigned, so Windows SmartScreen warns about an unknown publisher the first time. Choose **More info**, then **Run anyway**. See [Troubleshooting](#troubleshooting).
+
+To update the zip by hand, download the new zip, quit Seam, and replace both exes.
+
+Uninstalling the Store version removes its settings. The installer's uninstaller asks whether to remove them. The portable zip leaves them in `%APPDATA%\Seam`.
 
 Seam has a built-in updater, but it only installs releases signed with Seam's key, and no release is signed yet. About shows the result of each check.
 

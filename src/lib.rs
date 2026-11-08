@@ -18,6 +18,8 @@ pub mod autostart;
 #[cfg(windows)]
 pub mod ease;
 #[cfg(windows)]
+pub mod install;
+#[cfg(windows)]
 pub mod monitors;
 #[cfg(windows)]
 pub mod package;

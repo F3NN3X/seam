@@ -4,6 +4,8 @@ All notable changes to Seam. The format follows [Keep a Changelog](https://keepa
 
 ## [Unreleased]
 
+## [0.6.5] - 2026-11-09
+
 ### Added
 
 - **Glue** in Line Up: screens that touch on your desk but have a gap between them in Windows can be glued with G, and the pointer crosses the gap where they physically meet. Line Up offers each such pair after the touching borders. A pair found from the screens' sizes starts glued, and a pair found only from the pixel layout starts off. Align arrangement keeps glued screens apart. Displays marks a glued border "Glued to the right edge of 1". `glued` on a border in `config.json` and in the state's `borders`.

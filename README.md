@@ -76,6 +76,8 @@ A Stream Deck plugin in `integrations/streamdeck` puts Seam on keys. It talks to
 
 When Seam isn't running, every key says so and reconnects by itself once it is.
 
+On a PC shared with other Windows accounts, the plugin can't check that the program answering on Seam's connection is really Seam. Seam's own apps do check. The plugin only sends commands like "switch workspace" and reads status, so the most another account could do is see that status or ignore the keys.
+
 To install it, download `co.f3nn3x.seam.streamDeckPlugin` and open it. The Stream Deck app installs it and adds a Seam group to the action list. To build it yourself, run `pnpm install`, `pnpm build` and `pnpm pack` in `integrations/streamdeck`. The packed file lands in its `dist` folder.
 
 ## Install and update

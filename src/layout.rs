@@ -1,7 +1,9 @@
 //! Platform-independent decisions over the whole set of monitors: where a move
 //! across a border lands, and how to rearrange monitors to match the borders.
 
-use crate::geom::{aligned_along_origin, exits_of, place_against, remap_crossing, touching, EdgeMap, Rect, Side};
+use crate::geom::{
+    aligned_along_origin, exits_of, facing, place_against, remap_crossing, touching, EdgeMap, Rect, Side,
+};
 use std::collections::VecDeque;
 
 /// A calibrated border between two monitors (indices into `Live::rects`).
@@ -75,6 +77,8 @@ pub enum PlanError {
     Separates { moved: usize, other: usize },
     /// The border between `a` and `b` can't hold alongside the others.
     Unhonoured { a: usize, b: usize },
+    /// Moving `a` would take it out from beyond the side of `b` it's glued to.
+    BreaksGlue { a: usize, b: usize },
 }
 
 impl std::fmt::Display for PlanError {
@@ -87,6 +91,9 @@ impl std::fmt::Display for PlanError {
             Self::Unhonoured { a, b } => {
                 write!(f, "The border between screen {} and screen {} can't hold with the others", a + 1, b + 1)
             }
+            Self::BreaksGlue { a, b } => {
+                write!(f, "Moving screen {} would break its glue with screen {}", a + 1, b + 1)
+            }
         }
     }
 }
@@ -97,6 +104,9 @@ pub fn plan(rects: &[Rect], primary: usize, links: &[Link]) -> Result<Vec<Rect>,
     if rects.is_empty() {
         return Ok(Vec::new());
     }
+    // Glued screens keep their gap, so they must still face each other afterwards.
+    let glued: Vec<Link> =
+        links.iter().copied().filter(|l| l.glued && facing(&rects[l.a], &rects[l.b], l.side)).collect();
     // A border between screens that don't touch in Windows can't place either one.
     let links: Vec<Link> =
         links.iter().copied().filter(|l| touching(&rects[l.a], &rects[l.b]) == Some(l.side)).collect();
@@ -131,6 +141,12 @@ pub fn plan(rects: &[Rect], primary: usize, links: &[Link]) -> Result<Vec<Rect>,
             if touching(&rects[i], &rects[j]).is_some() && touching(&out[i], &out[j]).is_none() {
                 return Err(PlanError::Separates { moved, other });
             }
+        }
+    }
+    for l in &glued {
+        if !facing(&out[l.a], &out[l.b], l.side) {
+            let (moved, other) = if out[l.a] == rects[l.a] { (l.b, l.a) } else { (l.a, l.b) };
+            return Err(PlanError::BreaksGlue { a: moved, b: other });
         }
     }
     // Placing each screen follows only one border, so a loop of borders can
@@ -525,6 +541,14 @@ mod tests {
             link(2, 3, Side::Right, 1.0, 0.0),
         ];
         assert_eq!(plan(&grid(), 0, &links), Err(PlanError::Unhonoured { a: 2, b: 3 }));
+    }
+
+    #[test]
+    fn plan_refuses_to_move_a_screen_past_the_one_it_is_glued_to() {
+        // B slides right under A, which would put it past the left edge of C.
+        let rects = [Rect::new(0, 0, 1000, 1000), Rect::new(0, 1000, 1000, 1000), Rect::new(1100, 2000, 1000, 1000)];
+        let links = [link(0, 1, Side::Bottom, 1.0, -500.0), Link { glued: true, ..link(1, 2, Side::Right, 1.0, 0.0) }];
+        assert_eq!(plan(&rects, 0, &links), Err(PlanError::BreaksGlue { a: 1, b: 2 }));
     }
 
     #[test]

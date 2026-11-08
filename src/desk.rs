@@ -134,7 +134,7 @@ fn along_offset(mons: &[Mon], links: &[Link], placed: usize, next: usize, side: 
 }
 
 /// The screens as they stand on the desk, for the Displays map. Walks outward
-/// from the primary across touching screens.
+/// from the primary across touching screens and glued borders.
 pub fn physical_layout(mons: &[Mon], links: &[Link]) -> Vec<Placed> {
     let size = |i: usize| {
         let m = &mons[i];
@@ -151,11 +151,22 @@ pub fn physical_layout(mons: &[Mon], links: &[Link]) -> Vec<Placed> {
     let mut queue = VecDeque::from([first]);
     while let Some(i) = queue.pop_front() {
         let Some(from) = placed.iter().find(|p| p.index == i).copied() else { continue };
+        let glued = |j: usize| {
+            links.iter().filter(|l| l.glued).find_map(|l| {
+                if (l.a, l.b) == (i, j) {
+                    Some(l.side)
+                } else if (l.a, l.b) == (j, i) {
+                    Some(l.side.opposite())
+                } else {
+                    None
+                }
+            })
+        };
         for j in 0..mons.len() {
             if placed.iter().any(|p| p.index == j) {
                 continue;
             }
-            let Some(side) = touching(&mons[i].rect, &mons[j].rect) else { continue };
+            let Some(side) = touching(&mons[i].rect, &mons[j].rect).or_else(|| glued(j)) else { continue };
             let along = along_offset(mons, links, i, j, side);
             let (w, h) = size(j);
             placed.push(match side {

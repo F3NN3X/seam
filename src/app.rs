@@ -543,7 +543,7 @@ fn lineup_done(app: &mut App, accepted: bool) {
             app.last_align = Some(AlignResult { ok: res.is_ok(), message });
             match res {
                 Ok(_) => "The pointer now crosses where your screens meet.".to_string(),
-                Err(e) => format!("Pointer remap is on. Windows arrangement unchanged: {e}."),
+                Err(e) => format!("Pointer remap is on. Windows arrangement unchanged. {e}."),
             }
         } else {
             log::info!("arrangement skipped: setting is off");

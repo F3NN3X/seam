@@ -21,14 +21,14 @@ pub fn align(mons: &[Mon], links: &[Link]) -> Result<bool, String> {
     unsafe {
         let (mut np, mut nm) = (0u32, 0u32);
         if GetDisplayConfigBufferSizes(QDC_ONLY_ACTIVE_PATHS, &mut np, &mut nm) != ERROR_SUCCESS {
-            return Err("couldn't read the display configuration".into());
+            return Err("Couldn't read the display configuration".into());
         }
         let mut paths = vec![DISPLAYCONFIG_PATH_INFO::default(); np as usize];
         let mut modes = vec![DISPLAYCONFIG_MODE_INFO::default(); nm as usize];
         if QueryDisplayConfig(QDC_ONLY_ACTIVE_PATHS, &mut np, paths.as_mut_ptr(), &mut nm, modes.as_mut_ptr(), None)
             != ERROR_SUCCESS
         {
-            return Err("couldn't read the display configuration".into());
+            return Err("Couldn't read the display configuration".into());
         }
         paths.truncate(np as usize);
         modes.truncate(nm as usize);
@@ -54,7 +54,7 @@ pub fn align(mons: &[Mon], links: &[Link]) -> Result<bool, String> {
             }
         }
         if moved == 0 {
-            return Err("couldn't match screens to the display configuration".into());
+            return Err("Couldn't match screens to the display configuration".into());
         }
         let flags = SDC_APPLY | SDC_USE_SUPPLIED_DISPLAY_CONFIG | SDC_SAVE_TO_DATABASE | SDC_ALLOW_CHANGES;
         let rc = SetDisplayConfig(Some(&paths), Some(&modes), flags);

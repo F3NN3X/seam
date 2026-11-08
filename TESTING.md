@@ -688,7 +688,7 @@ Turn off **Settings → System → Display → Multiple displays → Ease cursor
 
 Finishing Line Up with the setting on calls `SetDisplayConfig` only if the plan is accepted.
 
-- [ ] **Refusal on this desk.** With **Also align Windows arrangement** ticked, finish Line Up. The balloon says the arrangement is unchanged, the balloon names the screens ("Moving screen 3 would overlap screen 1"), the log shows `arrangement result: Err("Moving screen 3 would overlap screen 1")`, and nothing moves. Moving screen 4 up for its border would take screen 3 with it, and screen 3's 7 px offset to the left would collide with screen 1.
+- [ ] **Refusal on this desk.** With **Also align Windows arrangement** ticked, finish Line Up. The balloon reads "Pointer remap is on. Windows arrangement unchanged. Moving screen 3 would overlap screen 1.", the log shows `arrangement result: Err("Moving screen 3 would overlap screen 1")`, and nothing moves. Moving screen 4 up for its border would take screen 3 with it, and screen 3's 7 px offset to the left would collide with screen 1.
 - [ ] **Setting off.** Untick it and finish Line Up. The log shows `arrangement skipped: setting is off`.
 - [ ] **Undo in Settings.** Only if an arrangement was actually applied: drag the screens back in Display settings, press Apply, and confirm the log shows `display change` and borders resolve again. If a screen no longer touches on its calibrated side, the log shows `dropped` for that border.
 

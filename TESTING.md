@@ -669,6 +669,7 @@ powershell -c "(Select-String 'hook ([0-9.]+)us' $env:APPDATA\Seam\seam.log).Mat
 ```
 
 - [ ] **Every event.** The log writes a `hook stats` line once a minute, covering all mouse events. `own max` is Seam and should stay well under 1000 µs. `next hooks max` is other apps' mouse hooks, which Seam can't control. `events` shows your polling rate reaching the hook.
+- [ ] **Spike source.** Run `seam.exe --log` for 12 minutes of normal use, then read `own_hist`, `next_hist`, `own_over_1ms` and `next_over_1ms` on the `hook stats` lines in `%APPDATA%\Seam\seam.log`. Each histogram counts events per bucket in microseconds: bucket 0 is under 1, then 1, 2-3, 4-7 and so on doubling, and the last is 2048 and up. Spikes in `own_hist` are Seam, spikes in `next_hist` are the hooks after it, and spikes in neither mean scheduling.
 
 ## Ease cursor movement off
 

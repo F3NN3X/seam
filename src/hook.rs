@@ -24,6 +24,19 @@ struct Stats {
     max: u64,
     own_max: u64,
     next_max: u64,
+    own_hist: [u32; BUCKETS],
+    next_hist: [u32; BUCKETS],
+    own_over_1ms: u32,
+    next_over_1ms: u32,
+}
+
+const BUCKETS: usize = 13;
+const MS_NS: u64 = 1_000_000;
+
+/// Log2 bucket of a time in microseconds: 0 is under 1us, then 1, 2-3, 4-7 and
+/// so on, with the last holding 2048us and up.
+fn bucket(ns: u64) -> usize {
+    ((64 - (ns / 1000).leading_zeros()) as usize).min(BUCKETS - 1)
 }
 
 /// Written by the UI thread, read by the hook. The hook only ever tries the
@@ -155,12 +168,20 @@ unsafe extern "system" fn ll_proc(code: i32, wparam: WPARAM, lparam: LPARAM) -> 
     let next = NEXT_NS.take();
     STATS.with(|s| {
         let t = s.get();
+        let own = ns - next;
+        let (mut own_hist, mut next_hist) = (t.own_hist, t.next_hist);
+        own_hist[bucket(own)] += 1;
+        next_hist[bucket(next)] += 1;
         s.set(Stats {
             events: t.events + 1,
             total: t.total + ns,
             max: t.max.max(ns),
-            own_max: t.own_max.max(ns - next),
+            own_max: t.own_max.max(own),
             next_max: t.next_max.max(next),
+            own_hist,
+            next_hist,
+            own_over_1ms: t.own_over_1ms + (own >= MS_NS) as u32,
+            next_over_1ms: t.next_over_1ms + (next >= MS_NS) as u32,
         });
     });
     res
@@ -180,12 +201,16 @@ fn write_stats() {
     if t.events > 0 {
         let us = |ns: u64| ns as f64 / 1e3;
         log::info!(
-            "hook stats: {} events, avg {:.1}us, max {:.1}us, own max {:.1}us, next hooks max {:.1}us",
+            "hook stats: {} events, avg {:.1}us, max {:.1}us, own max {:.1}us, next hooks max {:.1}us, own_hist={:?} next_hist={:?} own_over_1ms={} next_over_1ms={}",
             t.events,
             t.total as f64 / t.events as f64 / 1e3,
             us(t.max),
             us(t.own_max),
-            us(t.next_max)
+            us(t.next_max),
+            t.own_hist,
+            t.next_hist,
+            t.own_over_1ms,
+            t.next_over_1ms
         );
     }
 }
@@ -228,4 +253,22 @@ unsafe fn on_mouse(code: i32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
         }
     }
     call_next(code, wparam, lparam)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn buckets_are_log2_of_microseconds() {
+        assert_eq!(bucket(0), 0);
+        assert_eq!(bucket(999), 0);
+        assert_eq!(bucket(1_000), 1);
+        assert_eq!(bucket(3_999), 2);
+        assert_eq!(bucket(4_000), 3);
+        assert_eq!(bucket(1_023_000), 10);
+        assert_eq!(bucket(1_024_000), 11);
+        assert_eq!(bucket(2_048_000), 12);
+        assert_eq!(bucket(u64::MAX), 12);
+    }
 }

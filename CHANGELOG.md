@@ -6,6 +6,7 @@ All notable changes to Seam. The format follows [Keep a Changelog](https://keepa
 
 ### Added
 
+- Each workspace on the Workspaces page shows its apps as a row of icons under the name, up to eight and then "+n", instead of a window count.
 - An installer for the GitHub version. It installs for you only, with no admin prompt, and adds Seam to the Start menu and to Installed apps.
 - **Tell me when a pinned window closes**, on the Zones page. A click on the notification starts the app again and pins its new window. Off until you turn it on.
 - **Offer to restore my windows after I sign in**, on General. Seam remembers which apps were where and which were pinned, and after sign-in a click puts them back. Off until you turn it on.

@@ -58,7 +58,7 @@ If komorebi, GlazeWM or LeopardWM is running, Seam notices within 30 seconds and
 
 ### Workspaces
 
-Arrange your windows the way you like them, then press **Capture current windows** on the Workspaces page. Seam saves which app is on which screen and in which zone (or maximized, or at its own size), for the desk you have connected. **Switch now**, the workspace's shortcut, or **Workspaces** in the tray menu then puts each app back. Apps that aren't running are started if they're ticked under Launch and **Start missing apps** is on, and Seam waits up to 15 seconds for each window. **Update from screen** saves the windows as they are now into a workspace.
+Arrange your windows the way you like them, then press **Capture current windows** on the Workspaces page. Seam saves which app is on which screen and in which zone (or maximized, or at its own size), for the desk you have connected. **Switch now**, the workspace's shortcut, or **Workspaces** in the tray menu then puts each app back. Apps that aren't running are started if they're ticked under Launch and **Start missing apps** is on, and Seam waits up to 15 seconds for each window. **Update from screen** saves the windows as they are now into a workspace. In the list, each workspace shows its apps as a row of icons, up to eight and then "+n".
 
 **Other windows** says what a switch does with everything else on the desk's screens: leave it, minimize it, or close it. Close only asks. Each app gets a normal close request, so one with unsaved work shows its own prompt and stays open. Seam never ends a process.
 

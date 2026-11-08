@@ -15,6 +15,8 @@ pub mod workspace;
 pub mod zones;
 
 #[cfg(windows)]
+pub mod appicon;
+#[cfg(windows)]
 pub mod autostart;
 #[cfg(windows)]
 pub mod ease;

@@ -1,5 +1,6 @@
 //! Workspaces: save which apps are where on a desk, and switch between them.
 
+use crate::icons::{self, Icons};
 use crate::panel::{error_text, refusal, Panel};
 use crate::theme::{palette, Palette};
 use crate::ui::{self, card, keycaps, row, segmented, switch};
@@ -348,11 +349,48 @@ fn summary(panel: &Panel, ws: &Workspace) -> String {
     }
 }
 
-fn windows_text(count: usize) -> String {
-    format!("{count} window{}", if count == 1 { "" } else { "s" })
+/// How many icons the list card shows before "+n".
+const ICONS_SHOWN: usize = 8;
+
+/// The workspace's apps as a row of icons in rule order, each app once.
+fn icon_strip(i: usize, ws: &Workspace, icons: &Icons, p: Palette) -> Div {
+    let mut seen: Vec<String> = Vec::new();
+    let mut apps: Vec<&Rule> = Vec::new();
+    for rule in &ws.windows {
+        let key = icons::identity(rule);
+        if !seen.contains(&key) {
+            seen.push(key);
+            apps.push(rule);
+        }
+    }
+    let more = apps.len().saturating_sub(ICONS_SHOWN);
+    let shown = apps.iter().take(ICONS_SHOWN).enumerate().map(|(n, rule)| {
+        let slot = div().id(("app-icon", i * 100 + n)).flex_none().size(px(16.));
+        let name = SharedString::from(app_title(rule));
+        let slot = match icons.get(rule) {
+            Some(image) => slot.child(img(image).size(px(16.))),
+            None => slot.child(div().size(px(16.)).rounded(px(4.)).bg(p.muted)),
+        };
+        slot.tooltip(move |window, cx| Tooltip::new(name.clone()).build(window, cx))
+    });
+    div()
+        .flex()
+        .items_center()
+        .gap(px(4.))
+        .children(shown)
+        .when(apps.is_empty(), |d| d.child(div().text_size(px(12.)).text_color(p.muted).child("No windows yet")))
+        .when(more > 0, |d| d.child(div().text_size(px(12.)).text_color(p.muted).child(format!("+{more}"))))
 }
 
-fn list_card(i: usize, ws: &Workspace, active: bool, picked: bool, p: Palette, cx: &mut Context<Panel>) -> AnyElement {
+fn list_card(
+    i: usize,
+    ws: &Workspace,
+    icons: &Icons,
+    active: bool,
+    picked: bool,
+    p: Palette,
+    cx: &mut Context<Panel>,
+) -> AnyElement {
     let id = ws.id.clone();
     let name = div()
         .flex()
@@ -366,7 +404,7 @@ fn list_card(i: usize, ws: &Workspace, active: bool, picked: bool, p: Palette, c
         .items_center()
         .justify_between()
         .gap(px(8.))
-        .child(ui::description(windows_text(ws.windows.len()), p))
+        .child(icon_strip(i, ws, icons, p))
         .children(ws.hotkey.as_ref().map(|combo| keycaps(combo, false, p)));
     div()
         .id(("workspace", i))
@@ -625,6 +663,8 @@ pub fn render(panel: &mut Panel, window: &mut Window, cx: &mut Context<Panel>) -
     }
     let capture = ui::primary("capture", "Capture current windows")
         .on_click(cx.listener(|panel, _, window, cx| capture(panel, window, cx)));
+    let rules: Vec<Rule> = list.iter().flat_map(|ws| ws.windows.iter().cloned()).collect();
+    icons::request(panel, &rules, cx);
     let active = panel.state.as_ref().and_then(|s| s.workspace.as_ref()).map(|w| w.id.clone());
     let current = selected(panel);
     let cards: Vec<AnyElement> = list
@@ -632,7 +672,7 @@ pub fn render(panel: &mut Panel, window: &mut Window, cx: &mut Context<Panel>) -
         .enumerate()
         .map(|(i, ws)| {
             let picked = current.as_ref().is_some_and(|c| c.id == ws.id);
-            list_card(i, ws, active.as_deref() == Some(ws.id.as_str()), picked, p, cx)
+            list_card(i, ws, &panel.icons, active.as_deref() == Some(ws.id.as_str()), picked, p, cx)
         })
         .collect();
     // The dashed frame has nothing else on it, so the hover fill sits on the button inside.

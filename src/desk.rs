@@ -2,7 +2,7 @@
 //! it from here, so they always agree on what's lined up.
 
 use crate::config::{Config, Desk, SavedBorder, WindowSize};
-use crate::geom::{corridor, facing, facing_gap, predict, touching, EdgeMap, Rect, Side};
+use crate::geom::{corridor, facing, facing_gap, predict_centred, touching, EdgeMap, Rect, Side};
 use crate::layout::Link;
 use crate::log;
 use crate::state::{Border, BorderState};
@@ -29,7 +29,8 @@ pub struct Mon {
 /// Resolve saved borders against the monitors that are connected right now.
 /// A border applies if the two screens still touch on the same side, if it is
 /// glued and the screens still face each other that way across a gap, or if
-/// they still sit side by side on the desk without touching in Windows.
+/// they still sit side by side on the desk without touching in Windows. A
+/// border that isn't on the desk applies while the screens still touch.
 pub fn resolve(mons: &[Mon], saved: Option<&[SavedBorder]>) -> Vec<Link> {
     let Some(saved) = saved else {
         log::info!("no saved layout for these screens");
@@ -44,7 +45,7 @@ pub fn resolve(mons: &[Mon], saved: Option<&[SavedBorder]>) -> Vec<Link> {
                 log::info!("link {a}->{b} dropped: invalid map {:?}", s.map);
                 return None;
             }
-            Some(Link { a, b, side: s.side, map: s.map, glued: s.glued })
+            Some(Link { a, b, side: s.side, map: s.map, glued: s.glued, not_on_desk: s.not_on_desk })
         })
         .collect();
     let now = |l: &Link| touching(&mons[l.a].rect, &mons[l.b].rect);
@@ -52,10 +53,11 @@ pub fn resolve(mons: &[Mon], saved: Option<&[SavedBorder]>) -> Vec<Link> {
     // Screens apart in Windows are placed through the touching borders, so those come first.
     let apart = apart_neighbours(mons, &links);
     for l in known.iter().filter(|l| now(l) != Some(l.side)) {
-        let still = l.glued && facing(&mons[l.a].rect, &mons[l.b].rect, l.side)
-            || apart.iter().any(|p| {
-                (p.a, p.b, p.side) == (l.a, l.b, l.side) || (p.a, p.b, p.side) == (l.b, l.a, l.side.opposite())
-            });
+        let still = !l.not_on_desk
+            && (l.glued && facing(&mons[l.a].rect, &mons[l.b].rect, l.side)
+                || apart.iter().any(|p| {
+                    (p.a, p.b, p.side) == (l.a, l.b, l.side) || (p.a, p.b, p.side) == (l.b, l.a, l.side.opposite())
+                }));
         if still && now(l).is_none() {
             // Across a gap the link only acts where Windows has no screen under the pointer.
             links.push(Link { glued: true, ..*l });
@@ -77,18 +79,33 @@ pub fn has_neighbours(mons: &[Mon]) -> bool {
 /// Every pair of touching screens: the lined-up ones first, then the rest.
 pub fn border_states(mons: &[Mon], links: &[Link]) -> Vec<Border> {
     let number = |i: usize| i as u32 + 1;
-    let lined_up =
-        links.iter().map(|l| Border { a: number(l.a), b: number(l.b), side: l.side, state: BorderState::LinedUp });
+    let lined_up = links.iter().map(|l| Border {
+        a: number(l.a),
+        b: number(l.b),
+        side: l.side,
+        state: BorderState::LinedUp,
+        glued: l.glued,
+        not_on_desk: l.not_on_desk,
+    });
     let linked = |i: usize, j: usize| links.iter().any(|l| (l.a, l.b) == (i, j) || (l.a, l.b) == (j, i));
     let open = (0..mons.len()).flat_map(|i| (i + 1..mons.len()).map(move |j| (i, j))).filter_map(|(i, j)| {
         let side = touching(&mons[i].rect, &mons[j].rect).filter(|_| !linked(i, j))?;
-        Some(Border { a: number(i), b: number(j), side, state: BorderState::NotLinedUp })
+        Some(Border {
+            a: number(i),
+            b: number(j),
+            side,
+            state: BorderState::NotLinedUp,
+            glued: false,
+            not_on_desk: false,
+        })
     });
     let apart = apart_neighbours(mons, links).into_iter().filter(|p| !linked(p.a, p.b)).map(|p| Border {
         a: number(p.a),
         b: number(p.b),
         side: p.side,
         state: BorderState::NotLinedUp,
+        glued: false,
+        not_on_desk: false,
     });
     lined_up.chain(open).chain(apart).collect()
 }
@@ -122,7 +139,7 @@ fn to_mm(px: f64, dpi: f64) -> f64 {
 /// from the placed screen's origin. A lined-up border knows this physically;
 /// otherwise the Windows pixel offset is the best there is.
 fn along_offset(mons: &[Mon], links: &[Link], placed: usize, next: usize, side: Side) -> f64 {
-    let map = |a, b| links.iter().find(|l| (l.a, l.b) == (a, b)).map(|l| l.map);
+    let map = |a, b| links.iter().find(|l| !l.not_on_desk && (l.a, l.b) == (a, b)).map(|l| l.map);
     if let Some(m) = map(placed, next) {
         return to_mm(-m.o / m.s, dpi(&mons[placed]));
     }
@@ -134,7 +151,8 @@ fn along_offset(mons: &[Mon], links: &[Link], placed: usize, next: usize, side: 
 }
 
 /// The screens as they stand on the desk, for the Displays map. Walks outward
-/// from the primary across touching screens.
+/// from the primary across touching screens and glued borders, but not across
+/// a border that isn't on the desk.
 pub fn physical_layout(mons: &[Mon], links: &[Link]) -> Vec<Placed> {
     let size = |i: usize| {
         let m = &mons[i];
@@ -151,11 +169,25 @@ pub fn physical_layout(mons: &[Mon], links: &[Link]) -> Vec<Placed> {
     let mut queue = VecDeque::from([first]);
     while let Some(i) = queue.pop_front() {
         let Some(from) = placed.iter().find(|p| p.index == i).copied() else { continue };
+        let glued = |j: usize| {
+            links.iter().filter(|l| l.glued).find_map(|l| {
+                if (l.a, l.b) == (i, j) {
+                    Some(l.side)
+                } else if (l.a, l.b) == (j, i) {
+                    Some(l.side.opposite())
+                } else {
+                    None
+                }
+            })
+        };
         for j in 0..mons.len() {
             if placed.iter().any(|p| p.index == j) {
                 continue;
             }
-            let Some(side) = touching(&mons[i].rect, &mons[j].rect) else { continue };
+            let off_desk = links.iter().any(|l| l.not_on_desk && ((l.a, l.b) == (i, j) || (l.a, l.b) == (j, i)));
+            let Some(side) = touching(&mons[i].rect, &mons[j].rect).filter(|_| !off_desk).or_else(|| glued(j)) else {
+                continue;
+            };
             let along = along_offset(mons, links, i, j, side);
             let (w, h) = size(j);
             placed.push(match side {
@@ -330,7 +362,7 @@ pub fn glue_candidates(mons: &[Mon], links: &[Link]) -> Vec<Candidate> {
             if mons.iter().enumerate().any(|(k, m)| k != a && k != b && m.rect.intersects(&gap)) {
                 continue;
             }
-            let guess = predict(&mons[a].rect, &mons[b].rect, side, mons[a].raw_dpi, mons[b].raw_dpi);
+            let guess = predict_centred(&mons[a].rect, &mons[b].rect, side, mons[a].raw_dpi, mons[b].raw_dpi);
             out.push(Candidate { a, b, side, guess, apart: false });
         }
     }
@@ -411,6 +443,7 @@ mod tests {
             side: Side::Right,
             map: EdgeMap { s: 1.0, o: 0.0 },
             glued: true,
+            not_on_desk: false,
         }];
         let left = mon("a", Rect::new(0, 0, 1000, 1000));
         let sides = |b: Rect| {
@@ -420,5 +453,26 @@ mod tests {
         assert_eq!(sides(Rect::new(1000, 0, 1000, 1000)), [(Side::Right, true)]);
         assert_eq!(sides(Rect::new(-1150, 0, 1000, 1000)), []);
         assert_eq!(sides(Rect::new(900, 0, 1000, 1000)), []);
+    }
+
+    #[test]
+    fn a_border_not_on_the_desk_holds_only_while_the_screens_touch() {
+        let saved = [SavedBorder {
+            a: "a".into(),
+            b: "b".into(),
+            side: Side::Bottom,
+            map: EdgeMap { s: 1.0, o: 7.0 },
+            glued: false,
+            not_on_desk: true,
+        }];
+        let top = mon("a", Rect::new(0, 0, 1000, 1000));
+        let kept = |b: Rect| {
+            resolve(&[top.clone(), mon("b", b)], Some(&saved))
+                .iter()
+                .map(|l| (l.side, l.glued, l.not_on_desk))
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(kept(Rect::new(0, 1000, 1000, 500)), [(Side::Bottom, false, true)]);
+        assert_eq!(kept(Rect::new(0, 1100, 1000, 500)), []);
     }
 }

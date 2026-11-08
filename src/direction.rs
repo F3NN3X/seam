@@ -191,8 +191,22 @@ mod tests {
             mon("U3477", PxRect::new(3840, -1280, 1440, 3440), 109.0, false),
         ];
         let links = [
-            Link { a: 1, b: 0, side: Side::Bottom, map: EdgeMap { s: 1.4892, o: 34.76 }, glued: false },
-            Link { a: 0, b: 2, side: Side::Right, map: EdgeMap { s: 0.787, o: 1720.04 }, glued: false },
+            Link {
+                a: 1,
+                b: 0,
+                side: Side::Bottom,
+                map: EdgeMap { s: 1.4892, o: 34.76 },
+                glued: false,
+                not_on_desk: false,
+            },
+            Link {
+                a: 0,
+                b: 2,
+                side: Side::Right,
+                map: EdgeMap { s: 0.787, o: 1720.04 },
+                glued: false,
+                not_on_desk: false,
+            },
         ];
         let screens = desk_screens(&mons, &links);
         let number = |found: Found| match found {

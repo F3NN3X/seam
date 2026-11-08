@@ -61,6 +61,12 @@ pub struct Border {
     pub b: u32,
     pub side: Side,
     pub state: BorderState,
+    /// The screens are glued across a gap in Windows' arrangement.
+    #[serde(default)]
+    pub glued: bool,
+    /// The screens touch in Windows but not on the desk.
+    #[serde(default)]
+    pub not_on_desk: bool,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]

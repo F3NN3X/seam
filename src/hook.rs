@@ -4,7 +4,7 @@
 //! The hook lives on its own high-priority thread with its own message loop, so
 //! UI work like painting the overlay can never delay mouse input.
 
-use crate::layout::{decide, Crossing, Live};
+use crate::layout::{decide, Crossing, Live, Move, Push};
 use crate::log;
 use std::cell::Cell;
 use std::sync::mpsc::{channel, Sender};
@@ -44,9 +44,11 @@ fn bucket(ns: u64) -> usize {
 static LIVE: RwLock<Live> = RwLock::new(Live { rects: Vec::new(), links: Vec::new() });
 
 thread_local! {
-    // These three belong to the hook thread.
+    // These four belong to the hook thread.
     static HOOK: Cell<Option<HHOOK>> = const { Cell::new(None) };
     static STATS: Cell<Stats> = Cell::new(Stats::default());
+    /// How far the pointer has pushed past a glued edge.
+    static PUSH: Cell<Push> = Cell::new(Push::default());
     /// Time the current event spent in hooks after ours.
     static NEXT_NS: Cell<u64> = const { Cell::new(0) };
 }
@@ -130,12 +132,30 @@ fn run_command(cmd: usize) {
     });
 }
 
-/// Where this move should land, unless the pointer is confined.
-fn crossing(from: (i32, i32), pt: (i32, i32)) -> Option<Crossing> {
+/// What to do with this move, unless the pointer is confined.
+fn crossing(from: (i32, i32), pt: (i32, i32)) -> Option<Move> {
     let live = LIVE.try_read().ok()?;
     // Most moves cross nothing, so only then pay for the system call.
-    let c = decide(&live, from, pt)?;
-    (!cursor_is_confined(&live)).then_some(c)
+    let m = decide(&live, from, pt)?;
+    (!cursor_is_confined(&live)).then_some(m)
+}
+
+/// Where this move should put the pointer, with the crossing if it crosses. A
+/// glued crossing waits at the edge until the push past it adds up, and a
+/// border that isn't on the desk keeps the pointer at the edge.
+fn target(from: (i32, i32), pt: (i32, i32)) -> Option<((i32, i32), Option<Crossing>)> {
+    let m = crossing(from, pt);
+    let c = match m {
+        Some(Move::Cross(c)) => Some(c),
+        _ => None,
+    };
+    let (push, go) = PUSH.get().after(c.as_ref());
+    PUSH.set(push);
+    match m? {
+        Move::Block(at) => Some((at, None)),
+        Move::Cross(c) if go => Some((c.to, Some(c))),
+        Move::Cross(c) => c.hold.map(|at| (at, None)),
+    }
 }
 
 /// Games and some apps confine the pointer with ClipCursor; leave those alone.
@@ -234,17 +254,19 @@ unsafe fn on_mouse(code: i32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
             let mut prev = POINT::default();
             if GetCursorPos(&mut prev).is_ok() {
                 let (from, pt) = ((prev.x, prev.y), (info.pt.x, info.pt.y));
-                if let Some(c) = crossing(from, pt) {
-                    if c.to != pt && SetCursorPos(c.to.0, c.to.1).is_ok() {
+                if let Some((to, c)) = target(from, pt) {
+                    if to != pt && SetCursorPos(to.0, to.1).is_ok() {
                         if let Some(t0) = started {
                             let us = t0.elapsed().as_secs_f64() * 1e6;
-                            log::info!(
-                                "remap {from:?} -> {:?} (raw {pt:?}) border {}->{} {:?} hook {us:.1}us",
-                                c.to,
-                                c.src,
-                                c.dst,
-                                c.side
-                            );
+                            match c {
+                                Some(c) => log::info!(
+                                    "remap {from:?} -> {to:?} (raw {pt:?}) border {}->{} {:?} hook {us:.1}us",
+                                    c.src,
+                                    c.dst,
+                                    c.side
+                                ),
+                                None => log::info!("hold {from:?} at {to:?} (raw {pt:?}) hook {us:.1}us"),
+                            }
                         }
                         return LRESULT(1); // swallow the original move
                     }

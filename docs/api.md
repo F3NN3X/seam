@@ -211,7 +211,7 @@ Subscribe with `events.subscribe` and a list of topics. An event belongs to the 
   },
   "desk": { "sig": "<signature>", "name": "Home desk" },
   "screens": [{ "number": 1, "id": "<device path>", "name": "PG32UCDM", "primary": true }],
-  "borders": [{ "a": 2, "b": 1, "side": "Bottom", "state": "lined_up" }],
+  "borders": [{ "a": 2, "b": 1, "side": "Bottom", "state": "lined_up", "glued": false, "not_on_desk": false }],
   "workspace": { "id": "ws_7f3a", "name": "Coding", "drifted": false },
   "session": { "saved_at": 1793890000, "windows": 6 },
   "restart_apps": true,
@@ -235,7 +235,7 @@ Subscribe with `events.subscribe` and a list of topics. An event belongs to the 
 | `wm.focus_color`, `wm.pin_color` | The border colours as stored: `none`, a swatch name, or `#RRGGBB` |
 | `desk` | The connected set of screens. `sig` is its stable signature, and `name` is what you called it |
 | `screens` | One entry per connected screen. `number` is the Line Up number from 1, `id` the device path, `name` the model name, and `primary` whether it is the Windows main screen |
-| `borders` | The borders between screens, by Line Up number. `a` and `b` are the two screens, and `side` is which side of `a` the screen `b` is on (`Left`, `Right`, `Top` or `Bottom`). `state` is `lined_up` or `not_lined_up` |
+| `borders` | The borders between screens, by Line Up number. `a` and `b` are the two screens, and `side` is which side of `a` the screen `b` is on (`Left`, `Right`, `Top` or `Bottom`). `state` is `lined_up` or `not_lined_up`. `glued` is true when the two screens touch on the desk across a gap in the Windows arrangement, and false when an older Seam leaves it out. `not_on_desk` is true when the two screens touch in Windows but not on the desk, so the pointer stops at that border, and false when an older Seam leaves it out |
 | `workspace` | The workspace in use on this desk, or `null`. `drifted` is true once one of its windows was moved or minimized, so Snap back has work to do |
 | `session` | The last session saved for this desk, or `null`. `saved_at` is Unix seconds and `windows` how many windows it holds |
 | `restart_apps` | Windows' "Restart apps" sign-in option was on when Seam last looked |

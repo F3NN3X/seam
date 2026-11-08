@@ -4,8 +4,8 @@
 //! bezel. Two line pairs fix both scale and offset; no measuring needed.
 
 use crate::config::SavedBorder;
-use crate::desk::{apart_neighbours, resolve};
-use crate::geom::{anchor_points, overlap_in_a, predict, touching, EdgeMap, Side};
+use crate::desk::{glue_candidates, resolve};
+use crate::geom::{anchor_points, overlap_in_a, predict, predict_centred, touching, EdgeMap, Side};
 use crate::hook;
 use crate::layout::{Link, Live};
 use crate::monitors::Mon;
@@ -33,11 +33,36 @@ struct Step {
     b_pts: (f64, f64),
     /// The first guess, which R goes back to.
     guess: EdgeMap,
+    /// For screens with a gap between them in Windows, whether to glue them.
+    /// `None` for screens that touch.
+    glue: Option<bool>,
+    /// The saved border for this pair is glued.
+    was_glued: bool,
+    /// For screens that touch in Windows, that they don't on the desk, so the
+    /// pointer stops here.
+    not_on_desk: bool,
 }
 
 impl Step {
     fn map(&self) -> Option<EdgeMap> {
         EdgeMap::from_pairs(self.a_pts.0, self.b_pts.0, self.a_pts.1, self.b_pts.1)
+    }
+
+    /// False for a gap the user hasn't glued, which is skipped.
+    fn on(&self) -> bool {
+        self.glue != Some(false)
+    }
+
+    /// Whether the border is saved as glued. A glued pair that Windows has since
+    /// closed up stays glued.
+    fn glued(&self) -> bool {
+        self.glue.unwrap_or(self.was_glued)
+    }
+
+    /// Whether the lines can move: not for an unglued gap or a border that
+    /// isn't on the desk.
+    fn adjustable(&self) -> bool {
+        self.on() && !self.not_on_desk
     }
 }
 
@@ -91,29 +116,61 @@ fn saved_map(mons: &[Mon], a: usize, b: usize, side: Side, saved: &[SavedBorder]
     })
 }
 
+fn saved_glued(mons: &[Mon], a: usize, b: usize, saved: &[SavedBorder]) -> bool {
+    let (ia, ib) = (&mons[a].id, &mons[b].id);
+    saved.iter().any(|s| s.glued && ((&s.a, &s.b) == (ia, ib) || (&s.a, &s.b) == (ib, ia)))
+}
+
+fn saved_not_on_desk(mons: &[Mon], a: usize, b: usize, saved: &[SavedBorder]) -> bool {
+    let (ia, ib) = (&mons[a].id, &mons[b].id);
+    saved.iter().any(|s| s.not_on_desk && ((&s.a, &s.b) == (ia, ib) || (&s.a, &s.b) == (ib, ia)))
+}
+
+/// `a` and `b` swapped if needed so B is right of / below A.
+fn oriented(a: usize, b: usize, side: Side) -> (usize, usize, Side) {
+    match side {
+        Side::Right | Side::Bottom => (a, b, side),
+        Side::Left | Side::Top => (b, a, side.opposite()),
+    }
+}
+
 /// Every touching pair becomes one step, oriented so B is right of / below A,
-/// then every pair that only meets on the desk.
+/// then every pair that could be glued across a gap in Windows. Those start
+/// glued when the screens' sizes put them side by side or they were glued
+/// before, and off when only the pixel layout has them facing.
 fn build_steps(mons: &[Mon], saved: &[SavedBorder]) -> Vec<Step> {
     let mut pairs = Vec::new();
     for i in 0..mons.len() {
         for j in (i + 1)..mons.len() {
             let Some(side) = touching(&mons[i].rect, &mons[j].rect) else { continue };
-            let (a, b, side) = match side {
-                Side::Right | Side::Bottom => (i, j, side),
-                Side::Left | Side::Top => (j, i, side.opposite()),
-            };
-            pairs.push((a, b, side, predict(&mons[a].rect, &mons[b].rect, side, mons[a].raw_dpi, mons[b].raw_dpi)));
+            let (a, b, side) = oriented(i, j, side);
+            let guess = predict(&mons[a].rect, &mons[b].rect, side, mons[a].raw_dpi, mons[b].raw_dpi);
+            pairs.push((a, b, side, guess, None));
         }
     }
     let links = resolve(mons, Some(saved));
-    pairs.extend(apart_neighbours(mons, &links).into_iter().map(|p| (p.a, p.b, p.side, p.guess)));
+    for c in glue_candidates(mons, &links) {
+        let on = c.apart || saved_glued(mons, c.a, c.b, saved);
+        pairs.push((c.a, c.b, c.side, c.guess, Some(on)));
+    }
+    // A glued border holds past what detection finds, so Line Up must offer it too.
+    for l in links.iter().filter(|l| l.glued && touching(&mons[l.a].rect, &mons[l.b].rect).is_none()) {
+        let (a, b, side) = oriented(l.a, l.b, l.side);
+        if !pairs.iter().any(|p| (p.0, p.1) == (a, b)) {
+            let guess = predict_centred(&mons[a].rect, &mons[b].rect, side, mons[a].raw_dpi, mons[b].raw_dpi);
+            pairs.push((a, b, side, guess, Some(true)));
+        }
+    }
     pairs
         .into_iter()
-        .map(|(a, b, side, guess)| {
+        .map(|(a, b, side, guess, glue)| {
             let m = saved_map(mons, a, b, side, saved).unwrap_or(guess);
             let (la, lb) = (mons[a].rect.along_len(side), mons[b].rect.along_len(side));
             let a_pts = anchor_points(&m, la, lb);
-            Step { a, b, side, a_pts, b_pts: (m.apply(a_pts.0), m.apply(a_pts.1)), guess }
+            let was_glued = saved_glued(mons, a, b, saved);
+            let not_on_desk = glue.is_none() && saved_not_on_desk(mons, a, b, saved);
+            let b_pts = (m.apply(a_pts.0), m.apply(a_pts.1));
+            Step { a, b, side, a_pts, b_pts, guess, glue, was_glued, not_on_desk }
         })
         .collect()
 }
@@ -124,7 +181,10 @@ fn push_live(c: &Calib) {
     let links = c
         .steps
         .iter()
-        .filter_map(|s| s.map().map(|map| Link { a: s.a, b: s.b, side: s.side, map, glued: false }))
+        .filter(|s| s.on())
+        .filter_map(|s| {
+            s.map().map(|map| Link { a: s.a, b: s.b, side: s.side, map, glued: s.glued(), not_on_desk: s.not_on_desk })
+        })
         .collect();
     hook::set_live(Live { rects: c.mons.iter().map(|m| m.rect).collect(), links });
 }
@@ -201,13 +261,15 @@ fn finish(accept: bool) {
         let res = c
             .steps
             .iter()
+            .filter(|s| s.on())
             .filter_map(|s| {
                 s.map().map(|map| SavedBorder {
                     a: c.mons[s.a].id.clone(),
                     b: c.mons[s.b].id.clone(),
                     side: s.side,
                     map,
-                    glued: false,
+                    glued: s.glued() && !s.not_on_desk,
+                    not_on_desk: s.not_on_desk,
                 })
             })
             .collect();
@@ -275,10 +337,12 @@ fn handle(hwnd: HWND, idx: usize, msg: u32, wparam: WPARAM, lparam: LPARAM) -> O
         let step = &mut c.steps[cur];
         let is_b = idx == step.b;
         let side = step.side;
+        // An unglued gap, or a border that isn't on the desk, has nothing to adjust.
+        let live = step.adjustable();
         let mut after = After::Nothing;
         let mut changed = false;
         match msg {
-            WM_LBUTTONDOWN if is_b => {
+            WM_LBUTTONDOWN if is_b && live => {
                 let x = (lparam.0 & 0xffff) as i16 as f64;
                 let y = ((lparam.0 >> 16) & 0xffff) as i16 as f64;
                 let pos = if side.along_is_y() { y } else { x };
@@ -325,7 +389,7 @@ fn handle(hwnd: HWND, idx: usize, msg: u32, wparam: WPARAM, lparam: LPARAM) -> O
                     VK_DOWN | VK_RIGHT => Some(amount),
                     _ => None,
                 };
-                if let Some(delta) = nudge {
+                if let (Some(delta), true) = (nudge, live) {
                     let which = if key_down(VK_CONTROL.0) || c.sel == 2 { Which::Both } else { Which::One(c.sel) };
                     let base = step.b_pts;
                     set_b(step, which, base, delta);
@@ -351,11 +415,21 @@ fn handle(hwnd: HWND, idx: usize, msg: u32, wparam: WPARAM, lparam: LPARAM) -> O
                             after = After::Focus(c.wins[c.steps[c.cur].b]);
                             changed = true;
                         }
-                        VK_TAB => {
+                        VK_G if step.glue.is_some() => {
+                            step.glue = step.glue.map(|on| !on);
+                            c.drag = None;
+                            changed = true;
+                        }
+                        VK_N if step.glue.is_none() => {
+                            step.not_on_desk = !step.not_on_desk;
+                            c.drag = None;
+                            changed = true;
+                        }
+                        VK_TAB if live => {
                             c.sel = (c.sel + 1) % 3;
                             changed = true;
                         }
-                        VK_R => {
+                        VK_R if live => {
                             let (ma, mb) = (&c.mons[step.a], &c.mons[step.b]);
                             let m = step.guess;
                             step.a_pts = anchor_points(&m, ma.rect.along_len(side), mb.rect.along_len(side));
@@ -367,7 +441,7 @@ fn handle(hwnd: HWND, idx: usize, msg: u32, wparam: WPARAM, lparam: LPARAM) -> O
                 }
             }
             WM_SETCURSOR => {
-                let id = if is_b {
+                let id = if is_b && live {
                     if side.along_is_y() {
                         IDC_SIZENS
                     } else {
@@ -526,6 +600,53 @@ unsafe fn tag(dc: HDC, w: i32, h: i32, edge: Side, pos: f64, label: &str, s: f64
     text(dc, label, r, (20.0 * s) as i32, true, BG, DT_CENTER | DT_VCENTER | DT_SINGLELINE, false);
 }
 
+/// `c` faded most of the way into the background, for lines that are off.
+fn dim(c: (u8, u8, u8)) -> (u8, u8, u8) {
+    let mix = |x: u8, bg: u8| ((x as u16 * 2 + bg as u16 * 3) / 5) as u8;
+    (mix(c.0, BG.0), mix(c.1, BG.1), mix(c.2, BG.2))
+}
+
+/// The shared edge drawn in dashes, for screens with a gap between them in Windows.
+unsafe fn dashed_edge(dc: HDC, w: i32, h: i32, edge: Side, t: i32, s: f64, c: (u8, u8, u8)) {
+    let (dash, step) = ((24.0 * s) as i32, (36.0 * s) as i32);
+    let strip = edge_strip(w, h, edge, t);
+    let len = if edge.along_is_y() { h } else { w };
+    for p in (0..len).step_by(step.max(2) as usize) {
+        let r = if edge.along_is_y() {
+            RECT { top: p, bottom: (p + dash).min(h), ..strip }
+        } else {
+            RECT { left: p, right: (p + dash).min(w), ..strip }
+        };
+        fill(dc, r, c);
+    }
+}
+
+/// How far apart Windows has the step's screens, in pixels.
+fn windows_gap(c: &Calib, step: &Step) -> i32 {
+    let (a, b) = (c.mons[step.a].rect, c.mons[step.b].rect);
+    if step.side.along_is_y() {
+        b.left - a.right
+    } else {
+        b.top - a.bottom
+    }
+}
+
+/// A note beside the shared edge, saying how big the gap is in Windows.
+unsafe fn gap_hint(dc: HDC, w: i32, h: i32, edge: Side, gap: i32, s: f64) {
+    let inset = (80.0 * s) as i32;
+    let (bw, bh) = ((360.0 * s) as i32, (28.0 * s) as i32);
+    let (r, align) = match edge {
+        Side::Right => (RECT { left: w - inset - bw, top: h / 4, right: w - inset, bottom: h / 4 + bh }, DT_RIGHT),
+        Side::Left => (RECT { left: inset, top: h / 4, right: inset + bw, bottom: h / 4 + bh }, DT_LEFT),
+        Side::Bottom => {
+            (RECT { left: w / 2 - bw / 2, top: h - inset - bh, right: w / 2 + bw / 2, bottom: h - inset }, DT_CENTER)
+        }
+        Side::Top => (RECT { left: w / 2 - bw / 2, top: inset, right: w / 2 + bw / 2, bottom: inset + bh }, DT_CENTER),
+    };
+    let label = format!("Gap in Windows, {gap} px");
+    text(dc, &label, r, (16.0 * s) as i32, false, (176, 176, 176), align | DT_SINGLELINE, false);
+}
+
 fn edge_strip(w: i32, h: i32, edge: Side, t: i32) -> RECT {
     match edge {
         Side::Right => RECT { left: w - t, top: 0, right: w, bottom: h },
@@ -565,6 +686,7 @@ unsafe fn paint(hwnd: HWND, idx: usize) {
         if role_a || role_b {
             let (la, lb) = (c.mons[step.a].rect.along_len(step.side), c.mons[step.b].rect.along_len(step.side));
             let map = step.map();
+            let shade = |c: (u8, u8, u8)| if step.adjustable() { c } else { dim(c) };
             // Faint guide lines through the physical overlap: they all straighten
             // out once the two main lines are right.
             if let Some(m) = map {
@@ -572,34 +694,89 @@ unsafe fn paint(hwnd: HWND, idx: usize) {
                     for k in 0..=10 {
                         let a = lo + (hi - lo) * k as f64 / 10.0;
                         let pos = if role_a { a } else { m.apply(a) };
-                        line(mem, w, h, along_y, pos, (1.0 * s).max(1.0) as i32, GUIDE);
+                        line(mem, w, h, along_y, pos, (1.0 * s).max(1.0) as i32, shade(GUIDE));
                     }
                 }
             }
             let my_edge = if role_a { step.side } else { step.side.opposite() };
-            fill(mem, edge_strip(w, h, my_edge, (6.0 * s) as i32), EDGE);
+            if step.glue.is_some() {
+                dashed_edge(mem, w, h, my_edge, (6.0 * s) as i32, s, shade(EDGE));
+                gap_hint(mem, w, h, my_edge, windows_gap(c, step), s);
+            } else {
+                fill(mem, edge_strip(w, h, my_edge, (6.0 * s) as i32), shade(EDGE));
+            }
             let pts = if role_a { step.a_pts } else { step.b_pts };
             for (i, pos) in [pts.0, pts.1].into_iter().enumerate() {
-                let selected = role_b && (c.sel == i || c.sel == 2);
+                let selected = role_b && step.adjustable() && (c.sel == i || c.sel == 2);
                 let thick = ((if selected { 5.0 } else { 3.0 }) * s) as i32;
-                line(mem, w, h, along_y, pos, thick.max(2), LINE_COLORS[i]);
-                tag(mem, w, h, my_edge, pos, &format!("{}", i + 1), s, LINE_COLORS[i]);
+                line(mem, w, h, along_y, pos, thick.max(2), shade(LINE_COLORS[i]));
+                tag(mem, w, h, my_edge, pos, &format!("{}", i + 1), s, shade(LINE_COLORS[i]));
             }
             let last = c.cur + 1 == c.steps.len();
-            let msg = if role_b {
-                format!(
-                    "Line up screen {b} with screen {a}\n\n\
-                     Drag the lines on this screen until each one continues straight across the bezel from screen {a}.\n\
-                     Grab a line to move just that one. Drag anywhere else to move both.\n\n\
+            let (a, b) = (step.a + 1, step.b + 1);
+            let next = if last { "done" } else { "next border" };
+            // Where B is from A, and the reverse, in desk words: "straight below" reads
+            // better than "continues across the bezel" when the screens are far apart.
+            let (b_from_a, a_from_b, lands) = match step.side {
+                Side::Bottom => ("below", "above", "straight below"),
+                Side::Top => ("above", "below", "straight above"),
+                Side::Right => ("to the right", "to the left", "level with"),
+                Side::Left => ("to the left", "to the right", "level with"),
+            };
+            let msg = match (role_b, step.glue, step.not_on_desk) {
+                (true, Some(false), _) => format!(
+                    "Glue screen {b} to screen {a}?\n\n\
+                     Do this if this screen touches screen {a} on your desk. Windows has a gap \
+                     between them, so today the pointer stops at the edge.\n\n\
+                     Press G, then line them up as they stand on your desk.\n\n\
+                     Enter: skip   ·   Backspace: back   ·   Esc: cancel"
+                ),
+                (true, None, true) => format!(
+                    "Screen {b} doesn't touch screen {a} on your desk\n\n\
+                     Windows has them touching, so Seam stops the pointer crossing here. \
+                     Where you've glued a screen past this edge, the pointer goes there instead.\n\n\
+                     N says they do touch\n\n\
+                     Enter: {next}   ·   Backspace: back   ·   Esc: cancel"
+                ),
+                (true, glue, _) => format!(
+                    "{title}\n\n\
+                     Screen {a}, {a_from_b}, has a blue line 1 and a pink line 2.\n\
+                     Move this screen's blue line 1 until it sits {lands} screen {a}'s blue line, \
+                     as if one line ran across both screens. Then do the same with the pink line 2.{gap}\n\n\
+                     Grab a line to move just that one, or drag anywhere else to move both.\n\
                      Arrows nudge  ·  Shift ×10  ·  Ctrl = both  ·  Tab switches line  ·  R resets\n\
-                     The pointer already follows your lines, so try crossing as you go.\n\n\
+                     The pointer follows your lines already, so cross over to check.{toggle}\n\n\
                      Enter: {next}   ·   Backspace: back   ·   Esc: cancel",
-                    a = step.a + 1,
-                    b = step.b + 1,
-                    next = if last { "done" } else { "next border" },
-                )
-            } else {
-                format!("Reference screen\n\nThe lines here stay put. Adjust the matching lines on screen {}.", step.b + 1)
+                    title = if glue.is_some() {
+                        format!("Glue screen {b} to screen {a}")
+                    } else {
+                        format!("Line up screen {b} with screen {a}")
+                    },
+                    gap = if glue.is_some() {
+                        "\nThe gap doesn't matter: line them up as the screens stand on your desk."
+                    } else {
+                        ""
+                    },
+                    toggle = if glue.is_some() {
+                        "\nG unglues them".to_string()
+                    } else {
+                        format!(
+                            "\nScreen {b} doesn't touch screen {a} on your desk? \
+                             Press N, and Seam stops the pointer crossing here"
+                        )
+                    },
+                ),
+                (false, Some(false), _) => format!(
+                    "Reference screen\n\nScreen {b}, {b_from_a}, may touch this one on your desk. Look at screen {b} to glue them."
+                ),
+                (false, None, true) => format!(
+                    "Reference screen\n\nScreen {b}, {b_from_a}, doesn't touch this one on your desk, \
+                     so Seam stops the pointer crossing here."
+                ),
+                (false, ..) => format!(
+                    "Reference screen\n\nThe blue and pink lines here stay put.\n\
+                     On screen {b}, {b_from_a}, move its lines until each sits {lands} the matching line here."
+                ),
             };
             text(mem, &msg, center, (20.0 * s) as i32, false, (226, 230, 238), DT_CENTER | DT_WORDBREAK, true);
         } else {

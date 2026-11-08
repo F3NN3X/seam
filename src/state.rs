@@ -88,7 +88,7 @@ pub struct UpdateState {
 }
 
 /// Window managers Seam steps aside for (D110): the exe, the name State uses, and the name to show.
-/// LeopardWM's exe name is a guess from the project's name.
+/// LeopardWM's daemon binary is `leopardwm` (crates/daemon in jcardama/LeopardWM).
 pub const OTHER_WMS: [(&str, &str, &str); 3] = [
     ("komorebi.exe", "komorebi", "komorebi"),
     ("glazewm.exe", "glazewm", "GlazeWM"),

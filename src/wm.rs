@@ -9,18 +9,21 @@
 use crate::log;
 use crate::wincontrol;
 use seam::api::{self, PinKind, Reply, RpcError};
-use seam::config::ACCENT_RGB;
 use seam::state::OTHER_WMS;
 use seam::{winutil, winver};
 use serde_json::json;
 use std::sync::mpsc::{channel, Sender};
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
+use windows::core::w;
 use windows::Win32::Foundation::*;
-use windows::Win32::Graphics::Dwm::{DwmSetWindowAttribute, DWMWA_BORDER_COLOR, DWMWA_COLOR_DEFAULT};
+use windows::Win32::Graphics::Dwm::{
+    DwmGetColorizationColor, DwmSetWindowAttribute, DWMWA_BORDER_COLOR, DWMWA_COLOR_DEFAULT,
+};
 use windows::Win32::System::Diagnostics::ToolHelp::{
     CreateToolhelp32Snapshot, Process32FirstW, Process32NextW, PROCESSENTRY32W, TH32CS_SNAPPROCESS,
 };
+use windows::Win32::System::Registry::{RegGetValueW, HKEY_CURRENT_USER, RRF_RT_REG_DWORD};
 use windows::Win32::System::Threading::GetCurrentThreadId;
 use windows::Win32::UI::Accessibility::{SetWinEventHook, UnhookWinEvent, HWINEVENTHOOK};
 use windows::Win32::UI::WindowsAndMessaging::*;
@@ -51,6 +54,8 @@ pub enum Command {
     Release {
         reply: Option<Sender<Reply>>,
     },
+    /// Windows' accent colour changed.
+    AccentChanged,
 }
 
 static DETECTED: Mutex<Option<&'static str>> = Mutex::new(None);
@@ -87,6 +92,10 @@ pub fn pin(kind: PinKind, on: Option<bool>, hwnd: isize, reply: Option<Sender<Re
 
 pub fn release(reply: Option<Sender<Reply>>) {
     send(Command::Release { reply });
+}
+
+pub fn accent_changed() {
+    send(Command::AccentChanged);
 }
 
 /// Release all on a clean exit. Waits for it, but not for long.
@@ -141,9 +150,31 @@ fn hwnd_of(key: isize) -> HWND {
     HWND(key as *mut _)
 }
 
-/// 0x00BBGGRR, from the 0xRRGGBB the panel uses.
-fn colorref(rgb: u32) -> u32 {
-    (rgb >> 16 & 0xFF) | (rgb & 0xFF00) | (rgb & 0xFF) << 16
+/// Windows' accent colour as a COLORREF (0x00BBGGRR). `DWM\AccentColor` is
+/// the one Settings shows under Colours, stored as 0xAABBGGRR, so dropping the
+/// alpha leaves a COLORREF. The colorization colour (0xAARRGGBB) is the fallback.
+fn accent_colour() -> u32 {
+    let mut value = 0u32;
+    let mut size = 4u32;
+    let read = unsafe {
+        RegGetValueW(
+            HKEY_CURRENT_USER,
+            w!(r"Software\Microsoft\Windows\DWM"),
+            w!("AccentColor"),
+            RRF_RT_REG_DWORD,
+            None,
+            Some(&mut value as *mut u32 as _),
+            Some(&mut size),
+        )
+    };
+    if read.is_ok() {
+        return value & 0x00FF_FFFF;
+    }
+    let (mut argb, mut opaque) = (0u32, windows::core::BOOL(0));
+    if unsafe { DwmGetColorizationColor(&mut argb, &mut opaque) }.is_err() {
+        return DWMWA_COLOR_DEFAULT;
+    }
+    (argb >> 16 & 0xFF) | (argb & 0xFF00) | (argb & 0xFF) << 16
 }
 
 fn set_border_colour(h: HWND, colour: u32) -> bool {
@@ -223,6 +254,8 @@ struct Wm {
     focus_border: bool,
     /// The window Seam coloured last.
     bordered: Option<isize>,
+    /// Windows' accent colour, read when the border is turned on or the colour changes.
+    colour: u32,
     /// Windows that carry `Seam_pin`.
     pinned: Vec<isize>,
     foreground_hook: Option<HWINEVENTHOOK>,
@@ -293,6 +326,7 @@ impl Wm {
                 self.focus_border = focus_border;
                 self.sync_hooks();
                 if focus_border {
+                    self.colour = accent_colour();
                     self.border(unsafe { GetForegroundWindow() });
                 } else if let Some(old) = self.bordered.take() {
                     reset_border(hwnd_of(old));
@@ -311,6 +345,15 @@ impl Wm {
                     (Err(why), None) => log::info!("pin {kind:?}: {why}"),
                 }
             }
+            Command::AccentChanged if self.focus_border => {
+                self.colour = accent_colour();
+                if let Some(h) = self.bordered.map(hwnd_of) {
+                    if set_border_colour(h, self.colour) {
+                        winutil::mark_border(h, Some(self.colour));
+                    }
+                }
+            }
+            Command::AccentChanged => {}
             Command::Release { reply } => {
                 let released = self.release();
                 log::info!("released {released} pinned windows");
@@ -365,9 +408,8 @@ impl Wm {
         if let Some(old) = self.bordered.take() {
             reset_border(hwnd_of(old));
         }
-        let colour = colorref(ACCENT_RGB);
-        if ours_to_touch(h).is_ok() && set_border_colour(h, colour) {
-            winutil::mark_border(h, Some(colour));
+        if ours_to_touch(h).is_ok() && set_border_colour(h, self.colour) {
+            winutil::mark_border(h, Some(self.colour));
             self.bordered = Some(key);
         }
     }

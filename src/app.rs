@@ -178,6 +178,9 @@ struct App {
     update_failed: bool,
     /// Another window manager the seam-wm thread found running.
     other_wm: Option<&'static str>,
+    /// The user asked to quit, so pins and borders go with the tray. An update
+    /// or the Store copy taking over keeps them for the next tray to adopt.
+    release_on_exit: bool,
 }
 
 /// What a worker found in the updater's state file.
@@ -900,7 +903,7 @@ fn align_finished(app: &mut App) {
 /// Run one command and answer it, unless a worker will answer it later.
 fn run_command(app: &mut App, queued: Queued) {
     let ok = || Ok(json!({ "ok": true }));
-    let Queued { command, reply } = queued;
+    let Queued { command, reply, panel } = queued;
     let result = match command {
         Command::ConfigPatch(patch) => patch_config(app, &patch),
         Command::RemapSet(on) => {
@@ -935,6 +938,8 @@ fn run_command(app: &mut App, queued: Queued) {
         Command::PanelOpen(page) if open_panel(app, page.as_deref()) => ok(),
         Command::PanelOpen(_) => refused("seam-settings.exe needs to be next to seam.exe"),
         Command::AppQuit => {
+            // The updater and the Store copy ask without the panel's token.
+            app.release_on_exit = panel && app.install_started.is_none();
             unsafe {
                 let _ = PostMessageW(Some(app.hwnd), WM_CLOSE, WPARAM(0), LPARAM(0));
             }
@@ -1081,6 +1086,7 @@ fn show_menu(app: &mut App) {
                 }
             }
             ID_QUIT => {
+                app.release_on_exit = true;
                 // Close after this borrow ends so WM_DESTROY can clean up the icon.
                 let _ = PostMessageW(Some(hwnd), WM_CLOSE, WPARAM(0), LPARAM(0));
             }
@@ -1222,6 +1228,11 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
             LRESULT(0)
         }
         // The work area changed, which is what a scaling change or a moved taskbar does.
+        // Windows' accent colour changed, which the focus border follows.
+        WM_DWMCOLORIZATIONCOLORCHANGED => {
+            wm::accent_changed();
+            LRESULT(0)
+        }
         WM_SETTINGCHANGE => {
             if wparam.0 == SPI_SETWORKAREA.0 as usize {
                 snap::work_area_changed();
@@ -1304,7 +1315,9 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
         }
         WM_DESTROY => {
             hook::enable(false);
-            wm::release_before_exit();
+            if with_app(|a| a.release_on_exit).unwrap_or(false) {
+                wm::release_before_exit();
+            }
             snap::shutdown();
             with_app(|a| {
                 let nid = tray_data(a);
@@ -1441,6 +1454,7 @@ pub fn run() {
             install_started: None,
             update_failed: false,
             other_wm: None,
+            release_on_exit: false,
         };
         APP.with(|a| *a.borrow_mut() = Some(app));
         with_app(|a| {

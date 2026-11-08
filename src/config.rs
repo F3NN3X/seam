@@ -8,9 +8,6 @@ use std::path::{Path, PathBuf};
 
 const CURRENT_VERSION: u32 = 2;
 
-/// The panel's accent colour as 0xRRGGBB. The focus border uses it too (D108).
-pub const ACCENT_RGB: u32 = 0xFFB020;
-
 /// One calibrated border, keyed by stable monitor device paths.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct SavedBorder {
@@ -158,7 +155,7 @@ impl Default for ZoneSettings {
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(default)]
 pub struct WindowSettings {
-    /// Colour the focused window's border in the accent colour (D108).
+    /// Colour the focused window's border in Windows' accent colour (D108).
     pub focus_border: bool,
     /// "Another window manager handles my windows" (D110).
     pub other_wm: bool,

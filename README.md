@@ -46,8 +46,8 @@ Seam leaves windows from apps running as administrator, windows that aren't resp
 
 - **Pin window on top** keeps the focused window above the others until you press it again.
 - **Keep window out of workspace switches** makes the focused window sticky: a workspace switch never moves, minimizes or closes it, and capture leaves it out.
-- **Focus border**, on the Zones page, colours the border of the window that has focus in Seam's accent colour. It's off until you turn it on, needs Windows 11, and skips windows from apps running as administrator.
-- **Release pinned windows**, in the tray menu, takes back every pin and border Seam set. Seam does the same when it quits. If Seam stops without quitting, the next start keeps the pins it finds and resets the borders.
+- **Focus border**, on the Zones page, colours the border of the window that has focus in your Windows accent colour, the one under Settings > Personalisation > Colours. It's off until you turn it on, needs Windows 11, and skips windows from apps running as administrator.
+- **Release pinned windows**, in the tray menu, takes back every pin and border Seam set. Seam does the same when you quit it. An update or a restart that you didn't ask for keeps the pins: the next start keeps the pins it finds and resets the borders.
 
 The three pin keys have no key until you set one on the Shortcuts page.
 
@@ -103,7 +103,7 @@ When Seam isn't running, every key says so and reconnects by itself once it is.
 
 On a PC shared with other Windows accounts, the plugin can't check that the program answering on Seam's connection is really Seam. Seam's own apps do check. The plugin only sends commands like "switch workspace" and reads status, so the most another account could do is see that status or ignore the keys.
 
-To install it, download `co.f3nn3x.seam.streamDeckPlugin` and open it. The Stream Deck app installs it and adds a Seam group to the action list. To build it yourself, run `pnpm install`, `pnpm build` and `pnpm pack` in `integrations/streamdeck`. The packed file lands in its `dist` folder.
+To install it, download `co.f3nn3x.seam.streamDeckPlugin` and open it. The Stream Deck app installs it and adds a Seam group to the action list. To build it yourself, run `pnpm install`, `pnpm build` and `pnpm run pack` in `integrations/streamdeck`. The packed file lands in its `dist` folder.
 
 ## Install and update
 

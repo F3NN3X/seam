@@ -193,6 +193,31 @@ jobs:
           & $env:ISCC "/DAppVersion=$version" "/DAppId=$id" "/DArch=arm64" "/DSourceDir=$PWD\dist-arm64" "/O$PWD\dist" packaging\seam.iss
           if ($LASTEXITCODE -ne 0) { exit 1 }
 
+      # The Stream Deck plugin, packed by the Elgato CLI from the lockfile, as a
+      # download next to Seam. It talks to Seam over the local API, so it isn't
+      # in latest.json and the updater never touches it.
+      - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
+        with:
+          version: 10.25.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: integrations/streamdeck/pnpm-lock.yaml
+      - name: Stream Deck plugin
+        shell: pwsh
+        working-directory: integrations/streamdeck
+        run: |
+          pnpm install --frozen-lockfile
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+          pnpm build
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+          pnpm validate
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+          pnpm run pack
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+          Copy-Item dist/co.f3nn3x.seam.streamDeckPlugin ../../dist/
+
       # The zips, the setups and the Store package all hold the exes latest.json
       # hashes: the uploaded asset and, for ARM64, the copy the zip and setup took.
       - name: The exes are still the ones latest.json hashes

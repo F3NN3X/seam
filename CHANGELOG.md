@@ -6,6 +6,8 @@ All notable changes to Seam. The format follows [Keep a Changelog](https://keepa
 
 ### Added
 
+- Line Up draws faint diagonal stripes along the shared edge of the two screens, 10 mm apart on the desk, so you can see at a glance whether the edge runs straight across. Each step now names both screens with their model, such as "Line up screen 3 (HDMI) with screen 4 (U3477)".
+- Line Up can take the offset between two screens as a typed number in cm (M), once `lineup_measure` is on in `config.json`. It sets the map from the screens' physical sizes and moves the lines to match.
 - **Glue** in Line Up: screens that touch on your desk but have a gap between them in Windows can be glued with G, and the pointer crosses the gap where they physically meet. Align arrangement keeps glued screens apart, and Displays marks a glued border "Glued to the right edge of 1". `glued` on a border in `config.json` and in the state's `borders`.
 - A glued edge holds the pointer until you push about 60 px past it, so an auto-hide taskbar on that edge still shows.
 - **Not on your desk** in Line Up: press N on a border Windows has but your desk doesn't, and the pointer stops there, or crosses to a glued screen past that edge. Displays shows such a border as "Not on your desk". `not_on_desk` on a border in `config.json` and in the state's `borders`.

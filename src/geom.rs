@@ -208,6 +208,15 @@ pub fn predict_centred(a: &Rect, b: &Rect, side: Side, dpi_a: f64, dpi_b: f64) -
     EdgeMap { s, o: bl / 2.0 - s * al / 2.0 }
 }
 
+/// The map for a typed offset: B's start edge sits `offset_mm` further along the
+/// shared edge than A's (negative when it sits before it). `mm_a` and `mm_b` are
+/// each screen's millimetres per pixel. A position `a` px along A is `a * mm_a`
+/// mm, and `b` px along B is `offset_mm + b * mm_b` mm, so equal places give
+/// `b = (mm_a / mm_b) * a - offset_mm / mm_b`.
+pub fn map_from_offset(mm_a: f64, mm_b: f64, offset_mm: f64) -> Option<EdgeMap> {
+    Some(EdgeMap { s: mm_a / mm_b, o: -offset_mm / mm_b }).filter(EdgeMap::is_valid)
+}
+
 /// Where the two edges physically overlap, in A-relative coordinates.
 pub fn overlap_in_a(m: &EdgeMap, len_a: i32, len_b: i32) -> Option<(f64, f64)> {
     let inv = m.inverse();
@@ -418,6 +427,21 @@ mod tests {
         let placed = place_against(&uhd(), &qhd(), Side::Right, origin);
         assert_eq!(placed, Rect::new(3840, 360, 2560, 1440));
         assert_eq!(touching(&uhd(), &placed), Some(Side::Right));
+    }
+
+    #[test]
+    fn typed_offset_gives_the_map() {
+        // A at 0.2 mm per pixel, B at 0.1. B's top edge is 5 cm below A's: A's row
+        // 250 (50 mm) is B's row 0, and A's row 750 (150 mm) is B's row 1000.
+        let m = map_from_offset(0.2, 0.1, 50.0).unwrap();
+        assert!((m.s - 2.0).abs() < 1e-9);
+        assert!(m.apply(250.0).abs() < 1e-9);
+        assert!((m.apply(750.0) - 1000.0).abs() < 1e-9);
+        // Above instead: B's top edge is 5 cm above A's, so A's row 0 is B's row 500.
+        let m = map_from_offset(0.2, 0.1, -50.0).unwrap();
+        assert!((m.apply(0.0) - 500.0).abs() < 1e-9);
+        // A scale outside what a real pair can have is refused.
+        assert_eq!(map_from_offset(1.0, 0.05, 0.0), None);
     }
 
     #[test]

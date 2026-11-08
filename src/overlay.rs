@@ -5,7 +5,7 @@
 
 use crate::config::SavedBorder;
 use crate::desk::{glue_candidates, resolve};
-use crate::geom::{anchor_points, overlap_in_a, predict, predict_centred, touching, EdgeMap, Side};
+use crate::geom::{anchor_points, map_from_offset, overlap_in_a, predict, predict_centred, touching, EdgeMap, Side};
 use crate::hook;
 use crate::layout::{Link, Live};
 use crate::monitors::Mon;
@@ -21,6 +21,9 @@ use windows::Win32::UI::WindowsAndMessaging::*;
 pub const WM_APP_CALIB_DONE: u32 = WM_APP + 2;
 const CLASS: PCWSTR = w!("SeamOverlay");
 const MIN_GAP: f64 = 8.0;
+/// How deep the stripe band is, and how far apart its stripes are, on the desk.
+const STRIPE_BAND_MM: f64 = 60.0;
+const STRIPE_GAP_MM: f64 = 10.0;
 
 struct Step {
     a: usize,
@@ -78,6 +81,13 @@ struct Drag {
     b0: (f64, f64),
 }
 
+/// The typed offset being entered on B's screen.
+struct Typing {
+    text: String,
+    /// B's start edge is after A's (below / to the right) rather than before it.
+    after: bool,
+}
+
 struct Calib {
     owner: HWND,
     mons: Vec<Mon>,
@@ -87,6 +97,9 @@ struct Calib {
     /// 0 / 1 = a single line, 2 = both.
     sel: usize,
     drag: Option<Drag>,
+    /// `lineup_measure`: M offers a typed offset.
+    measure: bool,
+    typing: Option<Typing>,
 }
 
 thread_local! {
@@ -190,7 +203,7 @@ fn push_live(c: &Calib) {
 }
 
 /// Start the overlay. Returns false if there's nothing to line up.
-pub fn start(owner: HWND, mons: Vec<Mon>, saved: &[SavedBorder]) -> bool {
+pub fn start(owner: HWND, mons: Vec<Mon>, saved: &[SavedBorder], measure: bool) -> bool {
     if is_active() {
         return true;
     }
@@ -234,7 +247,7 @@ pub fn start(owner: HWND, mons: Vec<Mon>, saved: &[SavedBorder]) -> bool {
         }
     }
     let focus = wins[steps[0].b];
-    let calib = Calib { owner, mons, steps, cur: 0, wins: wins.clone(), sel: 0, drag: None };
+    let calib = Calib { owner, mons, steps, cur: 0, wins: wins.clone(), sel: 0, drag: None, measure, typing: None };
     push_live(&calib);
     CALIB.with(|c| *c.borrow_mut() = Some(calib));
     hook::enable(true);
@@ -319,6 +332,26 @@ fn set_b(step: &mut Step, which: Which, base: (f64, f64), delta: f64) {
     }
 }
 
+/// Millimetres per pixel of each screen of the step, `None` if either reports no size.
+fn sizes(mons: &[Mon], step: &Step) -> Option<(f64, f64)> {
+    let mm = |m: &Mon| (m.raw_dpi > 0.0).then(|| 25.4 / m.raw_dpi);
+    Some((mm(&mons[step.a])?, mm(&mons[step.b])?))
+}
+
+/// The map a typed offset gives, `None` if it isn't a number or a screen has no size.
+fn typed_map(mons: &[Mon], step: &Step, typing: &Typing) -> Option<EdgeMap> {
+    let cm: f64 = typing.text.replace(',', ".").parse().ok()?;
+    let (mm_a, mm_b) = sizes(mons, step)?;
+    map_from_offset(mm_a, mm_b, if typing.after { cm * 10.0 } else { -cm * 10.0 })
+}
+
+/// Put B's lines where `m` says, with A's lines inside the overlap it gives.
+fn set_map(mons: &[Mon], step: &mut Step, m: EdgeMap) {
+    let (la, lb) = (mons[step.a].rect.along_len(step.side), mons[step.b].rect.along_len(step.side));
+    step.a_pts = anchor_points(&m, la, lb);
+    step.b_pts = (m.apply(step.a_pts.0), m.apply(step.a_pts.1));
+}
+
 enum After {
     Nothing,
     Capture(HWND),
@@ -381,6 +414,43 @@ fn handle(hwnd: HWND, idx: usize, msg: u32, wparam: WPARAM, lparam: LPARAM) -> O
             WM_CAPTURECHANGED => {
                 c.drag = None;
             }
+            WM_CHAR if c.typing.is_some() => {
+                let ch = char::from_u32(wparam.0 as u32).unwrap_or(' ');
+                if let Some(t) = c.typing.as_mut() {
+                    let separator = (ch == ',' || ch == '.') && !t.text.contains([',', '.']);
+                    if (ch.is_ascii_digit() || separator) && t.text.len() < 8 {
+                        t.text.push(ch);
+                        changed = true;
+                    }
+                }
+            }
+            // Enter and Backspace mean next and back everywhere but in the field.
+            WM_KEYDOWN if c.typing.is_some() => match VIRTUAL_KEY(wparam.0 as u16) {
+                VK_ESCAPE => {
+                    c.typing = None;
+                    changed = true;
+                }
+                VK_TAB => {
+                    if let Some(t) = c.typing.as_mut() {
+                        t.after = !t.after;
+                    }
+                    changed = true;
+                }
+                VK_BACK => {
+                    if let Some(t) = c.typing.as_mut() {
+                        t.text.pop();
+                    }
+                    changed = true;
+                }
+                VK_RETURN => {
+                    if let Some(m) = c.typing.as_ref().and_then(|t| typed_map(&c.mons, step, t)) {
+                        set_map(&c.mons, step, m);
+                        c.typing = None;
+                        changed = true;
+                    }
+                }
+                _ => return None,
+            },
             WM_KEYDOWN => {
                 let vk = VIRTUAL_KEY(wparam.0 as u16);
                 let amount = if key_down(VK_SHIFT.0) { 10.0 } else { 1.0 };
@@ -430,10 +500,13 @@ fn handle(hwnd: HWND, idx: usize, msg: u32, wparam: WPARAM, lparam: LPARAM) -> O
                             changed = true;
                         }
                         VK_R if live => {
-                            let (ma, mb) = (&c.mons[step.a], &c.mons[step.b]);
                             let m = step.guess;
-                            step.a_pts = anchor_points(&m, ma.rect.along_len(side), mb.rect.along_len(side));
-                            step.b_pts = (m.apply(step.a_pts.0), m.apply(step.a_pts.1));
+                            set_map(&c.mons, step, m);
+                            changed = true;
+                        }
+                        VK_M if c.measure && live && sizes(&c.mons, step).is_some() => {
+                            c.typing = Some(Typing { text: String::new(), after: true });
+                            c.drag = None;
                             changed = true;
                         }
                         _ => return None,
@@ -647,6 +720,68 @@ unsafe fn gap_hint(dc: HDC, w: i32, h: i32, edge: Side, gap: i32, s: f64) {
     text(dc, &label, r, (16.0 * s) as i32, false, (176, 176, 176), align | DT_SINGLELINE, false);
 }
 
+/// The step's screen `i` as "3 (HDMI)", the number and model the corner shows.
+fn screen_name(c: &Calib, i: usize) -> String {
+    let m = &c.mons[i];
+    if m.named {
+        format!("{} ({})", i + 1, m.name)
+    } else {
+        format!("{}", i + 1)
+    }
+}
+
+/// A band of 45 degree stripes along the shared edge, 10 mm apart on the desk. A's
+/// are drawn in its own pixels. B's go through the step's map, so they run on
+/// across the edge when the map is right, and step or change spacing when it isn't.
+unsafe fn stripes(dc: HDC, w: i32, h: i32, c: &Calib, step: &Step, idx: usize, dpi_scale: f64) {
+    let Some((mm_a, mm_b)) = sizes(&c.mons, step) else { return };
+    let role_a = idx == step.a;
+    let depth = (STRIPE_BAND_MM / if role_a { mm_a } else { mm_b }).round() as i32;
+    let period = STRIPE_GAP_MM / mm_a;
+    if period < 3.0 {
+        return;
+    }
+    let (along_len, perp_len) = if step.side.along_is_y() { (h, w) } else { (w, h) };
+    let (edge, band) =
+        if role_a { (step.side, (perp_len - depth, perp_len)) } else { (step.side.opposite(), (0, depth)) };
+    // Each stripe is `along = perp + k`, with its own `k` on each screen.
+    let ks: Vec<f64> = if role_a {
+        let last = ((along_len + depth) as f64 / period).ceil() as i32;
+        (0..=last).map(|n| n as f64 * period - perp_len as f64).collect()
+    } else {
+        let Some(m) = step.map() else { return };
+        let inv = m.inverse();
+        let first = (inv.apply(-depth as f64) / period).floor() as i32;
+        let last = (inv.apply(along_len as f64) / period).ceil() as i32;
+        (first..=last).map(|n| m.apply(n as f64 * period)).collect()
+    };
+    if ks.len() > 4000 {
+        return;
+    }
+    let saved = SaveDC(dc);
+    let strip = edge_strip(w, h, edge, depth);
+    IntersectClipRect(dc, strip.left, strip.top, strip.right, strip.bottom);
+    let tone = dim((110, 116, 130));
+    let pen = CreatePen(PS_SOLID, ((2.0 * dpi_scale).round() as i32).max(1), rgb(tone.0, tone.1, tone.2));
+    let old = SelectObject(dc, pen.into());
+    for k in ks {
+        let at = |perp: i32| {
+            let along = (perp as f64 + k).round() as i32;
+            if step.side.along_is_y() {
+                (perp, along)
+            } else {
+                (along, perp)
+            }
+        };
+        let ((x0, y0), (x1, y1)) = (at(band.0), at(band.1));
+        let _ = MoveToEx(dc, x0, y0, None);
+        let _ = LineTo(dc, x1, y1);
+    }
+    SelectObject(dc, old);
+    let _ = DeleteObject(pen.into());
+    let _ = RestoreDC(dc, saved);
+}
+
 fn edge_strip(w: i32, h: i32, edge: Side, t: i32) -> RECT {
     match edge {
         Side::Right => RECT { left: w - t, top: 0, right: w, bottom: h },
@@ -674,6 +809,9 @@ unsafe fn paint(hwnd: HWND, idx: usize) {
         let Some(mon) = c.mons.get(idx) else { return };
         let step = &c.steps[c.cur];
         let along_y = step.side.along_is_y();
+        if step.adjustable() && (idx == step.a || idx == step.b) {
+            stripes(mem, w, h, c, step, idx, s);
+        }
 
         // Big screen number, like Shim.
         let pad = (36.0 * s) as i32;
@@ -713,7 +851,35 @@ unsafe fn paint(hwnd: HWND, idx: usize) {
                 tag(mem, w, h, my_edge, pos, &format!("{}", i + 1), s, shade(LINE_COLORS[i]));
             }
             let last = c.cur + 1 == c.steps.len();
-            let (a, b) = (step.a + 1, step.b + 1);
+            let (a, b) = (screen_name(c, step.a), screen_name(c, step.b));
+            // The stripes' one line, or why there are none.
+            let stripe_note = if !step.adjustable() {
+                ""
+            } else if sizes(&c.mons, step).is_some() {
+                "\nIf the stripes run on straight across the edge, the screens are lined up"
+            } else {
+                "\nNo stripe check: a screen on this pair reports no size"
+            };
+            let measure_note = if !c.measure || !step.adjustable() {
+                String::new()
+            } else if sizes(&c.mons, step).is_none() {
+                "\nTyping an offset isn't offered: a screen on this pair reports no size".to_string()
+            } else if let Some(t) = &c.typing {
+                let (an, bn) = (step.a + 1, step.b + 1);
+                let (edge, phrase, flip) = match (along_y, t.after) {
+                    (true, true) => ("top", "below", "below/above"),
+                    (true, false) => ("top", "above", "below/above"),
+                    (false, true) => ("left", "to the right of", "right/left"),
+                    (false, false) => ("left", "to the left of", "right/left"),
+                };
+                format!(
+                    "\n\nScreen {bn}'s {edge} edge is [ {}_ ] cm {phrase} screen {an}'s {edge} edge\n\
+                     Tab flips {flip}  ·  Enter: apply  ·  Esc: close",
+                    t.text
+                )
+            } else {
+                "\nM: type the offset in cm".to_string()
+            };
             let next = if last { "done" } else { "next border" };
             // Where B is from A, and the reverse, in desk words: "straight below" reads
             // better than "continues across the bezel" when the screens are far apart.
@@ -745,7 +911,7 @@ unsafe fn paint(hwnd: HWND, idx: usize) {
                      as if one line ran across both screens. Then do the same with the pink line 2.{gap}\n\n\
                      Grab a line to move just that one, or drag anywhere else to move both.\n\
                      Arrows nudge  ·  Shift ×10  ·  Ctrl = both  ·  Tab switches line  ·  R resets\n\
-                     The pointer follows your lines already, so cross over to check.{toggle}\n\n\
+                     The pointer follows your lines already, so cross over to check.{toggle}{stripe_note}{measure_note}\n\n\
                      Enter: {next}   ·   Backspace: back   ·   Esc: cancel",
                     title = if glue.is_some() {
                         format!("Glue screen {b} to screen {a}")
@@ -775,7 +941,7 @@ unsafe fn paint(hwnd: HWND, idx: usize) {
                 ),
                 (false, ..) => format!(
                     "Reference screen\n\nThe blue and pink lines here stay put.\n\
-                     On screen {b}, {b_from_a}, move its lines until each sits {lands} the matching line here."
+                     On screen {b}, {b_from_a}, move its lines until each sits {lands} the matching line here.{stripe_note}"
                 ),
             };
             text(mem, &msg, center, (20.0 * s) as i32, false, (226, 230, 238), DT_CENTER | DT_WORDBREAK, true);

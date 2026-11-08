@@ -5,8 +5,10 @@
 //! `SWP_ASYNCWINDOWPOS`) or is skipped for a window that has stopped answering.
 
 use crate::log;
+use crate::wm::Pinned;
+use seam::api::PinKind;
 use seam::winutil;
-use seam::workspace::{self, Candidate, OtherWindows, Rule, Target, WinState, Workspace};
+use seam::workspace::{self, Candidate, OtherWindows, Pin, Rule, Target, WinState, Workspace};
 use seam::zones::{self, Rect, ZoneLayout};
 use std::collections::HashSet;
 use std::path::Path;
@@ -25,6 +27,8 @@ use windows::Win32::UI::WindowsAndMessaging::*;
 pub const WM_APP_SWITCHED: u32 = WM_APP + 16;
 /// A worker finished a capture.
 pub const WM_APP_CAPTURED: u32 = WM_APP + 17;
+/// A worker finished capturing the last session.
+pub const WM_APP_SESSION: u32 = WM_APP + 25;
 
 /// How long a started app gets to show its window.
 const LAUNCH_WAIT: Duration = Duration::from_secs(15);
@@ -136,12 +140,13 @@ pub struct CaptureJob {
 }
 
 static CAPTURED: Mutex<Option<Vec<Rule>>> = Mutex::new(None);
+static SESSION: Mutex<Option<Vec<Rule>>> = Mutex::new(None);
 
 /// Start a capture. The main thread gets `WM_APP_CAPTURED` when it's done.
 pub fn capture(job: CaptureJob) -> bool {
     let spawned = std::thread::Builder::new().name("seam-capture".into()).spawn(move || {
         let _com = Com::enter();
-        let rules = capture_rules(&job);
+        let rules = capture_rules(&job, false);
         log::info!("workspace capture: {} windows", rules.len());
         *CAPTURED.lock().unwrap_or_else(|e| e.into_inner()) = Some(rules);
         unsafe {
@@ -155,11 +160,44 @@ pub fn take_captured() -> Option<Vec<Rule>> {
     CAPTURED.lock().unwrap_or_else(|e| e.into_inner()).take()
 }
 
-fn capture_rules(job: &CaptureJob) -> Vec<Rule> {
+/// Capture the last session (D120): every window, pinned ones with their pins.
+/// The main thread gets `WM_APP_SESSION` when it's done.
+pub fn capture_session(job: CaptureJob) -> bool {
+    let spawned = std::thread::Builder::new().name("seam-session".into()).spawn(move || {
+        let _com = Com::enter();
+        let rules = capture_rules(&job, true);
+        *SESSION.lock().unwrap_or_else(|e| e.into_inner()) = Some(rules);
+        unsafe {
+            let _ = PostMessageW(Some(hwnd_of(job.owner)), WM_APP_SESSION, WPARAM(0), LPARAM(0));
+        }
+    });
+    spawned.is_ok()
+}
+
+pub fn take_session() -> Option<Vec<Rule>> {
+    SESSION.lock().unwrap_or_else(|e| e.into_inner()).take()
+}
+
+/// The session capture's result, waiting for it no longer than `limit`. Only for
+/// the end of a Windows session, when there's no later message to wait for.
+pub fn wait_session(limit: Duration) -> Option<Vec<Rule>> {
+    let started = Instant::now();
+    loop {
+        if let Some(rules) = take_session() {
+            return Some(rules);
+        }
+        if started.elapsed() >= limit {
+            return None;
+        }
+        std::thread::sleep(Duration::from_millis(25));
+    }
+}
+
+fn capture_rules(job: &CaptureJob, session: bool) -> Vec<Rule> {
     let geos = geometry(&job.screens, job.gap);
     let mut rules = Vec::new();
-    // A sticky window belongs to no workspace.
-    for seen in snapshot().into_iter().filter(|s| !s.sticky) {
+    // A sticky window belongs to no workspace. The last session keeps it, pinned.
+    for seen in snapshot().into_iter().filter(|s| session || !s.sticky) {
         let h = hwnd_of(seen.cand.hwnd);
         let normal = winutil::normal_rect(h);
         // A minimized window has no place on screen, so it counts where it would restore to.
@@ -185,6 +223,7 @@ fn capture_rules(job: &CaptureJob) -> Vec<Rule> {
             target,
             normal_rect: normal.map(|n| workspace::to_fractions(n, geo.work)),
             launch: true,
+            pin: if session { Pin::of_bits(winutil::pin_bits(h)) } else { None },
         });
     }
     rules
@@ -522,6 +561,13 @@ fn run_switch(job: &SwitchJob, mine: u64) -> Option<Switched> {
     if cancelled() {
         return None;
     }
+    // The last session pins what was pinned again, by rule, because a window's handle
+    // doesn't outlive a sign-out.
+    for (rule, hwnd) in ws.windows.iter().zip(&found) {
+        if let (Some(pin), Some(hwnd)) = (rule.pin, *hwnd) {
+            pin_again(hwnd, pin);
+        }
+    }
 
     // Other windows on this desk's screens: only ones that were there before the switch began,
     // and never anything that belongs to an app this workspace has or has started, whose
@@ -564,6 +610,10 @@ fn run_switch(job: &SwitchJob, mine: u64) -> Option<Switched> {
                         let _ = ShowWindowAsync(h, SW_MINIMIZE);
                     }
                     OtherWindows::Close => {
+                        // Seam closing a pinned window isn't the news D119 tells about.
+                        if winutil::pin_bits(h) != 0 {
+                            crate::wm::closing(s.cand.hwnd);
+                        }
                         let _ = PostMessageW(Some(h), WM_CLOSE, WPARAM(0), LPARAM(0));
                     }
                     OtherWindows::Leave => {}
@@ -583,4 +633,58 @@ fn run_switch(job: &SwitchJob, mine: u64) -> Option<Switched> {
         }
     }
     Some(Switched { id: ws.id.clone(), name: ws.name.clone(), launched, placed, skipped })
+}
+
+/// Pin a window as a rule says. The seam-wm thread does it and logs how it went.
+fn pin_again(hwnd: isize, pin: Pin) {
+    if pin.bits() & winutil::PIN_TOP != 0 {
+        crate::wm::pin(PinKind::Top, Some(true), hwnd, None);
+    }
+    if pin.bits() & winutil::PIN_STICKY != 0 {
+        crate::wm::pin(PinKind::Sticky, Some(true), hwnd, None);
+    }
+}
+
+// ---- Reopen (D119)
+
+/// What the notice calls the app of a pinned window that closed.
+pub fn closed_name(gone: &Pinned) -> String {
+    app_name(&Rule { exe: gone.exe.clone(), title_hint: gone.title.clone(), ..Rule::default() })
+}
+
+/// Start the app of a pinned window that closed, the way a workspace starts a missing
+/// app, then pin its first new window the same way. Runs on a worker and only logs.
+pub fn reopen(gone: Pinned) -> bool {
+    let spawned = std::thread::Builder::new().name("seam-reopen".into()).spawn(move || {
+        let _com = Com::enter();
+        let rule = Rule {
+            exe: gone.exe.clone(),
+            aumid: gone.aumid.clone(),
+            class: gone.class.clone(),
+            title_hint: gone.title.clone(),
+            ..Rule::default()
+        };
+        let app = app_name(&rule);
+        // Only a window that wasn't there before the launch counts as the new one.
+        let before: HashSet<isize> = snapshot().into_iter().map(|s| s.cand.hwnd).collect();
+        if let Err(reason) = launch(&rule) {
+            log::info!("reopen {app}: not started ({reason})");
+            return;
+        }
+        let started = Instant::now();
+        while started.elapsed() < LAUNCH_WAIT {
+            std::thread::sleep(POLL);
+            let fresh: Vec<Candidate> =
+                snapshot().into_iter().map(|s| s.cand).filter(|c| !before.contains(&c.hwnd)).collect();
+            if let Some(Some(hwnd)) = workspace::assign(std::slice::from_ref(&rule), &fresh).first() {
+                log::info!("reopen {app}: started, pinning its new window");
+                if let Some(pin) = Pin::of_bits(gone.bits) {
+                    pin_again(*hwnd, pin);
+                }
+                return;
+            }
+        }
+        log::info!("reopen {app}: no window within {} s", LAUNCH_WAIT.as_secs());
+    });
+    spawned.is_ok()
 }

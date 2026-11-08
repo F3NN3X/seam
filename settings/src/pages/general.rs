@@ -133,6 +133,13 @@ pub fn render(panel: &mut Panel, window: &mut Window, cx: &mut Context<Panel>) -
     };
     let offer =
         switch("ask-new-desks", panel.config.ask_new_desks, window, cx, setter(|on| json!({ "ask_new_desks": on })));
+    let restore = switch(
+        "restore-session",
+        panel.config.general.restore_session,
+        window,
+        cx,
+        setter(|on| json!({ "general": { "restore_session": on } })),
+    );
     let selected = usize::from(panel.config.tray_click == TrayClick::LineUp);
     let left_click = ui::segmented("tray-click", &["Open Seam", "Start Line Up"], selected, window, cx, {
         let view = view.clone();
@@ -178,6 +185,12 @@ pub fn render(panel: &mut Panel, window: &mut Window, cx: &mut Context<Panel>) -
                         "Offer to line up new screens",
                         Some("Asks once when screens Seam hasn't seen connect".into()),
                         offer,
+                        p,
+                    ),
+                    row(
+                        "Offer to restore my windows after I sign in",
+                        Some("Seam remembers which apps were where and asks before it starts any".into()),
+                        restore,
                         p,
                     ),
                 ],

@@ -7,9 +7,12 @@ All notable changes to Seam. The format follows [Keep a Changelog](https://keepa
 ### Added
 
 - An installer for the GitHub version. It installs for you only, with no admin prompt, and adds Seam to the Start menu and to Installed apps.
+- **Tell me when a pinned window closes**, on the Zones page. A click on the notification starts the app again and pins its new window. Off until you turn it on.
+- **Offer to restore my windows after I sign in**, on General. Seam remembers which apps were where and which were pinned, and after sign-in a click puts them back. Off until you turn it on.
 
 ### Fixed
 
+- Opening a search result scrolls its page to the setting it found, so rows near the bottom, such as Pin border colour, are in view.
 - If an updated Seam doesn't start, the updater puts the old version back and starts it.
 
 ### Security

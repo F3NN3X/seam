@@ -46,6 +46,35 @@ pub enum Target {
     },
 }
 
+/// How a window was pinned, for the last session (D120). No pin isn't stored.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Pin {
+    Top,
+    Sticky,
+    Both,
+}
+
+impl Pin {
+    /// From `Seam_pin` bits: 1 is on top, 2 is sticky.
+    pub fn of_bits(bits: usize) -> Option<Pin> {
+        match bits & 3 {
+            1 => Some(Pin::Top),
+            2 => Some(Pin::Sticky),
+            3 => Some(Pin::Both),
+            _ => None,
+        }
+    }
+
+    pub fn bits(self) -> usize {
+        match self {
+            Pin::Top => 1,
+            Pin::Sticky => 2,
+            Pin::Both => 3,
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Rule {
@@ -61,6 +90,9 @@ pub struct Rule {
     /// `WINDOWPLACEMENT.rcNormalPosition` as fractions of the work area.
     pub normal_rect: Option<[f32; 4]>,
     pub launch: bool,
+    /// Only the last session has pins. A switch pins the window it matches again.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pin: Option<Pin>,
 }
 
 impl Default for Rule {
@@ -74,6 +106,7 @@ impl Default for Rule {
             target: Target::State { state: WinState::Keep },
             normal_rect: None,
             launch: true,
+            pin: None,
         }
     }
 }
@@ -114,6 +147,42 @@ pub fn list(saved: &[Value]) -> Vec<Workspace> {
 
 pub fn to_value(workspace: &Workspace) -> Value {
     serde_json::to_value(workspace).unwrap_or_default()
+}
+
+/// The id the last session switches under. No saved workspace has it.
+pub const SESSION_ID: &str = "last_session";
+
+/// The hidden "Last session" workspace a desk keeps (D120): what was where, and
+/// what was pinned, when Seam last looked.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Session {
+    /// Unix seconds.
+    pub saved_at: u64,
+    pub windows: Vec<Rule>,
+}
+
+impl Session {
+    /// A saved session with at least one window, or `None`.
+    pub fn parse(saved: &Value) -> Option<Session> {
+        serde_json::from_value(saved.clone()).ok().filter(|s: &Session| !s.windows.is_empty())
+    }
+
+    pub fn to_value(&self) -> Value {
+        serde_json::to_value(self).unwrap_or_default()
+    }
+
+    /// The workspace a restore switches to. Other windows are always left alone.
+    pub fn workspace(self) -> Workspace {
+        Workspace {
+            id: SESSION_ID.into(),
+            name: "Last session".into(),
+            hotkey: None,
+            launch_missing: true,
+            other_windows: OtherWindows::Leave,
+            windows: self.windows,
+        }
+    }
 }
 
 /// A random id that isn't in `taken`.

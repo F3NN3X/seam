@@ -7,17 +7,20 @@
 //! Zone snapping keeps its own hook on the tray thread for now (v0.7 moves it).
 
 use crate::log;
+use crate::tray::WM_APP_WINDOWS_CHANGED;
 use crate::wincontrol;
 use seam::api::{self, PinKind, Reply, RpcError};
 use seam::palette::{self, Colour, FOCUS_DEFAULT, PIN_DEFAULT};
 use seam::state::OTHER_WMS;
 use seam::{winutil, winver};
 use serde_json::json;
+use std::collections::HashMap;
 use std::sync::mpsc::{channel, Sender};
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
 use windows::Win32::Foundation::*;
 use windows::Win32::Graphics::Dwm::{DwmSetWindowAttribute, DWMWA_BORDER_COLOR, DWMWA_COLOR_DEFAULT};
+use windows::Win32::System::Com::{CoInitializeEx, COINIT_APARTMENTTHREADED};
 use windows::Win32::System::Diagnostics::ToolHelp::{
     CreateToolhelp32Snapshot, Process32FirstW, Process32NextW, PROCESSENTRY32W, TH32CS_SNAPPROCESS,
 };
@@ -27,6 +30,8 @@ use windows::Win32::UI::WindowsAndMessaging::*;
 
 /// The window manager found running changed. Read it with `detected`.
 pub const WM_APP_WM: u32 = WM_APP + 19;
+/// A pinned window closed and the user asked to hear about it. Read it with `take_closed`.
+pub const WM_APP_PIN_CLOSED: u32 = WM_APP + 24;
 /// A command for the thread, boxed in lParam.
 const WM_APP_COMMAND: u32 = WM_APP + 21;
 /// A window event a callback queued: the event in wParam, the window in lParam.
@@ -41,15 +46,46 @@ const REPAINT_SECOND_MS: u32 = 500;
 const REFRESH_EVERY_MS: u32 = 2_000;
 /// The first Windows 11 build, the first with `DWMWA_BORDER_COLOR`.
 const BORDER_BUILD: u32 = 22000;
+/// A pinned window that closes this soon after a workspace switch asked it to was closed by Seam.
+const ASKED_TO_CLOSE: Duration = Duration::from_secs(30);
+
+/// Who a pinned window was, kept from when it was pinned, because a window that
+/// is gone can't be asked (D119).
+#[derive(Clone, Debug)]
+pub struct Pinned {
+    pub exe: String,
+    pub aumid: Option<String>,
+    pub class: String,
+    pub title: String,
+    /// `Seam_pin` bits.
+    pub bits: usize,
+    /// When a workspace switch asked it to close.
+    asked_to_close: Option<Instant>,
+}
+
+impl Pinned {
+    fn of(h: HWND, bits: usize) -> Pinned {
+        Pinned {
+            exe: winutil::exe_path(h).unwrap_or_default(),
+            aumid: winutil::aumid(h),
+            class: winutil::class_name(h),
+            title: winutil::title(h),
+            bits,
+            asked_to_close: None,
+        }
+    }
+}
 
 pub enum Command {
     /// Who to tell about another window manager, whether the focus border is on,
-    /// and the config values of the two border colours.
+    /// the config values of the two border colours, and whether to say when a
+    /// pinned window closes.
     Configure {
         owner: isize,
         focus_border: bool,
         focus_color: String,
         pin_color: String,
+        notify_close: bool,
     },
     Pin {
         kind: PinKind,
@@ -62,14 +98,24 @@ pub enum Command {
     },
     /// Windows' accent colour changed.
     AccentChanged,
+    /// A workspace switch is about to ask this window to close.
+    Closing {
+        hwnd: isize,
+    },
 }
 
 static DETECTED: Mutex<Option<&'static str>> = Mutex::new(None);
+static CLOSED: Mutex<Option<Pinned>> = Mutex::new(None);
 static THREAD: OnceLock<u32> = OnceLock::new();
 
 /// The window manager found running at the last check, by its State name.
 pub fn detected() -> Option<&'static str> {
     *DETECTED.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+/// The pinned window that closed last, once.
+pub fn take_closed() -> Option<Pinned> {
+    CLOSED.lock().unwrap_or_else(|e| e.into_inner()).take()
 }
 
 /// Hand a command to the thread. Only an answer it can't post goes back from here.
@@ -88,8 +134,14 @@ fn send(command: Command) {
     }
 }
 
-pub fn configure(owner: isize, focus_border: bool, focus_color: &str, pin_color: &str) {
-    send(Command::Configure { owner, focus_border, focus_color: focus_color.into(), pin_color: pin_color.into() });
+pub fn configure(owner: isize, focus_border: bool, focus_color: &str, pin_color: &str, notify_close: bool) {
+    let (focus_color, pin_color) = (focus_color.into(), pin_color.into());
+    send(Command::Configure { owner, focus_border, focus_color, pin_color, notify_close });
+}
+
+/// Seam is about to close this window, so its closing isn't news.
+pub fn closing(hwnd: isize) {
+    send(Command::Closing { hwnd });
 }
 
 pub fn pin(kind: PinKind, on: Option<bool>, hwnd: isize, reply: Option<Sender<Reply>>) {
@@ -120,6 +172,8 @@ fn wm_thread() -> u32 {
             // Creates this thread's queue, so posting to it can't fail once `ready` is sent.
             let _ = PeekMessageW(&mut msg, None, 0, 0, PM_NOREMOVE);
             let _ = ready.send(GetCurrentThreadId());
+            // A pinned window's AUMID comes from its property store.
+            let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
             let mut wm = Wm::default();
             wm.adopt();
             wm.check();
@@ -243,6 +297,9 @@ struct Wm {
     pin_accent: bool,
     /// Windows that carry `Seam_pin`.
     pinned: Vec<isize>,
+    /// Who each of them is, for the notice when one closes.
+    known: HashMap<isize, Pinned>,
+    notify_close: bool,
     foreground_hook: Option<HWINEVENTHOOK>,
     destroy_hook: Option<HWINEVENTHOOK>,
     /// The window that had focus at the last foreground event.
@@ -311,8 +368,10 @@ impl Wm {
     fn adopt(&mut self) {
         let mut reset = 0;
         for h in winutil::top_level_windows() {
-            if winutil::pin_bits(h) != 0 {
+            let bits = winutil::pin_bits(h);
+            if bits != 0 {
                 self.pinned.push(h.0 as isize);
+                self.known.insert(h.0 as isize, Pinned::of(h, bits));
             }
             if winutil::has_border_mark(h) {
                 reset_border(h);
@@ -327,10 +386,11 @@ impl Wm {
 
     fn run(&mut self, command: Command) {
         match command {
-            Command::Configure { owner, focus_border, focus_color, pin_color } => {
+            Command::Configure { owner, focus_border, focus_color, pin_color, notify_close } => {
                 // A window manager found before the tray first said who it is.
                 let first = self.owner == 0;
                 self.owner = owner;
+                self.notify_close = notify_close;
                 if first && self.other_wm.is_some() {
                     self.tell_tray();
                 }
@@ -393,6 +453,11 @@ impl Wm {
                 log::info!("released {released} pinned windows");
                 if let Some(tx) = reply {
                     let _ = tx.send(Ok(json!({ "ok": true, "released": released })));
+                }
+            }
+            Command::Closing { hwnd } => {
+                if let Some(known) = self.known.get_mut(&hwnd) {
+                    known.asked_to_close = Some(Instant::now());
                 }
             }
         }
@@ -469,6 +534,9 @@ impl Wm {
                 self.pinned.retain(|p| *p != key);
                 if self.bordered == Some(key) {
                     self.bordered = None;
+                }
+                if let Some(gone) = self.known.remove(&key) {
+                    self.pin_closed(gone);
                 }
                 if self.pinned.is_empty() {
                     self.sync_hooks();
@@ -574,8 +642,13 @@ impl Wm {
         winutil::set_pin_bits(h, now);
         let key = h.0 as isize;
         self.pinned.retain(|p| *p != key);
+        self.known.remove(&key);
+        if now != bits {
+            self.tell_tray_of(WM_APP_WINDOWS_CHANGED);
+        }
         if now != 0 {
             self.pinned.push(key);
+            self.known.insert(key, Pinned::of(h, now));
             // The pin colour takes the border from the focus colour.
             if self.pin_colour.is_some() && self.bordered == Some(key) {
                 self.bordered = None;
@@ -612,9 +685,26 @@ impl Wm {
             }
         }
         self.pinned.clear();
+        self.known.clear();
         self.bordered = None;
         self.sync_hooks();
+        if released > 0 {
+            self.tell_tray_of(WM_APP_WINDOWS_CHANGED);
+        }
         released
+    }
+
+    /// A pinned window closed. Seam asking it to, Release all and quitting are
+    /// not news: the first is marked, and the other two leave nothing pinned.
+    fn pin_closed(&self, gone: Pinned) {
+        let asked = gone.asked_to_close.is_some_and(|at| at.elapsed() < ASKED_TO_CLOSE);
+        if !self.notify_close || asked {
+            return;
+        }
+        log::info!("a pinned window closed: {}", gone.class);
+        // A second close before the first notice is used replaces it.
+        *CLOSED.lock().unwrap_or_else(|e| e.into_inner()) = Some(gone);
+        self.tell_tray_of(WM_APP_PIN_CLOSED);
     }
 
     /// Look for another window manager, and tell the tray when that changes.
@@ -629,9 +719,13 @@ impl Wm {
     }
 
     fn tell_tray(&self) {
+        self.tell_tray_of(WM_APP_WM);
+    }
+
+    fn tell_tray_of(&self, message: u32) {
         if self.owner != 0 {
             unsafe {
-                let _ = PostMessageW(Some(hwnd_of(self.owner)), WM_APP_WM, WPARAM(0), LPARAM(0));
+                let _ = PostMessageW(Some(hwnd_of(self.owner)), message, WPARAM(0), LPARAM(0));
             }
         }
     }

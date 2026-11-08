@@ -164,6 +164,8 @@ pub struct WindowSettings {
     /// the default (D118, D122).
     pub focus_color: String,
     pub pin_color: String,
+    /// "Tell me when a pinned window closes" (D119).
+    pub notify_pinned_close: bool,
 }
 
 impl Default for WindowSettings {
@@ -173,8 +175,17 @@ impl Default for WindowSettings {
             other_wm: false,
             focus_color: palette::FOCUS_DEFAULT.into(),
             pin_color: palette::PIN_DEFAULT.into(),
+            notify_pinned_close: false,
         }
     }
+}
+
+/// How Seam starts.
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default)]
+pub struct GeneralSettings {
+    /// "Offer to restore my windows after I sign in" (D120). Off saves no session.
+    pub restore_session: bool,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -216,6 +227,10 @@ pub struct Desk {
     pub zones: BTreeMap<String, serde_json::Value>,
     /// Kept as raw JSON until workspaces exist.
     pub workspaces: Vec<serde_json::Value>,
+    /// The hidden "Last session" workspace (D120), raw like the workspaces. It is
+    /// kept apart from them, so no list, menu or shortcut shows it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_session: Option<serde_json::Value>,
 }
 
 impl Desk {
@@ -243,6 +258,7 @@ pub struct Config {
     pub hotkeys: Hotkeys,
     pub zones: ZoneSettings,
     pub windows: WindowSettings,
+    pub general: GeneralSettings,
     pub updates: UpdateSettings,
     pub api: ApiSettings,
     /// Layout signature (sorted device paths) -> desk.
@@ -266,6 +282,7 @@ impl Default for Config {
             hotkeys: Hotkeys::default(),
             zones: ZoneSettings::default(),
             windows: WindowSettings::default(),
+            general: GeneralSettings::default(),
             updates: UpdateSettings::default(),
             api: ApiSettings::default(),
             desks: BTreeMap::new(),

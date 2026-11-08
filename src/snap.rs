@@ -3,6 +3,7 @@
 //! that lives only while a window is being dragged. Nothing here touches the
 //! mouse hook (D7).
 
+use crate::tray::WM_APP_WINDOWS_CHANGED;
 use crate::{log, overlay, zone_paint};
 use seam::config::{Config, ZoneSettings};
 use seam::desk::Mon;
@@ -649,6 +650,9 @@ impl Engine {
         }
         self.pending = Some(Pending { hwnd: hwnd.0 as isize, target, before, steps, retries: 0, quiet, timer: 0 });
         self.advance_step();
+        unsafe {
+            let _ = PostMessageW(Some(hwnd_of(self.owner)), WM_APP_WINDOWS_CHANGED, WPARAM(0), LPARAM(0));
+        }
         true
     }
 

@@ -162,6 +162,23 @@ Set up first: record keys for **Pin window on top**, **Keep window out of worksp
 - [ ] **API.** `window.pin` with `{"kind":"top"}` toggles the focused window and answers `{"on":true}`, then `{"on":false}`. `{"kind":"sticky","on":true}` answers `{"on":true}` twice in a row. `{"kind":"side"}` answers error -32602. On an administrator window it answers error 3. `wm.release` answers `{"ok":true,"released":n}`. `state.get` shows `wm.focus_border` following the switch.
 - [ ] **Hook timings.** With the focus border on and a pinned window, move focus around for 60 s while moving the pointer across the borders. A `wm stats` line appears every 30 s with `max` well under 1000 µs, `hook stats` `own max` and `avg` match a run with the border off, and crossings still remap. Turn the border off and unpin everything: no more `wm stats` lines come, because the hooks are gone.
 
+## Pinned window closed
+
+Set up first: turn on **Tell me when a pinned window closes** in the Zones page's Windows card, and the debug log.
+
+- [ ] **Off by default.** On a fresh config the switch is off. Pin Notepad and close it: no notification, and the log has no `a pinned window closed` line.
+- [ ] **Win32 app.** Turn the switch on. Pin Notepad on top and close it. The tray shows "Pinned window closed" with "Notepad was pinned and has closed. Click to reopen". Click it: Notepad starts, and its new window is on top with the pin border within 15 s. The log says `reopen notepad: started, pinning its new window` and `pin Top: on`.
+- [ ] **Sticky.** Make a browser window sticky and close it, then click the notification. The new browser window is sticky: a workspace switch skips it with reason `sticky`. A window that was both on top and sticky comes back as both.
+- [ ] **Packaged app.** Pin Windows Terminal and close it. Click the notification: it starts through its AUMID and its window is pinned again.
+- [ ] **No click.** Close a pinned window and let the notification go. Nothing starts. Seam never starts an app without the click.
+- [ ] **Second close.** Pin Notepad and Paint, close Notepad, then Paint before clicking. The notification names Paint, and a click starts Paint only.
+- [ ] **Nothing appears.** Pin a portable app's window, close it, then rename or delete its exe. Click the notification: nothing starts, the log says `reopen ...: not started (not installed)`, and there's no second notification. An app whose window takes longer than 15 s logs `no window within 15 s` and stays unpinned.
+- [ ] **Release all doesn't count.** Pin two windows, click **Release pinned windows**, then close both. No notification.
+- [ ] **Quit doesn't count.** Pin a window and quit Seam from the tray: no notification, and closing the window afterwards shows nothing either.
+- [ ] **Close other windows doesn't count.** Pin Notepad on top (not sticky), and switch to a workspace without Notepad whose **Other windows** is Close. Notepad closes and no notification shows.
+- [ ] **Update keeps it.** Pin a window, install an update, then close the window. The new tray shows the notification and the click reopens it.
+- [ ] **Search.** Search for "pinned window closes": the row is found, and opening it scrolls the Windows card into view.
+
 ## Other window managers
 
 - [ ] **komorebi.** Start komorebi. Within 30 s the log says `other window manager: komorebi`, the Zones page shows a note at the top naming it, and the Windows card says it was found. Drag a window with Shift held: no zones show. Press next zone and Shift+Win+Alt+Right: nothing moves and the log gives the reason. `zone.move`, `window.move` and `window.swap` answer error 3 with it. `state.get` shows `wm.other_wm` as `komorebi`.
@@ -276,6 +293,7 @@ Use the 4-screen desk with Priority zones on screen 1.
 - [ ] **Shortcut problems.** Record Ctrl+Alt+K: the row warns that it types characters. Record a shortcut another app holds: the row says so and the keycaps turn red.
 - [ ] **Keyboard.** Ctrl+F jumps to search and Esc clears it. Tab walks the sidebar then the page, with a ring on each control, and no ring appears after a mouse click. Space flips a switch. Left and Right change the Tray icon choice.
 - [ ] **Search.** Type "log" and press a result. It opens that page.
+- [ ] **Search scrolls to the row.** Make the panel window short enough that every page scrolls. On each page, open a search result for a row near the bottom and check the row is in view with some room above it, starting from the top and from the bottom of another page: Displays "Also align Windows arrangement", Zones "Pin border colour" and "Another window manager handles my windows", Workspaces "Other windows" (with a workspace selected), Shortcuts "Capture current windows", General "Debug log", About "Licenses" (shows the Help section) and "Include pre-releases". A result at the top of its page, such as Displays "Line up screens", opens the page at the top. Scrolling by hand afterwards works as before, and picking a page in the sidebar keeps working as it did.
 - [ ] **Left-click.** Choose **Open Seam** under Tray icon, then left-click the tray icon. The panel opens. Set it back.
 - [ ] **Start with Windows.** Turn it on, sign out and in. Seam starts, and the panel doesn't. Turn it off.
 - [ ] **Debug log.** Turn it on, cross a border, and check `seam.log` grows. Turn it off.
@@ -290,6 +308,25 @@ Use the 4-screen desk with Priority zones on screen 1.
 - [ ] **Run key from v0.1.** Put the old value, the quoted path alone, in that key. Start Seam. The value now ends in `--autostart`.
 - [ ] **Window from the panel.** Quit Seam, run `seam-settings.exe --page about`. The tray starts, and one window opens on About.
 - [ ] **`--line-up` and updates.** `seam.exe --line-up` opens Line Up and no window. A restart after an update opens no window either.
+
+## Restoring the last session
+
+Set up first: turn on **Start with Windows** and **Offer to restore my windows after I sign in** on General, and the debug log. Have zones on two screens.
+
+- [ ] **Off by default.** On a fresh config the switch is off. Snap a few windows and wait a minute: `config.json` has no `last_session`, and the log has no `last session saved` line.
+- [ ] **Saved after changes.** Turn the switch on. Snap a window into a zone, pin another on top and make a third sticky. About 30 s after the last of these, the log says `last session saved: n windows`, and `config.json` holds `last_session` under the desk, with `"pin": "top"` and `"pin": "sticky"` on those rules. Keep snapping every few seconds: no save until 30 s after you stop. Leave the PC alone for 5 minutes: no more saves.
+- [ ] **Hidden.** The Workspaces page, the tray menu's Workspaces, Shortcuts and `workspaces.list` don't show a "Last session". `state.get` shows `session` with `saved_at` and `windows` for this desk, and `null` on a desk that has none.
+- [ ] **Sign out and in.** Arrange Notepad, Windows Terminal and a browser in zones, pin Notepad on top, and sign out within 30 s of the last change. The log ends with `last session saved`. Sign in: about 5 s after the desktop appears, "Last session" says "Restore your last session? Click to restore". Click it: missing apps start, every window goes back to its zone, and Notepad is on top with the pin border again. Windows that were already open, and anything else on screen, are left where they are.
+- [ ] **No click.** Sign out and in again and let the notification go. Nothing starts and nothing moves.
+- [ ] **Reboot.** Restart Windows with the same windows open. After sign-in the offer shows, and the click restores them as above. Window handles changed, so the pins come back by app.
+- [ ] **Apps that start themselves.** Have Discord or another app that starts at sign-in in the session. After sign-in, click the offer: Seam uses the window that's already open, starts no second copy, and puts it in its zone.
+- [ ] **Not at a hand start.** Quit Seam and start it from the Start menu: no offer. `seam.exe --updated-from x` after an update: no offer.
+- [ ] **Slow shell.** If the notification can't show yet at sign-in, Seam tries again every 5 s for a minute.
+- [ ] **Turned off.** Turn the switch off, snap windows and sign out and in. No new save happens and no offer shows.
+- [ ] **Shutdown is quick.** Sign out with many apps open: Windows doesn't list Seam as preventing sign-out. A capture that takes longer than 2 s leaves the earlier session saved, and the log says so.
+- [ ] **Other desk.** Unplug to "Laptop only" and sign out and in. The offer is for that desk's own last session, or there is none.
+- [ ] **API.** `session.restore` from the panel token or a Seam process runs the restore and a subscribed client gets `workspace.switched` with id `last_session`. From another client it answers error 4. With nothing saved for the desk it answers error 1.
+- [ ] **Search.** Search for "restore": the General row is found, and opening it shows the row.
 
 ## Updates (GitHub build)
 

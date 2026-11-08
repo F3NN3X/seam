@@ -5,3 +5,4 @@
 # It is recommended to check this file in to source control so that
 # everyone who runs the test benefits from these saved cases.
 cc fb5b6794c7e9ef0660cc8e6d540634c41cba7b4156ac6a13e0fcb43b9006c502 # shrinks to side = Left, len_a = 596, len_b = 1297, s = 0.6974645939450451, o = 880.5789416061799, at = 1.0
+cc de23be7df9f27a8bb9a848ce434d2bd9c752c10df7f9e1380246715b7b1027c4 # shrinks to sides = (Top, Top), sizes = [(400, 400), (400, 400), (400, 400)], shifts = (0, 0), gaps = (1, 0), maps = [(0.1, 0.0), (0.1, 0.0)], from = (1, 0.0, 0.0), to = (746, 0)

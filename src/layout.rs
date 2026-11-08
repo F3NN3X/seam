@@ -68,7 +68,7 @@ pub struct Crossing {
 pub enum Move {
     Cross(Crossing),
     /// Keep the pointer here, at the edge: Windows has a screen past it that
-    /// isn't there on the desk.
+    /// isn't there on the desk, or it's past the end of a glue.
     Block((i32, i32)),
 }
 
@@ -110,6 +110,16 @@ pub fn decide(live: &Live, prev: (i32, i32), pt: (i32, i32)) -> Option<Move> {
                 return Some(Move::Block(inside(&a, pt)));
             }
         }
+    }
+    // Past the end of a glue, with no screen there in Windows, the edge is a dead
+    // one. Stop the pointer ourselves: with Ease cursor movement on, Windows would
+    // jump it to the nearest screen, which on the desk isn't there.
+    let glued_edge = exits
+        .into_iter()
+        .flatten()
+        .any(|(side, ..)| live.links.iter().any(|l| l.glued && !l.not_on_desk && l.toward(src, side).is_some()));
+    if glued_edge && under.get_or_insert_with(|| live.rects.iter().position(|r| r.contains(pt.0, pt.1))).is_none() {
+        return Some(Move::Block(inside(&a, pt)));
     }
     None
 }
@@ -258,11 +268,19 @@ mod tests {
         Live { rects: rects.to_vec(), links: links.to_vec() }
     }
 
-    /// `decide` for a move that must cross or be left to Windows.
+    /// `decide` for a move that must cross, stop at the edge, or be left to Windows.
+    /// A stop must keep the pointer on the screen it came from.
     fn cross(live: &Live, prev: (i32, i32), pt: (i32, i32)) -> Option<Crossing> {
         match decide(live, prev, pt) {
             Some(Move::Cross(c)) => Some(c),
-            Some(m) => panic!("{m:?} from {prev:?} to {pt:?}"),
+            Some(Move::Block(at)) => {
+                let src = live.rects.iter().find(|r| r.contains(prev.0, prev.1));
+                assert!(
+                    src.is_some_and(|r| r.contains(at.0, at.1)),
+                    "stop {at:?} off the screen, from {prev:?} to {pt:?}"
+                );
+                None
+            }
             None => None,
         }
     }

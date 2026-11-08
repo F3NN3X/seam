@@ -321,8 +321,6 @@ pub struct Config {
     /// The panel asked once whether to turn on Windows' "Ease cursor movement between
     /// displays", or Seam turned it on. Either way it isn't asked again.
     pub cursor_easing_asked: bool,
-    /// Line Up lets you type the offset between two screens' edges in cm.
-    pub lineup_measure: bool,
     /// Windows' `RestartApps` as it was before Seam turned it off, `u32::MAX` if it
     /// wasn't there, or `None` while Seam leaves it alone. Only the tray writes it.
     pub restore_apps_saved: Option<u32>,
@@ -356,7 +354,6 @@ impl Default for Config {
             restore_apps: RestoreApps::Windows,
             auto_apply: false,
             cursor_easing_asked: false,
-            lineup_measure: false,
             restore_apps_saved: None,
             updates: UpdateSettings::default(),
             api: ApiSettings::default(),

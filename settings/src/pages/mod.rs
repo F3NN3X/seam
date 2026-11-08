@@ -2,6 +2,7 @@ pub mod about;
 pub mod app_picker;
 pub mod displays;
 pub mod general;
+pub mod help;
 pub mod screen_editor;
 pub mod shortcuts;
 pub mod updates;

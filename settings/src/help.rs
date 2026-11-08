@@ -1,0 +1,203 @@
+//! What the Help page says, kept as data so search can find it. `**` marks the
+//! exact label of something in Seam, which shows in bold.
+
+use crate::panel::Page;
+
+pub enum Block {
+    Text(&'static str),
+    List(&'static [&'static str]),
+    /// A step, with a button that opens the page that does it.
+    Step {
+        title: &'static str,
+        text: &'static str,
+        page: Page,
+    },
+}
+
+pub struct Topic {
+    pub title: &'static str,
+    pub blocks: &'static [Block],
+    /// The page the button under the text opens.
+    pub opens: Option<Page>,
+}
+
+impl Topic {
+    /// Whether its title or text holds `query`, which is already lower case.
+    pub fn mentions(&self, query: &str) -> bool {
+        let has = |text: &str| plain(text).to_lowercase().contains(query);
+        has(self.title)
+            || self.blocks.iter().any(|block| match block {
+                Block::Text(text) => has(text),
+                Block::List(items) => items.iter().any(|item| has(item)),
+                Block::Step { title, text, .. } => has(title) || has(text),
+            })
+    }
+}
+
+/// The text without its bold marks.
+pub fn plain(text: &str) -> String {
+    text.replace("**", "")
+}
+
+use Block::{List, Step, Text};
+
+pub const TOPICS: &[Topic] = &[
+    Topic {
+        title: "Getting started",
+        blocks: &[
+            Text("Seam makes the pointer cross where your screens physically meet, and puts your windows where you want them. Three steps get you there."),
+            Step {
+                title: "Line up your screens",
+                text: "Drag two lines across each border until they run straight over the bezel",
+                page: Page::Displays,
+            },
+            Step { title: "Pick zone layouts", text: "Choose Columns, Rows, Grid or Priority for each screen", page: Page::Zones },
+            Step {
+                title: "Capture a workspace",
+                text: "Arrange your windows, then save which app is where",
+                page: Page::Workspaces,
+            },
+        ],
+        opens: None,
+    },
+    Topic {
+        title: "Pointer and borders",
+        blocks: &[
+            Text("Windows keeps the same pixel row when the pointer crosses to another screen, so between screens of different sizes it jumps. Seam puts it where the screens physically meet instead."),
+            Text("Press **Line up screens** on the Displays page, or Ctrl+Shift+Alt+L. Every screen shows its number, and for each border:"),
+            List(&[
+                "Grab a line to move just that line. This sets the scale.",
+                "Drag anywhere else to move both lines. This sets the height.",
+                "Arrow keys nudge the selected line, Tab switches lines and R goes back to the guess from your screens' sizes",
+                "Enter goes to the next border or finishes, Backspace goes back and Esc cancels",
+            ]),
+            Text("When you finish, Seam saves the borders and turns on **Remap pointer at borders**. Ctrl+Shift+Alt+P pauses and resumes it. With **Also align Windows arrangement** on, Seam also moves your screens in Display settings to match."),
+            Text("Each set of screens is a desk, with its own borders, zones and workspaces. **Saved desks** lists them, and each desk's menu has **Rename** and **Forget**."),
+            Text("Seam relies on Windows' **Ease cursor movement between displays**, so the pointer can always leave a screen toward its neighbour. When it's off, the Displays page says so, and **Turn it on** turns it on for you. Seam never turns it off."),
+        ],
+        opens: Some(Page::Displays),
+    },
+    Topic {
+        title: "Zones",
+        blocks: &[
+            Text("Pick a layout for each screen: Columns, Rows, Grid or Priority. Then hold Shift while you drag a window. The zones show on the screen under the pointer, and letting go drops the window into the one that's lit."),
+            List(&[
+                "Hold Ctrl as well to cover several zones with one window",
+                "**Show zones** and **Span zones** change the two keys",
+                "**Gap** sets the space between zones and the screen edge",
+                "**Restore size when dragged out** gives a window its old size back when you drop it outside a zone",
+            ]),
+            Text("**Edit layout** opens the editor on the screen itself. Click a zone to split it side by side or top and bottom, drag a divider, or merge two neighbours, then press **Done**. Esc throws the changes away and Ctrl+Z undoes the last one."),
+            Text("**Keep windows in their zones** is experimental. It moves snapped windows back after a screen, resolution or scaling change, or after the PC wakes."),
+            Text("Layouts belong to the desk, so each set of screens keeps its own."),
+        ],
+        opens: Some(Page::Zones),
+    },
+    Topic {
+        title: "Moving windows",
+        blocks: &[
+            Text("Left means left on your desk, as the screens physically stand, not in Windows' pixel layout."),
+            List(&[
+                "Shift+Win+Alt+arrows move the focused window. A window in a zone goes to the next zone that way, then onto the screen next to it.",
+                "Ctrl+Shift+Alt+arrows focus the nearest window that way",
+                "Swap trades places with the nearest window that way. It has no key until you set one.",
+            ]),
+            Text("**When a window moves to another screen**, on the Zones page, sets the size a window gets there: **Let Windows scale it**, **Keep its pixel size** or **Keep its real size**. **Also when I drag a window to another screen** does the same for a window you drop with the mouse."),
+            Text("Seam leaves alone the windows of apps running as administrator, windows that aren't responding, and its own."),
+            Text("If komorebi, GlazeWM or LeopardWM is running, Seam leaves placing windows to it. **Another window manager handles my windows** does the same for any other one."),
+        ],
+        opens: Some(Page::Shortcuts),
+    },
+    Topic {
+        title: "Pins and borders",
+        blocks: &[
+            List(&[
+                "**Pin window on top** keeps the focused window above the others until you press it again",
+                "**Keep window out of workspace switches** makes it sticky: a switch never moves, minimizes or closes it, and capture leaves it out",
+                "**Release pinned windows**, in the tray menu, takes back every pin and border Seam set. Quitting Seam does the same.",
+            ]),
+            Text("The pin keys have no key until you set one on the Shortcuts page."),
+            Text("**Focus border** colours the border of the window that has focus. A pinned window gets an amber border, which wins over the focus border. Both colours are picked from the swatches on the Zones page, with **None** for no border and **Custom colour** for any other."),
+            Text("**Tell me when a pinned window closes** tells you after the app closes. Click the notification to start it again and pin its new window."),
+            Text("**Pinned windows stay when I switch workspaces** makes a switch leave a window pinned on top alone, like a sticky one."),
+        ],
+        opens: Some(Page::Zones),
+    },
+    Topic {
+        title: "Workspaces",
+        blocks: &[
+            Text("A workspace saves which app is on which screen and in which zone, how each window shows, and which one had the focus, for the desk you have connected."),
+            List(&[
+                "**Capture current windows** saves the windows open now. Only app windows with a taskbar button count.",
+                "**Switch now**, the workspace's shortcut or **Workspaces** in the tray menu puts each app back. Windows already in place aren't touched.",
+                "**Start missing apps** starts the ticked apps that aren't running, and **Other windows** leaves, minimizes or closes the rest. Close only asks, so an app with unsaved work stays open.",
+                "**Update from screen** saves the windows as they are now, and keeps your edits",
+            ]),
+            Text("The table is an editor, and each change saves at once with Undo. Pick where an app goes and how it shows. The rows are the start order: drag one by its grip, or press Alt+Up and Alt+Down. Click an app's name for a delay and **Wait for this app's window before opening the next**. **Add an app** picks one from the open windows or the Start menu."),
+            Text("The **Now** column shows how each app is doing. When something moved or was minimized, **Put windows back** puts it back. That's Snap back, which also has a shortcut, **Snap back to this workspace**."),
+            Text("**Put apps in place when they open** sends an app of the workspace in use to its place once, a moment after you open it yourself."),
+            Text("**Save windows to the active workspace** is a shortcut that saves into the workspace in use without opening Seam. Click its notification within 8 seconds to undo it."),
+            Text("The workspace in use shows as Active in the list, and as Active, moved once one of its windows moved. **Set as default**, on a workspace's menu, makes it the one in use when Seam starts and none is remembered."),
+        ],
+        opens: Some(Page::Workspaces),
+    },
+    Topic {
+        title: "Last session",
+        blocks: &[
+            Text("**Offer to restore my windows after I sign in** keeps a hidden last session for each desk: which apps are where, and which are pinned. It's off until you turn it on."),
+            Text("When Seam starts at sign-in, it asks whether to restore it. A click puts the windows back in their zones and pins them again. Nothing starts without the click."),
+            Text("**Who reopens the apps** picks **Windows reopens them**, where Seam puts each window back as it appears, or **Seam reopens them**, where Seam starts the missing apps itself."),
+        ],
+        opens: Some(Page::General),
+    },
+    Topic {
+        title: "Shortcuts",
+        blocks: &[
+            Text("Shortcuts work anywhere in Windows, even with the Seam window closed."),
+            List(&[
+                "Ctrl+Shift+Alt+L lines up your screens",
+                "Ctrl+Shift+Alt+P pauses or resumes the remap",
+                "Shift+Win+Alt+arrows move the focused window, and Ctrl+Shift+Alt+arrows focus the window that way",
+                "Swap, next and previous zone, the pins, capture, Snap back and quick save have no key until you set one",
+            ]),
+            Text("Each workspace can have its own shortcut too. Press **Change** on a row, then the keys. Esc keeps the old ones and Backspace clears them. Ctrl+Shift+Alt plus a number is a good choice, since Ctrl+Alt alone types characters on many keyboards."),
+            Text("If another app already holds a shortcut, its keys turn red and Seam keeps running without it."),
+        ],
+        opens: Some(Page::Shortcuts),
+    },
+    Topic {
+        title: "Stream Deck",
+        blocks: &[
+            Text("The Seam plugin puts Seam on Stream Deck keys. It talks to Seam through the local API, so **Let other apps control Seam** on General has to stay on."),
+            List(&[
+                "Switch workspace, Snap back and Save windows",
+                "Line up screens, Pause or resume remap, and Zones on or off",
+                "Next zone, Previous zone, Move window and Focus window",
+                "Pin on top, Release pinned windows, and Desk, which shows the desk's name",
+            ]),
+            Text("To install it, open the co.f3nn3x.seam.streamDeckPlugin file, and the Stream Deck app adds a Seam group to its actions. When Seam isn't running, every key says so and reconnects by itself."),
+        ],
+        opens: Some(Page::General),
+    },
+    Topic {
+        title: "Local API",
+        blocks: &[
+            Text("Tools on this PC can control Seam through its local API, the way the Stream Deck plugin does. They can read status, switch workspaces, line up screens and move windows."),
+            Text("**Let other apps control Seam**, on General, turns it on or off, and says how many apps are connected. The Seam window has its own connection, so it keeps working either way."),
+        ],
+        opens: Some(Page::General),
+    },
+    Topic {
+        title: "Updates",
+        blocks: &[
+            Text("About shows your version and the result of each update check."),
+            List(&[
+                "**Check for updates every day** looks once a day, and **Check now** looks straight away",
+                "**Install updates on their own** installs only while you're away from the computer",
+                "**Include pre-releases** gets new features early. They may have rough edges.",
+            ]),
+            Text("The updater only installs releases signed with Seam's key, and no release is signed yet, so for now download a new version from GitHub. The Store copy is updated by the Microsoft Store."),
+        ],
+        opens: Some(Page::About),
+    },
+];

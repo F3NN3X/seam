@@ -3,6 +3,7 @@
 
 #![cfg_attr(windows, windows_subsystem = "windows")]
 
+mod help;
 mod icons;
 mod pages;
 mod panel;

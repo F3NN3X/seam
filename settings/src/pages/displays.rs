@@ -309,6 +309,19 @@ fn desk_rows(panel: &Panel, window: &Window, cx: &mut Context<Panel>) -> Vec<Any
     rows.collect()
 }
 
+/// Ask the tray to turn on Windows' Ease cursor movement. Seam never turns it off.
+pub fn turn_on_easing(panel: &mut Panel, window: &mut Window, cx: &mut Context<Panel>) {
+    panel.call("cursor_easing.set", json!({ "on": true }), window, cx, |panel, result, window, cx| {
+        panel.ease_on = seam::ease::is_on();
+        match result {
+            Ok(_) => window.push_notification(Notification::new().message("Turned on Ease cursor movement"), cx),
+            Err(e) => window.push_notification(refusal("Ease cursor movement left as it was", &error_text(&e)), cx),
+        }
+        panel.reload_config(window, cx);
+        cx.notify();
+    });
+}
+
 fn ease_alert(p: Palette, cx: &mut Context<Panel>) -> Div {
     div()
         .flex()
@@ -332,6 +345,10 @@ fn ease_alert(p: Palette, cx: &mut Context<Panel>) -> Div {
         .child(ui::secondary("open-display-settings", "Open Display settings", cx).on_click(|_, _, cx| {
             cx.open_url("ms-settings:display");
         }))
+        .child(
+            ui::primary("turn-on-easing", "Turn it on")
+                .on_click(cx.listener(|panel, _, window, cx| turn_on_easing(panel, window, cx))),
+        )
 }
 
 pub fn render(panel: &mut Panel, window: &mut Window, cx: &mut Context<Panel>) -> impl IntoElement {

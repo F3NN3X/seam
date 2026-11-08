@@ -121,6 +121,8 @@ pub enum Command {
     WorkspaceSetDefault(Option<String>),
     /// "Put apps in place when they open".
     AutoApplySet(bool),
+    /// Windows' "Ease cursor movement between displays". Only on is carried out.
+    CursorEasingSet(bool),
     RemapSet(bool),
     ZonesSet(bool),
     ZoneMove(Dir),
@@ -222,6 +224,7 @@ fn command(method: &str, p: &Value) -> Result<Command, RpcError> {
         "workspace.quick_save" => Command::WorkspaceQuickSave,
         "workspace.set_default" => Command::WorkspaceSetDefault(str_param(p, "id")?),
         "autoapply.set" => Command::AutoApplySet(on_param(p)?),
+        "cursor_easing.set" => Command::CursorEasingSet(on_param(p)?),
         "remap.set" => Command::RemapSet(on_param(p)?),
         "zones.set" => Command::ZonesSet(on_param(p)?),
         "zone.move" => match p.get("dir").and_then(Value::as_str) {
@@ -280,7 +283,7 @@ fn allowed(command: &Command, peer: Peer) -> Result<(), RpcError> {
         return Err(RpcError::new(DISABLED, "Other apps can't control Seam right now"));
     }
     let permitted = match command {
-        Command::ConfigPatch(_) | Command::WorkspaceUpdate { .. } => peer.panel,
+        Command::ConfigPatch(_) | Command::WorkspaceUpdate { .. } | Command::CursorEasingSet(_) => peer.panel,
         Command::AppQuit
         | Command::WorkspaceCapture { .. }
         | Command::SessionRestore
@@ -559,6 +562,7 @@ mod tests {
                 panel,
                 Command::WorkspaceCapture { name: None, into: Some("ws_1".into()), row: Some(2) },
             ),
+            (request("cursor_easing.set", r#"{"on":true}"#), panel, Command::CursorEasingSet(true)),
             (request("app.quit", "{}"), panel, Command::AppQuit),
             (request("app.quit", "{}"), own, Command::AppQuit),
             (request("update.ready", "{}"), own, Command::UpdateReady),
@@ -591,6 +595,8 @@ mod tests {
             (request("workspace.update", r#"{"id":"ws_1","workspace":{}}"#), anyone, FORBIDDEN),
             (request("workspace.capture", r#"{"row":1}"#), panel, INVALID_PARAMS),
             (request("app.quit", "{}"), anyone, FORBIDDEN),
+            (request("cursor_easing.set", r#"{"on":true}"#), anyone, FORBIDDEN),
+            (request("cursor_easing.set", r#"{"on":true}"#), own, FORBIDDEN),
             (request("update.ready", "{}"), panel, FORBIDDEN),
             (request("state.get", "{}"), off, DISABLED),
             (request("remap.set", r#"{"on":true}"#), off, DISABLED),

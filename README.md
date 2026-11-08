@@ -6,7 +6,7 @@ This is a Windows take on [Shim](https://screenshim.app/) for macOS, with one ad
 
 ## Use it
 
-1. In **Settings → System → Display → Multiple displays**, turn on **Ease cursor movement between displays**. Seam relies on it so the pointer can always leave a screen toward its neighbour, and warns you if it's off.
+1. In **Settings → System → Display → Multiple displays**, turn on **Ease cursor movement between displays**. Seam relies on it so the pointer can always leave a screen toward its neighbour, and warns you if it's off. The Seam window asks once whether to turn it on, and the Displays page has **Turn it on** while it's off. Seam never turns it off.
 2. Run `seam.exe`. It lives in the tray, and opens the Seam window when you start it yourself. At sign-in it starts in the tray only. On a new set of screens it asks once.
 3. Choose **Line Up Screens…** in the tray menu, or press Ctrl+Shift+Alt+L. A full-screen overlay opens on every monitor, with big numbers so you know which screen is which.
 4. For each border, the reference screen shows two coloured lines. On the neighbouring screen, drag the matching lines until each one runs straight across the bezel:
@@ -17,6 +17,8 @@ This is a Windows take on [Shim](https://screenshim.app/) for macOS, with one ad
 5. Press **Enter** to go to the next border, or to finish after the last one. **Backspace** goes back, **Esc** cancels.
 
 When you finish, Seam saves the layout for that exact set of screens and turns on the remap. If **Also align Windows arrangement** is checked (it is by default), Seam also moves your monitors in the Windows arrangement. Each border then lines up at the middle of its physical overlap, so things like dragging a window between screens look right even with Seam closed. You can undo this anytime in Display settings.
+
+**Help**, at the bottom of the Seam window's sidebar, explains each part of Seam in a short topic, starting with Getting started, and each topic has a button to the page it's about. Search finds the topics too.
 
 ### Zones
 

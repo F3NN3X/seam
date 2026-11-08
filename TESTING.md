@@ -460,13 +460,24 @@ Turn the debug log on. Set **Save windows to the active workspace** on Shortcuts
 - [ ] **Shortcut problems.** Record Ctrl+Alt+K: the row warns that it types characters. Record a shortcut another app holds: the row says so and the keycaps turn red.
 - [ ] **Keyboard.** Ctrl+F jumps to search and Esc clears it. Tab walks the sidebar then the page, with a ring on each control, and no ring appears after a mouse click. Space flips a switch. Left and Right change the Tray icon choice.
 - [ ] **Search.** Type "log" and press a result. It opens that page.
-- [ ] **Search scrolls to the row.** Make the panel window short enough that every page scrolls. On each page, open a search result for a row near the bottom and check the row is in view with some room above it, starting from the top and from the bottom of another page: Displays "Also align Windows arrangement", Zones "Pin border colour" and "Another window manager handles my windows", Workspaces "Other windows" (with a workspace selected), Shortcuts "Capture current windows", General "Debug log", About "Licenses" (shows the Help section) and "Include pre-releases". A result at the top of its page, such as Displays "Line up screens", opens the page at the top. Scrolling by hand afterwards works as before, and picking a page in the sidebar keeps working as it did.
+- [ ] **Search scrolls to the row.** Make the panel window short enough that every page scrolls. On each page, open a search result for a row near the bottom and check the row is in view with some room above it, starting from the top and from the bottom of another page: Displays "Also align Windows arrangement", Zones "Pin border colour" and "Another window manager handles my windows", Workspaces "Other windows" (with a workspace selected), Shortcuts "Capture current windows", General "Debug log", About "Licenses" (shows the Support section) and "Include pre-releases". A result at the top of its page, such as Displays "Line up screens", opens the page at the top. Scrolling by hand afterwards works as before, and picking a page in the sidebar keeps working as it did.
 - [ ] **Left-click.** Choose **Open Seam** under Tray icon, then left-click the tray icon. The panel opens. Set it back.
 - [ ] **Start with Windows.** Turn it on, sign out and in. Seam starts, and the panel doesn't. Turn it off.
 - [ ] **Debug log.** Turn it on, cross a border, and check `seam.log` grows. Turn it off.
 - [ ] **Files.** **Open** shows the folder holding `config.json`. **Export…** then **Import…** round-trips your settings, and importing a broken file is refused with nothing changed.
 - [ ] **About.** **Copy diagnostics** puts your version, Windows build, screens and borders on the clipboard, with no window titles or file paths.
 - [ ] **Panel missing.** Rename `seam-settings.exe`, choose **Open Seam…**. A balloon says it's unavailable and Seam keeps running. Rename it back.
+
+## Sidebar and Help
+
+- [ ] **Sidebar.** Displays, Zones and Workspaces are at the top. The App heading with Shortcuts, General, Help and About sits at the bottom, right above "Seam" and the version. Make the window as short as it goes: the two groups don't overlap. The update dot still shows on About.
+- [ ] **Open Help.** Click Help. The topics are on the left, in this order: Getting started, Pointer and borders, Zones, Moving windows, Pins and borders, Workspaces, Last session, Shortcuts, Stream Deck, Local API, Updates. Getting started is picked the first time.
+- [ ] **Every topic.** Click each one. The picked card is raised, its text shows on the right with the labels in bold, nothing is cut off at the panel's smallest size, and it reads correctly in light and dark.
+- [ ] **Getting started buttons.** **Open Displays**, **Open Zones** and **Open Workspaces** on the three steps each open that page.
+- [ ] **Topic buttons.** The button under each other topic opens its page: Pointer and borders Displays, Zones Zones, Moving windows Shortcuts, Pins and borders Zones, Workspaces Workspaces, Last session General, Shortcuts Shortcuts, Stream Deck General, Local API General, Updates About.
+- [ ] **Search.** Type "snap back": the results include Help's Workspaces topic, and pressing it opens Help with that topic picked. Type "stream deck", "sign-in" and "pre-releases": each lists its Help topic. Type "help": every topic is listed.
+- [ ] **Remembered page.** Close the panel on Help and open it again: it opens on Help. Run `seam-settings.exe --page help`: it opens on Help.
+- [ ] **About.** About's last section is called Support and still has **Copy diagnostics**, **Report a problem**, **Source on GitHub** and **Licenses**, each working as before.
 
 ## Starting and signing in
 
@@ -661,7 +672,14 @@ powershell -c "(Select-String 'hook ([0-9.]+)us' $env:APPDATA\Seam\seam.log).Mat
 
 Turn off **Settings → System → Display → Multiple displays → Ease cursor movement between displays**.
 
-- [ ] **Warning.** Restart Seam with the setting off. A balloon warns once, and the log shows `Ease cursor movement is off`. The settings panel shows it as off.
+- [ ] **Warning.** Close the Seam window and restart Seam with the setting off. A balloon warns once, and the log shows `Ease cursor movement is off`. Clicking it opens Displays, which shows the alert with **Turn it on**.
+- [ ] **No double warning.** With the Seam window open, pause and resume the remap. No balloon comes, because the window shows the setting itself.
+- [ ] **First-run ask.** With `cursor_easing_asked` false or missing in `config.json`, open the Seam window on any page but Displays. A dashed note at the top says "Seam needs Windows' Ease cursor movement between displays…" with **Not now** and **Turn it on**. On Displays the note doesn't show, and the alert does.
+- [ ] **Not now.** Press **Not now**. The note goes, `cursor_easing_asked` is true, and it doesn't come back after restarting Seam or turning the remap off and on. The Displays alert stays while the setting is off.
+- [ ] **Turn it on.** Set it off again and `cursor_easing_asked` back to false. Press **Turn it on** in the note. Without signing out: the Windows Settings toggle shows on (reopen the page), the pointer crosses where it used to stop at an edge, and the log shows `cursor easing: Some(false) to Some(true), Ok(())` plus the `SPI_SETCURSORS` and `WM_SETTINGCHANGE` lines. "Turned on Ease cursor movement" shows, the alert goes, and the note never comes back. Record whether the crossing works straight away or only after a sign-out.
+- [ ] **Alert button.** Turn it off in Windows Settings, come back to Displays: the alert shows **Open Display settings** and **Turn it on**. **Turn it on** works as above. With it on, there's no alert.
+- [ ] **State.** `state.get` has `windows_cursor_easing` false while off and true after. `cursor_easing.set` from a client without the panel's token is refused, and `{"on":false}` is refused with nothing changed.
+- [ ] **Search.** Type "deadzone", "easing" and "jump": each finds "Ease cursor movement between displays", which opens Displays at the top.
 - [ ] **Describe what happens.** Expected: crossings where both screens have pixels at that row still remap. Elsewhere the pointer stops at the edge, because Seam only acts when a move leaves the screen across a calibrated border and lands on a physical screen. Try the top of screen 1 left of x=596, and the right edge of screen 1 below where screen 4 ends. Record what you see, then turn it back on.
 
 ## Align arrangement

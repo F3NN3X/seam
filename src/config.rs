@@ -304,6 +304,9 @@ pub struct Config {
     /// "Put apps in place when they open": a window that opens and matches a rule of
     /// the active workspace goes to its place once (§11.1). Off by default.
     pub auto_apply: bool,
+    /// The panel asked once whether to turn on Windows' "Ease cursor movement between
+    /// displays", or Seam turned it on. Either way it isn't asked again.
+    pub cursor_easing_asked: bool,
     /// Windows' `RestartApps` as it was before Seam turned it off, `u32::MAX` if it
     /// wasn't there, or `None` while Seam leaves it alone. Only the tray writes it.
     pub restore_apps_saved: Option<u32>,
@@ -335,6 +338,7 @@ impl Default for Config {
             restore_session: false,
             restore_apps: RestoreApps::Windows,
             auto_apply: false,
+            cursor_easing_asked: false,
             restore_apps_saved: None,
             updates: UpdateSettings::default(),
             api: ApiSettings::default(),

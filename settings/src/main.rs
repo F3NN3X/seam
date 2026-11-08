@@ -15,6 +15,7 @@ mod update;
 use gpui_kit::*;
 use panel::{Page, Panel};
 use seam::api::Client;
+use seam::panelwin;
 use seam::tray;
 use serde_json::json;
 use std::time::{Duration, Instant};
@@ -58,6 +59,31 @@ pub fn restart_panel(cx: &mut App) {
     cx.quit();
 }
 
+/// The window's logical size, which is the same on every screen.
+const WINDOW_SIZE: (f32, f32) = (1160., 780.);
+
+/// The screen under the pointer: its gpui display, work area (physical pixels)
+/// and DPI.
+struct Target {
+    display: DisplayId,
+    work: seam::zones::Rect,
+    dpi: u32,
+}
+
+impl Target {
+    fn under_pointer() -> Option<Target> {
+        let (monitor, work, dpi) = panelwin::screen_under_pointer()?;
+        Some(Target { display: DisplayId::new(monitor), work, dpi })
+    }
+
+    /// The work area in logical pixels at this screen's scale.
+    fn logical_work(&self) -> Bounds<Pixels> {
+        let scale = self.dpi as f32 / 96.;
+        let at = |v: i32| px(v as f32 / scale);
+        Bounds::new(point(at(self.work.x), at(self.work.y)), size(at(self.work.w), at(self.work.h)))
+    }
+}
+
 fn main() {
     // The updater's headless modes, and the installer's. None opens a window.
     if std::env::args().any(|a| a == "--check-updates") {
@@ -81,14 +107,40 @@ fn main() {
         init(cx);
         theme::install(cx);
         Panel::bind_keys(cx);
+        let (w, h) = WINDOW_SIZE;
+        let target = Target::under_pointer();
+        // gpui puts the window on the screen under the pointer, so it never shows
+        // on the primary. It sizes it with the scale of the screen it was made on,
+        // not that screen's, so the position and size are set again in physical
+        // pixels straight after, by `panelwin::open_centred`.
+        let (bounds, display_id, work) = match &target {
+            Some(t) => {
+                let work = t.logical_work();
+                (Bounds::centered_at(work.center(), size(px(w), px(h))), Some(t.display), Some(work.size))
+            }
+            None => (Bounds::centered(None, size(px(w), px(h)), cx), None, None),
+        };
+        // A screen smaller than the window needs a smaller least size, or the
+        // window couldn't shrink to fit (64 is room for the title bar and frame).
+        let room =
+            |work: Option<Pixels>, least: f32| work.map_or(px(least), |v| px(least).min(v - px(64.)).max(px(300.)));
         let options = WindowOptions {
             titlebar: Some(TitlebarOptions { title: Some(tray::PANEL_TITLE.into()), ..Default::default() }),
-            window_bounds: Some(WindowBounds::Windowed(Bounds::centered(None, size(px(1160.), px(780.)), cx))),
-            window_min_size: Some(size(px(900.), px(640.))),
+            window_bounds: Some(WindowBounds::Windowed(bounds)),
+            display_id,
+            window_min_size: Some(size(room(work.map(|s| s.width), 900.), room(work.map(|s| s.height), 640.))),
             ..Default::default()
         };
         let page = page.as_deref().and_then(Page::from_arg);
         open_window(options, cx, move |window, cx| cx.new(|cx| Panel::new(page, token, window, cx)))
             .expect("failed to open the Seam window");
+        if let Some(t) = target {
+            // gpui only hears about the new size if it isn't mid-update when Win32
+            // sends it, so this runs as a task of its own.
+            cx.spawn(async move |_| {
+                panelwin::open_centred(tray::PANEL_TITLE, t.work, t.dpi, WINDOW_SIZE);
+            })
+            .detach();
+        }
     });
 }

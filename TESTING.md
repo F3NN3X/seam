@@ -706,6 +706,14 @@ Needs workspaces on this desk that hold the apps below.
 - [ ] **150% scaling.** Set display scaling to 150%. Icons are sharp, not blurry, and still 16 logical px.
 - [ ] **No stall.** Open the Workspaces page with a workspace of many apps. The page draws at once and the icons fill in a moment later.
 
+## Window opens under the pointer
+
+- [ ] **Each screen.** With two or more screens, put the pointer on each one in turn and open Seam from the tray (and from `seam-settings.exe --page general`). The window opens centred in that screen's work area, never partly under the taskbar, and never flashes on the primary screen first.
+- [ ] **Different scaling.** With screens at different scaling (say 100% and 150%), open it on each. It's the same apparent size on both, about 1160 x 780 logical, and fully on the screen.
+- [ ] **Screen left of the primary.** Place a screen left of or above the primary, so its origin is negative, and open it there. It's centred on that screen.
+- [ ] **Small screen.** On a screen smaller than the window (or with a very large taskbar), the window fits inside the work area.
+- [ ] **Already open.** With the window open on one screen, open Seam from another screen. The existing window comes forward where it is; it doesn't move.
+
 ## Report back
 
 For each failure, give the step, what you saw, and the matching lines from `seam.log`.

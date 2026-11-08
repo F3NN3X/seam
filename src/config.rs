@@ -19,6 +19,10 @@ pub struct SavedBorder {
     /// Side of `a` that `b` sits on.
     pub side: Side,
     pub map: EdgeMap,
+    /// The screens touch on the desk but Windows has a gap between them, so the
+    /// border holds while `b` stays beyond that side of `a`.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub glued: bool,
 }
 
 /// What a left-click on the tray icon does.
@@ -507,7 +511,7 @@ mod tests {
     use crate::geom::Rect;
 
     fn border(a: &str, b: &str, side: Side, s: f64, o: f64) -> SavedBorder {
-        SavedBorder { a: a.into(), b: b.into(), side, map: EdgeMap { s, o } }
+        SavedBorder { a: a.into(), b: b.into(), side, map: EdgeMap { s, o }, glued: false }
     }
 
     fn mon(name: &str) -> Mon {
@@ -541,6 +545,15 @@ mod tests {
         let s = serde_json::to_string(&c).unwrap();
         let back: Config = serde_json::from_str(&s).unwrap();
         assert_eq!(back.desks, c.desks);
+    }
+
+    #[test]
+    fn only_a_glued_border_writes_the_flag() {
+        let plain = serde_json::to_value(border("x", "y", Side::Right, 1.0, 0.0)).unwrap();
+        assert!(plain.get("glued").is_none());
+        let glued = SavedBorder { glued: true, ..border("x", "y", Side::Right, 1.0, 0.0) };
+        let json = serde_json::to_string(&glued).unwrap();
+        assert_eq!(serde_json::from_str::<SavedBorder>(&json).unwrap(), glued);
     }
 
     /// A private empty directory holding `config.json` with the given bytes.

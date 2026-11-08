@@ -121,7 +121,11 @@ fn build_steps(mons: &[Mon], saved: &[SavedBorder]) -> Vec<Step> {
 /// Push the in-progress maps to the hook so the pointer behaves as calibrated
 /// while you adjust ("try while adjusting").
 fn push_live(c: &Calib) {
-    let links = c.steps.iter().filter_map(|s| s.map().map(|map| Link { a: s.a, b: s.b, side: s.side, map })).collect();
+    let links = c
+        .steps
+        .iter()
+        .filter_map(|s| s.map().map(|map| Link { a: s.a, b: s.b, side: s.side, map, glued: false }))
+        .collect();
     hook::set_live(Live { rects: c.mons.iter().map(|m| m.rect).collect(), links });
 }
 
@@ -203,6 +207,7 @@ fn finish(accept: bool) {
                     b: c.mons[s.b].id.clone(),
                     side: s.side,
                     map,
+                    glued: false,
                 })
             })
             .collect();

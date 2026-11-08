@@ -4,7 +4,11 @@ All notable changes to Seam. The format follows [Keep a Changelog](https://keepa
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-11-08
+
 ### Added
+
+- The Stream Deck plugin is a download on each release, next to the setups and zips.
 
 - Workspaces remember whether each window was minimized, maximized or full screen, which window was in front of which, and which had the focus, and a switch brings all of that back. A minimized window stays minimized and restores into its zone later.
 - Edit a workspace on the Workspaces page: where each app goes (including where it is now), how it shows, the start order by drag or Alt+Up and Alt+Down, and removing an app. Each change saves at once, with Undo.

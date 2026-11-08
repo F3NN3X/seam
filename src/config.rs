@@ -483,20 +483,6 @@ impl Config {
             let _ = write_atomic(p, &s);
         }
     }
-
-    /// Apply one change to the file as it is right now, so a process with an
-    /// older copy in memory can't undo what another one saved. Returns the
-    /// result, for a caller that keeps a copy.
-    pub fn edit(change: impl FnOnce(&mut Config)) -> Config {
-        Self::edit_at(&Self::path(), change)
-    }
-
-    fn edit_at(p: &Path, change: impl FnOnce(&mut Config)) -> Config {
-        let mut c = Self::load_from(p);
-        change(&mut c);
-        c.save_to(p);
-        c
-    }
 }
 
 /// A v0.1 build can't read a v2 file, so keep the original to go back to. Only
@@ -609,9 +595,11 @@ mod tests {
     }
 
     #[test]
-    fn edit_changes_one_field_and_keeps_saved_layouts() {
+    fn changing_one_field_keeps_saved_layouts() {
         let p = scratch("edit", br#"{"layouts": {"desk": []}, "seen": ["desk"]}"#);
-        Config::edit_at(&p, |c| c.enabled = false);
+        let mut c = Config::load_from(&p);
+        c.enabled = false;
+        c.save_to(&p);
         let back = Config::load_from(&p);
         assert!(!back.enabled && back.desks.contains_key("desk") && back.seen == ["desk"]);
         let _ = std::fs::remove_dir_all(p.parent().unwrap());

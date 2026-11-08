@@ -16,7 +16,7 @@ use crate::switcher::{
     self, CaptureJob, LiveWorkspace, Screen as SwitchScreen, SwitchJob, WM_APP_CAPTURED, WM_APP_SESSION,
     WM_APP_SWITCHED,
 };
-use crate::tray::{self, CLASS, WM_APP_API, WM_APP_LINEUP, WM_APP_WINDOWS_CHANGED};
+use crate::tray::{CLASS, WM_APP_API, WM_APP_LINEUP, WM_APP_WINDOWS_CHANGED};
 use crate::wm::{Pinned, WM_APP_WS_MOVED};
 use crate::{arrange, ease, hotkey, identify, live, overlay, wincontrol, wm};
 use seam::api::{self, Client, Command, PinKind, Reply, RpcError, WindowVerb};
@@ -65,8 +65,6 @@ const WM_APP_UPDATE: u32 = WM_APP + 13;
 const TIMER_REFRESH: usize = 1;
 /// Windows silently removes low-level hooks that ever time out, so re-arm periodically.
 const TIMER_REARM: usize = 2;
-/// Retries a reload the app was too busy for (menu open).
-const TIMER_RELOAD: usize = 3;
 /// Retries API commands the app was too busy for (menu open).
 const TIMER_API: usize = 4;
 /// Sends a `state.changed` that came too soon after the last one.
@@ -1122,23 +1120,6 @@ fn start_lineup(app: &mut App) {
     }
 }
 
-/// The panel writes config.json itself; pick up what it changed.
-fn reload(app: &mut App) {
-    log::info!("config reloaded");
-    // The tray keeps what Restart apps was, and the file may not have its last save yet.
-    let saved = app.cfg.restore_apps_saved;
-    app.cfg = Config::load();
-    app.cfg.restore_apps_saved = saved;
-    if forget_deleted(app) {
-        persist(app);
-    }
-    log::apply(app.cfg.debug_log);
-    sync_restart_apps(app);
-    migrate_hotkeys(app);
-    apply_hotkeys(app);
-    refresh(app);
-}
-
 /// Start the panel, which raises the open one if there is one.
 fn open_panel(app: &mut App, page: Option<&str>) -> bool {
     let panel = std::env::current_exe().map(|exe| exe.with_file_name("seam-settings.exe"));
@@ -1715,18 +1696,6 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
         }
         overlay::WM_APP_CALIB_DONE => {
             with_app(|a| lineup_done(a, wparam.0 != 0));
-            LRESULT(0)
-        }
-        tray::WM_APP_RELOAD => {
-            if with_app(reload).is_none() {
-                SetTimer(Some(hwnd), TIMER_RELOAD, 250, None);
-            }
-            LRESULT(0)
-        }
-        WM_TIMER if wparam.0 == TIMER_RELOAD => {
-            if with_app(reload).is_some() {
-                let _ = KillTimer(Some(hwnd), TIMER_RELOAD);
-            }
             LRESULT(0)
         }
         WM_DISPLAYCHANGE => {

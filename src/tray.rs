@@ -7,7 +7,6 @@ use windows::Win32::UI::WindowsAndMessaging::*;
 
 pub const CLASS: PCWSTR = w!("SeamTray");
 pub const WM_APP_LINEUP: u32 = WM_APP + 3;
-pub const WM_APP_RELOAD: u32 = WM_APP + 4;
 /// Wakes the main thread to drain the API command queue.
 pub const WM_APP_API: u32 = WM_APP + 5;
 /// Seam pinned, unpinned or placed a window, so the last session is worth saving again.

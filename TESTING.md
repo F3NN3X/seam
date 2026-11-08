@@ -308,6 +308,53 @@ Turn the debug log on. Each check captures, then reads the table and the log. A 
 - [ ] **Administrator window.** Capture with an app running as administrator. A switch skips it with `elevated` and never changes its state or its stacking.
 - [ ] **Gate A, hook.** During all of the above, the log's hook timing lines are the same as before.
 
+### Editing a workspace
+
+Each change below saves at once, with no Save button, and shows a notification with **Undo** for 8 s. Undo puts the workspace back as it was before that change. Check `config.json` after each one.
+
+- [ ] **Goes to.** Pick "Screen 2, zone 1" for an app: the notice says "<app> goes to Screen 2, zone 1" and a switch puts it there. "Screen 1, full" maximizes it on screen 1. "Keep where it is" leaves it alone on a switch. The list has every zone of every screen, a "full" entry per screen, "Keep where it is" and "Where it is now".
+- [ ] **Where it is now.** With the app open, move its window to another zone and pick **Where it is now**. The row says the new zone, and Undo gives the old one back. With the app closed it says "Where <app> goes stays as it was" and "That app has no window open".
+- [ ] **Show as.** Open a row with a click on its name. Pick Minimized, switch: the window is minimized and restores into its place. Maximized sets Goes to "Screen N, full". Normal from Maximized puts the window back at the size it had before it was maximized.
+- [ ] **Launch.** Untick an app: it doesn't start on a switch with it closed. Tick it again.
+- [ ] **Reorder by drag.** Drag a row by its grip below the next one. The notice says "Moved <app> to place 2", and `windows` in `config.json` is in the new order.
+- [ ] **Reorder by keyboard.** Tab to a row, press Alt+Down then Alt+Up. The row moves each time, the focus ring stays on it, and Alt+Up on the first row or Alt+Down on the last does nothing.
+- [ ] **Remove.** "..." on a row, **Remove**. It's gone at once, and Undo brings it back in the same place.
+- [ ] **Rename and switches.** Rename, the shortcut on Shortcuts, **Start missing apps** and **Other windows** still save, without a notice.
+- [ ] **Refused.** With the tray stopped, change anything: "Seam isn't running" shows and nothing changes. In `config.json`, give a rule a zone the screen's layout doesn't have, then rename the workspace: that still saves, and the rule keeps its zone.
+- [ ] **Not the panel.** A test client that isn't the panel gets error 4 from `workspace.update`.
+
+### Adding an app
+
+- [ ] **Open now.** **Add an app** opens a popover with a search field and the tabs **Open now** and **Installed**. Open now lists the app windows with a taskbar button, one per window, with each window's title under the app's name, and nothing from Seam. Click one: the popover closes, the app is the last row with "Keep where it is" and Launch ticked, and "Added <app>" has Undo.
+- [ ] **Installed.** The Installed tab lists the Start menu's apps by name with their icons, and no services, uninstallers or links. Search "note": only matching apps stay. Search for something that isn't there: "Nothing matches ...".
+- [ ] **A Store app.** Add Calculator from Installed with it closed. The row says "Packaged app". Switch: Calculator starts through its AUMID and isn't listed as `refused`.
+- [ ] **Already there.** An app that's already a row shows "In this workspace" in both tabs. Clicking it adds a second row, for a second window of that app.
+- [ ] **Never include.** "..." on a row, **Never include this app**. The row goes, its exe is in **Never manage these apps** on General and in `zones.exclude`, and a capture leaves it out. Undo brings the row back and takes it off the list. On General, **Remove** takes an app off the list with Undo. A Store app added from Installed has no Never include until a capture or Where it is now fills in its exe.
+
+### Launch stages
+
+Turn the debug log on. Close every app of a test workspace, with **Start missing apps** on and every app ticked.
+
+- [ ] **Everything at once.** With no delay and nothing waiting, switch. Every app starts straight away, the log has one `stage 1 of 1` line, and each `<app> showed after X ms` line comes as its window appears, so the first windows are placed before the slowest app is up.
+- [ ] **Delays.** Give the second app a 5 s delay (the row says "5 s after its stage starts") and switch. It starts about 5 s after the first. The slider shows "0 s" and "30 s" at its ends and moves in half seconds.
+- [ ] **Wait for a window.** Tick **Wait for this app's window before opening the next** on the first app: a line with "then wait" shows under it. Switch: the apps below start only once its window is up, and the log has `stage 1 of 2` and `stage 2 of 2` with their times.
+- [ ] **Took too long.** Make the waiting app one that doesn't open a window (a tray-only app) or that is slow, and switch. After 15 s the next stage starts anyway, the log's stage line ends with `too long: <app>`, and `workspace.switched` lists it in `skipped` as "Took too long to open".
+- [ ] **Already running.** Leave one waiting app with a delay running and switch. It's placed at once, before anything starts, with no delay and no wait.
+- [ ] **Start minimized.** Set an app to Show as Minimized, close it, switch. It starts and ends up minimized, and restores into its place.
+- [ ] **Event-driven.** During a switch the log has no gap of a second between a window showing and its `showed after` line. With nothing waiting, the wm thread's stats lines show no extra events.
+- [ ] **Newer switch.** Switch to a workspace with a 10 s delay, then to another within 2 s. The delayed app doesn't start.
+
+### Update from screen keeps your edits
+
+- [ ] **Merge.** Set a delay and a wait on two apps, reorder them and add an app from Installed that isn't running. Move the running windows and choose **Update from screen**. The running rows take their new places and keep their delays, waits, Launch ticks and order. The app that isn't running is still there. A window that wasn't in the workspace is added at the end.
+- [ ] **Nothing deleted.** Close every app and choose Update from screen. Every row is still there.
+
+### Pinned windows and switches
+
+- [ ] **Off.** With **Pinned windows stay when I switch workspaces** off on Zones, pin Notepad on top and switch to a workspace that puts Notepad in a zone: it moves, and stays on top. With **Other windows** on Minimize, a pinned window that isn't in the workspace is minimized.
+- [ ] **On.** Turn it on and do the same. Notepad isn't moved, `skipped` lists it as `pinned`, and Minimize and Close leave it alone. Capture: Notepad is in the new workspace. A sticky window is still left out of the capture.
+- [ ] **API.** `config.get` has `windows.pins_stay_on_switch`.
+
 ## Settings panel
 
 - [ ] **Open.** Choose **Open Seam…** in the tray menu. The panel opens in your Windows theme on the last page you used, and the sidebar shows the current remap state.

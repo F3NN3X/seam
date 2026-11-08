@@ -166,6 +166,9 @@ pub struct WindowSettings {
     pub pin_color: String,
     /// "Tell me when a pinned window closes" (D119).
     pub notify_pinned_close: bool,
+    /// "Pinned windows stay when I switch workspaces": a switch leaves a window
+    /// pinned on top alone, as it does a sticky one. Capture still saves it.
+    pub pins_stay_on_switch: bool,
 }
 
 impl Default for WindowSettings {
@@ -176,6 +179,7 @@ impl Default for WindowSettings {
             focus_color: palette::FOCUS_DEFAULT.into(),
             pin_color: palette::PIN_DEFAULT.into(),
             notify_pinned_close: false,
+            pins_stay_on_switch: false,
         }
     }
 }

@@ -15,7 +15,7 @@ use seam::state::OTHER_WMS;
 use seam::{winutil, winver};
 use serde_json::json;
 use std::collections::HashMap;
-use std::sync::mpsc::{channel, Sender};
+use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
 use windows::Win32::Foundation::*;
@@ -102,6 +102,15 @@ pub enum Command {
     Closing {
         hwnd: isize,
     },
+    /// Send every top-level window that is shown to this switch, until it stops
+    /// listening or a newer one asks.
+    WatchShown {
+        switch: u64,
+        tx: Sender<isize>,
+    },
+    UnwatchShown {
+        switch: u64,
+    },
 }
 
 static DETECTED: Mutex<Option<&'static str>> = Mutex::new(None);
@@ -154,6 +163,18 @@ pub fn release(reply: Option<Sender<Reply>>) {
 
 pub fn accent_changed() {
     send(Command::AccentChanged);
+}
+
+/// Windows as they are shown, for a switch waiting on the apps it started. The
+/// hook for them exists only while a switch listens, so the thread is idle otherwise.
+pub fn watch_shown(switch: u64) -> Receiver<isize> {
+    let (tx, rx) = channel();
+    send(Command::WatchShown { switch, tx });
+    rx
+}
+
+pub fn unwatch_shown(switch: u64) {
+    send(Command::UnwatchShown { switch });
 }
 
 /// Release all on a clean exit. Waits for it, but not for long.
@@ -302,6 +323,9 @@ struct Wm {
     notify_close: bool,
     foreground_hook: Option<HWINEVENTHOOK>,
     destroy_hook: Option<HWINEVENTHOOK>,
+    show_hook: Option<HWINEVENTHOOK>,
+    /// The switch waiting for windows to show, and where to send them.
+    shown_to: Option<(u64, Sender<isize>)>,
     /// The window that had focus at the last foreground event.
     foreground: Option<isize>,
     /// Windows to paint again after a focus change, and which of the two repaints is next.
@@ -336,14 +360,16 @@ fn sync_hook(slot: &mut Option<HWINEVENTHOOK>, event: u32, wanted: bool) {
 
 impl Wm {
     /// Only what a feature that is on needs: focus changes for the border and for
-    /// pins that apps may paint over, closed windows while anything is pinned, and
-    /// the refresh timer while either applies.
+    /// pins that apps may paint over, closed windows while anything is pinned,
+    /// shown windows while a switch waits for them, and the refresh timer while
+    /// the first applies.
     fn sync_hooks(&mut self) {
         let wanted = (self.focus_border && self.focus_colour.is_some())
             || (!self.pinned.is_empty() && self.pin_colour.is_some());
         let painting = wanted && borders_supported();
         sync_hook(&mut self.foreground_hook, EVENT_SYSTEM_FOREGROUND, painting);
         sync_hook(&mut self.destroy_hook, EVENT_OBJECT_DESTROY, !self.pinned.is_empty());
+        sync_hook(&mut self.show_hook, EVENT_OBJECT_SHOW, self.shown_to.is_some());
         match (painting, self.refresh_timer) {
             (true, 0) => self.refresh_timer = unsafe { SetTimer(None, 0, REFRESH_EVERY_MS, None) },
             (false, id) if id != 0 => {
@@ -460,6 +486,16 @@ impl Wm {
                     known.asked_to_close = Some(Instant::now());
                 }
             }
+            Command::WatchShown { switch, tx } => {
+                self.shown_to = Some((switch, tx));
+                self.sync_hooks();
+            }
+            Command::UnwatchShown { switch } => {
+                if self.shown_to.as_ref().is_some_and(|(s, _)| *s == switch) {
+                    self.shown_to = None;
+                    self.sync_hooks();
+                }
+            }
         }
     }
 
@@ -539,6 +575,14 @@ impl Wm {
                     self.pin_closed(gone);
                 }
                 if self.pinned.is_empty() {
+                    self.sync_hooks();
+                }
+            }
+            // Only top-level windows. A switch that has stopped listening lets the hook go.
+            EVENT_OBJECT_SHOW if unsafe { GetAncestor(h, GA_ROOT) } == h => {
+                let gone = self.shown_to.as_ref().is_some_and(|(_, tx)| tx.send(h.0 as isize).is_err());
+                if gone {
+                    self.shown_to = None;
                     self.sync_hooks();
                 }
             }

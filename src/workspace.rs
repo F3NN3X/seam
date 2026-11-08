@@ -12,6 +12,9 @@ use std::path::{Component, Path, Prefix};
 
 /// A window this close to a zone, in pixels, counts as being in it.
 const ZONE_TOLERANCE: i32 = 8;
+/// The longest delay before an app starts, and the step it moves in.
+pub const MAX_DELAY_MS: u32 = 30_000;
+pub const DELAY_STEP_MS: u32 = 500;
 
 /// What a switch does with windows the workspace doesn't mention.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -112,6 +115,10 @@ pub struct Rule {
     pub z: u32,
     /// The window that had the focus at capture. At most one per workspace.
     pub focused: bool,
+    /// How long a switch waits before starting this app, within its stage.
+    pub delay_ms: u32,
+    /// The next stage starts only once this app's window is up, or took too long.
+    pub wait_for_window: bool,
 }
 
 impl Default for Rule {
@@ -129,6 +136,8 @@ impl Default for Rule {
             shown: Shown::Normal,
             z: u32::MAX,
             focused: false,
+            delay_ms: 0,
+            wait_for_window: false,
         }
     }
 }
@@ -162,6 +171,36 @@ impl Rule {
             _ => {}
         }
         self.target = target;
+    }
+
+    /// Show the window another way. Maximized is the screen's full target, and
+    /// leaving it puts the window back where it was when it wasn't maximized.
+    pub fn set_shown(&mut self, shown: Shown) {
+        let full = self.target == (Target::State { state: WinState::Max });
+        match shown {
+            Shown::Maximized => self.target = Target::State { state: WinState::Max },
+            _ if full => {
+                self.target = match self.normal_rect {
+                    Some(rect) => Target::Rect { rect },
+                    None => Target::State { state: WinState::Keep },
+                }
+            }
+            _ => {}
+        }
+        self.shown = shown;
+    }
+
+    /// Where and how a capture found the window, taken into this row. The row
+    /// keeps its launch details and its place in the start order.
+    fn take_place(&mut self, from: &Rule) {
+        self.title_hint = from.title_hint.clone();
+        self.class = from.class.clone();
+        self.monitor = from.monitor.clone();
+        self.target = from.target.clone();
+        self.normal_rect = from.normal_rect;
+        self.shown = from.shown;
+        self.z = from.z;
+        self.focused = from.focused;
     }
 }
 
@@ -355,21 +394,119 @@ pub fn rect_for(target: &Target, zones: &[Rect], work: Rect) -> Option<Rect> {
     }
 }
 
-/// The old rule a new capture of the same app replaces, so its Launch box survives.
-pub fn keep_launch_flags(old: &Workspace, mut fresh: Vec<Rule>) -> Vec<Rule> {
-    let mut used = vec![false; old.windows.len()];
-    for rule in &mut fresh {
-        let same = |o: &Rule| match (&rule.aumid, &o.aumid) {
-            (Some(a), Some(b)) => a == b,
-            (None, None) => rule.exe.eq_ignore_ascii_case(&o.exe),
-            _ => false,
-        };
-        if let Some(i) = old.windows.iter().enumerate().position(|(i, o)| !used[i] && same(o)) {
-            used[i] = true;
-            rule.launch = old.windows[i].launch;
+/// A capture's rules as the matcher sees windows, so a recapture finds the rows a
+/// switch would.
+fn as_candidates(fresh: &[Rule]) -> Vec<Candidate> {
+    let cand = |(i, r): (usize, &Rule)| Candidate {
+        hwnd: i as isize,
+        exe: r.exe.clone(),
+        aumid: r.aumid.clone(),
+        class: r.class.clone(),
+        title: r.title_hint.clone(),
+        z: i,
+    };
+    fresh.iter().enumerate().map(cand).collect()
+}
+
+/// "Update from screen": each row the capture has a window for takes where and how
+/// that window is now, and keeps its launch details and its place in the start
+/// order. A row with no window right now stays, so a recapture never deletes an
+/// app. New windows go at the end, topmost first.
+pub fn merge_capture(old: &Workspace, fresh: Vec<Rule>) -> Vec<Rule> {
+    let found = assign(&old.windows, &as_candidates(&fresh));
+    let mut taken = vec![false; fresh.len()];
+    let mut merged = old.windows.clone();
+    for (row, hit) in merged.iter_mut().zip(&found) {
+        match hit {
+            Some(i) => {
+                taken[*i as usize] = true;
+                row.take_place(&fresh[*i as usize]);
+            }
+            // With no window, nothing says how it stacks or whether it has the focus.
+            None => {
+                row.z = u32::MAX;
+                row.focused = false;
+            }
         }
     }
-    fresh
+    merged.extend(fresh.into_iter().zip(taken).filter(|(_, t)| !t).map(|(r, _)| r));
+    merged
+}
+
+/// "Where it is now" for one row: the place of the window a capture has for it,
+/// or `None` when the app has no window open.
+pub fn recapture_row(old: &Workspace, row: usize, fresh: &[Rule]) -> Option<Workspace> {
+    let rule = old.windows.get(row)?;
+    let hit = assign(std::slice::from_ref(rule), &as_candidates(fresh)).into_iter().next().flatten()?;
+    let from = &fresh[hit as usize];
+    let mut updated = old.clone();
+    if from.focused {
+        updated.windows.iter_mut().for_each(|r| r.focused = false);
+    }
+    updated.windows[row].take_place(from);
+    Some(updated)
+}
+
+/// The rows a switch starts, in start order, cut into stages. A stage ends at a
+/// row that waits for its window. Apps in a stage start together, each after its
+/// own delay, and the next stage starts once the waiting ones are up.
+pub fn stages(rules: &[Rule], starting: &[usize]) -> Vec<Vec<usize>> {
+    let mut stages: Vec<Vec<usize>> = Vec::new();
+    let mut open = false;
+    for &i in starting {
+        match stages.last_mut() {
+            Some(stage) if open => stage.push(i),
+            _ => stages.push(vec![i]),
+        }
+        open = !rules.get(i).is_some_and(|r| r.wait_for_window);
+    }
+    stages
+}
+
+/// A delay as a switch uses it: 0 to 30 s, in half seconds.
+pub fn tame_delay(ms: u32) -> u32 {
+    (ms.min(MAX_DELAY_MS) + DELAY_STEP_MS / 2) / DELAY_STEP_MS * DELAY_STEP_MS
+}
+
+/// What the editor sends, made safe to save over `old`. The id stays, a zone it
+/// picks must be on its screen (`zones` says how many a screen has), and a program or
+/// AUMID that wasn't in the workspace already must pass the same checks as an
+/// import. A row with nothing safe to start can't be ticked to start, which keeps
+/// an imported workspace's cleared rows from launching. Errors say why, in the
+/// panel's words.
+pub fn checked_update(old: &Workspace, mut new: Workspace, zones: &dyn Fn(&str) -> usize) -> Result<Workspace, String> {
+    if new.id != old.id {
+        return Err("That's a different workspace".into());
+    }
+    let name = new.name.trim().to_string();
+    new.name = if name.is_empty() { old.name.clone() } else { name };
+    let mut focused = false;
+    for rule in &mut new.windows {
+        let known = old.windows.iter().any(|o| o.exe == rule.exe && o.aumid == rule.aumid);
+        let exe_ok = rule.exe.is_empty() || safe_exe(&rule.exe);
+        let aumid_ok = rule.aumid.as_deref().is_none_or(safe_aumid);
+        if !(known || exe_ok && aumid_ok) {
+            return Err(format!("{} wasn't added, because Seam won't start that program", rule.title_hint));
+        }
+        // Only a place the editor chose is checked, so a layout changed since keeps the
+        // workspace editable.
+        let placed = old.windows.iter().any(|o| o.monitor == rule.monitor && o.target == rule.target);
+        if let (Target::Zone { zone, span_to }, false) = (&rule.target, placed) {
+            let (zone, span_to, count) = (*zone, *span_to, zones(&rule.monitor) as u32);
+            if !(1..=count).contains(&zone) || span_to.is_some_and(|to| !(1..=count).contains(&to)) {
+                return Err("That zone isn't on its screen any more".into());
+            }
+        }
+        let startable = (exe_ok && !rule.exe.is_empty()) || rule.aumid.as_deref().is_some_and(safe_aumid);
+        rule.launch &= startable;
+        rule.delay_ms = tame_delay(rule.delay_ms);
+        // Pins belong to the last session.
+        rule.pin = None;
+        // At most one window has the focus.
+        rule.focused &= !focused;
+        focused |= rule.focused;
+    }
+    Ok(new)
 }
 
 /// A screen as an export file describes it.
@@ -509,5 +646,28 @@ mod tests {
         // A rule with an AUMID never takes a window that has none.
         let rules = [rule(ff, terminal, "", "")];
         assert_eq!(assign(&rules, &[win(1, ff, None, "", "", 0)]), vec![None]);
+
+        // A recapture matches the same way. A matched row keeps its launch details and
+        // place, a row with no window stays, and a new window goes at the end.
+        let spotify = r"C:\Spotify.exe";
+        let mut docs = rule(ff, None, "MozillaWindowClass", "Docs");
+        (docs.launch, docs.delay_ms, docs.wait_for_window) = (false, 1500, true);
+        let old = Workspace { windows: vec![docs, rule(spotify, None, "", "")], ..Workspace::default() };
+        let mut moved = rule(ff, None, "MozillaWindowClass", "Docs — Mozilla Firefox");
+        moved.target = Target::Zone { zone: 2, span_to: None };
+        let fresh = vec![rule("notepad.exe", None, "", ""), moved];
+        let merged = merge_capture(&old, fresh);
+        let rows: Vec<(&str, bool, u32, bool)> =
+            merged.iter().map(|r| (r.exe.as_str(), r.launch, r.delay_ms, r.wait_for_window)).collect();
+        assert_eq!(rows, [(ff, false, 1500, true), (spotify, true, 0, false), ("notepad.exe", true, 0, false)]);
+        assert_eq!(merged[0].target, Target::Zone { zone: 2, span_to: None });
+
+        // Stages end at a row that waits for its window.
+        let mut waits: Vec<Rule> = (0..5).map(|_| rule(ff, None, "", "")).collect();
+        (waits[1].wait_for_window, waits[4].wait_for_window) = (true, true);
+        assert_eq!(stages(&waits, &[0, 1, 2, 3, 4]), vec![vec![0, 1], vec![2, 3, 4]]);
+        assert_eq!(stages(&waits, &[0, 2]), vec![vec![0, 2]]);
+        assert_eq!(stages(&waits, &[1, 4]), vec![vec![1], vec![4]]);
+        assert_eq!((tame_delay(1200), tame_delay(99_000)), (1000, MAX_DELAY_MS));
     }
 }

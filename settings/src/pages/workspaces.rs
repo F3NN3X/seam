@@ -1,11 +1,11 @@
 //! Workspaces: save which apps are where on a desk, and switch between them.
 
 use crate::icons::{self, Icons};
+use crate::pages::{app_picker, workspace_editor};
 use crate::panel::{error_text, refusal, Panel};
 use crate::theme::{palette, Palette};
 use crate::ui::{self, card, keycaps, row, segmented, switch};
 use gpui_kit::component::button::ButtonVariants;
-use gpui_kit::component::checkbox::Checkbox;
 use gpui_kit::component::input::Input;
 use gpui_kit::component::menu::{DropdownMenu, PopupMenuItem};
 use gpui_kit::component::notification::Notification;
@@ -14,21 +14,18 @@ use gpui_kit::component::{Icon, WindowExt};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 use seam::state::Screen;
-use seam::workspace::{self, Export, OtherWindows, Rule, ScreenInfo, Target, WinState, Workspace};
+use seam::workspace::{self, Export, OtherWindows, Rule, ScreenInfo, Target, Workspace};
 use seam::zones;
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
 use std::path::PathBuf;
-use std::time::Duration;
 
 const LIST_WIDTH: f32 = 232.;
-const GOES_TO_WIDTH: f32 = 220.;
-const LAUNCH_WIDTH: f32 = 56.;
-const UNDO_FOR: Duration = Duration::from_secs(8);
 
-// ---- What is saved. The config keeps workspaces as raw JSON, so edits go back as a whole list.
+// ---- What is saved. The config keeps workspaces as raw JSON. Creating, deleting and
+// importing send the whole list; the editor sends one workspace.
 
-fn desk_sig(panel: &Panel) -> String {
+pub fn desk_sig(panel: &Panel) -> String {
     panel.state.as_ref().map(|s| s.desk.sig.clone()).unwrap_or_default()
 }
 
@@ -36,7 +33,7 @@ fn saved(panel: &Panel) -> Vec<Value> {
     panel.config.desks.get(&desk_sig(panel)).map(|d| d.workspaces.clone()).unwrap_or_default()
 }
 
-fn all(panel: &Panel) -> Vec<Workspace> {
+pub fn all(panel: &Panel) -> Vec<Workspace> {
     workspace::list(&saved(panel))
 }
 
@@ -52,21 +49,15 @@ fn save(panel: &mut Panel, list: Vec<Value>, window: &mut Window, cx: &mut Conte
     panel.patch(json!({ "desks": { sig: { "workspaces": list } } }), window, cx);
 }
 
-/// Change one workspace and save the list.
-pub fn edit(
+/// Change one workspace's settings, with no Undo: its name, shortcut and switches.
+fn edit(
     panel: &mut Panel,
     id: &str,
     window: &mut Window,
     cx: &mut Context<Panel>,
     change: impl FnOnce(&mut Workspace),
 ) {
-    let mut list = saved(panel);
-    let Some(slot) = list.iter_mut().find(|v| workspace::parse(v).is_some_and(|w| w.id == id)) else { return };
-    if let Some(mut ws) = workspace::parse(slot) {
-        change(&mut ws);
-        *slot = workspace::to_value(&ws);
-    }
-    save(panel, list, window, cx);
+    workspace_editor::update(panel, id, None, window, cx, change);
 }
 
 /// Set or clear a workspace's shortcut. The tray registers it.
@@ -147,33 +138,17 @@ fn create_empty(panel: &mut Panel, window: &mut Window, cx: &mut Context<Panel>)
 }
 
 fn delete(panel: &mut Panel, id: &str, window: &mut Window, cx: &mut Context<Panel>) {
-    struct Undo;
     let before = saved(panel);
     let name = workspace::list(&before).into_iter().find(|w| w.id == id).map(|w| w.name).unwrap_or_default();
     let rest = before.iter().filter(|v| workspace::parse(v).is_none_or(|w| w.id != id)).cloned().collect();
     panel.workspace = None;
     save(panel, rest, window, cx);
-    let view = cx.entity().downgrade();
-    let note = Notification::new().id::<Undo>().message(format!("Deleted {name}")).action(move |_, _, cx| {
-        let (view, before) = (view.clone(), before.clone());
-        ui::primary("undo-workspace", "Undo").on_click(cx.listener(move |note: &mut Notification, _, window, cx| {
-            let before = before.clone();
-            let _ = view.update(cx, |panel, cx| save(panel, before, window, cx));
-            note.dismiss(window, cx);
-        }))
-    });
-    window.push_notification(note, cx);
-    panel.toast_generation += 1;
-    let generation = panel.toast_generation;
-    cx.spawn_in(window, async move |this, cx| {
-        cx.background_executor().timer(UNDO_FOR).await;
-        let _ = this.update_in(cx, |panel, window, cx| {
-            if panel.toast_generation == generation {
-                window.remove_notification::<Undo>(cx);
-            }
-        });
-    })
-    .detach();
+    panel.offer_undo(
+        format!("Deleted {name}"),
+        move |panel, window, cx| save(panel, before.clone(), window, cx),
+        window,
+        cx,
+    );
 }
 
 /// The connected screens as an export file describes them.
@@ -246,53 +221,8 @@ fn add_imported(panel: &mut Panel, file: Export, window: &mut Window, cx: &mut C
 
 // ---- What is drawn
 
-/// A place a window can be sent to, as the Goes to menu lists it.
-#[derive(Clone)]
-struct Place {
-    label: String,
-    /// The screen it's on. `None` leaves a window's screen as it was.
-    monitor: Option<String>,
-    target: Target,
-}
-
-fn places(panel: &Panel) -> Vec<Place> {
-    let keep =
-        Place { label: "Keep where it is".into(), monitor: None, target: Target::State { state: WinState::Keep } };
-    let mut places = vec![keep];
-    let sig = desk_sig(panel);
-    let desk = panel.config.desks.get(&sig);
-    for s in panel.state.iter().flat_map(|s| s.screens.iter()) {
-        let layout = desk.and_then(|d| d.zones.get(&s.id)).and_then(zones::layout_of);
-        let count = layout.map_or(0, |l| zones::leaf_count(&l.tree));
-        for zone in 1..=count as u32 {
-            let target = Target::Zone { zone, span_to: None };
-            places.push(Place {
-                label: format!("Screen {}, zone {zone}", s.number),
-                monitor: Some(s.id.clone()),
-                target,
-            });
-        }
-        let full = Target::State { state: WinState::Max };
-        places.push(Place { label: format!("Screen {}, full", s.number), monitor: Some(s.id.clone()), target: full });
-    }
-    places
-}
-
-/// Where a rule sends its window, in the words of the menu.
-fn goes_to(rule: &Rule, screens: &[Screen]) -> String {
-    let number = screens.iter().find(|s| s.id == rule.monitor).map(|s| s.number);
-    match (&rule.target, number) {
-        (Target::State { state: WinState::Keep }, _) => "Keep where it is".into(),
-        (_, None) => "Screen not connected".into(),
-        (Target::Zone { zone, span_to: None }, Some(n)) => format!("Screen {n}, zone {zone}"),
-        (Target::Zone { zone, span_to: Some(to) }, Some(n)) => format!("Screen {n}, zones {zone} to {to}"),
-        (Target::State { .. }, Some(n)) => format!("Screen {n}, full"),
-        (Target::Rect { .. }, Some(n)) => format!("Screen {n}, own size"),
-    }
-}
-
 /// "Windows Terminal" from `WindowsTerminal.exe`, "Firefox" from `firefox.exe`.
-fn app_title(rule: &Rule) -> String {
+pub fn app_title(rule: &Rule) -> String {
     let stem = rule.exe.rsplit('\\').next().unwrap_or(&rule.exe);
     let stem = stem.strip_suffix(".exe").or_else(|| stem.strip_suffix(".EXE")).unwrap_or(stem);
     let mut title = String::new();
@@ -309,14 +239,6 @@ fn app_title(rule: &Rule) -> String {
     } else {
         title
     }
-}
-
-fn exe_line(rule: &Rule) -> String {
-    let packaged = rule.aumid.is_some() && rule.exe.to_lowercase().contains(r"\windowsapps\");
-    if packaged {
-        return "Packaged app".into();
-    }
-    rule.exe.rsplit('\\').next().unwrap_or(&rule.exe).to_string()
 }
 
 /// The line under the name: which layout the windows use, or how many there are.
@@ -422,120 +344,14 @@ fn list_card(
         .on_click(cx.listener(move |panel, _, _, cx| {
             panel.workspace = Some(id.clone());
             panel.naming = false;
+            panel.editing.expanded = None;
             cx.notify();
         }))
         .into_any_element()
 }
 
-fn tile(letter: String, p: Palette) -> Div {
-    div()
-        .flex()
-        .flex_none()
-        .items_center()
-        .justify_center()
-        .size(px(32.))
-        .rounded(px(8.))
-        .bg(p.raised)
-        .text_size(px(14.))
-        .text_color(p.secondary)
-        .child(letter)
-}
-
-fn window_row(
-    i: usize,
-    ws: &Workspace,
-    rule: &Rule,
-    screens: &[Screen],
-    places: &[Place],
-    p: Palette,
-    cx: &mut Context<Panel>,
-) -> AnyElement {
-    let title = app_title(rule);
-    let current = goes_to(rule, screens);
-    let view = cx.entity();
-    let weak = cx.entity().downgrade();
-    let (options, shown, id) = (places.to_vec(), current.clone(), ws.id.clone());
-    let goes = ui::secondary(("goes-to", i), current, cx).dropdown_caret(true).w(px(GOES_TO_WIDTH)).dropdown_menu(
-        move |mut menu, _, _| {
-            for (n, place) in options.iter().enumerate() {
-                let (weak, place, id) = (weak.clone(), place.clone(), id.clone());
-                let checked = place.label == shown;
-                let item = PopupMenuItem::new(place.label.clone()).checked(checked).on_click(move |_, window, cx| {
-                    let (place, id) = (place.clone(), id.clone());
-                    let _ = weak.update(cx, |panel, cx| {
-                        edit(panel, &id, window, cx, |ws| {
-                            let Some(rule) = ws.windows.get_mut(i) else { return };
-                            rule.set_target(place.target);
-                            if let Some(monitor) = place.monitor {
-                                rule.monitor = monitor;
-                            }
-                        });
-                    });
-                });
-                menu = menu.item(item);
-                if n == 0 {
-                    menu = menu.separator();
-                }
-            }
-            menu
-        },
-    );
-    let id = ws.id.clone();
-    let launch = Checkbox::new(("launch", i))
-        .checked(rule.launch)
-        .accessibility_label(format!("Start {title}"))
-        .on_click(move |on, window, cx| {
-            let (on, id) = (*on, id.clone());
-            view.update(cx, |panel, cx| {
-                edit(panel, &id, window, cx, |ws| {
-                    if let Some(rule) = ws.windows.get_mut(i) {
-                        rule.launch = on;
-                    }
-                })
-            });
-        });
-    // What will run is shown in full on hover.
-    let full_path = SharedString::from(if rule.exe.is_empty() { exe_line(rule) } else { rule.exe.clone() });
-    let name = div()
-        .id(("app-name", i))
-        .tooltip(move |window, cx| Tooltip::new(full_path.clone()).build(window, cx))
-        .flex()
-        .flex_col()
-        .flex_1()
-        .min_w_0()
-        .child(div().text_size(px(14.)).truncate().child(title.clone()))
-        .child(div().text_size(px(12.)).text_color(p.muted).truncate().child(exe_line(rule)));
-    div()
-        .flex()
-        .items_center()
-        .gap(px(12.))
-        .px(px(16.))
-        .py(px(8.))
-        .child(tile(title.chars().next().map(|c| c.to_uppercase().to_string()).unwrap_or_default(), p))
-        .child(name)
-        .child(div().flex_none().w(px(GOES_TO_WIDTH)).child(goes))
-        .child(div().flex().flex_none().justify_end().w(px(LAUNCH_WIDTH)).child(launch))
-        .into_any_element()
-}
-
-fn table_head(p: Palette) -> AnyElement {
-    let head = |text: &'static str| div().text_size(px(13.)).text_color(p.muted).child(text);
-    div()
-        .flex()
-        .items_center()
-        .gap(px(12.))
-        .px(px(16.))
-        .py(px(10.))
-        .child(div().flex_1().child(head("App")))
-        .child(div().flex_none().w(px(GOES_TO_WIDTH)).child(head("Goes to")))
-        .child(div().flex().flex_none().justify_end().w(px(LAUNCH_WIDTH)).child(head("Launch")))
-        .into_any_element()
-}
-
 fn detail(panel: &mut Panel, ws: Workspace, window: &mut Window, cx: &mut Context<Panel>) -> Div {
     let p = palette(cx);
-    let screens = panel.state.as_ref().map(|s| s.screens.clone()).unwrap_or_default();
-    let places = places(panel);
     let summary = summary(panel, &ws);
 
     // A new or renamed workspace opens its name for editing.
@@ -596,14 +412,10 @@ fn detail(panel: &mut Panel, ws: Workspace, window: &mut Window, cx: &mut Contex
         .child(more)
         .into_any_element();
 
-    let mut rows = vec![header, table_head(p)];
-    if ws.windows.is_empty() {
-        let text = "No windows yet. Arrange your windows, then choose Update from screen";
-        rows.push(div().px(px(16.)).py(px(16.)).child(ui::description(text, p)).into_any_element());
-    }
-    for (i, rule) in ws.windows.iter().enumerate() {
-        rows.push(window_row(i, &ws, rule, &screens, &places, p, cx));
-    }
+    let mut rows = vec![header];
+    rows.extend(workspace_editor::rows(panel, &ws, window, cx));
+    let add = app_picker::button(panel, &ws, cx);
+    rows.push(div().flex().px(px(16.)).py(px(12.)).child(add).into_any_element());
 
     let view = cx.entity();
     let id = ws.id.clone();

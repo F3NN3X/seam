@@ -8,7 +8,7 @@ use crate::config::{signature, Config};
 use crate::desk::{self, has_neighbours, resolve};
 use crate::hook;
 use crate::layout::{Link, Live};
-use crate::live::WM_APP_DRIFT;
+use crate::live::{WM_APP_DETECTED, WM_APP_DRIFT};
 use crate::log;
 use crate::monitors::{self, Mon};
 use crate::snap::{self, WM_APP_REFIT, WM_APP_SNAP_BLOCKED};
@@ -415,6 +415,9 @@ fn refresh(app: &mut App) {
         apply_hotkeys(app);
     }
     relink(app);
+    if arrived {
+        choose_in_use(app);
+    }
     // New set of screens that's never been lined up: ask once. Only mark it
     // seen if the shell actually showed the prompt (it may not be up at login).
     if app.links.is_empty()
@@ -665,11 +668,13 @@ fn switched(app: &mut App) {
     );
     // The last session isn't a workspace anyone can pick, so it never shows as the one in use.
     if done.id != SESSION_ID {
-        app.workspace = Some(done.id.clone());
+        set_in_use(app, Some(done.id.clone()));
         sync_live(app);
         app.recheck = true;
         unsafe { SetTimer(Some(app.hwnd), TIMER_DRIFT, DRIFT_AFTER_MS, None) };
     }
+    // Apps opened by hand during the switch go to their places now.
+    live::switch_ended();
     windows_changed(app);
     publish(app);
     let skipped: Vec<Value> =
@@ -703,6 +708,89 @@ fn sync_live(app: &mut App) {
     let auto_apply = app.cfg.auto_apply && aside(app).is_none();
     let live = active.map(|ws| live_of(app, ws));
     live::set_active(app.hwnd.0 as isize, live, auto_apply);
+}
+
+/// The workspace in use changed: remember it for this desk, so a restart shows it again.
+fn set_in_use(app: &mut App, id: Option<String>) {
+    app.workspace = id.clone();
+    let Some(desk) = app.cfg.desks.get_mut(&app.sig) else { return };
+    if desk.active_workspace != id {
+        desk.active_workspace = id;
+        persist(app);
+    }
+}
+
+/// A deleted workspace is no longer in use, remembered or the default. Returns
+/// whether the config changed.
+fn forget_deleted(app: &mut App) -> bool {
+    let ids: Vec<String> = desk_workspaces(app).into_iter().map(|w| w.id).collect();
+    let gone = |id: &Option<String>| id.as_ref().is_some_and(|id| !ids.contains(id));
+    if gone(&app.workspace) {
+        app.workspace = None;
+    }
+    let Some(desk) = app.cfg.desks.get_mut(&app.sig) else { return false };
+    let mut changed = false;
+    for slot in [&mut desk.active_workspace, &mut desk.default_workspace] {
+        if gone(slot) {
+            *slot = None;
+            changed = true;
+        }
+    }
+    changed
+}
+
+/// At start and on another desk, which workspace is in use, without moving a window:
+/// the one remembered for this desk, else its default, else the only one whose
+/// running apps are all in place, which the live worker looks for.
+fn choose_in_use(app: &mut App) {
+    let list = desk_workspaces(app);
+    let desk = app.cfg.desks.get(&app.sig);
+    let here = |id: Option<&String>| id.filter(|id| list.iter().any(|w| w.id == **id)).cloned();
+    let remembered = here(desk.and_then(|d| d.active_workspace.as_ref())).map(|id| (id, "remembered"));
+    let chosen = remembered.or_else(|| here(desk.and_then(|d| d.default_workspace.as_ref())).map(|id| (id, "default")));
+    match chosen {
+        Some((id, why)) => {
+            log::info!("workspace in use at start: {id} ({why})");
+            set_in_use(app, Some(id));
+            sync_live(app);
+            live::check_drift();
+        }
+        None if !list.is_empty() => {
+            let lives = list.into_iter().map(|w| live_of(app, w)).collect();
+            live::detect(app.sig.clone(), lives);
+        }
+        None => log::info!("workspace in use at start: none, this desk has no workspaces"),
+    }
+}
+
+/// The live worker found which workspace looks like the one in use.
+fn detected_in_use(app: &mut App) {
+    let Some(found) = live::take_detected() else { return };
+    // Another desk since, or a switch got there first.
+    if found.sig != app.sig || app.workspace.is_some() {
+        return;
+    }
+    let Some(id) = found.id.filter(|id| desk_workspaces(app).iter().any(|w| w.id == *id)) else {
+        log::info!("workspace in use at start: none detected");
+        return;
+    };
+    log::info!("workspace in use at start: {id} (detected)");
+    set_in_use(app, Some(id));
+    sync_live(app);
+    live::check_drift();
+    publish(app);
+}
+
+/// The workspace taken as in use at start when none is remembered, or none.
+fn set_default(app: &mut App, id: Option<String>) -> Reply {
+    if id.as_ref().is_some_and(|id| !desk_workspaces(app).iter().any(|w| w.id == *id)) {
+        return Err(RpcError::new(api::NOT_FOUND, "no such workspace on this desk"));
+    }
+    let Some(desk) = app.cfg.desks.get_mut(&app.sig) else { return refused("This desk has no workspaces") };
+    desk.default_workspace = id.clone();
+    persist(app);
+    publish(app);
+    Ok(json!({ "id": id }))
 }
 
 /// Snap back: switch to the workspace in use again, so what drifted goes back.
@@ -792,7 +880,7 @@ fn quick_saved(app: &mut App, saved: &Workspace, before: Option<Value>) {
     let created = before.is_none();
     let in_use = app.workspace.clone();
     if created {
-        app.workspace = Some(saved.id.clone());
+        set_in_use(app, Some(saved.id.clone()));
     }
     sync_live(app);
     let until = Instant::now() + QUICK_UNDO_FOR;
@@ -826,7 +914,7 @@ fn undo_quick_save(app: &mut App) {
         None => {
             desk.workspaces.retain(|v| !same(v));
             if app.workspace.as_deref() == Some(undo.id.as_str()) {
-                app.workspace = undo.in_use;
+                set_in_use(app, undo.in_use);
             }
         }
     }
@@ -838,7 +926,7 @@ fn undo_quick_save(app: &mut App) {
 
 /// A capture finished: save it as a new workspace, or over the one it was asked to update.
 fn captured(app: &mut App) {
-    let (Some(rules), Some(job)) = (switcher::take_captured(), app.capturing.take()) else { return };
+    let (Some((rules, hwnds)), Some(job)) = (switcher::take_captured(), app.capturing.take()) else { return };
     let answer = |r: Reply| {
         if let Some(tx) = &job.reply {
             let _ = tx.send(r);
@@ -848,6 +936,10 @@ fn captured(app: &mut App) {
     let existing = workspace::list(&desk.workspaces);
     // The workspace as it was, for a quick save's Undo.
     let mut before = None;
+    // The row each captured window has now, when the save stamps them.
+    let mut rows = None;
+    // "Where it is now" stamps its one window.
+    let mut stamps = None;
     let saved = match &job.into {
         Some(into) => {
             let Some(old) = existing.iter().find(|w| w.id == *into) else {
@@ -855,10 +947,16 @@ fn captured(app: &mut App) {
             };
             let updated = match job.row {
                 Some(row) => match workspace::recapture_row(old, row, &rules) {
-                    Some(updated) => updated,
+                    Some((updated, hit)) => {
+                        stamps = Some(vec![(hwnds[hit], row)]);
+                        updated
+                    }
                     None => return answer(refused("That app isn't open, so where it goes stays as it was")),
                 },
-                None => Workspace { windows: workspace::merge_capture(old, rules), ..old.clone() },
+                None => {
+                    rows = Some(workspace::capture_rows(old, &rules));
+                    Workspace { windows: workspace::merge_capture(old, rules), ..old.clone() }
+                }
             };
             let same = |v: &&mut Value| workspace::parse(v).is_some_and(|w| w.id == *into);
             if let Some(slot) = desk.workspaces.iter_mut().find(same) {
@@ -873,17 +971,33 @@ fn captured(app: &mut App) {
                 Some(name) if !name.is_empty() => workspace::unique_name(name, &names),
                 _ => workspace::next_name(&names),
             };
+            if job.quick {
+                rows = Some((0..rules.len()).collect());
+            }
             let created = Workspace { id: workspace::new_id(&ids), name, windows: rules, ..Workspace::default() };
             desk.workspaces.push(workspace::to_value(&created));
             created
         }
     };
     persist(app);
+    // The saved windows hold their rows, as after a switch, so drift and auto-apply see them at once.
+    let key = workspace::stamp_key(&saved.id);
+    if let Some(rows) = rows {
+        live::stamp(key, hwnds.into_iter().zip(rows).collect(), true);
+    } else if let Some(windows) = stamps {
+        // The drift check comes below, once the worker has the updated workspace.
+        live::stamp(key, windows, false);
+    }
     if job.quick {
         let created = before.is_none();
         quick_saved(app, &saved, before);
+        live::check_drift();
         publish(app);
         return answer(Ok(json!({ "id": saved.id, "created": created })));
+    }
+    if app.workspace.as_deref() == Some(saved.id.as_str()) {
+        sync_live(app);
+        live::check_drift();
     }
     publish(app);
     if job.reply.is_some() {
@@ -923,7 +1037,17 @@ fn update_workspace(app: &mut App, id: &str, sent: Value) -> Reply {
         )
         .collect();
     let patch = json!({ "desks": { app.sig.clone(): { "workspaces": list } } });
-    patch_config(app, &patch)
+    let moves = workspace::moved_rows(&old.windows, &checked.windows);
+    let reply = patch_config(app, &patch);
+    // Windows a switch or auto-apply stamped keep the app they were stamped for. The
+    // worker already has the new rows by now, so a window it stamps in between is
+    // remapped from the wrong row. That needs a window to open in those microseconds,
+    // and the next switch stamps everything again.
+    let unmoved = moves.len() == checked.windows.len() && moves.iter().enumerate().all(|(i, m)| *m == Some(i));
+    if reply.is_ok() && !unmoved {
+        live::restamp(workspace::stamp_key(id), moves);
+    }
+    reply
 }
 
 fn set_remap(app: &mut App, on: bool) {
@@ -968,6 +1092,9 @@ fn reload(app: &mut App) {
     let saved = app.cfg.restore_apps_saved;
     app.cfg = Config::load();
     app.cfg.restore_apps_saved = saved;
+    if forget_deleted(app) {
+        persist(app);
+    }
     log::apply(app.cfg.debug_log);
     sync_restart_apps(app);
     migrate_hotkeys(app);
@@ -1025,6 +1152,7 @@ fn patch_config(app: &mut App, patch: &Value) -> Reply {
     // What Windows' Restart apps was before Seam changed it is the tray's to keep.
     next.restore_apps_saved = app.cfg.restore_apps_saved;
     app.cfg = next;
+    forget_deleted(app);
     sync_restart_apps(app);
     persist(app);
     log::apply(app.cfg.debug_log);
@@ -1158,6 +1286,7 @@ fn run_command(app: &mut App, queued: Queued) {
             None => Err(RpcError::new(api::NOT_FOUND, "no such workspace on this desk")),
         },
         Command::WorkspaceSnapBack => snap_back(app),
+        Command::WorkspaceSetDefault(id) => set_default(app, id),
         Command::WorkspaceQuickSave => {
             if let Some(refusal) = quick_save(app, Some(reply.clone())) {
                 let _ = reply.send(refusal);
@@ -1421,6 +1550,10 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
         }
         WM_APP_DRIFT => {
             with_app(drift_checked);
+            LRESULT(0)
+        }
+        WM_APP_DETECTED => {
+            with_app(detected_in_use);
             LRESULT(0)
         }
         WM_APP_SESSION => {

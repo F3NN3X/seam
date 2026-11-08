@@ -5,6 +5,7 @@ use crate::classify::{classify, Verdict, WindowFacts};
 use crate::zones::{frame_adjust, Rect};
 use std::sync::OnceLock;
 use windows::core::{w, BOOL, PCWSTR, PWSTR};
+use windows::Win32::Foundation::ERROR_SUCCESS;
 use windows::Win32::Foundation::{CloseHandle, ERROR_ACCESS_DENIED, HANDLE, HWND, LPARAM, POINT, RECT};
 use windows::Win32::Graphics::Dwm::{DwmGetWindowAttribute, DWMWA_CLOAKED, DWMWA_EXTENDED_FRAME_BOUNDS};
 use windows::Win32::Graphics::Gdi::{
@@ -13,8 +14,12 @@ use windows::Win32::Graphics::Gdi::{
 };
 use windows::Win32::Security::{GetTokenInformation, TokenElevation, TOKEN_ELEVATION, TOKEN_QUERY};
 use windows::Win32::Storage::EnhancedStorage::PKEY_AppUserModel_ID;
+use windows::Win32::Storage::Packaging::Appx::GetPackageFamilyName;
 use windows::Win32::System::Com::CoTaskMemFree;
 use windows::Win32::System::Com::StructuredStorage::PropVariantToStringAlloc;
+use windows::Win32::System::Diagnostics::ToolHelp::{
+    CreateToolhelp32Snapshot, Process32FirstW, Process32NextW, PROCESSENTRY32W, TH32CS_SNAPPROCESS,
+};
 use windows::Win32::System::Threading::{
     GetCurrentProcess, OpenProcess, OpenProcessToken, QueryFullProcessImageNameW, PROCESS_NAME_WIN32,
     PROCESS_QUERY_LIMITED_INFORMATION,
@@ -392,6 +397,35 @@ pub fn exe_path_of(pid: u32) -> Option<String> {
         let _ = CloseHandle(process);
         let path = String::from_utf16_lossy(buf.get(..len as usize)?);
         ok.then_some(path)
+    }
+}
+
+/// Every process running now: its id and its program's file name, lower case.
+pub fn processes() -> Vec<(u32, String)> {
+    let mut list = Vec::new();
+    unsafe {
+        let Ok(snapshot) = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0) else { return list };
+        let mut entry = PROCESSENTRY32W { dwSize: size_of::<PROCESSENTRY32W>() as u32, ..Default::default() };
+        let mut more = Process32FirstW(snapshot, &mut entry).is_ok();
+        while more {
+            let len = entry.szExeFile.iter().position(|&c| c == 0).unwrap_or(entry.szExeFile.len());
+            list.push((entry.th32ProcessID, String::from_utf16_lossy(&entry.szExeFile[..len]).to_lowercase()));
+            more = Process32NextW(snapshot, &mut entry).is_ok();
+        }
+        let _ = CloseHandle(snapshot);
+    }
+    list
+}
+
+/// The package family of a Store app's process, or `None` for any other.
+pub fn package_family_of(pid: u32) -> Option<String> {
+    unsafe {
+        let process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid).ok()?;
+        let mut buf = [0u16; 256];
+        let mut len = buf.len() as u32;
+        let found = GetPackageFamilyName(process, &mut len, Some(PWSTR(buf.as_mut_ptr())));
+        let _ = CloseHandle(process);
+        (found == ERROR_SUCCESS).then(|| String::from_utf16_lossy(&buf[..(len as usize).saturating_sub(1)]))
     }
 }
 

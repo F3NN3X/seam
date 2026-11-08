@@ -547,6 +547,9 @@ impl Panel {
 
     fn show_now(&mut self, page: Page, reveal: Option<&'static str>, window: &mut Window, cx: &mut Context<Self>) {
         self.page = page;
+        if page == Page::Workspaces {
+            self.icons.retry_failed();
+        }
         let _ = std::fs::write(last_page_file(), page.title());
         self.ask_status(cx);
         if let Some(title) = reveal {

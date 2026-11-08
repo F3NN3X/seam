@@ -4,6 +4,27 @@ All notable changes to Seam. The format follows [Keep a Changelog](https://keepa
 
 ## [Unreleased]
 
+### Added
+
+- **Set as default** on a workspace's "..." menu: when no workspace is remembered, it's the one in use when Seam starts. `workspace.set_default` in the API, and `default` in `workspaces.list`.
+
+### Changed
+
+- The settings window opens a little wider, and the workspace list is narrower, so the workspace editor's columns show in full. Workspace cards show up to six app icons before "+n".
+- The workspace in use shows a green dot and "Active" in the Workspaces list, instead of "in use", and "Active, moved" once one of its windows moved.
+- After a restart or a desk change, the workspace last in use on that desk shows as active again, else the default, else the only one whose open apps are all in place. Nothing moves.
+
+### Fixed
+
+- Apps that close to the tray, such as Stream Deck, Spotify, Discord and Steam, show "Running in background" in the workspace editor instead of "Not running", and don't count as moved.
+- The "..." on each app in the workspace editor no longer gets cut off: the name and Goes to columns shrink and end in "..." instead, down to the panel's smallest size.
+
+- A workspace counts as moved as soon as you snap one of its windows with Win+arrow or use the maximize button, not only after a drag.
+- Reordering or removing apps in a workspace no longer mixes up which open window belongs to which app, so Snap back and opening apps put them in the right place.
+- An app you open while a switch is still starting the others now goes to its place once the switch ends, with **Put apps in place when they open** on.
+- After a quick save, **Update from screen** or **Where it is now**, moving a saved window counts as moved at once, and reopening a saved app puts it back, without switching first.
+- A workspace app icon that couldn't load is tried again when you come back to the Workspaces page a minute later.
+
 ## [0.6.0] - 2026-11-08
 
 ### Added

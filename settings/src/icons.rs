@@ -7,20 +7,39 @@ use seam::appicon::{self, Icon};
 use seam::workspace::Rule;
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 /// Asked for at twice the drawn size, so it stays sharp at 200% scaling.
 const REQUEST_PX: i32 = 32;
+/// An icon that couldn't be had is asked for again at most this often.
+const RETRY_AFTER: Duration = Duration::from_secs(60);
 
-/// Icons by app identity, kept for the life of the panel. `None` while one loads, and
-/// for good if it can't be had; both draw the placeholder.
+/// One app's icon. Loading and failed both draw the placeholder.
+enum Slot {
+    Loading,
+    Ready(Arc<Image>),
+    /// Since when, so it's asked for again only after a while.
+    Failed(Instant),
+}
+
+/// Icons by app identity, kept for the life of the panel.
 #[derive(Default)]
 pub struct Icons {
-    by_app: HashMap<String, Option<Arc<Image>>>,
+    by_app: HashMap<String, Slot>,
 }
 
 impl Icons {
     pub fn get(&self, rule: &Rule) -> Option<Arc<Image>> {
-        self.by_app.get(&identity(rule)).cloned().flatten()
+        match self.by_app.get(&identity(rule)) {
+            Some(Slot::Ready(image)) => Some(image.clone()),
+            _ => None,
+        }
+    }
+
+    /// The Workspaces page shows again: icons that failed a minute or more ago are
+    /// forgotten, so the next draw asks for them again.
+    pub fn retry_failed(&mut self) {
+        self.by_app.retain(|_, slot| !matches!(slot, Slot::Failed(at) if at.elapsed() >= RETRY_AFTER));
     }
 }
 
@@ -39,17 +58,20 @@ pub fn request(panel: &mut Panel, rules: &[Rule], cx: &mut Context<Panel>) {
         if key.is_empty() || panel.icons.by_app.contains_key(&key) {
             continue;
         }
-        panel.icons.by_app.insert(key.clone(), None);
+        panel.icons.by_app.insert(key.clone(), Slot::Loading);
         let (exe, aumid) = (rule.exe.clone(), rule.aumid.clone());
         cx.spawn(async move |this, cx| {
             let image = cx
                 .background_executor()
                 .spawn(async move { appicon::load(&exe, aumid.as_deref(), REQUEST_PX).map(|i| Arc::new(to_image(&i))) })
                 .await;
-            let _ = this.update(cx, |panel, cx| {
-                if image.is_some() {
-                    panel.icons.by_app.insert(key, image);
+            let _ = this.update(cx, |panel, cx| match image {
+                Some(image) => {
+                    panel.icons.by_app.insert(key, Slot::Ready(image));
                     cx.notify();
+                }
+                None => {
+                    panel.icons.by_app.insert(key, Slot::Failed(Instant::now()));
                 }
             });
         })

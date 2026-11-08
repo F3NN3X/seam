@@ -313,6 +313,8 @@ pub enum RowState {
     /// Minimized, and the workspace wants it shown.
     Minimized,
     NotRunning,
+    /// Its program runs with no window, as an app closed to the tray does.
+    Background,
     /// Runs as administrator, so Seam can't move it.
     CantMove,
 }
@@ -327,6 +329,14 @@ pub struct RowStatus {
 /// Something a switch would put back: Snap back has work to do.
 pub fn drifted(rows: &[RowStatus]) -> bool {
     rows.iter().any(|r| matches!(r.state, RowState::Moved | RowState::Minimized))
+}
+
+/// The workspace looks like the one in use: it has an app with a window, and every
+/// app with a window is where it puts it. One in the background counts as neither.
+pub fn all_in_place(rows: &[RowStatus]) -> bool {
+    let mut running =
+        rows.iter().filter(|r| !matches!(r.state, RowState::NotRunning | RowState::Background)).peekable();
+    running.peek().is_some() && running.all(|r| r.state == RowState::InPlace)
 }
 
 /// A random id that isn't in `taken`.
@@ -484,9 +494,44 @@ pub fn merge_capture(old: &Workspace, fresh: Vec<Rule>) -> Vec<Rule> {
     merged
 }
 
+/// For each window of a capture, the row `merge_capture` gives it.
+pub fn capture_rows(old: &Workspace, fresh: &[Rule]) -> Vec<usize> {
+    let mut rows = vec![None; fresh.len()];
+    for (row, hit) in assign(&old.windows, &as_candidates(fresh)).into_iter().enumerate() {
+        if let Some(i) = hit {
+            rows[i as usize] = Some(row);
+        }
+    }
+    let mut next = old.windows.len()..;
+    rows.into_iter().map(|row| row.or_else(|| next.next()).unwrap_or_default()).collect()
+}
+
+/// Where each row of `old` went in `new` after an edit reordered, removed or added
+/// rows: the same rule first, then the same app the way a switch matches, for a
+/// row that also changed. `None` for a row that was removed.
+pub fn moved_rows(old: &[Rule], new: &[Rule]) -> Vec<Option<usize>> {
+    let mut taken = vec![false; new.len()];
+    let mut moves: Vec<Option<usize>> = old
+        .iter()
+        .map(|rule| {
+            let j = (0..new.len()).find(|j| !taken[*j] && new[*j] == *rule)?;
+            taken[j] = true;
+            Some(j)
+        })
+        .collect();
+    let left: Vec<usize> = (0..new.len()).filter(|j| !taken[*j]).collect();
+    let changed: Vec<usize> = (0..old.len()).filter(|i| moves[*i].is_none()).collect();
+    let rules: Vec<Rule> = changed.iter().map(|i| old[*i].clone()).collect();
+    let cands = as_candidates(&left.iter().map(|j| new[*j].clone()).collect::<Vec<_>>());
+    for (i, hit) in changed.into_iter().zip(assign(&rules, &cands)) {
+        moves[i] = hit.map(|k| left[k as usize]);
+    }
+    moves
+}
+
 /// "Where it is now" for one row: the place of the window a capture has for it,
-/// or `None` when the app has no window open.
-pub fn recapture_row(old: &Workspace, row: usize, fresh: &[Rule]) -> Option<Workspace> {
+/// and which of the capture's windows that is, or `None` when the app has no window open.
+pub fn recapture_row(old: &Workspace, row: usize, fresh: &[Rule]) -> Option<(Workspace, usize)> {
     let rule = old.windows.get(row)?;
     let hit = assign(std::slice::from_ref(rule), &as_candidates(fresh)).into_iter().next().flatten()?;
     let from = &fresh[hit as usize];
@@ -495,7 +540,7 @@ pub fn recapture_row(old: &Workspace, row: usize, fresh: &[Rule]) -> Option<Work
         updated.windows.iter_mut().for_each(|r| r.focused = false);
     }
     updated.windows[row].take_place(from);
-    Some(updated)
+    Some((updated, hit as usize))
 }
 
 /// The rows a switch starts, in start order, cut into stages. A stage ends at a

@@ -433,7 +433,7 @@ pub fn render(panel: &mut Panel, window: &mut Window, cx: &mut Context<Panel>) -
     let subtitle = format!("Hold {} while you drag a window to drop it into a zone", key_label(&zones_cfg.show_key));
     let view = cx.entity();
 
-    let on = switch("zones-on", zones_cfg.enabled, window, cx, {
+    let on = switch("zones-on", "Zones", zones_cfg.enabled, window, cx, {
         let view = view.clone();
         move |on, window, cx| {
             view.update(cx, |panel, cx| panel.patch(json!({ "zones": { "enabled": on } }), window, cx))
@@ -461,7 +461,7 @@ pub fn render(panel: &mut Panel, window: &mut Window, cx: &mut Context<Panel>) -
 
     let show_at = KEYS.iter().position(|(k, _)| *k == zones_cfg.show_key).unwrap_or(0);
     let span_at = KEYS.iter().position(|(k, _)| *k == zones_cfg.span_key).unwrap_or(1);
-    let show = ui::segmented("zone-show-key", &["Shift", "Ctrl", "Alt"], show_at, window, cx, {
+    let show = ui::segmented("zone-show-key", "Show zones", &["Shift", "Ctrl", "Alt"], show_at, window, cx, {
         let view = view.clone();
         move |i, window, cx| {
             // The span key can't be the same key, so it moves to the next one.
@@ -482,7 +482,7 @@ pub fn render(panel: &mut Panel, window: &mut Window, cx: &mut Context<Panel>) -
         (at, why[SPAN_ORDER[at]])
     });
     let span_selected = SPAN_ORDER.iter().position(|i| *i == span_at).unwrap_or(0);
-    let span = ui::choice("zone-span-key", span_labels, span_blocked, span_selected, window, cx, {
+    let span = ui::choice("zone-span-key", "Span zones", span_labels, span_blocked, span_selected, window, cx, {
         let view = view.clone();
         move |i, window, cx| {
             let key = KEYS[SPAN_ORDER[i]].0;
@@ -497,17 +497,17 @@ pub fn render(panel: &mut Panel, window: &mut Window, cx: &mut Context<Panel>) -
         .child(ends("0"))
         .child(Slider::new(&panel.gap).horizontal().w(px(160.)))
         .child(ends("32"));
-    let restore = switch("zone-restore", zones_cfg.restore_size, window, cx, {
+    let restore = switch("zone-restore", "Restore size when dragged out", zones_cfg.restore_size, window, cx, {
         let view = view.clone();
         move |on, window, cx| {
             view.update(cx, |panel, cx| panel.patch(json!({ "zones": { "restore_size": on } }), window, cx))
         }
     });
-    let refit = switch("zone-refit", zones_cfg.refit, window, cx, {
+    let refit = switch("zone-refit", "Keep windows in their zones", zones_cfg.refit, window, cx, {
         let view = view.clone();
         move |on, window, cx| view.update(cx, |panel, cx| panel.patch(json!({ "zones": { "refit": on } }), window, cx))
     });
-    let on_screen = switch("zone-on-screen", zones_cfg.edit_on_screen, window, cx, {
+    let on_screen = switch("zone-on-screen", "Edit layouts on the screen", zones_cfg.edit_on_screen, window, cx, {
         let view = view.clone();
         move |on, window, cx| {
             view.update(cx, |panel, cx| panel.patch(json!({ "zones": { "edit_on_screen": on } }), window, cx))
@@ -573,49 +573,82 @@ pub fn render(panel: &mut Panel, window: &mut Window, cx: &mut Context<Panel>) -
         (None, false) => None,
     };
     let windows_cfg = panel.config.windows.clone();
-    let border = switch("focus-border", windows_cfg.focus_border, window, cx, {
+    let border = switch("focus-border", "Focus border", windows_cfg.focus_border, window, cx, {
         let view = view.clone();
         move |on, window, cx| {
             view.update(cx, |panel, cx| panel.patch(json!({ "windows": { "focus_border": on } }), window, cx))
         }
     });
-    let manual = switch("other-wm", other_wm, window, cx, {
+    let manual = switch("other-wm", "Another window manager handles my windows", other_wm, window, cx, {
         let view = view.clone();
         move |on, window, cx| {
             view.update(cx, |panel, cx| panel.patch(json!({ "windows": { "other_wm": on } }), window, cx))
         }
     });
-    let notify_close = switch("notify-pinned-close", windows_cfg.notify_pinned_close, window, cx, {
-        let view = view.clone();
-        move |on, window, cx| {
-            view.update(cx, |panel, cx| panel.patch(json!({ "windows": { "notify_pinned_close": on } }), window, cx))
-        }
-    });
-    let pins_stay = switch("pins-stay-on-switch", windows_cfg.pins_stay_on_switch, window, cx, {
-        let view = view.clone();
-        move |on, window, cx| {
-            view.update(cx, |panel, cx| panel.patch(json!({ "windows": { "pins_stay_on_switch": on } }), window, cx))
-        }
-    });
+    let notify_close = switch(
+        "notify-pinned-close",
+        "Tell me when a pinned window closes",
+        windows_cfg.notify_pinned_close,
+        window,
+        cx,
+        {
+            let view = view.clone();
+            move |on, window, cx| {
+                view.update(cx, |panel, cx| {
+                    panel.patch(json!({ "windows": { "notify_pinned_close": on } }), window, cx)
+                })
+            }
+        },
+    );
+    let pins_stay = switch(
+        "pins-stay-on-switch",
+        "Pinned windows stay when I switch workspaces",
+        windows_cfg.pins_stay_on_switch,
+        window,
+        cx,
+        {
+            let view = view.clone();
+            move |on, window, cx| {
+                view.update(cx, |panel, cx| {
+                    panel.patch(json!({ "windows": { "pins_stay_on_switch": on } }), window, cx)
+                })
+            }
+        },
+    );
     let size_mode = panel.config.window_size_on_move;
     let size_at = SIZE_MODES.iter().position(|m| *m == size_mode).unwrap_or(0);
-    let size_choice = ui::segmented("window-size-on-move", &SIZE_LABELS, size_at, window, cx, {
-        let view = view.clone();
-        move |i, window, cx| {
-            let mode = SIZE_MODES.get(i).copied().unwrap_or_default();
-            view.update(cx, |panel, cx| panel.patch(json!({ "window_size_on_move": mode }), window, cx))
-        }
-    });
+    let size_choice = ui::segmented(
+        "window-size-on-move",
+        "When a window moves to another screen",
+        &SIZE_LABELS,
+        size_at,
+        window,
+        cx,
+        {
+            let view = view.clone();
+            move |i, window, cx| {
+                let mode = SIZE_MODES.get(i).copied().unwrap_or_default();
+                view.update(cx, |panel, cx| panel.patch(json!({ "window_size_on_move": mode }), window, cx))
+            }
+        },
+    );
     // Only Seam's own sizes apply to a drag, so with Windows' scaling it can't be used.
     let scaled = size_mode == WindowSize::Windows;
-    let on_drag = switch("window-size-on-drag", panel.config.window_size_on_drag, window, cx, {
-        let view = view.clone();
-        move |on, window, cx| {
-            if !scaled {
-                view.update(cx, |panel, cx| panel.patch(json!({ "window_size_on_drag": on }), window, cx));
+    let on_drag = switch(
+        "window-size-on-drag",
+        "Also when I drag a window to another screen",
+        panel.config.window_size_on_drag,
+        window,
+        cx,
+        {
+            let view = view.clone();
+            move |on, window, cx| {
+                if !scaled {
+                    view.update(cx, |panel, cx| panel.patch(json!({ "window_size_on_drag": on }), window, cx));
+                }
             }
-        }
-    });
+        },
+    );
     let other_about = match &detected {
         Some(name) => format!("{} found running", state::other_wm_title(name)),
         None => "Snapping and window moves step aside. The pointer remap keeps working.".to_string(),
@@ -690,23 +723,24 @@ pub fn render(panel: &mut Panel, window: &mut Window, cx: &mut Context<Panel>) -
     let selected = saved.as_ref().map_or(Template::None, |l| l.template);
     let labels: Vec<SharedString> =
         panel.mons.iter().enumerate().map(|(i, m)| format!("{}  {}", i + 1, m.name).into()).collect();
-    let tabs = ui::choice("zone-screen", labels, None, panel.zone_screen.min(panel.mons.len() - 1), window, cx, {
-        let view = view.clone();
-        move |i, window, cx| {
-            view.update(cx, |panel, cx| {
-                // An editor that's open carries on with the screen picked.
-                let editing = panel.editor.is_some();
-                let then: zone_editor::Then = Rc::new(move |panel, window, cx| {
-                    panel.zone_screen = i;
-                    if editing {
-                        zone_editor::open(panel, window, cx);
-                    }
-                    cx.notify();
-                });
-                zone_editor::guard(panel, window, cx, then);
-            })
-        }
-    });
+    let tabs =
+        ui::choice("zone-screen", "Screen", labels, None, panel.zone_screen.min(panel.mons.len() - 1), window, cx, {
+            let view = view.clone();
+            move |i, window, cx| {
+                view.update(cx, |panel, cx| {
+                    // An editor that's open carries on with the screen picked.
+                    let editing = panel.editor.is_some();
+                    let then: zone_editor::Then = Rc::new(move |panel, window, cx| {
+                        panel.zone_screen = i;
+                        if editing {
+                            zone_editor::open(panel, window, cx);
+                        }
+                        cx.notify();
+                    });
+                    zone_editor::guard(panel, window, cx, then);
+                })
+            }
+        });
 
     let mut tiles =
         div().flex().flex_wrap().content_start().w(px(TILE_WIDTH * 2. + TILE_GAP * 2. + 4.)).gap(px(TILE_GAP));

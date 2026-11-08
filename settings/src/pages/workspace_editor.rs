@@ -421,7 +421,14 @@ fn stage_line(p: Palette) -> Div {
         .child(div().flex_1().h(px(1.)).bg(p.hairline_strong))
 }
 
-fn goes_menu(panel: &Panel, i: usize, ws: &Workspace, screens: &[Screen], cx: &mut Context<Panel>) -> AnyElement {
+fn goes_menu(
+    panel: &Panel,
+    i: usize,
+    ws: &Workspace,
+    screens: &[Screen],
+    title: &str,
+    cx: &mut Context<Panel>,
+) -> AnyElement {
     let rule = &ws.windows[i];
     let current = goes_to(rule, screens);
     let weak = cx.entity().downgrade();
@@ -456,6 +463,7 @@ fn goes_menu(panel: &Panel, i: usize, ws: &Workspace, screens: &[Screen], cx: &m
     };
     ui::secondary(("goes-to", i), current.clone(), cx)
         .dropdown_caret(true)
+        .accessibility_label(format!("Where {title} goes: {current}"))
         .w_full()
         .tooltip(current)
         .dropdown_menu(menu)
@@ -492,7 +500,7 @@ fn details(panel: &mut Panel, i: usize, ws: &Workspace, window: &mut Window, cx:
     let id = ws.id.clone();
     let at = SHOW_AS.iter().position(|(_, s)| *s == rule.shown).unwrap_or(0);
     let labels: Vec<&'static str> = SHOW_AS.iter().map(|(label, _)| *label).collect();
-    let show = ui::segmented(("show-as", i), &labels, at, window, cx, {
+    let show = ui::segmented(("show-as", i), "Show as", &labels, at, window, cx, {
         let (view, id) = (view.clone(), id.clone());
         move |k, window, cx| {
             let (label, shown) = SHOW_AS[k.min(SHOW_AS.len() - 1)];
@@ -518,16 +526,23 @@ fn details(panel: &mut Panel, i: usize, ws: &Workspace, window: &mut Window, cx:
         .child(ends("0 s"))
         .child(Slider::new(&panel.editing.delay).horizontal().w(px(160.)))
         .child(ends("30 s"));
-    let wait = switch(("wait-for-window", i), rule.wait_for_window, window, cx, move |on, window, cx| {
-        let id = id.clone();
-        view.update(cx, |panel, cx| {
-            let note = |title: &str| match on {
-                true => format!("The next app waits for {title}"),
-                false => format!("The next app doesn't wait for {title}"),
-            };
-            update_row(panel, &id, i, note, window, cx, |rule| rule.wait_for_window = on);
-        });
-    });
+    let wait = switch(
+        ("wait-for-window", i),
+        "Wait for this app's window before opening the next",
+        rule.wait_for_window,
+        window,
+        cx,
+        move |on, window, cx| {
+            let id = id.clone();
+            view.update(cx, |panel, cx| {
+                let note = |title: &str| match on {
+                    true => format!("The next app waits for {title}"),
+                    false => format!("The next app doesn't wait for {title}"),
+                };
+                update_row(panel, &id, i, note, window, cx, |rule| rule.wait_for_window = on);
+            });
+        },
+    );
     let delay_about = match value {
         0 => "Opens as soon as its stage starts".to_string(),
         ms => format!("{} after its stage starts", seconds(ms)),
@@ -630,7 +645,7 @@ fn window_row(
         .flex()
         .flex_col()
         .gap(px(2.))
-        .child(goes_menu(panel, i, ws, screens, cx))
+        .child(goes_menu(panel, i, ws, screens, &title, cx))
         .when(opens, |d| d.child(div().text_size(px(12.)).text_color(p.muted).truncate().child("Will open")));
     let main = div()
         .flex()

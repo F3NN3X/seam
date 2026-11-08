@@ -21,6 +21,7 @@ All notable changes to Seam. The format follows [Keep a Changelog](https://keepa
 
 ### Fixed
 
+- A screen reader now reads the Seam window's sidebar rows, switches, choices, pause button and "..." buttons by name, such as "More for Desk" and "Remap pointer at borders, switch, on".
 - Apps that close to the tray, such as Stream Deck, Spotify, Discord and Steam, show "Running in background" in the workspace editor instead of "Not running", and don't count as moved.
 - The "..." on each app in the workspace editor no longer gets cut off: the name and Goes to columns shrink and end in "..." instead, down to the panel's smallest size.
 

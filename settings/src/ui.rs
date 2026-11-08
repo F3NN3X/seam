@@ -196,6 +196,7 @@ pub fn dot(color: Hsla, filled: bool) -> Div {
 
 pub fn switch(
     id: impl Into<ElementId>,
+    label: impl Into<SharedString>,
     on: bool,
     window: &mut Window,
     cx: &mut App,
@@ -210,6 +211,9 @@ pub fn switch(
         .id(id)
         .track_focus(&focus)
         .tab_index(0)
+        .role(Role::Switch)
+        .aria_label(label)
+        .aria_toggled(if on { Toggled::True } else { Toggled::False })
         .flex()
         .flex_none()
         .items_center()
@@ -238,6 +242,7 @@ pub fn switch(
 /// A choice of a few short options. Arrow keys move the choice.
 pub fn segmented(
     id: impl Into<ElementId>,
+    label: impl Into<SharedString>,
     options: &[&'static str],
     selected: usize,
     window: &mut Window,
@@ -245,13 +250,15 @@ pub fn segmented(
     change: impl Fn(usize, &mut Window, &mut App) + 'static,
 ) -> impl IntoElement {
     let labels = options.iter().map(|label| SharedString::from(*label)).collect();
-    choice(id, labels, None, selected, window, cx, change)
+    choice(id, label, labels, None, selected, window, cx, change)
 }
 
 /// A segmented control whose labels are made at run time, and whose `blocked`
 /// option can't be picked and says why.
+#[allow(clippy::too_many_arguments)]
 pub fn choice(
     id: impl Into<ElementId>,
+    label: impl Into<SharedString>,
     options: Vec<SharedString>,
     blocked: Option<(usize, &'static str)>,
     selected: usize,
@@ -284,6 +291,8 @@ pub fn choice(
         .id(id)
         .track_focus(&focus)
         .tab_index(0)
+        .role(Role::RadioGroup)
+        .aria_label(label)
         .flex()
         .gap(px(2.))
         .p(px(4.))
@@ -307,6 +316,9 @@ pub fn choice(
         let why = blocked.filter(|(at, _)| *at == i).map(|(_, why)| why);
         let segment = div()
             .id(i)
+            .role(Role::RadioButton)
+            .aria_label(label.clone())
+            .aria_toggled(if i == selected { Toggled::True } else { Toggled::False })
             .px(px(12.))
             .py(px(4.))
             .rounded(px(6.))

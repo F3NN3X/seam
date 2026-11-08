@@ -306,6 +306,7 @@ pub fn group(panel: &Panel, window: &mut Window, cx: &mut Context<Panel>) -> Any
         .on_click(cx.listener(|panel, _, window, cx| check_now(panel, window, cx)));
     let daily = switch(
         "update-daily",
+        "Check for updates every day",
         panel.config.updates.auto_check,
         window,
         cx,
@@ -313,6 +314,7 @@ pub fn group(panel: &Panel, window: &mut Window, cx: &mut Context<Panel>) -> Any
     );
     let on_their_own = switch(
         "update-auto-install",
+        "Install updates on their own",
         panel.config.updates.auto_install,
         window,
         cx,
@@ -320,6 +322,7 @@ pub fn group(panel: &Panel, window: &mut Window, cx: &mut Context<Panel>) -> Any
     );
     let prerelease = switch(
         "update-prerelease",
+        "Include pre-releases",
         panel.config.updates.prerelease,
         window,
         cx,

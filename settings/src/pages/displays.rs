@@ -288,6 +288,7 @@ fn desk_rows(panel: &Panel, window: &Window, cx: &mut Context<Panel>) -> Vec<Any
         let more = ui::secondary(("more", i), "", cx)
             .ghost()
             .icon(Icon::new(assets::IconName::Ellipsis))
+            .accessibility_label(format!("More for {}", desk.name))
             .dropdown_menu(move |menu, _, _| {
                 let (rename_sig, name) = (sig.clone(), desk.name.clone());
                 let (forget_sig, forget_desk) = (sig.clone(), desk.clone());
@@ -407,13 +408,20 @@ pub fn render(panel: &mut Panel, window: &mut Window, cx: &mut Context<Panel>) -
     }
 
     let view = cx.entity();
-    let remap = switch("remap", panel.config.enabled, window, cx, {
+    let remap = switch("remap", "Remap pointer at borders", panel.config.enabled, window, cx, {
         let view = view.clone();
         move |on, window, cx| view.update(cx, |panel, cx| panel.patch(json!({ "enabled": on }), window, cx))
     });
-    let also_align = switch("align-arrangement", panel.config.align_arrangement, window, cx, move |on, window, cx| {
-        view.update(cx, |panel, cx| panel.patch(json!({ "align_arrangement": on }), window, cx));
-    });
+    let also_align = switch(
+        "align-arrangement",
+        "Also align Windows arrangement",
+        panel.config.align_arrangement,
+        window,
+        cx,
+        move |on, window, cx| {
+            view.update(cx, |panel, cx| panel.patch(json!({ "align_arrangement": on }), window, cx));
+        },
+    );
     let pointer = card(
         vec![
             row("Remap pointer at borders", Some("Cross where the screens physically meet".into()), remap, p),

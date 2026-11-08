@@ -130,8 +130,13 @@ pub fn render(panel: &mut Panel, window: &mut Window, cx: &mut Context<Panel>) -
     let locked = packaged && panel.startup.is_none_or(Startup::locked);
     let blocked = packaged && panel.startup.is_some_and(Startup::locked);
     let start_on = if packaged { panel.startup.is_some_and(Startup::is_on) } else { autostart::is_enabled() };
-    let start_with_windows =
-        div().opacity(if locked { 0.5 } else { 1. }).child(switch("autostart", start_on, window, cx, {
+    let start_with_windows = div().opacity(if locked { 0.5 } else { 1. }).child(switch(
+        "autostart",
+        "Start with Windows",
+        start_on,
+        window,
+        cx,
+        {
             let view = view.clone();
             move |on, _, cx| {
                 if locked {
@@ -146,16 +151,24 @@ pub fn render(panel: &mut Panel, window: &mut Window, cx: &mut Context<Panel>) -
                 }
                 view.update(cx, |_, cx| cx.notify());
             }
-        }));
+        },
+    ));
     let start_about = if blocked {
         "Turned off in Windows Settings, Startup apps"
     } else {
         "Seam waits in the tray after you sign in"
     };
-    let offer =
-        switch("ask-new-desks", panel.config.ask_new_desks, window, cx, setter(|on| json!({ "ask_new_desks": on })));
+    let offer = switch(
+        "ask-new-desks",
+        "Offer to line up new screens",
+        panel.config.ask_new_desks,
+        window,
+        cx,
+        setter(|on| json!({ "ask_new_desks": on })),
+    );
     let restore = switch(
         "restore-session",
+        "Offer to restore my windows after I sign in",
         panel.config.restore_session,
         window,
         cx,
@@ -164,6 +177,7 @@ pub fn render(panel: &mut Panel, window: &mut Window, cx: &mut Context<Panel>) -
     let seam_reopens = panel.config.restore_apps == RestoreApps::Seam;
     let reopen_choice = ui::segmented(
         "restore-apps",
+        "Who reopens the apps",
         &["Windows reopens them", "Seam reopens them"],
         usize::from(seam_reopens),
         window,
@@ -193,19 +207,27 @@ pub fn render(panel: &mut Panel, window: &mut Window, cx: &mut Context<Panel>) -
         ui::note("Windows' Restart apps is on again, so apps may open twice", Some(open), p)
     });
     let selected = usize::from(panel.config.tray_click == TrayClick::LineUp);
-    let left_click = ui::segmented("tray-click", &["Open Seam", "Start Line Up"], selected, window, cx, {
-        let view = view.clone();
-        move |i, window, cx| {
-            let value = if i == 0 { "open" } else { "line_up" };
-            view.update(cx, |panel, cx| panel.patch(json!({ "tray_click": value }), window, cx));
-        }
-    });
+    let left_click =
+        ui::segmented("tray-click", "Left-click", &["Open Seam", "Start Line Up"], selected, window, cx, {
+            let view = view.clone();
+            move |i, window, cx| {
+                let value = if i == 0 { "open" } else { "line_up" };
+                view.update(cx, |panel, cx| panel.patch(json!({ "tray_click": value }), window, cx));
+            }
+        });
     let connected = panel.state.as_ref().map_or(0, |s| s.clients.iter().filter(|c| *c != "panel").count());
     let api_about =
         format!("Stream Deck and tools on this PC can read status and switch workspaces. {connected} connected");
-    let api =
-        switch("api-enabled", panel.config.api.enabled, window, cx, setter(|on| json!({ "api": { "enabled": on } })));
-    let debug_log = switch("debug-log", panel.config.debug_log, window, cx, setter(|on| json!({ "debug_log": on })));
+    let api = switch(
+        "api-enabled",
+        "Let other apps control Seam",
+        panel.config.api.enabled,
+        window,
+        cx,
+        setter(|on| json!({ "api": { "enabled": on } })),
+    );
+    let debug_log =
+        switch("debug-log", "Debug log", panel.config.debug_log, window, cx, setter(|on| json!({ "debug_log": on })));
 
     let folder = div()
         .flex()
@@ -244,18 +266,20 @@ pub fn render(panel: &mut Panel, window: &mut Window, cx: &mut Context<Panel>) -
         .enumerate()
         .map(|(i, name)| {
             let name = name.clone();
-            let remove = ui::secondary(("never-manage", i), "Remove", cx).on_click(cx.listener({
-                let name = name.clone();
-                move |panel, _, window, cx| {
-                    let before = panel.config.zones.exclude.clone();
-                    let rest: Vec<String> = before.iter().filter(|x| **x != name).cloned().collect();
-                    panel.patch(json!({ "zones": { "exclude": rest } }), window, cx);
-                    let undo = move |panel: &mut Panel, window: &mut Window, cx: &mut Context<Panel>| {
-                        panel.patch(json!({ "zones": { "exclude": before.clone() } }), window, cx)
-                    };
-                    panel.offer_undo(format!("Removed {name}"), undo, window, cx);
-                }
-            }));
+            let remove = ui::secondary(("never-manage", i), "Remove", cx)
+                .accessibility_label(format!("Remove {name}"))
+                .on_click(cx.listener({
+                    let name = name.clone();
+                    move |panel, _, window, cx| {
+                        let before = panel.config.zones.exclude.clone();
+                        let rest: Vec<String> = before.iter().filter(|x| **x != name).cloned().collect();
+                        panel.patch(json!({ "zones": { "exclude": rest } }), window, cx);
+                        let undo = move |panel: &mut Panel, window: &mut Window, cx: &mut Context<Panel>| {
+                            panel.patch(json!({ "zones": { "exclude": before.clone() } }), window, cx)
+                        };
+                        panel.offer_undo(format!("Removed {name}"), undo, window, cx);
+                    }
+                }));
             row(name, None, remove, p)
         })
         .collect();

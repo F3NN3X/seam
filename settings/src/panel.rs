@@ -593,6 +593,9 @@ impl Panel {
             .id(id)
             .track_focus(&focus)
             .tab_index(0)
+            .role(Role::Tab)
+            .aria_label(page.title())
+            .aria_selected(active)
             .flex()
             .items_center()
             .gap(px(10.))
@@ -649,6 +652,7 @@ impl Panel {
             .ghost()
             .icon(Icon::new(icon).size(px(16.)).text_color(p.secondary))
             .tooltip(label)
+            .accessibility_label(label)
             .on_click(cx.listener(move |this, _, window, cx| {
                 this.command("remap.set", json!({ "on": !enabled }), window, cx);
             }));

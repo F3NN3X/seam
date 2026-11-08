@@ -13,14 +13,20 @@ on:
 permissions:
   contents: write
 
+# A second tag waits for the first. A cancelled release can leave half a draft.
+concurrency:
+  group: release
+  cancel-in-progress: false
+
 jobs:
   release:
     runs-on: windows-latest
+    timeout-minutes: 45
     environment: release
     env:
       SIGN: ${{ secrets.MINISIGN_SECRET_KEY != '' }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Versions match the tag
         shell: bash
@@ -62,7 +68,13 @@ jobs:
       - name: Install minisign
         if: env.SIGN == 'true'
         shell: pwsh
-        run: choco install minisign --version 0.8.0 --no-progress -y
+        run: |
+          foreach ($try in 1..3) {
+            choco install minisign --version 0.8.0 --no-progress -y
+            if ($LASTEXITCODE -eq 0) { exit 0 }
+            Start-Sleep -Seconds (10 * $try)
+          }
+          exit 1
 
       - name: Sign manifest
         if: env.SIGN == 'true'

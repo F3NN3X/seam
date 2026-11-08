@@ -1,7 +1,7 @@
 {
 	"UUID": "co.f3nn3x.seam",
 	"Name": "Seam",
-	"Version": "0.6.0.0",
+	"Version": "0.6.1.0",
 	"Author": "F3NN3X",
 	"Description": "Switch workspaces, line up screens, and pause the pointer remap or the zones from a Stream Deck key. Needs Seam running.",
 	"URL": "https://github.com/F3NN3X/seam",
@@ -165,6 +165,38 @@
 				{
 					"Image": "imgs/actions/window-focus/key",
 					"Title": "Focus window",
+					"TitleAlignment": "bottom"
+				}
+			]
+		},
+		{
+			"UUID": "co.f3nn3x.seam.pin-top",
+			"Name": "Pin on top",
+			"Tooltip": "Keep the focused window above the others, or press again to unpin it.",
+			"Icon": "imgs/actions/pin-top/icon",
+			"Controllers": [
+				"Keypad"
+			],
+			"States": [
+				{
+					"Image": "imgs/actions/pin-top/key",
+					"Title": "Pin on top",
+					"TitleAlignment": "bottom"
+				}
+			]
+		},
+		{
+			"UUID": "co.f3nn3x.seam.release",
+			"Name": "Release pinned windows",
+			"Tooltip": "Take back every pin and focus border Seam set.",
+			"Icon": "imgs/actions/release/icon",
+			"Controllers": [
+				"Keypad"
+			],
+			"States": [
+				{
+					"Image": "imgs/actions/release/key",
+					"Title": "Release pins",
 					"TitleAlignment": "bottom"
 				}
 			]

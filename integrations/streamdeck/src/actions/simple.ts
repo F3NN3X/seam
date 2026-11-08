@@ -29,6 +29,21 @@ export class PreviousZone extends Plain {
 	}
 }
 
+/** Pins the focused window on top, or unpins it. State doesn't say which window is pinned, so the key has one look. */
+@action({ UUID: "co.f3nn3x.seam.pin-top" })
+export class PinOnTop extends Plain {
+	protected async press(): Promise<void> {
+		await seam.call("window.pin", { kind: "top" });
+	}
+}
+
+@action({ UUID: "co.f3nn3x.seam.release" })
+export class ReleasePinned extends Plain {
+	protected async press(): Promise<void> {
+		await seam.call("wm.release");
+	}
+}
+
 /** Lit while the pointer remap is running. With no lined-up borders it counts as not running. */
 @action({ UUID: "co.f3nn3x.seam.remap" })
 export class Remap extends SeamAction {

@@ -82,6 +82,29 @@ const windowFocus = (p) => {
   return { ...base, h: 28, svg: base.svg + from + to + arrowBelow(p) };
 };
 
+/** A window on the right screen with a pin above it, the way it stays above the others. */
+const pinTop = (p) => {
+  const base = mark(p);
+  const window = `<rect x="21" y="9" width="8" height="8" rx="1" fill="${p.line}"/>`;
+  const pin =
+    `<circle cx="25" cy="4" r="2" fill="${p.seam}"/>` +
+    `<line x1="25" y1="6" x2="25" y2="9" stroke="${p.line}" stroke-width="${Math.min(p.width, 1)}"/>`;
+  return { ...base, svg: base.svg + window + pin };
+};
+
+/** Two outlined windows, the pins taken off them. */
+const release = (p) => {
+  const base = mark(p);
+  const thin = Math.min(p.width, 1);
+  const windows =
+    `<rect x="3.5" y="6.5" width="5" height="7" rx="1" fill="none" stroke="${p.line}" stroke-width="${thin}"/>` +
+    `<rect x="21.5" y="6.5" width="7" height="8" rx="1" fill="none" stroke="${p.line}" stroke-width="${thin}"/>`;
+  const arrow =
+    `<line x1="16" y1="27" x2="16" y2="21" stroke="${p.line}" stroke-width="${p.width}" stroke-linecap="round"/>` +
+    `<polyline points="13.5,23.5 16,21 18.5,23.5" fill="none" stroke="${p.line}" stroke-width="${p.width}" stroke-linecap="round" stroke-linejoin="round"/>`;
+  return { ...base, h: 28, svg: base.svg + windows + arrow };
+};
+
 const place = (glyph, scale, cx, cy) =>
   `<g transform="translate(${cx - (glyph.w * scale) / 2} ${cy - (glyph.h * scale) / 2}) scale(${scale})">${glyph.svg}</g>`;
 
@@ -116,6 +139,8 @@ const actions = {
   desk: { draw: mark, states: ["lit"] },
   "window-move": { draw: windowMove, states: ["lit"] },
   "window-focus": { draw: windowFocus, states: ["lit"] },
+  "pin-top": { draw: pinTop, states: ["lit"] },
+  release: { draw: release, states: ["lit"] },
 };
 
 for (const [name, { draw, states }] of Object.entries(actions)) {

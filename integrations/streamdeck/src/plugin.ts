@@ -1,6 +1,6 @@
 import streamDeck from "@elgato/streamdeck";
 import { seam } from "./seam.js";
-import { LineUp, NextZone, PreviousZone, Remap, Desk, Zones } from "./actions/simple.js";
+import { LineUp, NextZone, PreviousZone, PinOnTop, ReleasePinned, Remap, Desk, Zones } from "./actions/simple.js";
 import { FocusWindow, MoveWindow } from "./actions/window.js";
 import { SwitchWorkspace } from "./actions/workspace.js";
 
@@ -14,6 +14,8 @@ streamDeck.actions.registerAction(new NextZone());
 streamDeck.actions.registerAction(new PreviousZone());
 streamDeck.actions.registerAction(new MoveWindow());
 streamDeck.actions.registerAction(new FocusWindow());
+streamDeck.actions.registerAction(new PinOnTop());
+streamDeck.actions.registerAction(new ReleasePinned());
 streamDeck.actions.registerAction(new Desk());
 
 // An error nobody caught must not take the plugin, and so every key, down with it.

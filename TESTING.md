@@ -477,6 +477,7 @@ Turn the debug log on. Set **Save windows to the active workspace** on Shortcuts
 - [ ] **Topic buttons.** The button under each other topic opens its page: Pointer and borders Displays, Zones Zones, Moving windows Shortcuts, Pins and borders Zones, Workspaces Workspaces, Last session General, Shortcuts Shortcuts, Stream Deck General, Local API General, Updates About.
 - [ ] **Search.** Type "snap back": the results include Help's Workspaces topic, and pressing it opens Help with that topic picked. Type "stream deck", "sign-in" and "pre-releases": each lists its Help topic. Type "help": every topic is listed.
 - [ ] **Remembered page.** Close the panel on Help and open it again: it opens on Help. Run `seam-settings.exe --page help`: it opens on Help.
+- [ ] **Page on an open panel.** With the panel open on Displays, run `seam-settings.exe --page help` and send `panel.open` with `{"page":"about"}`: each switches the open window to that page and brings it to the front, and no second window starts. On Zones, start a layout edit and run it again with another page: the "Discard layout changes?" dialog asks first, and Keep editing leaves the page as it was. An unknown page leaves the open window where it is.
 - [ ] **About.** About's last section is called Support and still has **Copy diagnostics**, **Report a problem**, **Source on GitHub** and **Licenses**, each working as before.
 
 ## Starting and signing in

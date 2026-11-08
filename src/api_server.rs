@@ -70,6 +70,8 @@ struct Conn {
     id: u64,
     name: Option<String>,
     topics: Vec<String>,
+    /// It proved it is the panel with the token.
+    panel: bool,
     outbox: Arc<Outbox>,
 }
 
@@ -299,6 +301,7 @@ impl Session {
         let name = if self.panel { "panel".to_string() } else { client };
         if let Some(conn) = guard(&shared.conns).iter_mut().find(|c| c.id == self.conn_id) {
             conn.name = Some(name);
+            conn.panel = self.panel;
         }
         notify_clients_changed(shared);
         let packaged = read_snapshot(shared).state.packaged;
@@ -410,7 +413,13 @@ fn pump(shared: &Shared, pipe: HANDLE, read_event: HANDLE, write_event: HANDLE, 
         overflowed: AtomicBool::new(false),
     });
     let conn_id = NEXT_CONN.fetch_add(1, Ordering::Relaxed);
-    guard(&shared.conns).push(Conn { id: conn_id, name: None, topics: Vec::new(), outbox: outbox.clone() });
+    guard(&shared.conns).push(Conn {
+        id: conn_id,
+        name: None,
+        topics: Vec::new(),
+        panel: false,
+        outbox: outbox.clone(),
+    });
     notify_clients_changed(shared);
 
     let own_image = client_is_seam(pipe);
@@ -487,10 +496,20 @@ pub fn publish(next: Snapshot, api_enabled: bool) -> bool {
 
 /// Queue an event for every subscribed client. Their threads do the writing.
 pub fn broadcast(kind: &str, data: &Value) {
+    queue_event(kind, data, false);
+}
+
+/// Like `broadcast`, but only the panel gets it.
+pub fn broadcast_to_panels(kind: &str, data: &Value) {
+    queue_event(kind, data, true);
+}
+
+fn queue_event(kind: &str, data: &Value, panels_only: bool) {
     let Some(shared) = SHARED.get() else { return };
     let line = event_line(kind, data);
     let topic = topic_of(kind);
-    for conn in guard(&shared.conns).iter().filter(|c| c.topics.iter().any(|t| t == topic)) {
+    let wanted = |c: &&Conn| (c.panel || !panels_only) && c.topics.iter().any(|t| t == topic);
+    for conn in guard(&shared.conns).iter().filter(wanted) {
         let mut lines = guard(&conn.outbox.lines);
         if lines.len() >= MAX_QUEUED_EVENTS {
             conn.outbox.overflowed.store(true, Ordering::Relaxed);

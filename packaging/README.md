@@ -92,7 +92,7 @@ Add yourself as required reviewer under Settings, Environments, store. Then run 
 
 ## The update key
 
-The GitHub build installs an update only if Seam's minisign key signed its `latest.json`. Until the key exists, the public key in `settings/src/update.rs` is a placeholder, every update check stops at the signature and records why, and `release.yml` fails rather than draft a release nobody can update to. Install minisign and create the key once, on your machine, outside the repository:
+The GitHub build installs an update only if Seam's minisign key (ID `DD3DF0F7CB3ACA88`) signed its `latest.json`. Its public half is `SEAM_PUBLIC_KEY` in `settings/src/update.rs`, and `release.yml` fails rather than draft a release nobody can update to. The key already exists; these are the steps for a new one. Install minisign and create the key once, on your machine, outside the repository:
 
 ```powershell
 winget install jedisct1.minisign

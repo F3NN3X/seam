@@ -403,6 +403,18 @@ fn desk_workspaces(app: &App) -> Vec<Workspace> {
     app.cfg.desks.get(&app.sig).map(|d| workspace::list(&d.workspaces)).unwrap_or_default()
 }
 
+/// Next and previous zone give up a key the directional moves hold now (D107),
+/// in the file too, so the panel shows them as not set.
+fn migrate_hotkeys(app: &mut App) {
+    let dropped = app.cfg.hotkeys.drop_zone_clashes();
+    for action in &dropped {
+        log::info!("hotkey {action} cleared: a directional key holds it now");
+    }
+    if !dropped.is_empty() {
+        persist(app);
+    }
+}
+
 /// Register the shortcuts that changed. Windows refuses one another app holds.
 fn apply_hotkeys(app: &mut App) {
     let keys = &app.cfg.hotkeys;
@@ -413,11 +425,9 @@ fn apply_hotkeys(app: &mut App) {
         (HOTKEY_PREV_ZONE, "prev_zone".to_string(), keys.prev_zone.clone()),
         (HOTKEY_CAPTURE, "capture_workspace".to_string(), keys.capture_workspace.clone()),
     ];
-    let directional = keys.directional();
-    for (id, (verb, dir, combo)) in (HOTKEY_WINDOW..).zip(directional) {
+    for (id, (verb, dir, combo)) in (HOTKEY_WINDOW..).zip(keys.directional()) {
         wanted.push((id, format!("{verb}_{dir}"), combo.cloned()));
     }
-    let taken: Vec<hotkey::Combo> = directional.iter().filter_map(|(_, _, c)| hotkey::parse(c.as_ref()?)).collect();
     for (id, ws) in (HOTKEY_WORKSPACE..).zip(desk_workspaces(app)) {
         wanted.push((id, format!("workspace:{}", ws.id), ws.hotkey));
     }
@@ -432,13 +442,6 @@ fn apply_hotkeys(app: &mut App) {
     }
     for (id, action, combo) in &wanted {
         let Some(combo) = combo else { continue };
-        // A file saved before D107 still has next and previous zone on Win+Alt+Right
-        // and Left. The moves hold those keys now, so the old ones quietly give way.
-        let zone_step = matches!(*id, HOTKEY_NEXT_ZONE | HOTKEY_PREV_ZONE);
-        if zone_step && hotkey::parse(combo).is_some_and(|c| taken.contains(&c)) {
-            log::info!("hotkey {action} gives way to a directional key: {combo}");
-            continue;
-        }
         let registered = hotkey::parse(combo)
             .is_some_and(|c| unsafe { RegisterHotKey(Some(app.hwnd), *id, HOT_KEY_MODIFIERS(c.mods), c.vk).is_ok() });
         if !registered {
@@ -629,6 +632,7 @@ fn reload(app: &mut App) {
     log::info!("config reloaded");
     app.cfg = Config::load();
     log::apply(app.cfg.debug_log);
+    migrate_hotkeys(app);
     apply_hotkeys(app);
     refresh(app);
 }
@@ -1366,6 +1370,7 @@ pub fn run() {
         APP.with(|a| *a.borrow_mut() = Some(app));
         with_app(|a| {
             add_icon(a);
+            migrate_hotkeys(a);
             apply_hotkeys(a);
             refresh(a);
             api_server::start(a.hwnd.0 as isize, a.token.clone(), snapshot(a), a.cfg.api.enabled);

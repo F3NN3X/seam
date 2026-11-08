@@ -57,8 +57,8 @@ impl Default for Hotkeys {
         Hotkeys {
             line_up: Some("Ctrl+Shift+Alt+L".into()),
             pause: Some("Ctrl+Shift+Alt+P".into()),
-            // Win+Alt+arrows moves the window now (D107). A saved file that still has
-            // these on Win+Alt+Left and Right gives way to the moves when registering.
+            // Win+Alt+arrows moves the window now (D107). The tray clears these in a
+            // saved file that still has them on a directional key.
             next_zone: None,
             prev_zone: None,
             capture_workspace: None,
@@ -95,6 +95,22 @@ impl Hotkeys {
             ("swap", "up", self.swap_up.as_ref()),
             ("swap", "down", self.swap_down.as_ref()),
         ]
+    }
+
+    /// A file from before D107 has next and previous zone on Win+Alt+Right and
+    /// Left, which the moves hold now. Clear whichever sits on a directional
+    /// key, and say which.
+    pub fn drop_zone_clashes(&mut self) -> Vec<&'static str> {
+        let taken: Vec<_> =
+            self.directional().iter().filter_map(|(_, _, c)| crate::hotkey::parse(c.as_ref()?)).collect();
+        let mut dropped = Vec::new();
+        for (action, combo) in [("next_zone", &mut self.next_zone), ("prev_zone", &mut self.prev_zone)] {
+            if combo.as_deref().and_then(crate::hotkey::parse).is_some_and(|c| taken.contains(&c)) {
+                *combo = None;
+                dropped.push(action);
+            }
+        }
+        dropped
     }
 }
 

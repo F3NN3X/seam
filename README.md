@@ -42,7 +42,7 @@ Experimental: turn on **Keep windows in their zones** on the Zones page and Seam
 - **Ctrl+Shift+Alt+arrows** focus the nearest window that way.
 - **Swap** trades places with the nearest window that way, zones included. It has no key until you set one.
 
-Seam leaves windows from apps running as administrator, windows that aren't responding and its own windows alone. Next and previous zone are still on the Shortcuts page and in the API, with no key by default. A `config.json` from an earlier version that still has them on Win+Alt+Left and Right lets the moves have those keys.
+Seam leaves windows from apps running as administrator, windows that aren't responding and its own windows alone. Next and previous zone are still on the Shortcuts page and in the API, with no key by default. If a `config.json` from an earlier version still has them on Win+Alt+Left and Right, Seam clears them once, so the moves get those keys.
 
 ### Workspaces
 

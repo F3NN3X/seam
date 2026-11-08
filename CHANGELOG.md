@@ -9,6 +9,7 @@ All notable changes to Seam. The format follows [Keep a Changelog](https://keepa
 - **Set as default** on a workspace's "..." menu: when no workspace is remembered, it's the one in use when Seam starts. `workspace.set_default` in the API, and `default` in `workspaces.list`.
 - A **Help** page in the Seam window, with a topic for each part of Seam and a button to its page. Search finds the topics by their text.
 - Seam can turn on Windows' **Ease cursor movement between displays** for you: the Seam window asks once while it's off, and the Displays alert has **Turn it on**. Seam never turns it off. `cursor_easing.set` in the API, and `windows_cursor_easing` in the state.
+- **Saved desks** and the border rows on Displays show when a desk was lined up ("Lined up today", "yesterday", "3 days ago", then the date), and dates are in your local time. A desk lined up by an earlier version shows plain "Lined up" until you line it up again. `lined_up_at` in `config.json`.
 
 ### Changed
 

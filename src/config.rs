@@ -249,6 +249,10 @@ pub struct Desk {
     /// Unix seconds. 0 until the tray has seen a migrated desk connected.
     pub last_seen: u64,
     pub borders: Vec<SavedBorder>,
+    /// Unix seconds a line-up was last accepted. None for a desk lined up by an
+    /// older build, or not at all.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub lined_up_at: Option<u64>,
     /// Monitor device path -> zone layout. Kept as raw JSON until zones exist.
     pub zones: BTreeMap<String, serde_json::Value>,
     /// Kept as raw JSON until workspaces exist.
@@ -629,6 +633,7 @@ mod tests {
         let desk = &c.desks["A|B|C|D"];
         assert_eq!(desk.name, "Desk with 4 screens");
         assert_eq!(desk.last_seen, 0);
+        assert_eq!(desk.lined_up_at, None);
         assert_eq!(desk.borders.len(), 2);
         assert_eq!(desk.borders[0], border("B", "A", Side::Bottom, 1.2844, 64.0));
         assert_eq!(desk.borders[1], border("A", "D", Side::Right, 0.7807, 212.0));
@@ -641,6 +646,7 @@ mod tests {
         let back = Config::load_from(&p);
         assert_eq!((back.version, back.tray_click), (2, TrayClick::LineUp));
         assert_eq!(back.desks, c.desks);
+        assert!(!saved.contains("lined_up_at"), "{saved}");
 
         // Connecting the desk names it, and a name the user chose stays.
         let mons: Vec<Mon> = ["PG32UCDM", "LG HDR QHD", "HDMI panel", "U3477"].map(mon).into();

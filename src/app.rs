@@ -526,6 +526,7 @@ fn lineup_done(app: &mut App, accepted: bool) {
         desk::note_active(&mut app.cfg, &sig, &mons, unix_now());
         if let Some(desk) = app.cfg.desks.get_mut(&sig) {
             desk.borders = res;
+            desk.lined_up_at = Some(unix_now());
         }
         if !app.cfg.seen.contains(&sig) {
             app.cfg.seen.push(sig);

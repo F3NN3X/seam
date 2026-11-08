@@ -384,6 +384,21 @@ Needs a `Seam-Setup` built by CI (the `installer` artifact of a run on `main`), 
 - [ ] **Quit still running.** With Seam running from the installed folder, `seam-settings.exe --quit-tray` exits 0 and Seam is gone. With nothing running it also exits 0.
 - [ ] **Hook timing.** Paste the `hook::log_stats` lines. Own max stays well under 1000 µs, as before.
 
+## Release dry run (x64 and ARM64)
+
+Needs a pre-release tag such as `v0.5.0-beta.1` pushed to my repo, so `release.yml` drafts it, and an ARM64 PC for the last three. Delete the draft and the tag afterwards.
+
+- [ ] **Assets.** The draft holds `Seam-Setup-X.Y.Z.exe`, `Seam-Setup-X.Y.Z-arm64.exe`, `seam-X.Y.Z-windows-x64.zip`, `seam-X.Y.Z-windows-arm64.zip`, `seam.exe`, `seam-settings.exe`, `seam-arm64.exe`, `seam-settings-arm64.exe`, `latest.json` and `latest.json.minisig`, and nothing else.
+- [ ] **Signature.** `minisign -Vm latest.json -P <key>` passes on the downloaded pair.
+- [ ] **Manifest.** `latest.json` has `files` with the x64 `seam.exe` and `seam-settings.exe` only, and `arches` with `x86_64` and `aarch64`. Every `sha256` matches its asset (`Get-FileHash`), and the `aarch64` entries name `seam-arm64.exe` and `seam-settings-arm64.exe` as `asset`.
+- [ ] **Machine type.** `dumpbin /headers` on the ARM64 exes, from the zip and from the installed folder, says `AA64 machine (ARM64)`. The x64 ones say `8664 machine (x64)`.
+- [ ] **Zips.** Each zip holds `seam.exe`, `seam-settings.exe`, `README.md` and `LICENSE`, and its exes hash the same as that build's entries.
+- [ ] **Old updater.** A 0.4.0 x64 build with **Include pre-releases** on finds the pre-release, downloads the x64 exes, and installs it.
+- [ ] **ARM64 setup on x64.** On an x64 PC, `Seam-Setup-X.Y.Z-arm64.exe` refuses to install, saying it needs a different processor.
+- [ ] **ARM64 install.** On the ARM64 PC, the ARM64 setup installs and Seam runs. Task Manager's Architecture column shows ARM64 for `seam.exe` and `seam-settings.exe`.
+- [ ] **Switch builds.** On the ARM64 PC, install the x64 setup, then run the ARM64 one over it. Installed apps shows one Seam, the folder holds the ARM64 exes, and your settings stay. Going back the other way works the same.
+- [ ] **ARM64 updater.** An ARM64 build older than the pre-release downloads `seam-arm64.exe` and `seam-settings-arm64.exe` and stages them as `seam.exe` and `seam-settings.exe` in `updates\<version>\`, and after **Install and restart** the exes are still ARM64.
+
 ## Microsoft Store build
 
 Build and install a test package, from an elevated prompt the first time:

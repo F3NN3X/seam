@@ -99,24 +99,46 @@ jobs:
 
       - run: cargo build --release --workspace
 
+      # A cross build on this x64 runner. ring compiles for ARM64 with clang only,
+      # which the runner ships.
+      - name: Build for ARM64
+        shell: bash
+        run: |
+          rustup target add aarch64-pc-windows-msvc
+          export PATH="/c/Program Files/LLVM/bin:$PATH"
+          clang --version
+          cargo build --release --workspace --target aarch64-pc-windows-msvc
+
+      # dist\ holds what's uploaded. A release asset name is unique, so the ARM64
+      # exes go up as seam-arm64.exe and seam-settings-arm64.exe, and dist-arm64\
+      # holds them under their own names for the zip and the setup.
       - name: Manifest and checksums
         shell: bash
         run: |
           set -euo pipefail
           tag="${GITHUB_REF_NAME#v}"
-          mkdir dist
+          mkdir dist dist-arm64
           cp target/release/seam.exe target/release/seam-settings.exe dist/
+          cp target/aarch64-pc-windows-msvc/release/seam.exe target/aarch64-pc-windows-msvc/release/seam-settings.exe dist-arm64/
+          cp dist-arm64/seam.exe dist/seam-arm64.exe
+          cp dist-arm64/seam-settings.exe dist/seam-settings-arm64.exe
           pre=false; [[ "$tag" == *-* ]] && pre=true
           python - "$tag" "$pre" <<'PY'
           import hashlib, json, os, sys, datetime
           tag, pre = sys.argv[1], sys.argv[2] == "true"
           # The panel shows the first few lines, so it gets the bullets without the headings.
           notes = "\n".join(l.rstrip() for l in open("notes.md", encoding="utf-8") if l.startswith("- "))
-          files = [{"name": n, "size": os.path.getsize(f"dist/{n}"),
-                    "sha256": hashlib.sha256(open(f"dist/{n}", "rb").read()).hexdigest()}
-                   for n in ("seam.exe", "seam-settings.exe")]
+          def entry(name, asset):
+              return {"name": name, "asset": asset, "size": os.path.getsize(f"dist/{asset}"),
+                      "sha256": hashlib.sha256(open(f"dist/{asset}", "rb").read()).hexdigest()}
+          # Keyed like Rust's std::env::consts::ARCH, which the updater looks itself up by.
+          arches = {arch: [entry(n, n.replace(".exe", f"{suffix}.exe")) for n in ("seam.exe", "seam-settings.exe")]
+                    for arch, suffix in (("x86_64", ""), ("aarch64", "-arm64"))}
+          # `files` is exactly what updaters from before ARM64 builds read: the x64 exes.
+          files = [{k: f[k] for k in ("name", "size", "sha256")} for f in arches["x86_64"]]
           json.dump({"version": tag, "date": datetime.date.today().isoformat(), "prerelease": pre,
-                     "notes": notes.strip(), "files": files}, open("dist/latest.json", "w"), indent=2)
+                     "notes": notes.strip(), "files": files, "arches": arches},
+                    open("dist/latest.json", "w"), indent=2)
           PY
 
       - name: Install minisign
@@ -142,7 +164,10 @@ jobs:
 
       - name: Zip for manual download
         shell: pwsh
-        run: Compress-Archive -Path dist/seam.exe, dist/seam-settings.exe, README.md, LICENSE -DestinationPath "dist/seam-$($env:GITHUB_REF_NAME.TrimStart('v'))-windows-x64.zip"
+        run: |
+          $version = $env:GITHUB_REF_NAME.TrimStart('v')
+          Compress-Archive -Path dist/seam.exe, dist/seam-settings.exe, README.md, LICENSE -DestinationPath "dist/seam-$version-windows-x64.zip"
+          Compress-Archive -Path dist-arm64/seam.exe, dist-arm64/seam-settings.exe, README.md, LICENSE -DestinationPath "dist/seam-$version-windows-arm64.zip"
 
       # Inno Setup 7 isn't on Chocolatey, so this takes the official release at a
       # pinned version and SHA-256, and ignores any Inno the runner already has.
@@ -152,24 +177,32 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: ./packaging/install-inno.ps1
 
-      # Built from dist\, the files latest.json hashes. The setup isn't added to
-      # latest.json, because the updater only stages the two exes.
-      - name: Build installer
+      # Built from dist\ and dist-arm64\, the files latest.json hashes. The setups
+      # aren't added to latest.json, because the updater only stages the two exes.
+      - name: Build installers
         shell: pwsh
         run: |
           $id = (Get-Content packaging/installer.json -Raw | ConvertFrom-Json).app_id
           $version = $env:GITHUB_REF_NAME.TrimStart('v')
           & $env:ISCC "/DAppVersion=$version" "/DAppId=$id" "/DSourceDir=$PWD\dist" "/O$PWD\dist" packaging\seam.iss
           if ($LASTEXITCODE -ne 0) { exit 1 }
+          & $env:ISCC "/DAppVersion=$version" "/DAppId=$id" "/DArch=arm64" "/DSourceDir=$PWD\dist-arm64" "/O$PWD\dist" packaging\seam.iss
+          if ($LASTEXITCODE -ne 0) { exit 1 }
 
-      # The zip, the setup and the Store package all hold the exes latest.json hashes.
+      # The zips, the setups and the Store package all hold the exes latest.json
+      # hashes: the uploaded asset and, for ARM64, the copy the zip and setup took.
       - name: The exes are still the ones latest.json hashes
         shell: bash
         run: |
           python - <<'PY'
           import hashlib, json, sys
-          bad = [f["name"] for f in json.load(open("dist/latest.json"))["files"]
-                 if hashlib.sha256(open(f"dist/{f['name']}", "rb").read()).hexdigest() != f["sha256"]]
+          manifest = json.load(open("dist/latest.json"))
+          staged = {"x86_64": "dist", "aarch64": "dist-arm64"}
+          checks = [(f["name"], f"dist/{f['name']}", f["sha256"]) for f in manifest["files"]]
+          checks += [(f["asset"], path, f["sha256"]) for arch, files in manifest["arches"].items() for f in files
+                     for path in (f"dist/{f['asset']}", f"{staged[arch]}/{f['name']}")]
+          bad = sorted({name for name, path, sha in checks
+                        if hashlib.sha256(open(path, "rb").read()).hexdigest() != sha})
           if bad:
               print(f"::error::{', '.join(bad)} changed after latest.json was written")
               sys.exit(1)

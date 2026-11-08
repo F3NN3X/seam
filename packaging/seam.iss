@@ -5,6 +5,8 @@
 ;
 ; SourceDir holds the exes the release was built from, never target\. Give it as
 ; an absolute path, because Inno reads a relative one from this file's folder.
+; Add /DArch=arm64 for the ARM64 build. Both builds share one AppId and folder,
+; so running the other one's setup replaces the install instead of adding a second.
 
 #ifndef AppVersion
   #error Pass /DAppVersion=x.y.z
@@ -26,6 +28,20 @@
   #define Core AppVersion
 #endif
 #define Repo "https://github.com/F3NN3X/seam"
+; x64 also installs on ARM64 Windows, which runs it emulated. The x64 setup keeps
+; its old name.
+#ifndef Arch
+  #define Arch "x64"
+#endif
+#if Arch == "x64"
+  #define Allowed "x64compatible"
+  #define Suffix ""
+#elif Arch == "arm64"
+  #define Allowed "arm64"
+  #define Suffix "-arm64"
+#else
+  #error Arch is x64 or arm64
+#endif
 
 [Setup]
 AppId={#AppIdEscaped}
@@ -39,13 +55,13 @@ DefaultDirName={autopf}\Seam
 DisableDirPage=yes
 DisableProgramGroupPage=yes
 PrivilegesRequired=lowest
-ArchitecturesAllowed=x64compatible
-ArchitecturesInstallIn64BitMode=x64compatible
+ArchitecturesAllowed={#Allowed}
+ArchitecturesInstallIn64BitMode={#Allowed}
 WizardStyle=modern
 SetupIconFile=..\assets\seam.ico
 UninstallDisplayIcon={app}\seam.exe
 LicenseFile=..\LICENSE
-OutputBaseFilename=Seam-Setup-{#AppVersion}
+OutputBaseFilename=Seam-Setup-{#AppVersion}{#Suffix}
 Compression=lzma2
 SolidCompression=yes
 ; Seam is quit through its own API (see [Code]), not by Restart Manager.

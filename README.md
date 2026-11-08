@@ -118,6 +118,8 @@ There are three ways to get Seam:
 - **The installer**, recommended on GitHub. Download `Seam-Setup-X.Y.Z.exe` from [Releases](https://github.com/F3NN3X/seam/releases) and run it. It installs for you only, with no admin prompt, and adds Seam to the Start menu and to Installed apps.
 - **The portable zip.** Download `seam-X.Y.Z-windows-x64.zip` from the same page, unzip it and keep both exes together.
 
+Each comes in two builds: x64 for most PCs, and ARM64 (`Seam-Setup-X.Y.Z-arm64.exe`, `seam-X.Y.Z-windows-arm64.zip`) for PCs with an ARM processor, such as Snapdragon laptops. The x64 build runs on those too, emulated. Both installers use the same folder, so running the other one's setup switches your install over, and the updater keeps the build you have.
+
 The installer and the zip are unsigned, so Windows SmartScreen warns about an unknown publisher the first time. Choose **More info**, then **Run anyway**. See [Troubleshooting](#troubleshooting).
 
 To update the zip by hand, download the new zip, quit Seam, and replace both exes.

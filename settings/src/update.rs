@@ -84,6 +84,8 @@ pub fn pick(releases: &[Release], current: &Version, prerelease: bool) -> Option
 
 struct File {
     name: String,
+    /// The release asset it downloads from. The ARM64 exes carry a suffix there.
+    asset: String,
     size: u64,
     sha256: String,
 }
@@ -95,14 +97,23 @@ struct Manifest {
     files: Vec<File>,
 }
 
+/// The files for this build's architecture. `files` is the x64 build, the list
+/// updaters from before the ARM64 builds read. `arches` has a list per build,
+/// keyed like `std::env::consts::ARCH`, and a manifest that has it is only read there.
 fn parse_manifest(bytes: &[u8]) -> Option<Manifest> {
     let manifest: Value = serde_json::from_slice(bytes).ok()?;
-    let files: Vec<File> = manifest["files"]
+    let list = match manifest["arches"].as_object() {
+        Some(arches) => arches.get(std::env::consts::ARCH)?,
+        None => &manifest["files"],
+    };
+    let files: Vec<File> = list
         .as_array()?
         .iter()
         .filter_map(|f| {
+            let name = f["name"].as_str()?.to_string();
             Some(File {
-                name: f["name"].as_str()?.to_string(),
+                asset: f["asset"].as_str().map_or_else(|| name.clone(), str::to_string),
+                name,
                 size: f["size"].as_u64()?,
                 sha256: f["sha256"].as_str()?.to_lowercase(),
             })
@@ -230,7 +241,7 @@ fn stage(
     let staged = manifest
         .files
         .iter()
-        .try_for_each(|file| download(&agent, file, release.asset_url(&file.name)?, &dir, &mut arrived));
+        .try_for_each(|file| download(&agent, file, release.asset_url(&file.asset)?, &dir, &mut arrived));
     if let Err(e) = staged {
         let _ = std::fs::remove_dir_all(&dir);
         return Err(e);

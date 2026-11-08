@@ -326,7 +326,7 @@ fn list_card(
         .justify_between()
         .gap(px(8.))
         .child(div().text_size(px(14.)).font_weight(FontWeight::MEDIUM).truncate().child(ws.name.clone()))
-        .children(active.map(|drifted| active_badge(drifted, p)));
+        .children(active.map(|drifted| active_status(drifted, p)));
     let detail = div()
         .flex()
         .items_center()
@@ -343,15 +343,8 @@ fn list_card(
         .rounded(px(12.))
         .border_1()
         .cursor_pointer()
-        // Picked is a neutral step up, in use is amber, and both is a stronger amber.
-        .map(|d| match (active.is_some(), picked) {
-            (true, true) => d.bg(p.accent.opacity(0.16)).border_color(p.accent),
-            (true, false) => {
-                d.bg(p.accent.opacity(0.08)).border_color(p.accent.opacity(0.5)).hover(|d| d.bg(p.accent.opacity(0.12)))
-            }
-            (false, true) => d.bg(p.raised).border_color(p.hairline_strong),
-            (false, false) => d.bg(p.card).border_color(p.hairline).hover(|d| d.bg(p.raised)),
-        })
+        .when(picked, |d| d.bg(p.raised).border_color(p.hairline_strong))
+        .when(!picked, |d| d.bg(p.card).border_color(p.hairline).hover(|d| d.bg(p.raised)))
         .child(name)
         .child(detail)
         .on_click(cx.listener(move |panel, _, _, cx| {
@@ -363,17 +356,11 @@ fn list_card(
         .into_any_element()
 }
 
-/// The badge on the card of the workspace in use.
-fn active_badge(drifted: bool, p: Palette) -> AnyElement {
-    div()
-        .flex_none()
-        .px(px(8.))
-        .rounded(px(8.))
-        .bg(p.accent.opacity(0.16))
-        .text_size(px(12.))
-        .text_color(p.accent_text)
-        .child(if drifted { "Active, moved" } else { "Active" })
-        .into_any_element()
+/// The status on the card of the workspace in use: a dot and a word, as the editor's rows have.
+fn active_status(drifted: bool, p: Palette) -> AnyElement {
+    let word = if drifted { "Active, moved" } else { "Active" };
+    let text = div().text_size(px(12.)).text_color(p.secondary).child(word);
+    div().flex().flex_none().items_center().gap(px(8.)).child(ui::dot(p.positive, true)).child(text).into_any_element()
 }
 
 /// "Put windows back": Snap back for the workspace in use, a switch for any other.

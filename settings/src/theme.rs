@@ -63,8 +63,6 @@ pub struct Palette {
     pub secondary: Hsla,
     pub muted: Hsla,
     pub accent: Hsla,
-    /// The accent where it is text, dark enough to read on a light surface.
-    pub accent_text: Hsla,
     pub positive: Hsla,
     pub negative: Hsla,
 }
@@ -86,7 +84,6 @@ pub fn palette(cx: &App) -> Palette {
             secondary: c(0xB0B0B0),
             muted: c(0x949494),
             accent: c(0xFFB020),
-            accent_text: c(0xFFB020),
             positive: c(0x4CC38A),
             negative: c(0xF07A7D),
         }
@@ -104,7 +101,6 @@ pub fn palette(cx: &App) -> Palette {
             secondary: c(0x5C5C5C),
             muted: c(0x707070),
             accent: c(0xFFB020),
-            accent_text: c(0x9A6200),
             positive: c(0x16A34A),
             negative: c(0xDC2626),
         }

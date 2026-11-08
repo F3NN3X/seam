@@ -6,7 +6,7 @@ All notable changes to Seam. The format follows [Keep a Changelog](https://keepa
 
 ### Changed
 
-- The workspace in use stands out in the Workspaces list, with an amber card and an "Active" badge that reads "Active, moved" once one of its windows moved.
+- The workspace in use shows a green dot and "Active" in the Workspaces list, instead of "in use", and "Active, moved" once one of its windows moved.
 
 ### Fixed
 

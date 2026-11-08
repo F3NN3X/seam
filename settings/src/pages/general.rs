@@ -7,7 +7,7 @@ use gpui_kit::component::notification::Notification;
 use gpui_kit::component::{ActiveTheme, WindowExt};
 use gpui_kit::*;
 use seam::autostart;
-use seam::config::{Config, TrayClick};
+use seam::config::{Config, RestoreApps, TrayClick};
 use seam::package::{self, Startup};
 use serde_json::json;
 use std::path::PathBuf;
@@ -80,6 +80,27 @@ fn confirm_import(panel: &Panel, next: Config, window: &mut Window, cx: &mut Con
     });
 }
 
+/// Seam reopening the apps turns Windows' Restart apps off, so ask first (D128).
+/// Cancel leaves Windows reopening them.
+fn confirm_seam_reopens(window: &mut Window, cx: &mut Context<Panel>) {
+    let view = cx.entity().downgrade();
+    window.open_alert_dialog(cx, move |alert, _, _| {
+        let view = view.clone();
+        alert
+            .title("Turn off Windows' Restart apps?")
+            .description(
+                "Windows would also reopen apps at sign-in, so they'd open twice. Seam turns its setting off while Seam reopens them, and puts it back when you switch back or turn restore off.",
+            )
+            .ok_text("Turn it off")
+            .cancel_text("Cancel")
+            .show_cancel(true)
+            .on_ok(move |_, window, cx| {
+                let _ = view.update(cx, |panel, cx| panel.patch(json!({ "restore_apps": "seam" }), window, cx));
+                true
+            })
+    });
+}
+
 fn open_folder() {
     let _ = std::process::Command::new("explorer").arg(package::settings_dir()).spawn();
 }
@@ -133,6 +154,44 @@ pub fn render(panel: &mut Panel, window: &mut Window, cx: &mut Context<Panel>) -
     };
     let offer =
         switch("ask-new-desks", panel.config.ask_new_desks, window, cx, setter(|on| json!({ "ask_new_desks": on })));
+    let restore = switch(
+        "restore-session",
+        panel.config.restore_session,
+        window,
+        cx,
+        setter(|on| json!({ "restore_session": on })),
+    );
+    let seam_reopens = panel.config.restore_apps == RestoreApps::Seam;
+    let reopen_choice = ui::segmented(
+        "restore-apps",
+        &["Windows reopens them", "Seam reopens them"],
+        usize::from(seam_reopens),
+        window,
+        cx,
+        {
+            let view = view.clone();
+            move |i, window, cx| {
+                view.update(cx, |panel, cx| match i {
+                    0 => panel.patch(json!({ "restore_apps": "windows" }), window, cx),
+                    _ if panel.config.restore_apps != RestoreApps::Seam => confirm_seam_reopens(window, cx),
+                    _ => {}
+                })
+            }
+        },
+    );
+    let reopen_about = if seam_reopens {
+        "Seam starts the apps that aren't running, and turns Windows' Restart apps off meanwhile"
+    } else {
+        "Windows' Restart apps or the apps themselves open them, and Seam puts each window back"
+    };
+    let restart_note = (panel.config.restore_session
+        && seam_reopens
+        && panel.state.as_ref().is_some_and(|s| s.restart_apps))
+    .then(|| {
+        let open = ui::secondary("open-sign-in-options", "Open Sign-in options", cx)
+            .on_click(|_, _, cx| cx.open_url("ms-settings:signinoptions"));
+        ui::note("Windows' Restart apps is on again, so apps may open twice", Some(open), p)
+    });
     let selected = usize::from(panel.config.tray_click == TrayClick::LineUp);
     let left_click = ui::segmented("tray-click", &["Open Seam", "Start Line Up"], selected, window, cx, {
         let view = view.clone();
@@ -164,6 +223,20 @@ pub fn render(panel: &mut Panel, window: &mut Window, cx: &mut Context<Panel>) -
         .text_color(p.secondary)
         .child(folder_label());
 
+    let mut startup_rows = vec![
+        row("Start with Windows", Some(start_about.into()), start_with_windows, p),
+        row("Offer to line up new screens", Some("Asks once when screens Seam hasn't seen connect".into()), offer, p),
+        row(
+            "Offer to restore my windows after I sign in",
+            Some("Seam remembers which apps were where and asks before it starts any".into()),
+            restore,
+            p,
+        ),
+    ];
+    if panel.config.restore_session {
+        startup_rows.push(row("Who reopens the apps", Some(reopen_about.into()), reopen_choice, p));
+    }
+
     div()
         .flex()
         .flex_col()
@@ -171,18 +244,7 @@ pub fn render(panel: &mut Panel, window: &mut Window, cx: &mut Context<Panel>) -
         .child(ui::page_title("General", "How Seam starts and where it keeps its files", p))
         .child(section(
             "Startup",
-            card(
-                vec![
-                    row("Start with Windows", Some(start_about.into()), start_with_windows, p),
-                    row(
-                        "Offer to line up new screens",
-                        Some("Asks once when screens Seam hasn't seen connect".into()),
-                        offer,
-                        p,
-                    ),
-                ],
-                p,
-            ),
+            div().flex().flex_col().gap(px(8.)).child(card(startup_rows, p)).children(restart_note),
             p,
         ))
         .child(section(

@@ -110,6 +110,8 @@ pub struct Panel {
     /// The Gap slider. It sends the new gap when it's let go.
     pub gap: Entity<SliderState>,
     pub search: Entity<InputState>,
+    /// The page's scroll, which opening a search result moves to the row it found.
+    page_scroll: ScrollHandle,
     /// Holds focus when no control does, so Tab and Ctrl+F always reach a binding.
     focus: FocusHandle,
     pub query: SharedString,
@@ -213,6 +215,7 @@ impl Panel {
             colour_generation: 0,
             gap,
             search,
+            page_scroll: ScrollHandle::new(),
             focus,
             query: SharedString::default(),
             recording: None,
@@ -442,20 +445,26 @@ impl Panel {
         self.patch(diff_patch(&old, &new), window, cx);
     }
 
-    fn show(&mut self, page: Page, window: &mut Window, cx: &mut Context<Self>) {
+    /// Show a page. A search result also names the row to scroll to on it.
+    fn show(&mut self, page: Page, reveal: Option<&'static str>, window: &mut Window, cx: &mut Context<Self>) {
         // Unsaved zone edits ask before they're lost.
         if self.editor.is_some() {
             let then: pages::zone_editor::Then =
-                std::rc::Rc::new(move |panel, window, cx| panel.show_now(page, window, cx));
+                std::rc::Rc::new(move |panel, window, cx| panel.show_now(page, reveal, window, cx));
             pages::zone_editor::guard(self, window, cx, then);
             return;
         }
-        self.show_now(page, window, cx);
+        self.show_now(page, reveal, window, cx);
     }
 
-    fn show_now(&mut self, page: Page, window: &mut Window, cx: &mut Context<Self>) {
+    fn show_now(&mut self, page: Page, reveal: Option<&'static str>, window: &mut Window, cx: &mut Context<Self>) {
         self.page = page;
         let _ = std::fs::write(last_page_file(), page.title());
+        if let Some(title) = reveal {
+            // From the top, so a result that isn't a row of its own lands at the page's start.
+            self.page_scroll.set_offset(Point::default());
+            ui::reveal(title, &self.page_scroll);
+        }
         self.clear_search(window, cx);
         cx.notify();
     }
@@ -490,10 +499,10 @@ impl Panel {
             .child(Icon::new(page.icon()).size(px(16.)).text_color(if active { p.text } else { p.muted }))
             .child(div().flex_1().child(page.title()))
             .when(update_ready, |d| d.child(ui::dot(p.accent, true)))
-            .on_click(cx.listener(move |this, _, window, cx| this.show(page, window, cx)))
+            .on_click(cx.listener(move |this, _, window, cx| this.show(page, None, window, cx)))
             .on_key_down(cx.listener(move |this, e: &KeyDownEvent, window, cx| {
                 if matches!(e.keystroke.key.as_str(), "space" | "enter") {
-                    this.show(page, window, cx);
+                    this.show(page, None, window, cx);
                 }
             }))
     }
@@ -622,13 +631,13 @@ impl Panel {
             p,
         ));
         let rows = matches.iter().enumerate().map(|(i, hit)| {
-            let page = hit.page;
+            let (page, anchor) = (hit.page, hit.anchor());
             div()
                 .id(i)
                 .cursor_pointer()
                 .hover(|d| d.bg(p.raised))
                 .child(ui::row(hit.title, Some(page.title().into()), div(), p))
-                .on_click(cx.listener(move |this, _, window, cx| this.show(page, window, cx)))
+                .on_click(cx.listener(move |this, _, window, cx| this.show(page, Some(anchor), window, cx)))
                 .into_any_element()
         });
         let rows: Vec<AnyElement> = rows.collect();
@@ -682,6 +691,7 @@ impl Render for Panel {
                 Page::About => pages::about::render(self, window, cx).into_any_element(),
             }
         };
+        ui::reveal_built();
         let banners = self.banners(cx);
         pages::screen_editor::sync(self, cx);
         div()
@@ -697,8 +707,26 @@ impl Render for Panel {
             .text_color(p.text)
             .font_family(cx.theme().font_family.clone())
             .child(self.sidebar(window, cx))
-            .child(div().flex_1().min_w_0().h_full().child(div().id("page").size_full().overflow_y_scrollbar().child(
-                div().flex().flex_col().gap(px(ui::SECTION_GAP)).px(px(32.)).py(px(24.)).children(banners).child(body),
-            )))
+            .child(
+                // The page keeps its own scroll handle, so a search result can scroll it.
+                div()
+                    .relative()
+                    .flex_1()
+                    .min_w_0()
+                    .h_full()
+                    .child(
+                        div().id("page").size_full().overflow_y_scroll().track_scroll(&self.page_scroll).child(
+                            div()
+                                .flex()
+                                .flex_col()
+                                .gap(px(ui::SECTION_GAP))
+                                .px(px(32.))
+                                .py(px(24.))
+                                .children(banners)
+                                .child(body),
+                        ),
+                    )
+                    .vertical_scrollbar(&self.page_scroll),
+            )
     }
 }

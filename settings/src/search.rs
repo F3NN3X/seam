@@ -7,10 +7,24 @@ pub struct Entry {
     pub title: &'static str,
     about: &'static str,
     keywords: &'static str,
+    /// The row or section that holds it, when it's a button rather than a row of its own.
+    within: Option<&'static str>,
+}
+
+impl Entry {
+    /// The row or section opening this result scrolls to.
+    pub fn anchor(&self) -> &'static str {
+        self.within.unwrap_or(self.title)
+    }
 }
 
 const fn entry(page: Page, title: &'static str, about: &'static str, keywords: &'static str) -> Entry {
-    Entry { page, title, about, keywords }
+    Entry { page, title, about, keywords, within: None }
+}
+
+/// A button in About's Help section.
+const fn help(title: &'static str, about: &'static str, keywords: &'static str) -> Entry {
+    Entry { page: Page::About, title, about, keywords, within: Some("Help") }
 }
 
 const ENTRIES: &[Entry] = &[
@@ -48,6 +62,12 @@ const ENTRIES: &[Entry] = &[
     ),
     entry(
         Page::Zones,
+        "Tell me when a pinned window closes",
+        "Click the notification to start the app again and pin its window",
+        "notify notification reopen closed sticky topmost",
+    ),
+    entry(
+        Page::Zones,
         "Another window manager handles my windows",
         "Snapping and window moves step aside",
         "komorebi glazewm leopardwm tiling coexistence",
@@ -80,6 +100,18 @@ const ENTRIES: &[Entry] = &[
     entry(Page::Shortcuts, "Capture current windows", "Global shortcut", "hotkey keyboard workspace"),
     entry(Page::General, "Start with Windows", "Seam waits in the tray after you sign in", "login autostart"),
     entry(Page::General, "Offer to line up new screens", "Asks once when screens Seam hasn't seen connect", ""),
+    entry(
+        Page::General,
+        "Offer to restore my windows after I sign in",
+        "Seam remembers which apps were where and asks before it starts any",
+        "session restore reboot sign out login",
+    ),
+    entry(
+        Page::General,
+        "Who reopens the apps",
+        "Windows' Restart apps, or Seam, after you sign in",
+        "session restore restart apps sign-in options twice",
+    ),
     entry(Page::General, "Left-click", "Right-click always shows the menu", "tray icon"),
     entry(Page::General, "Let other apps control Seam", "Stream Deck and tools on this PC", "api"),
     entry(Page::General, "Settings folder", "Export, import or open your settings", "config files"),
@@ -87,10 +119,10 @@ const ENTRIES: &[Entry] = &[
     entry(Page::About, "Check for updates every day", "Last checked, and check now", "update version"),
     entry(Page::About, "Install updates on their own", "Only while you're away from the computer", "update"),
     entry(Page::About, "Include pre-releases", "Get new features early", "update beta"),
-    entry(Page::About, "Copy diagnostics", "Your version, Windows build, screens and saved borders", "support"),
-    entry(Page::About, "Report a problem", "Opens a new GitHub issue", "bug"),
-    entry(Page::About, "Source on GitHub", "", "code"),
-    entry(Page::About, "Licenses", "", "open source"),
+    help("Copy diagnostics", "Your version, Windows build, screens and saved borders", "support"),
+    help("Report a problem", "Opens a new GitHub issue", "bug"),
+    help("Source on GitHub", "", "code"),
+    help("Licenses", "", "open source"),
 ];
 
 pub fn find(query: &str) -> Vec<&'static Entry> {

@@ -6,10 +6,74 @@ use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::component::ThemeStyled;
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
+use std::cell::RefCell;
 use std::rc::Rc;
 use std::sync::Arc;
 
 pub const SECTION_GAP: f32 = 24.;
+/// Room left above a row a search result scrolled to.
+const REVEAL_MARGIN: f32 = 24.;
+
+/// The row or section a search result opened, by title, and the page's scroll.
+struct Reveal {
+    title: SharedString,
+    scroll: ScrollHandle,
+    /// The page being built has that row, so it scrolls there once laid out.
+    found: bool,
+}
+
+thread_local! {
+    static REVEAL: RefCell<Option<Reveal>> = const { RefCell::new(None) };
+}
+
+/// Scroll the row or section titled `title` into view when its page next draws.
+pub fn reveal(title: &'static str, scroll: &ScrollHandle) {
+    REVEAL.with(|r| *r.borrow_mut() = Some(Reveal { title: title.into(), scroll: scroll.clone(), found: false }));
+}
+
+/// The page has been built. A result it has no row for stays at the top, and isn't
+/// left waiting to scroll some later page.
+pub fn reveal_built() {
+    REVEAL.with(|r| {
+        let mut r = r.borrow_mut();
+        match r.as_mut() {
+            // Until the row is laid out, a page built again looks for it again.
+            Some(w) if w.found => w.found = false,
+            _ => *r = None,
+        }
+    });
+}
+
+/// `element`, scrolled to once it's laid out if a search result is waiting for `title`.
+fn anchored(title: &SharedString, element: Div) -> AnyElement {
+    let waiting = REVEAL.with(|r| {
+        let mut r = r.borrow_mut();
+        let w = r.as_mut().filter(|w| w.title == *title)?;
+        w.found = true;
+        Some(w.scroll.clone())
+    });
+    let Some(scroll) = waiting else { return element.into_any_element() };
+    let anchor = ScrollAnchor::for_handle(scroll.clone());
+    let target = anchor.clone();
+    element
+        .on_children_prepainted(move |_, window, cx| {
+            if REVEAL.with(|r| r.borrow_mut().take()).is_none() {
+                return;
+            }
+            // The anchor knows where the row is only once this frame is laid out, so
+            // the scroll happens before the next one, with a little room above it.
+            target.scroll_to(window, cx);
+            let scroll = scroll.clone();
+            window.on_next_frame(move |window, _| {
+                let at = scroll.offset();
+                scroll.set_offset(point(at.x, (at.y + px(REVEAL_MARGIN)).min(px(0.))));
+                window.refresh();
+            });
+        })
+        .id(ElementId::Name(title.clone()))
+        .anchor_scroll(Some(anchor))
+        .into_any_element()
+}
 
 /// A focus handle that lives as long as the element with this id.
 fn focus_for(id: &ElementId, window: &mut Window, cx: &mut App) -> FocusHandle {
@@ -44,13 +108,15 @@ pub fn page_header(title: impl Into<SharedString>, subtitle: impl Into<SharedStr
     div().flex().items_start().justify_between().gap(px(16.)).child(page_title(title, subtitle, p))
 }
 
-pub fn section(title: impl Into<SharedString>, body: impl IntoElement, p: Palette) -> Div {
-    div()
+pub fn section(title: impl Into<SharedString>, body: impl IntoElement, p: Palette) -> AnyElement {
+    let title = title.into();
+    let section = div()
         .flex()
         .flex_col()
         .gap(px(8.))
-        .child(div().text_size(px(13.)).text_color(p.secondary).child(title.into()))
-        .child(body)
+        .child(div().text_size(px(13.)).text_color(p.secondary).child(title.clone()))
+        .child(body);
+    anchored(&title, section)
 }
 
 /// Rows in a group, with a hairline between them.
@@ -73,12 +139,13 @@ pub fn row(
 
 pub fn row_with(title: impl Into<SharedString>, about: Option<AnyElement>, control: impl IntoElement) -> AnyElement {
     let height = if about.is_some() { px(56.) } else { px(48.) };
-    let name = div().text_size(px(14.)).line_height(px(20.)).child(title.into());
+    let title = title.into();
+    let name = div().text_size(px(14.)).line_height(px(20.)).child(title.clone());
     let mut text = div().flex().flex_col().gap(px(2.)).flex_1().min_w_0().child(name);
     if let Some(about) = about {
         text = text.child(about);
     }
-    div()
+    let row = div()
         .flex()
         .items_center()
         .justify_between()
@@ -87,8 +154,8 @@ pub fn row_with(title: impl Into<SharedString>, about: Option<AnyElement>, contr
         .px(px(16.))
         .py(px(8.))
         .child(text)
-        .child(div().flex().flex_none().items_center().gap(px(8.)).child(control))
-        .into_any_element()
+        .child(div().flex().flex_none().items_center().gap(px(8.)).child(control));
+    anchored(&title, row)
 }
 
 pub fn secondary(id: impl Into<ElementId>, label: impl Into<SharedString>, cx: &App) -> Button {

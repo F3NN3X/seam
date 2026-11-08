@@ -50,6 +50,8 @@ Seam leaves windows from apps running as administrator, windows that aren't resp
 - **Pin border**: a window pinned on top or sticky gets a Seam amber border, which wins over the focus border until you unpin it. Both colours are picked from a row of swatches under the Windows card on the Zones page: Windows accent, Seam amber, blue, teal, green, red, pink or white. **None** leaves that border to the app and Windows, and **Custom** opens a colour picker, with a palette, sliders and a hex field.
 - **Release pinned windows**, in the tray menu, takes back every pin and border Seam set. Seam does the same when you quit it. An update or a restart that you didn't ask for keeps the pins: the next start keeps the pins it finds and resets the borders.
 
+- **Tell me when a pinned window closes**, on the Zones page, is off until you turn it on. Seam can't stop an app closing, so it tells you afterwards: "Notepad was pinned and has closed. Click to reopen". A click starts the app again, the way a workspace starts a missing one, and pins its first new window within 15 seconds the same way. Release all, quitting Seam and a workspace's **Close** don't count.
+
 The three pin keys have no key until you set one on the Shortcuts page.
 
 If komorebi, GlazeWM or LeopardWM is running, Seam notices within 30 seconds and leaves placing windows to it: drag snapping, the zone keys, move and swap, and keeping windows in their zones are off, and the Zones page says why. **Another window manager handles my windows** on the Zones page does the same for any other one. The pointer remap, Line Up, workspaces, focus keys and pins keep working.
@@ -63,6 +65,8 @@ Arrange your windows the way you like them, then press **Capture current windows
 Each workspace's **...** menu has **Export...** and **Import...**. An imported workspace starts with launching off, and every app has to be ticked again, because a file from someone else shouldn't be able to start programs for you. Windows are mapped to your screens by device path, then by number and model, then by number, and any that match nothing stay where they are.
 
 Other apps, such as a Stream Deck, can switch workspaces through the local API.
+
+**Offer to restore my windows after I sign in**, on General, is off until you turn it on. Seam then keeps a hidden last session for each desk: which apps are where, and which are pinned. It saves it 30 seconds after it last snapped, pinned or switched, and again when you sign out or shut down. When Seam starts at sign-in, it asks "Restore your last session? Click to restore". A click works like a workspace switch that leaves other windows alone: windows go back to their zones, and pins come back. Nothing starts without the click. **Who reopens the apps** picks between Windows' Restart apps (Seam starts nothing and puts each window back as it appears, for up to a minute) and Seam (it starts the missing apps, and turns Windows' Restart apps off until you switch back or turn restore off).
 
 ### Tray menu
 

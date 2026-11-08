@@ -10,6 +10,8 @@ pub const WM_APP_LINEUP: u32 = WM_APP + 3;
 pub const WM_APP_RELOAD: u32 = WM_APP + 4;
 /// Wakes the main thread to drain the API command queue.
 pub const WM_APP_API: u32 = WM_APP + 5;
+/// Seam pinned, unpinned or placed a window, so the last session is worth saving again.
+pub const WM_APP_WINDOWS_CHANGED: u32 = WM_APP + 23;
 pub const PANEL_TITLE: &str = "Seam";
 
 /// One panel at a time. Returns true after raising a panel that's already open.

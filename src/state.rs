@@ -113,6 +113,14 @@ pub struct WmState {
     pub pin_color: String,
 }
 
+/// The last session saved for the desk that is connected (D120).
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SessionRef {
+    /// Unix seconds.
+    pub saved_at: u64,
+    pub windows: usize,
+}
+
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(default)]
 pub struct State {
@@ -125,6 +133,9 @@ pub struct State {
     pub screens: Vec<Screen>,
     pub borders: Vec<Border>,
     pub workspace: Option<WorkspaceRef>,
+    pub session: Option<SessionRef>,
+    /// Windows' "Restart apps" sign-in option was on when Seam last looked (D128).
+    pub restart_apps: bool,
     pub hotkey_errors: Vec<HotkeyError>,
     pub last_align: Option<AlignResult>,
     pub update: Option<UpdateState>,

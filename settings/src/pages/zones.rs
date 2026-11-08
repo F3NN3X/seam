@@ -560,6 +560,12 @@ pub fn render(panel: &mut Panel, window: &mut Window, cx: &mut Context<Panel>) -
             view.update(cx, |panel, cx| panel.patch(json!({ "windows": { "other_wm": on } }), window, cx))
         }
     });
+    let notify_close = switch("notify-pinned-close", windows_cfg.notify_pinned_close, window, cx, {
+        let view = view.clone();
+        move |on, window, cx| {
+            view.update(cx, |panel, cx| panel.patch(json!({ "windows": { "notify_pinned_close": on } }), window, cx))
+        }
+    });
     let other_about = match &detected {
         Some(name) => format!("{} found running", state::other_wm_title(name)),
         None => "Snapping and window moves step aside. The pointer remap keeps working.".to_string(),
@@ -594,6 +600,12 @@ pub fn render(panel: &mut Panel, window: &mut Window, cx: &mut Context<Panel>) -
             row("Focus border", Some("Colour the border of the window that has focus".into()), border, p),
             div().when(border_off.is_some(), |d| d.opacity(0.4)).child(focus_colour_row).into_any_element(),
             pin_colour_row,
+            row(
+                "Tell me when a pinned window closes",
+                Some("Click the notification to start the app again and pin its window".into()),
+                notify_close,
+                p,
+            ),
             row("Another window manager handles my windows", Some(other_about.into()), manual, p),
         ],
         p,

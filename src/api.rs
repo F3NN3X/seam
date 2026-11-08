@@ -112,6 +112,7 @@ pub enum Command {
         on: Option<bool>,
     },
     WmRelease,
+    SessionRestore,
     LineupStart,
     ArrangementAlign,
     ScreenIdentify(u32),
@@ -200,6 +201,7 @@ fn command(method: &str, p: &Value) -> Result<Command, RpcError> {
             Command::WindowPin { kind, on }
         }
         "wm.release" => Command::WmRelease,
+        "session.restore" => Command::SessionRestore,
         "lineup.start" => Command::LineupStart,
         "arrangement.align" => Command::ArrangementAlign,
         "screen.identify" => Command::ScreenIdentify(
@@ -231,7 +233,7 @@ fn allowed(command: &Command, peer: Peer) -> Result<(), RpcError> {
     }
     let permitted = match command {
         Command::ConfigPatch(_) => peer.panel,
-        Command::AppQuit | Command::WorkspaceCapture { .. } => peer.panel || peer.own_image,
+        Command::AppQuit | Command::WorkspaceCapture { .. } | Command::SessionRestore => peer.panel || peer.own_image,
         Command::UpdateReady => peer.own_image,
         _ => true,
     };

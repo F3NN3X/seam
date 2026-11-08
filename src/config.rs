@@ -164,6 +164,8 @@ pub struct WindowSettings {
     /// the default (D118, D122).
     pub focus_color: String,
     pub pin_color: String,
+    /// "Tell me when a pinned window closes" (D119).
+    pub notify_pinned_close: bool,
 }
 
 impl Default for WindowSettings {
@@ -173,6 +175,7 @@ impl Default for WindowSettings {
             other_wm: false,
             focus_color: palette::FOCUS_DEFAULT.into(),
             pin_color: palette::PIN_DEFAULT.into(),
+            notify_pinned_close: false,
         }
     }
 }
@@ -204,6 +207,17 @@ impl Default for UpdateSettings {
     }
 }
 
+/// Who reopens the apps of a restored last session (D128).
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum RestoreApps {
+    /// Windows' Restart apps, or the apps themselves. Seam only arranges them.
+    #[default]
+    Windows,
+    /// Seam starts the missing ones, and turns Windows' Restart apps off meanwhile.
+    Seam,
+}
+
 /// One set of screens and everything that belongs to it.
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
@@ -216,6 +230,10 @@ pub struct Desk {
     pub zones: BTreeMap<String, serde_json::Value>,
     /// Kept as raw JSON until workspaces exist.
     pub workspaces: Vec<serde_json::Value>,
+    /// The hidden "Last session" workspace (D120), raw like the workspaces. It is
+    /// kept apart from them, so no list, menu or shortcut shows it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_session: Option<serde_json::Value>,
 }
 
 impl Desk {
@@ -243,6 +261,14 @@ pub struct Config {
     pub hotkeys: Hotkeys,
     pub zones: ZoneSettings,
     pub windows: WindowSettings,
+    /// "Offer to restore my windows after I sign in" (D120). Off saves no session
+    /// and deletes the saved ones.
+    pub restore_session: bool,
+    /// Who reopens the last session's apps (D128).
+    pub restore_apps: RestoreApps,
+    /// Windows' `RestartApps` as it was before Seam turned it off, `u32::MAX` if it
+    /// wasn't there, or `None` while Seam leaves it alone. Only the tray writes it.
+    pub restore_apps_saved: Option<u32>,
     pub updates: UpdateSettings,
     pub api: ApiSettings,
     /// Layout signature (sorted device paths) -> desk.
@@ -266,6 +292,9 @@ impl Default for Config {
             hotkeys: Hotkeys::default(),
             zones: ZoneSettings::default(),
             windows: WindowSettings::default(),
+            restore_session: false,
+            restore_apps: RestoreApps::Windows,
+            restore_apps_saved: None,
             updates: UpdateSettings::default(),
             api: ApiSettings::default(),
             desks: BTreeMap::new(),
@@ -344,6 +373,9 @@ impl Config {
         let mut config: Config = serde_json::from_value(merged)?;
         config.windows.focus_color = palette::normalise(&config.windows.focus_color, palette::FOCUS_DEFAULT);
         config.windows.pin_color = palette::normalise(&config.windows.pin_color, palette::PIN_DEFAULT);
+        if !config.restore_session {
+            config.desks.values_mut().for_each(|desk| desk.last_session = None);
+        }
         Ok(config)
     }
 

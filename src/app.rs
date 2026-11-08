@@ -8,18 +8,22 @@ use crate::layout::{Link, Live};
 use crate::log;
 use crate::monitors::{self, Mon};
 use crate::snap::{self, WM_APP_REFIT, WM_APP_SNAP_BLOCKED};
-use crate::switcher::{self, CaptureJob, Screen as SwitchScreen, SwitchJob, WM_APP_CAPTURED, WM_APP_SWITCHED};
-use crate::tray::{self, CLASS, WM_APP_API, WM_APP_LINEUP};
+use crate::switcher::{
+    self, CaptureJob, Screen as SwitchScreen, SwitchJob, WM_APP_CAPTURED, WM_APP_SESSION, WM_APP_SWITCHED,
+};
+use crate::tray::{self, CLASS, WM_APP_API, WM_APP_LINEUP, WM_APP_WINDOWS_CHANGED};
+use crate::wm::Pinned;
 use crate::{arrange, ease, hotkey, identify, overlay, wincontrol, wm};
 use seam::api::{self, Client, Command, PinKind, Reply, RpcError, WindowVerb};
-use seam::config::TrayClick;
+use seam::config::{RestoreApps, TrayClick};
 use seam::direction::Dir;
 use seam::state::{
-    self, AlignResult, DeskRef, HotkeyError, Remap, Screen, Snapshot, State, UpdateState, WmState, WorkspaceRef,
+    self, AlignResult, DeskRef, HotkeyError, Remap, Screen, SessionRef, Snapshot, State, UpdateState, WmState,
+    WorkspaceRef,
 };
-use seam::workspace::{self, Workspace};
+use seam::workspace::{self, Rule, Session, Workspace, SESSION_ID};
 use seam::zones;
-use seam::{autostart, install, package, process, updates};
+use seam::{autostart, install, package, process, restart_apps, updates};
 use serde_json::{json, Value};
 use std::cell::RefCell;
 use std::os::windows::process::CommandExt;
@@ -62,6 +66,18 @@ const TIMER_UPDATE: usize = 6;
 const TIMER_AUTO_INSTALL: usize = 7;
 /// Retries taking in another window manager's news the app was too busy for (menu open).
 const TIMER_OTHER_WM: usize = 8;
+/// Saves the last session a while after Seam last pinned, placed or switched (D120).
+const TIMER_SESSION: usize = 9;
+const SESSION_SAVE_AFTER_MS: u32 = 30_000;
+/// Offers the last session once the desktop has settled after sign-in.
+const TIMER_SESSION_OFFER: usize = 10;
+const SESSION_OFFER_AFTER_MS: u32 = 5_000;
+/// Tries to show the offer while the shell isn't ready for notifications yet.
+const SESSION_OFFER_TRIES: u8 = 12;
+/// How long the end of a Windows session waits for the last session's capture.
+const SESSION_END_WAIT: Duration = Duration::from_secs(2);
+/// How long a restore whose apps Windows reopens waits for their windows (D128).
+const ARRANGE_WAIT: Duration = Duration::from_secs(60);
 const FIRST_UPDATE_CHECK_MS: u32 = 2 * 60 * 1000;
 const UPDATE_CHECK_EVERY_MS: u32 = 24 * 60 * 60 * 1000;
 const AUTO_INSTALL_RETRY_MS: u32 = 60 * 1000;
@@ -98,6 +114,10 @@ enum BalloonAction {
     None,
     LineUp,
     OpenPanel(&'static str),
+    /// Start the app of the pinned window that closed (D119).
+    Reopen,
+    /// Restore the last session offered at sign-in (D120).
+    RestoreSession,
 }
 
 /// Writes config.json on its own thread, so the main thread never does file I/O.
@@ -181,6 +201,17 @@ struct App {
     /// The user asked to quit, so pins and borders go with the tray. An update
     /// or the Store copy taking over keeps them for the next tray to adopt.
     release_on_exit: bool,
+    /// The pinned window that closed last, for the notice's click.
+    reopen: Option<Pinned>,
+    /// The last session as it was when it was offered, for the notice's click.
+    session_offer: Option<Workspace>,
+    session_offer_tries: u8,
+    /// A last-session capture is running, for the desk it started on.
+    session_capture: Option<String>,
+    /// Windows asked whether the session may end, and the capture for it has started.
+    session_ending: bool,
+    /// Windows' Restart apps was on when Seam last looked (D128).
+    restart_apps: bool,
 }
 
 /// What a worker found in the updater's state file.
@@ -324,7 +355,8 @@ fn relink(app: &mut App) {
     hook::set_live(Live { rects: app.mons.iter().map(|m| m.rect).collect(), links: app.links.clone() });
     snap::update(app.hwnd, &app.cfg, &app.sig, &app.mons, aside(app).as_deref());
     let windows = &app.cfg.windows;
-    wm::configure(app.hwnd.0 as isize, windows.focus_border, &windows.focus_color, &windows.pin_color);
+    let owner = app.hwnd.0 as isize;
+    wm::configure(owner, windows.focus_border, &windows.focus_color, &windows.pin_color, windows.notify_pinned_close);
     arm_hook(app);
     update_tip(app);
 }
@@ -377,8 +409,10 @@ fn snapshot(app: &App) -> Snapshot {
         let saved = app.cfg.desks.get(&app.sig)?;
         workspace::list(&saved.workspaces).into_iter().find(|w| w.id == *id)
     });
+    let session = saved_session(app).map(|s| SessionRef { saved_at: s.saved_at, windows: s.windows.len() });
     let state = State {
         workspace: workspace.map(|w| WorkspaceRef { id: w.id, name: w.name }),
+        session,
         seam_version: env!("CARGO_PKG_VERSION").into(),
         packaged: app.packaged,
         update: app.update.clone(),
@@ -397,6 +431,7 @@ fn snapshot(app: &App) -> Snapshot {
         hotkey_errors: app.hotkey_errors.clone(),
         last_align: app.last_align.clone(),
         clients: app.clients.clone(),
+        restart_apps: app.restart_apps,
     };
     Snapshot { state, config: serde_json::to_value(&app.cfg).unwrap_or_default() }
 }
@@ -498,10 +533,20 @@ fn start_switch(app: &mut App, id: Option<&str>, name: Option<&str>) -> Reply {
     let Some(workspace) = found else {
         return Err(RpcError::new(api::NOT_FOUND, "no such workspace on this desk"));
     };
+    switch_to(app, workspace)
+}
+
+/// Hand a workspace, saved or the last session, to the switch worker.
+fn switch_to(app: &mut App, workspace: Workspace) -> Reply {
+    start_switch_job(app, workspace, None)
+}
+
+fn start_switch_job(app: &mut App, workspace: Workspace, arrange_for: Option<Duration>) -> Reply {
     log::info!("switching to workspace {}", workspace.name);
     // A hotkey gives the tray the right to take focus. For anyone else this is all it can do.
     let _ = unsafe { AllowSetForegroundWindow(std::process::id()) };
-    let job = SwitchJob { owner: app.hwnd.0 as isize, workspace, screens: job_screens(app), gap: app.cfg.zones.gap };
+    let (owner, screens, gap) = (app.hwnd.0 as isize, job_screens(app), app.cfg.zones.gap);
+    let job = SwitchJob { owner, workspace, screens, gap, arrange_for };
     if switcher::switch(job) {
         Ok(json!({ "ok": true }))
     } else {
@@ -568,7 +613,11 @@ fn switched(app: &mut App) {
         done.placed,
         done.skipped.len()
     );
-    app.workspace = Some(done.id.clone());
+    // The last session isn't a workspace anyone can pick, so it never shows as the one in use.
+    if done.id != SESSION_ID {
+        app.workspace = Some(done.id.clone());
+    }
+    windows_changed(app);
     publish(app);
     let skipped: Vec<Value> =
         done.skipped.iter().map(|(app, reason)| json!({ "app": app, "reason": reason })).collect();
@@ -644,6 +693,174 @@ fn captured(app: &mut App) {
     notify(app, "Workspace captured", &body, BalloonAction::OpenPanel("workspaces"));
 }
 
+// ---- Last session (D120)
+
+/// The last session saved for the desk that is connected.
+fn saved_session(app: &App) -> Option<Session> {
+    app.cfg.desks.get(&app.sig)?.last_session.as_ref().and_then(Session::parse)
+}
+
+/// Seam pinned, placed or switched, so save the last session once things have been
+/// quiet for a while. A newer change starts the wait again.
+fn windows_changed(app: &App) {
+    if app.cfg.restore_session {
+        unsafe { SetTimer(Some(app.hwnd), TIMER_SESSION, SESSION_SAVE_AFTER_MS, None) };
+    }
+}
+
+/// Capture the last session on a worker. One at a time.
+fn start_session_capture(app: &mut App) {
+    if !app.cfg.restore_session || app.session_capture.is_some() {
+        return;
+    }
+    let job = CaptureJob { owner: app.hwnd.0 as isize, screens: job_screens(app), gap: app.cfg.zones.gap };
+    if switcher::capture_session(job) {
+        app.session_capture = Some(app.sig.clone());
+    }
+}
+
+/// Keep a finished capture as the desk's last session. An empty one is more likely
+/// apps already gone at sign-out than a choice, so the last saved one stays.
+fn store_session(app: &mut App, rules: Vec<Rule>) {
+    let Some(sig) = app.session_capture.take() else { return };
+    if rules.is_empty() || !app.cfg.restore_session {
+        return;
+    }
+    let Some(desk) = app.cfg.desks.get_mut(&sig) else { return };
+    log::info!("last session saved: {} windows", rules.len());
+    desk.last_session = Some(Session { saved_at: unix_now(), windows: rules }.to_value());
+    persist(app);
+    publish(app);
+}
+
+fn session_captured(app: &mut App) {
+    if let Some(rules) = switcher::take_session() {
+        store_session(app, rules);
+    }
+}
+
+/// Windows asks whether the session may end. Capture now, while the apps are still
+/// there, and never hold up the sign-out.
+fn query_end_session(app: &mut App) {
+    app.session_ending = true;
+    start_session_capture(app);
+}
+
+/// Windows is ending the session: finish the capture started at
+/// `WM_QUERYENDSESSION` and write it out before the process goes. A capture that
+/// isn't done in time leaves the last saved session as it was.
+fn end_session(app: &mut App) {
+    if !app.cfg.restore_session {
+        return;
+    }
+    // Later than the question, apps may already be closing, so only capture now if it was missed.
+    if !app.session_ending {
+        start_session_capture(app);
+    }
+    if app.session_capture.is_some() {
+        match switcher::wait_session(SESSION_END_WAIT) {
+            Some(rules) => store_session(app, rules),
+            None => log::info!("last session not captured in time, the saved one stays"),
+        }
+    }
+    if let Some(saver) = app.saver.take() {
+        saver.finish();
+    }
+}
+
+/// After a sign-in, offer the last session once. Returns whether that's settled,
+/// shown or with nothing to offer.
+fn offer_session(app: &mut App) -> bool {
+    let Some(session) = saved_session(app).filter(|_| app.cfg.restore_session) else { return true };
+    // The click restores what was offered, even if a save replaces it meanwhile.
+    app.session_offer = Some(session.workspace());
+    let shown =
+        notify(app, "Last session", "Restore your last session? Click to restore", BalloonAction::RestoreSession);
+    app.session_offer_tries += 1;
+    shown || app.session_offer_tries >= SESSION_OFFER_TRIES
+}
+
+/// Run the last session as a workspace: nothing else is touched, and the pins come
+/// back by rule. Seam starts the missing apps as captured only when it reopens them;
+/// otherwise Windows or the apps do, and Seam places each window as it appears (D128).
+fn restore_session(app: &mut App, session: Workspace) -> Reply {
+    let mode = app.cfg.restore_apps;
+    log::info!("restoring the last session: {} windows, apps reopened by {mode:?}", session.windows.len());
+    let arrange_for = (mode == RestoreApps::Windows).then_some(ARRANGE_WAIT);
+    start_switch_job(app, session, arrange_for)
+}
+
+// ---- Windows' Restart apps (D128)
+
+/// Seam reopens the apps, so Windows' Restart apps would open them a second time.
+fn holds_restart_apps(cfg: &Config) -> bool {
+    cfg.restore_session && cfg.restore_apps == RestoreApps::Seam
+}
+
+/// Turn Windows' Restart apps off while Seam reopens the apps, keeping the value it
+/// had the first time, and give that value back when Seam stops. A failed write is
+/// logged and the mode stays as chosen.
+fn sync_restart_apps(app: &mut App) {
+    let wanted = holds_restart_apps(&app.cfg);
+    match (wanted, app.cfg.restore_apps_saved) {
+        (true, None) => match restart_apps::read() {
+            Ok(found) => {
+                app.cfg.restore_apps_saved = Some(found);
+                persist(app);
+                match restart_apps::write(0) {
+                    Ok(()) => log::info!("Windows' Restart apps turned off (was {found:#x})"),
+                    Err(e) => log::info!("Windows' Restart apps not turned off: {e:?}"),
+                }
+            }
+            Err(e) => log::info!("Windows' Restart apps not read: {e:?}"),
+        },
+        (false, Some(saved)) => {
+            match restart_apps::write(saved) {
+                Ok(()) => log::info!("Windows' Restart apps given back ({saved:#x})"),
+                Err(e) => log::info!("Windows' Restart apps not given back: {e:?}"),
+            }
+            app.cfg.restore_apps_saved = None;
+            persist(app);
+        }
+        _ => {}
+    }
+    app.restart_apps = restart_apps::is_on();
+}
+
+/// At start: the user may have turned Restart apps back on in Windows. Seam doesn't
+/// turn it off again, it says so in the panel.
+fn check_restart_apps(app: &mut App) {
+    if holds_restart_apps(&app.cfg) && app.cfg.restore_apps_saved.is_some() {
+        app.restart_apps = restart_apps::is_on();
+        if app.restart_apps {
+            log::info!("Windows' Restart apps is on again, so apps may open twice");
+        }
+        return;
+    }
+    sync_restart_apps(app);
+}
+
+// ---- Pinned window closed (D119)
+
+fn pin_closed(app: &mut App) {
+    let Some(gone) = wm::take_closed() else { return };
+    if !app.cfg.windows.notify_pinned_close {
+        return;
+    }
+    let body = format!("{} was pinned and has closed. Click to reopen", switcher::closed_name(&gone));
+    // One notice at a time: a second close replaces what the click reopens.
+    app.reopen = Some(gone);
+    notify(app, "Pinned window closed", &body, BalloonAction::Reopen);
+}
+
+fn reopen_closed(app: &mut App) {
+    if let Some(gone) = app.reopen.take() {
+        if !switcher::reopen(gone) {
+            log::info!("reopen: couldn't start the worker");
+        }
+    }
+}
+
 fn set_remap(app: &mut App, on: bool) {
     app.cfg.enabled = on;
     persist(app);
@@ -682,8 +899,12 @@ fn start_lineup(app: &mut App) {
 /// The panel writes config.json itself; pick up what it changed.
 fn reload(app: &mut App) {
     log::info!("config reloaded");
+    // The tray keeps what Restart apps was, and the file may not have its last save yet.
+    let saved = app.cfg.restore_apps_saved;
     app.cfg = Config::load();
+    app.cfg.restore_apps_saved = saved;
     log::apply(app.cfg.debug_log);
+    sync_restart_apps(app);
     migrate_hotkeys(app);
     apply_hotkeys(app);
     refresh(app);
@@ -850,7 +1071,10 @@ fn patch_config(app: &mut App, patch: &Value) -> Reply {
         return refused("That config is from a different version of Seam");
     }
     next.layouts.clear();
+    // What Windows' Restart apps was before Seam changed it is the tray's to keep.
+    next.restore_apps_saved = app.cfg.restore_apps_saved;
     app.cfg = next;
+    sync_restart_apps(app);
     persist(app);
     log::apply(app.cfg.debug_log);
     apply_hotkeys(app);
@@ -969,6 +1193,10 @@ fn run_command(app: &mut App, queued: Queued) {
             wm::release(Some(reply));
             return;
         }
+        Command::SessionRestore => match saved_session(app) {
+            Some(session) => restore_session(app, session.workspace()),
+            None => Err(RpcError::new(api::NOT_FOUND, "No last session is saved for this desk")),
+        },
         Command::WorkspaceSwitch { id, name } => start_switch(app, id.as_deref(), name.as_deref()),
         Command::WorkspaceCapture { name, into } => {
             if let Some(refusal) = start_capture(app, name, into, Some(reply.clone())) {
@@ -1120,6 +1348,16 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                         Some(BalloonAction::OpenPanel(page)) => {
                             with_app(|a| open_panel(a, Some(page)));
                         }
+                        Some(BalloonAction::Reopen) => {
+                            with_app(reopen_closed);
+                        }
+                        Some(BalloonAction::RestoreSession) => {
+                            with_app(|a| {
+                                if let Some(Err(e)) = a.session_offer.take().map(|s| restore_session(a, s)) {
+                                    log::info!("last session: {}", e.message);
+                                }
+                            });
+                        }
                         _ => {}
                     }
                 }
@@ -1183,6 +1421,43 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
         }
         WM_APP_CAPTURED => {
             with_app(captured);
+            LRESULT(0)
+        }
+        WM_APP_SESSION => {
+            with_app(session_captured);
+            LRESULT(0)
+        }
+        WM_APP_WINDOWS_CHANGED => {
+            with_app(|a| windows_changed(a));
+            LRESULT(0)
+        }
+        WM_TIMER if wparam.0 == TIMER_SESSION => {
+            if with_app(start_session_capture).is_some() {
+                let _ = KillTimer(Some(hwnd), TIMER_SESSION);
+            }
+            LRESULT(0)
+        }
+        WM_TIMER if wparam.0 == TIMER_SESSION_OFFER => {
+            if with_app(offer_session).unwrap_or(false) {
+                let _ = KillTimer(Some(hwnd), TIMER_SESSION_OFFER);
+            }
+            LRESULT(0)
+        }
+        wm::WM_APP_PIN_CLOSED => {
+            with_app(pin_closed);
+            LRESULT(0)
+        }
+        WM_QUERYENDSESSION => {
+            with_app(query_end_session);
+            LRESULT(1)
+        }
+        WM_ENDSESSION => {
+            if wparam.0 != 0 {
+                with_app(end_session);
+            } else {
+                // The sign-out was called off.
+                with_app(|a| a.session_ending = false);
+            }
             LRESULT(0)
         }
         WM_APP_API => {
@@ -1458,12 +1733,19 @@ pub fn run() {
             update_failed: false,
             other_wm: None,
             release_on_exit: false,
+            reopen: None,
+            session_offer: None,
+            session_offer_tries: 0,
+            session_capture: None,
+            session_ending: false,
+            restart_apps: false,
         };
         APP.with(|a| *a.borrow_mut() = Some(app));
         with_app(|a| {
             add_icon(a);
             migrate_hotkeys(a);
             apply_hotkeys(a);
+            check_restart_apps(a);
             refresh(a);
             api_server::start(a.hwnd.0 as isize, a.token.clone(), snapshot(a), a.cfg.api.enabled);
         });
@@ -1485,9 +1767,14 @@ pub fn run() {
         }
         // A launch from the Start menu or by hand opens the window too. A
         // sign-in launch, a restart after an update and a `--line-up` start don't.
-        let quiet = line_up || updated_from.is_some() || has_flag("--tray-only") || package::login_launch();
+        let login = package::login_launch();
+        let quiet = line_up || updated_from.is_some() || has_flag("--tray-only") || login;
         if !quiet {
             with_app(|a| open_panel(a, None));
+        }
+        // After a sign-in, offer the last session once the desktop has settled (D120).
+        if login && with_app(|a| a.cfg.restore_session) == Some(true) {
+            SetTimer(Some(hwnd), TIMER_SESSION_OFFER, SESSION_OFFER_AFTER_MS, None);
         }
         if line_up {
             let _ = PostMessageW(Some(hwnd), WM_APP_LINEUP, WPARAM(0), LPARAM(0));

@@ -4,6 +4,7 @@ use crate::pages::updates::UpdateUi;
 use crate::theme::palette;
 use crate::{pages, search, ui};
 use gpui_kit::component::button::{Button, ButtonVariants};
+use gpui_kit::component::color_picker::{ColorPickerEvent, ColorPickerState};
 use gpui_kit::component::input::{Input, InputEvent, InputState};
 use gpui_kit::component::notification::Notification;
 use gpui_kit::component::scroll::ScrollableElement;
@@ -101,12 +102,11 @@ pub struct Panel {
     /// The name field should take focus when it next draws.
     pub focus_name: bool,
     pub name_input: Entity<InputState>,
-    /// The custom colour field under a swatch row: which `windows` setting it sets, and
-    /// whether what was typed was refused. It takes focus when it next draws.
-    pub colour_open: Option<&'static str>,
-    pub colour_invalid: bool,
-    pub colour_focus: bool,
-    pub colour_input: Entity<InputState>,
+    /// The pickers behind the Custom swatch of the focus and pin colour rows, and a
+    /// counter so only the last colour picked in a burst is sent.
+    pub focus_picker: Entity<ColorPickerState>,
+    pub pin_picker: Entity<ColorPickerState>,
+    pub colour_generation: u64,
     /// The Gap slider. It sends the new gap when it's let go.
     pub gap: Entity<SliderState>,
     pub search: Entity<InputState>,
@@ -140,7 +140,8 @@ impl Panel {
         let page = page.or(saved.and_then(|s| Page::from_arg(s.trim()))).unwrap_or(Page::Displays);
         let search = cx.new(|cx| InputState::new(window, cx).placeholder("Search"));
         let name_input = cx.new(|cx| InputState::new(window, cx).placeholder("Workspace name"));
-        let colour_input = cx.new(|cx| InputState::new(window, cx).placeholder("#RRGGBB"));
+        let focus_picker = cx.new(|cx| ColorPickerState::new(window, cx));
+        let pin_picker = cx.new(|cx| ColorPickerState::new(window, cx));
         let gap =
             cx.new(|_| SliderState::new().min(0.).max(32.).step(2.).default_value(Config::default().zones.gap as f32));
         let subscriptions = vec![
@@ -158,10 +159,13 @@ impl Panel {
                     pages::workspaces::finish_naming(this, window, cx);
                 }
             }),
-            cx.subscribe_in(&colour_input, window, |this, _, event: &InputEvent, window, cx| {
-                if matches!(event, InputEvent::PressEnter { .. } | InputEvent::Blur) {
-                    pages::zones::finish_colour(this, window, cx);
-                }
+            cx.subscribe_in(&focus_picker, window, |this, _, event: &ColorPickerEvent, window, cx| {
+                let ColorPickerEvent::Change(colour) = event;
+                pages::zones::picked("focus_color", *colour, this, window, cx);
+            }),
+            cx.subscribe_in(&pin_picker, window, |this, _, event: &ColorPickerEvent, window, cx| {
+                let ColorPickerEvent::Change(colour) = event;
+                pages::zones::picked("pin_color", *colour, this, window, cx);
             }),
             cx.subscribe_in(&search, window, |this, input, event: &InputEvent, _, cx| {
                 if matches!(event, InputEvent::Change) {
@@ -204,10 +208,9 @@ impl Panel {
             naming: false,
             focus_name: false,
             name_input,
-            colour_open: None,
-            colour_invalid: false,
-            colour_focus: false,
-            colour_input,
+            focus_picker,
+            pin_picker,
+            colour_generation: 0,
             gap,
             search,
             focus,

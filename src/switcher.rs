@@ -33,6 +33,8 @@ pub const WM_APP_SESSION: u32 = WM_APP + 25;
 /// How long a started app gets to show its window.
 const LAUNCH_WAIT: Duration = Duration::from_secs(15);
 const POLL: Duration = Duration::from_millis(250);
+/// How often an arranging switch looks for windows that have appeared.
+const ARRANGE_POLL: Duration = Duration::from_millis(500);
 /// Time for an app to react to a move before the next step.
 const SETTLE: Duration = Duration::from_millis(120);
 /// A window this close to where it was put counts as there.
@@ -236,6 +238,9 @@ pub struct SwitchJob {
     pub workspace: Workspace,
     pub screens: Vec<Screen>,
     pub gap: u32,
+    /// Start nothing, and wait this long for the windows to appear, placing each as it
+    /// does: a last session whose apps Windows reopens (D128).
+    pub arrange_for: Option<Duration>,
 }
 
 /// How a switch went: what the event says.
@@ -466,6 +471,62 @@ fn place_all(moves: &[Move], skipped: &mut Vec<(String, String)>, cancelled: &dy
     moved
 }
 
+/// Place the windows of the rules `which` that have one, then pin again what the
+/// rule says was pinned. Returns how many moved.
+fn place_rules(
+    ws: &Workspace,
+    found: &[Option<isize>],
+    which: &[usize],
+    geos: &[Geo],
+    skipped: &mut Vec<(String, String)>,
+    cancelled: &dyn Fn() -> bool,
+) -> usize {
+    let mut moves = Vec::new();
+    for i in which {
+        let (rule, Some(hwnd)) = (&ws.windows[*i], found[*i]) else { continue };
+        let h = hwnd_of(hwnd);
+        // A screen that isn't connected, or a window to keep where it is, isn't moved.
+        let Some(geo) = geos.iter().find(|g| g.id == rule.monitor) else { continue };
+        if rule.target == (Target::State { state: WinState::Keep }) || !unsafe { IsWindow(Some(h)) }.as_bool() {
+            continue;
+        }
+        let app = app_name(rule);
+        if winutil::is_sticky(h) {
+            skipped.push((app, "sticky".into()));
+            continue;
+        }
+        if winutil::is_elevated_over_us(h) {
+            skipped.push((app, "elevated".into()));
+            continue;
+        }
+        let Some(before) = winutil::window_rect(h) else { continue };
+        let kind = match workspace::rect_for(&rule.target, &geo.zones, geo.work) {
+            Some(rect) => Kind::Rect(rect),
+            None => {
+                let on_it = geo.bounds.contains(centre(before).0, centre(before).1);
+                if winutil::is_maximized(h) && on_it {
+                    continue;
+                }
+                Kind::Max { work: geo.work, normal: rule.normal_rect.map(|f| workspace::from_fractions(f, geo.work)) }
+            }
+        };
+        let crosses = winutil::monitor_dpi(h) != geo.dpi;
+        moves.push(Move { hwnd, app, kind, crosses, before });
+    }
+    let placed = place_all(&moves, skipped, cancelled);
+    if cancelled() {
+        return placed;
+    }
+    // The last session pins what was pinned again, by rule, because a window's handle
+    // doesn't outlive a sign-out.
+    for i in which {
+        if let (Some(pin), Some(hwnd)) = (ws.windows[*i].pin, found[*i]) {
+            pin_again(hwnd, pin);
+        }
+    }
+    placed
+}
+
 /// Does the whole switch. Returns `None` if a newer one replaced it.
 fn run_switch(job: &SwitchJob, mine: u64) -> Option<Switched> {
     let cancelled = || SWITCH_GEN.load(Ordering::SeqCst) != mine;
@@ -483,7 +544,9 @@ fn run_switch(job: &SwitchJob, mine: u64) -> Option<Switched> {
     let mut waiting: Vec<(usize, Instant)> = Vec::new();
     let mut started: Vec<usize> = Vec::new();
     let mut reused: Vec<usize> = Vec::new();
-    let wanted = ws.windows.iter().enumerate().filter(|(i, r)| ws.launch_missing && found[*i].is_none() && r.launch);
+    // A switch that only arranges starts nothing.
+    let launching = ws.launch_missing && job.arrange_for.is_none();
+    let wanted = ws.windows.iter().enumerate().filter(|(i, r)| launching && found[*i].is_none() && r.launch);
     for (i, rule) in wanted {
         let key = launch_key(rule);
         // A switch that was replaced already started this app, so wait for its window.
@@ -524,49 +587,44 @@ fn run_switch(job: &SwitchJob, mine: u64) -> Option<Switched> {
         waiting = still;
     }
 
-    // Place.
-    let mut moves = Vec::new();
-    for (rule, hwnd) in ws.windows.iter().zip(&found) {
-        let Some(hwnd) = *hwnd else { continue };
-        let h = hwnd_of(hwnd);
-        // A screen that isn't connected, or a window to keep where it is, isn't moved.
-        let Some(geo) = geos.iter().find(|g| g.id == rule.monitor) else { continue };
-        if rule.target == (Target::State { state: WinState::Keep }) || !unsafe { IsWindow(Some(h)) }.as_bool() {
-            continue;
-        }
-        let app = app_name(rule);
-        if winutil::is_sticky(h) {
-            skipped.push((app, "sticky".into()));
-            continue;
-        }
-        if winutil::is_elevated_over_us(h) {
-            skipped.push((app, "elevated".into()));
-            continue;
-        }
-        let Some(before) = winutil::window_rect(h) else { continue };
-        let kind = match workspace::rect_for(&rule.target, &geo.zones, geo.work) {
-            Some(rect) => Kind::Rect(rect),
-            None => {
-                let on_it = geo.bounds.contains(centre(before).0, centre(before).1);
-                if winutil::is_maximized(h) && on_it {
-                    continue;
-                }
-                Kind::Max { work: geo.work, normal: rule.normal_rect.map(|f| workspace::from_fractions(f, geo.work)) }
+    let mut placed = 0;
+    if let Some(wait) = job.arrange_for {
+        // Something else opens the windows, so place each one as it appears, once per rule.
+        let mut done = vec![false; ws.windows.len()];
+        let since = Instant::now();
+        loop {
+            let ready: Vec<usize> = (0..done.len()).filter(|i| !done[*i] && found[*i].is_some()).collect();
+            if !ready.is_empty() {
+                placed += place_rules(ws, &found, &ready, &geos, &mut skipped, &cancelled);
+                ready.iter().for_each(|i| done[*i] = true);
             }
-        };
-        let crosses = winutil::monitor_dpi(h) != geo.dpi;
-        moves.push(Move { hwnd, app, kind, crosses, before });
+            if done.iter().all(|d| *d) || since.elapsed() >= wait {
+                break;
+            }
+            std::thread::sleep(ARRANGE_POLL);
+            if cancelled() {
+                return None;
+            }
+            let claimed: HashSet<isize> = found.iter().flatten().copied().collect();
+            let fresh: Vec<Candidate> =
+                snapshot().into_iter().map(|s| s.cand).filter(|c| !claimed.contains(&c.hwnd)).collect();
+            let missing: Vec<usize> = (0..done.len()).filter(|i| found[*i].is_none()).collect();
+            let rules: Vec<Rule> = missing.iter().map(|i| ws.windows[*i].clone()).collect();
+            for (i, hit) in missing.into_iter().zip(workspace::assign(&rules, &fresh)) {
+                found[i] = hit;
+            }
+        }
+        let absent: Vec<String> =
+            ws.windows.iter().zip(&found).filter(|(_, h)| h.is_none()).map(|(r, _)| app_name(r)).collect();
+        let shown = found.iter().flatten().count();
+        log::info!("{}: placed {shown} of {}, never showed: {}", ws.name, found.len(), absent.join(", "));
+        skipped.extend(absent.into_iter().map(|app| (app, "timeout".to_string())));
+    } else {
+        let all: Vec<usize> = (0..found.len()).collect();
+        placed = place_rules(ws, &found, &all, &geos, &mut skipped, &cancelled);
     }
-    let placed = place_all(&moves, &mut skipped, &cancelled);
     if cancelled() {
         return None;
-    }
-    // The last session pins what was pinned again, by rule, because a window's handle
-    // doesn't outlive a sign-out.
-    for (rule, hwnd) in ws.windows.iter().zip(&found) {
-        if let (Some(pin), Some(hwnd)) = (rule.pin, *hwnd) {
-            pin_again(hwnd, pin);
-        }
     }
 
     // Other windows on this desk's screens: only ones that were there before the switch began,
@@ -623,7 +681,8 @@ fn run_switch(job: &SwitchJob, mine: u64) -> Option<Switched> {
     }
 
     // Focus the first window. The tray has foreground rights after a hotkey; otherwise this may be refused, and then it stays.
-    if let Some(Some(first)) = found.first() {
+    // A switch that waited up to a minute would take focus from whatever the user opened since.
+    if let Some(Some(first)) = found.first().filter(|_| job.arrange_for.is_none()) {
         let h = hwnd_of(*first);
         unsafe {
             if winutil::is_minimized(h) {

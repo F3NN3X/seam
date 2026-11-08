@@ -316,7 +316,7 @@ Set up first: turn on **Start with Windows** and **Offer to restore my windows a
 - [ ] **Off by default.** On a fresh config the switch is off. Snap a few windows and wait a minute: `config.json` has no `last_session`, and the log has no `last session saved` line.
 - [ ] **Saved after changes.** Turn the switch on. Snap a window into a zone, pin another on top and make a third sticky. About 30 s after the last of these, the log says `last session saved: n windows`, and `config.json` holds `last_session` under the desk, with `"pin": "top"` and `"pin": "sticky"` on those rules. Keep snapping every few seconds: no save until 30 s after you stop. Leave the PC alone for 5 minutes: no more saves.
 - [ ] **Hidden.** The Workspaces page, the tray menu's Workspaces, Shortcuts and `workspaces.list` don't show a "Last session". `state.get` shows `session` with `saved_at` and `windows` for this desk, and `null` on a desk that has none.
-- [ ] **Sign out and in.** Arrange Notepad, Windows Terminal and a browser in zones, pin Notepad on top, and sign out within 30 s of the last change. The log ends with `last session saved`. Sign in: about 5 s after the desktop appears, "Last session" says "Restore your last session? Click to restore". Click it: missing apps start, every window goes back to its zone, and Notepad is on top with the pin border again. Windows that were already open, and anything else on screen, are left where they are.
+- [ ] **Sign out and in.** Arrange Notepad, Windows Terminal and a browser in zones, pin Notepad on top, and sign out within 30 s of the last change. The log ends with `last session saved`. Sign in: about 5 s after the desktop appears, "Last session" says "Restore your last session? Click to restore". Click it with **Who reopens the apps** on Seam: missing apps start, every window goes back to its zone, and Notepad is on top with the pin border again. Windows that were already open, and anything else on screen, are left where they are.
 - [ ] **No click.** Sign out and in again and let the notification go. Nothing starts and nothing moves.
 - [ ] **Reboot.** Restart Windows with the same windows open. After sign-in the offer shows, and the click restores them as above. Window handles changed, so the pins come back by app.
 - [ ] **Apps that start themselves.** Have Discord or another app that starts at sign-in in the session. After sign-in, click the offer: Seam uses the window that's already open, starts no second copy, and puts it in its zone.
@@ -327,6 +327,24 @@ Set up first: turn on **Start with Windows** and **Offer to restore my windows a
 - [ ] **Other desk.** Unplug to "Laptop only" and sign out and in. The offer is for that desk's own last session, or there is none.
 - [ ] **API.** `session.restore` from the panel token or a Seam process runs the restore and a subscribed client gets `workspace.switched` with id `last_session`. From another client it answers error 4. With nothing saved for the desk it answers error 1.
 - [ ] **Search.** Search for "restore": the General row is found, and opening it shows the row.
+
+## Who reopens the apps
+
+Set up first: turn on **Offer to restore my windows after I sign in** and the debug log. Check Windows' setting with `reg query "HKCU\Software\Microsoft\Windows NT\CurrentVersion\Winlogon" /v RestartApps` (Settings > Accounts > Sign-in options, "Automatically save my restartable apps and restart them when I sign back in").
+
+- [ ] **Shown with restore only.** **Who reopens the apps** shows under the restore switch only while it's on, set to **Windows reopens them**, with a one-line caption that changes with the choice. `config.json` has `"restore_apps": "windows"` and `"restore_apps_saved": null`.
+- [ ] **Confirm, cancel.** With Restart apps on (`RestartApps` 0x1), pick **Seam reopens them**. "Turn off Windows' Restart apps?" opens. **Cancel**: the choice stays on Windows, and `reg query` still shows 0x1.
+- [ ] **Confirm, turn it off.** Pick it again and press **Turn it off**. `reg query` shows 0x0, the Sign-in options switch is off after reopening Settings, `config.json` has `"restore_apps": "seam"` and `"restore_apps_saved": 1`, and the log says `Windows' Restart apps turned off (was 0x1)`.
+- [ ] **Switch back.** Pick **Windows reopens them** (no dialog). `reg query` shows 0x1 again, `restore_apps_saved` is `null`, and the log says `given back`.
+- [ ] **Restore off gives it back.** Choose Seam again, then turn **Offer to restore my windows** off. `reg query` shows 0x1 and `restore_apps_saved` is `null`. Turn restore on again: the choice is still Seam, and the value is 0x0 again.
+- [ ] **Stored once.** Before picking Seam, set the value to 5 (`reg add "HKCU\Software\Microsoft\Windows NT\CurrentVersion\Winlogon" /v RestartApps /t REG_DWORD /d 5 /f`). Pick Seam: `restore_apps_saved` is 5. Quit and start Seam twice: it stays 5. Switch back: `reg query` shows 0x5.
+- [ ] **Value missing.** Switch to Windows mode, delete the value (`reg delete "HKCU\Software\Microsoft\Windows NT\CurrentVersion\Winlogon" /v RestartApps /f`), and pick Seam. `reg query` shows 0x0 and `restore_apps_saved` is `4294967295`. Switch back: the value is gone again, not 0.
+- [ ] **Turned back on by hand.** In Seam mode, turn Restart apps back on in Sign-in options, then quit and start Seam. Seam leaves it on, the log says `Windows' Restart apps is on again, so apps may open twice`, `state.get` shows `restart_apps: true`, and General shows that note under the choice with **Open Sign-in options**, which opens Settings on Sign-in options.
+- [ ] **Registry refused.** If writing the value fails (for example a policy locks it), the log says so, nothing crashes, and the choice stays as picked.
+- [ ] **Sign in, Windows mode, Restart apps on.** Leave Notepad, Windows Terminal and a browser open in zones, one pinned, and sign out. Sign in and click the offer: Seam starts nothing. As Windows reopens the apps, each window goes to its zone and the pinned one is pinned again, within 60 s. The log says `Last session: placed n of m, never showed: ...` naming apps Windows didn't reopen, and focus isn't taken.
+- [ ] **Sign in, Windows mode, Restart apps off.** Same, with Restart apps off: only apps that start themselves or are already open are placed. The rest are named in the log line after 60 s, and nothing starts.
+- [ ] **Sign in, Seam mode.** With Restart apps turned off by Seam, sign out and in and click the offer: Seam starts the missing apps once each, with no second copies from Windows.
+- [ ] **Sign in, Seam mode, Restart apps on by hand.** Turn it back on in Settings, sign out and in, and click the offer: apps may open twice, as the note on General says.
 
 ## Updates (GitHub build)
 

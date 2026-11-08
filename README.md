@@ -66,7 +66,7 @@ Each workspace's **...** menu has **Export...** and **Import...**. An imported w
 
 Other apps, such as a Stream Deck, can switch workspaces through the local API.
 
-**Offer to restore my windows after I sign in**, on General, is off until you turn it on. Seam then keeps a hidden last session for each desk: which apps are where, and which are pinned. It saves it 30 seconds after it last snapped, pinned or switched, and again when you sign out or shut down. When Seam starts at sign-in, it asks "Restore your last session? Click to restore". A click works like a workspace switch that leaves other windows alone: apps that aren't running start, windows go back to their zones, and pins come back. Nothing starts without the click.
+**Offer to restore my windows after I sign in**, on General, is off until you turn it on. Seam then keeps a hidden last session for each desk: which apps are where, and which are pinned. It saves it 30 seconds after it last snapped, pinned or switched, and again when you sign out or shut down. When Seam starts at sign-in, it asks "Restore your last session? Click to restore". A click works like a workspace switch that leaves other windows alone: windows go back to their zones, and pins come back. Nothing starts without the click. **Who reopens the apps** picks between Windows' Restart apps (Seam starts nothing and puts each window back as it appears, for up to a minute) and Seam (it starts the missing apps, and turns Windows' Restart apps off until you switch back or turn restore off).
 
 ### Tray menu
 

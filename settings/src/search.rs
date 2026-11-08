@@ -106,6 +106,12 @@ const ENTRIES: &[Entry] = &[
         "Seam remembers which apps were where and asks before it starts any",
         "session restore reboot sign out login",
     ),
+    entry(
+        Page::General,
+        "Who reopens the apps",
+        "Windows' Restart apps, or Seam, after you sign in",
+        "session restore restart apps sign-in options twice",
+    ),
     entry(Page::General, "Left-click", "Right-click always shows the menu", "tray icon"),
     entry(Page::General, "Let other apps control Seam", "Stream Deck and tools on this PC", "api"),
     entry(Page::General, "Settings folder", "Export, import or open your settings", "config files"),

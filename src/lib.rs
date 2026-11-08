@@ -29,6 +29,8 @@ pub mod panelwin;
 #[cfg(windows)]
 pub mod process;
 #[cfg(windows)]
+pub mod restart_apps;
+#[cfg(windows)]
 pub mod tray;
 #[cfg(windows)]
 pub mod winutil;

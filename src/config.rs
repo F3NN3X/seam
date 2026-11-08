@@ -207,6 +207,17 @@ impl Default for UpdateSettings {
     }
 }
 
+/// Who reopens the apps of a restored last session (D128).
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum RestoreApps {
+    /// Windows' Restart apps, or the apps themselves. Seam only arranges them.
+    #[default]
+    Windows,
+    /// Seam starts the missing ones, and turns Windows' Restart apps off meanwhile.
+    Seam,
+}
+
 /// One set of screens and everything that belongs to it.
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
@@ -253,6 +264,11 @@ pub struct Config {
     /// "Offer to restore my windows after I sign in" (D120). Off saves no session
     /// and deletes the saved ones.
     pub restore_session: bool,
+    /// Who reopens the last session's apps (D128).
+    pub restore_apps: RestoreApps,
+    /// Windows' `RestartApps` as it was before Seam turned it off, `u32::MAX` if it
+    /// wasn't there, or `None` while Seam leaves it alone. Only the tray writes it.
+    pub restore_apps_saved: Option<u32>,
     pub updates: UpdateSettings,
     pub api: ApiSettings,
     /// Layout signature (sorted device paths) -> desk.
@@ -277,6 +293,8 @@ impl Default for Config {
             zones: ZoneSettings::default(),
             windows: WindowSettings::default(),
             restore_session: false,
+            restore_apps: RestoreApps::Windows,
+            restore_apps_saved: None,
             updates: UpdateSettings::default(),
             api: ApiSettings::default(),
             desks: BTreeMap::new(),

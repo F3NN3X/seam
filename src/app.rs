@@ -15,7 +15,7 @@ use crate::tray::{self, CLASS, WM_APP_API, WM_APP_LINEUP, WM_APP_WINDOWS_CHANGED
 use crate::wm::Pinned;
 use crate::{arrange, ease, hotkey, identify, overlay, wincontrol, wm};
 use seam::api::{self, Client, Command, PinKind, Reply, RpcError, WindowVerb};
-use seam::config::TrayClick;
+use seam::config::{RestoreApps, TrayClick};
 use seam::direction::Dir;
 use seam::state::{
     self, AlignResult, DeskRef, HotkeyError, Remap, Screen, SessionRef, Snapshot, State, UpdateState, WmState,
@@ -23,7 +23,7 @@ use seam::state::{
 };
 use seam::workspace::{self, Rule, Session, Workspace, SESSION_ID};
 use seam::zones;
-use seam::{autostart, install, package, process, updates};
+use seam::{autostart, install, package, process, restart_apps, updates};
 use serde_json::{json, Value};
 use std::cell::RefCell;
 use std::os::windows::process::CommandExt;
@@ -76,6 +76,8 @@ const SESSION_OFFER_AFTER_MS: u32 = 5_000;
 const SESSION_OFFER_TRIES: u8 = 12;
 /// How long the end of a Windows session waits for the last session's capture.
 const SESSION_END_WAIT: Duration = Duration::from_secs(2);
+/// How long a restore whose apps Windows reopens waits for their windows (D128).
+const ARRANGE_WAIT: Duration = Duration::from_secs(60);
 const FIRST_UPDATE_CHECK_MS: u32 = 2 * 60 * 1000;
 const UPDATE_CHECK_EVERY_MS: u32 = 24 * 60 * 60 * 1000;
 const AUTO_INSTALL_RETRY_MS: u32 = 60 * 1000;
@@ -208,6 +210,8 @@ struct App {
     session_capture: Option<String>,
     /// Windows asked whether the session may end, and the capture for it has started.
     session_ending: bool,
+    /// Windows' Restart apps was on when Seam last looked (D128).
+    restart_apps: bool,
 }
 
 /// What a worker found in the updater's state file.
@@ -427,6 +431,7 @@ fn snapshot(app: &App) -> Snapshot {
         hotkey_errors: app.hotkey_errors.clone(),
         last_align: app.last_align.clone(),
         clients: app.clients.clone(),
+        restart_apps: app.restart_apps,
     };
     Snapshot { state, config: serde_json::to_value(&app.cfg).unwrap_or_default() }
 }
@@ -533,10 +538,15 @@ fn start_switch(app: &mut App, id: Option<&str>, name: Option<&str>) -> Reply {
 
 /// Hand a workspace, saved or the last session, to the switch worker.
 fn switch_to(app: &mut App, workspace: Workspace) -> Reply {
+    start_switch_job(app, workspace, None)
+}
+
+fn start_switch_job(app: &mut App, workspace: Workspace, arrange_for: Option<Duration>) -> Reply {
     log::info!("switching to workspace {}", workspace.name);
     // A hotkey gives the tray the right to take focus. For anyone else this is all it can do.
     let _ = unsafe { AllowSetForegroundWindow(std::process::id()) };
-    let job = SwitchJob { owner: app.hwnd.0 as isize, workspace, screens: job_screens(app), gap: app.cfg.zones.gap };
+    let (owner, screens, gap) = (app.hwnd.0 as isize, job_screens(app), app.cfg.zones.gap);
+    let job = SwitchJob { owner, workspace, screens, gap, arrange_for };
     if switcher::switch(job) {
         Ok(json!({ "ok": true }))
     } else {
@@ -770,11 +780,64 @@ fn offer_session(app: &mut App) -> bool {
     shown || app.session_offer_tries >= SESSION_OFFER_TRIES
 }
 
-/// Run the last session as a workspace: missing apps start as captured, nothing
-/// else is touched, and the pins come back by rule.
+/// Run the last session as a workspace: nothing else is touched, and the pins come
+/// back by rule. Seam starts the missing apps as captured only when it reopens them;
+/// otherwise Windows or the apps do, and Seam places each window as it appears (D128).
 fn restore_session(app: &mut App, session: Workspace) -> Reply {
-    log::info!("restoring the last session: {} windows", session.windows.len());
-    switch_to(app, session)
+    let mode = app.cfg.restore_apps;
+    log::info!("restoring the last session: {} windows, apps reopened by {mode:?}", session.windows.len());
+    let arrange_for = (mode == RestoreApps::Windows).then_some(ARRANGE_WAIT);
+    start_switch_job(app, session, arrange_for)
+}
+
+// ---- Windows' Restart apps (D128)
+
+/// Seam reopens the apps, so Windows' Restart apps would open them a second time.
+fn holds_restart_apps(cfg: &Config) -> bool {
+    cfg.restore_session && cfg.restore_apps == RestoreApps::Seam
+}
+
+/// Turn Windows' Restart apps off while Seam reopens the apps, keeping the value it
+/// had the first time, and give that value back when Seam stops. A failed write is
+/// logged and the mode stays as chosen.
+fn sync_restart_apps(app: &mut App) {
+    let wanted = holds_restart_apps(&app.cfg);
+    match (wanted, app.cfg.restore_apps_saved) {
+        (true, None) => match restart_apps::read() {
+            Ok(found) => {
+                app.cfg.restore_apps_saved = Some(found);
+                persist(app);
+                match restart_apps::write(0) {
+                    Ok(()) => log::info!("Windows' Restart apps turned off (was {found:#x})"),
+                    Err(e) => log::info!("Windows' Restart apps not turned off: {e:?}"),
+                }
+            }
+            Err(e) => log::info!("Windows' Restart apps not read: {e:?}"),
+        },
+        (false, Some(saved)) => {
+            match restart_apps::write(saved) {
+                Ok(()) => log::info!("Windows' Restart apps given back ({saved:#x})"),
+                Err(e) => log::info!("Windows' Restart apps not given back: {e:?}"),
+            }
+            app.cfg.restore_apps_saved = None;
+            persist(app);
+        }
+        _ => {}
+    }
+    app.restart_apps = restart_apps::is_on();
+}
+
+/// At start: the user may have turned Restart apps back on in Windows. Seam doesn't
+/// turn it off again, it says so in the panel.
+fn check_restart_apps(app: &mut App) {
+    if holds_restart_apps(&app.cfg) && app.cfg.restore_apps_saved.is_some() {
+        app.restart_apps = restart_apps::is_on();
+        if app.restart_apps {
+            log::info!("Windows' Restart apps is on again, so apps may open twice");
+        }
+        return;
+    }
+    sync_restart_apps(app);
 }
 
 // ---- Pinned window closed (D119)
@@ -836,8 +899,12 @@ fn start_lineup(app: &mut App) {
 /// The panel writes config.json itself; pick up what it changed.
 fn reload(app: &mut App) {
     log::info!("config reloaded");
+    // The tray keeps what Restart apps was, and the file may not have its last save yet.
+    let saved = app.cfg.restore_apps_saved;
     app.cfg = Config::load();
+    app.cfg.restore_apps_saved = saved;
     log::apply(app.cfg.debug_log);
+    sync_restart_apps(app);
     migrate_hotkeys(app);
     apply_hotkeys(app);
     refresh(app);
@@ -1004,7 +1071,10 @@ fn patch_config(app: &mut App, patch: &Value) -> Reply {
         return refused("That config is from a different version of Seam");
     }
     next.layouts.clear();
+    // What Windows' Restart apps was before Seam changed it is the tray's to keep.
+    next.restore_apps_saved = app.cfg.restore_apps_saved;
     app.cfg = next;
+    sync_restart_apps(app);
     persist(app);
     log::apply(app.cfg.debug_log);
     apply_hotkeys(app);
@@ -1668,12 +1738,14 @@ pub fn run() {
             session_offer_tries: 0,
             session_capture: None,
             session_ending: false,
+            restart_apps: false,
         };
         APP.with(|a| *a.borrow_mut() = Some(app));
         with_app(|a| {
             add_icon(a);
             migrate_hotkeys(a);
             apply_hotkeys(a);
+            check_restart_apps(a);
             refresh(a);
             api_server::start(a.hwnd.0 as isize, a.token.clone(), snapshot(a), a.cfg.api.enabled);
         });

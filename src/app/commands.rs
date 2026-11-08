@@ -74,7 +74,7 @@ pub(super) fn start_align(app: &mut App, reply: Sender<Reply>) -> Option<Reply> 
 
 pub(super) fn align_finished(app: &mut App) {
     let Some(job) = ALIGNING.lock().unwrap_or_else(|e| e.into_inner()).take() else { return };
-    let result = job.result.unwrap_or_else(|| Err("the arrangement change stopped".into()));
+    let result = job.result.unwrap_or_else(|| Err("The arrangement change stopped".into()));
     log::info!("arrangement result: {result:?}");
     let message = result.as_ref().err().cloned().unwrap_or_default();
     app.last_align = Some(AlignResult { ok: result.is_ok(), message: message.clone() });

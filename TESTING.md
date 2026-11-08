@@ -454,6 +454,7 @@ Turn the debug log on. Set **Save windows to the active workspace** on Shortcuts
 - [ ] **Remap switch.** Turn it off. Crossings stop remapping and the sidebar says paused. Turn it on and they work again.
 - [ ] **Align switch.** Turn it off, then open the tray menu. **Also align Windows arrangement** is unticked. Turn it back on.
 - [ ] **Rename.** Rename a desk from its **…** menu. The sidebar and tray menu show the new name.
+- [ ] **Desk dates.** Finish Line Up: the border rows on Displays say "Lined up today" and **Saved desks** says "N screens, lined up today". A desk you haven't used since says "last connected" with a date in local time (check one connected just after local midnight, and one just before UTC midnight if your zone is not UTC). Set `lined_up_at` in `config.json` to a time one, three and ten days ago, and restart Seam: the text reads "yesterday", "3 days ago" and the date. Remove the field: both say plain "Lined up". Seam doesn't write `lined_up_at` for a desk that was never lined up.
 - [ ] **Forget and Undo.** Forget the desk in use. The borders go to "Not lined up", the page keeps a sensible desk name, and **Saved desks** says there are none. Press **Undo** within 8 seconds and everything comes back. Forget it again, wait, and the notification goes on its own. Line up to save it again.
 - [ ] **Record a shortcut.** On Shortcuts, press **Change**, then Ctrl+Alt+Shift+K. The new keys show and work from another app.
 - [ ] **Recorder keys.** Press **Change** then Esc: nothing changes. Press **Change** then Backspace: the row says "Not set" and stays that way after quitting and restarting Seam. **Record** a shortcut again.
@@ -688,7 +689,7 @@ Turn off **Settings → System → Display → Multiple displays → Ease cursor
 
 Finishing Line Up with the setting on calls `SetDisplayConfig` only if the plan is accepted.
 
-- [ ] **Refusal on this desk.** With **Also align Windows arrangement** ticked, finish Line Up. The balloon says the arrangement is unchanged, the balloon names the screens ("Moving screen 3 would overlap screen 1"), the log shows `arrangement result: Err("Moving screen 3 would overlap screen 1")`, and nothing moves. Moving screen 4 up for its border would take screen 3 with it, and screen 3's 7 px offset to the left would collide with screen 1.
+- [ ] **Refusal on this desk.** With **Also align Windows arrangement** ticked, finish Line Up. The balloon reads "Pointer remap is on. Windows arrangement unchanged. Moving screen 3 would overlap screen 1.", the log shows `arrangement result: Err("Moving screen 3 would overlap screen 1")`, and nothing moves. Moving screen 4 up for its border would take screen 3 with it, and screen 3's 7 px offset to the left would collide with screen 1.
 - [ ] **Setting off.** Untick it and finish Line Up. The log shows `arrangement skipped: setting is off`.
 - [ ] **Undo in Settings.** Only if an arrangement was actually applied: drag the screens back in Display settings, press Apply, and confirm the log shows `display change` and borders resolve again. If a screen no longer touches on its calibrated side, the log shows `dropped` for that border.
 

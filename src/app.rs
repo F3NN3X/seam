@@ -530,6 +530,7 @@ fn lineup_done(app: &mut App, accepted: bool) {
         desk::note_active(&mut app.cfg, &sig, &mons, unix_now());
         if let Some(desk) = app.cfg.desks.get_mut(&sig) {
             desk.borders = res;
+            desk.lined_up_at = Some(unix_now());
         }
         if !app.cfg.seen.contains(&sig) {
             app.cfg.seen.push(sig);
@@ -546,7 +547,7 @@ fn lineup_done(app: &mut App, accepted: bool) {
             app.last_align = Some(AlignResult { ok: res.is_ok(), message });
             match res {
                 Ok(_) => "The pointer now crosses where your screens meet.".to_string(),
-                Err(e) => format!("Pointer remap is on. Windows arrangement unchanged: {e}."),
+                Err(e) => format!("Pointer remap is on. Windows arrangement unchanged. {e}."),
             }
         } else {
             log::info!("arrangement skipped: setting is off");

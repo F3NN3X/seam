@@ -12,11 +12,12 @@ use gpui_kit::component::{Disableable, Icon, WindowExt};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 use seam::config::Desk;
-use seam::desk::Placed;
+use seam::desk::{month_day, relative_day, Placed};
 use seam::geom::Side;
 use seam::state::{BorderState, State};
+use seam::winutil;
 use serde_json::json;
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 const MAP_HEIGHT: f32 = 240.;
 const MAP_PADDING: f32 = 12.;
@@ -147,6 +148,7 @@ fn border_rows(panel: &Panel, state: &State, p: Palette) -> Vec<AnyElement> {
         Side::Top => "Top",
         Side::Bottom => "Bottom",
     };
+    let lined_up_when = panel.config.desks.get(&state.desk.sig).and_then(|d| d.lined_up_at).and_then(relative);
     let rows = state.borders.iter().map(|b| {
         let (a, other) = (b.a as usize, b.b as usize);
         let link = panel.links.iter().find(|l| (l.a + 1, l.b + 1) == (a, other));
@@ -163,7 +165,11 @@ fn border_rows(panel: &Panel, state: &State, p: Palette) -> Vec<AnyElement> {
             .gap(px(8.))
             .text_size(px(13.))
             .child(ui::dot(if lined_up { p.positive } else { p.muted }, lined_up))
-            .child(if lined_up { "Lined up" } else { "Not lined up" });
+            .child(match (lined_up, lined_up_when.as_deref()) {
+                (true, Some(when)) => format!("Lined up {when}"),
+                (true, None) => "Lined up".to_string(),
+                (false, _) => "Not lined up".to_string(),
+            });
         div()
             .flex()
             .items_center()
@@ -188,16 +194,10 @@ fn border_rows(panel: &Panel, state: &State, p: Palette) -> Vec<AnyElement> {
     rows.collect()
 }
 
-fn month_day(unix: u64) -> String {
-    // Days to a civil date (Howard Hinnant's algorithm), in UTC.
-    let z = (unix / 86_400) as i64 + 719_468;
-    let doe = z.rem_euclid(146_097);
-    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
-    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-    let mp = (5 * doy + 2) / 153;
-    let day = doy - (153 * mp + 2) / 5 + 1;
-    let month = ["Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec", "Jan", "Feb"];
-    format!("{day} {}", month[mp as usize])
+/// "today", "3 days ago" or "12 Oct", by the local calendar.
+fn relative(unix: u64) -> Option<String> {
+    let now = SystemTime::now().duration_since(UNIX_EPOCH).ok()?.as_secs();
+    Some(relative_day(winutil::local_date(now)?, winutil::local_date(unix)?))
 }
 
 fn forget(panel: &mut Panel, sig: String, desk: Desk, window: &mut Window, cx: &mut Context<Panel>) {
@@ -267,9 +267,15 @@ fn desk_rows(panel: &Panel, window: &Window, cx: &mut Context<Panel>) -> Vec<Any
         let screens = sig.split('|').count();
         let count = format!("{screens} screen{}", if screens == 1 { "" } else { "s" });
         let about = match (in_use, desk.last_seen) {
-            (true, _) if !desk.borders.is_empty() => format!("{count}, lined up"),
+            (true, _) if !desk.borders.is_empty() => match desk.lined_up_at.and_then(relative) {
+                Some(when) => format!("{count}, lined up {when}"),
+                None => format!("{count}, lined up"),
+            },
             (true, _) | (false, 0) => count,
-            (false, seen) => format!("{count}, last connected {}", month_day(seen)),
+            (false, seen) => match winutil::local_date(seen) {
+                Some(date) => format!("{count}, last connected {}", month_day(date)),
+                None => count,
+            },
         };
         let title = div()
             .flex()

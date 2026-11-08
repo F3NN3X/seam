@@ -2,11 +2,12 @@
 //! placing one so its visible frame lands on a rect.
 
 use crate::classify::{classify, Verdict, WindowFacts};
+use crate::desk::Date;
 use crate::zones::{frame_adjust, Rect};
 use std::sync::OnceLock;
 use windows::core::{w, BOOL, PCWSTR, PWSTR};
-use windows::Win32::Foundation::ERROR_SUCCESS;
 use windows::Win32::Foundation::{CloseHandle, ERROR_ACCESS_DENIED, HANDLE, HWND, LPARAM, POINT, RECT};
+use windows::Win32::Foundation::{ERROR_SUCCESS, FILETIME, SYSTEMTIME};
 use windows::Win32::Graphics::Dwm::{DwmGetWindowAttribute, DWMWA_CLOAKED, DWMWA_EXTENDED_FRAME_BOUNDS};
 use windows::Win32::Graphics::Gdi::{
     GetMonitorInfoW, MonitorFromPoint, MonitorFromRect, MonitorFromWindow, MONITORINFO, MONITOR_DEFAULTTONEAREST,
@@ -24,6 +25,7 @@ use windows::Win32::System::Threading::{
     GetCurrentProcess, OpenProcess, OpenProcessToken, QueryFullProcessImageNameW, PROCESS_NAME_WIN32,
     PROCESS_QUERY_LIMITED_INFORMATION,
 };
+use windows::Win32::System::Time::{FileTimeToSystemTime, SystemTimeToTzSpecificLocalTime};
 use windows::Win32::UI::HiDpi::{GetDpiForMonitor, GetSystemMetricsForDpi, MDT_EFFECTIVE_DPI};
 use windows::Win32::UI::Shell::PropertiesSystem::{IPropertyStore, SHGetPropertyStoreForWindow};
 use windows::Win32::UI::WindowsAndMessaging::*;
@@ -654,6 +656,19 @@ fn shrink(r: Rect, m: i32) -> Rect {
 /// The inverse of what `place_minimized` sets, so a capture and a switch agree.
 pub fn normal_frame(h: HWND, dpi: u32) -> Option<Rect> {
     normal_rect(h).map(|n| shrink(n, frame_margin(h, dpi)))
+}
+
+/// The local calendar day of a Unix time, by the Windows time zone.
+pub fn local_date(unix: u64) -> Option<Date> {
+    // Seconds from 1601 to 1970, then 100 ns ticks.
+    let ticks = unix.checked_add(11_644_473_600)?.checked_mul(10_000_000)?;
+    let file = FILETIME { dwLowDateTime: ticks as u32, dwHighDateTime: (ticks >> 32) as u32 };
+    let (mut utc, mut local) = (SYSTEMTIME::default(), SYSTEMTIME::default());
+    unsafe {
+        FileTimeToSystemTime(&file, &mut utc).ok()?;
+        SystemTimeToTzSpecificLocalTime(None, &utc, &mut local).ok()?;
+    }
+    Some(Date { year: i32::from(local.wYear), month: u32::from(local.wMonth), day: u32::from(local.wDay) })
 }
 
 #[cfg(test)]

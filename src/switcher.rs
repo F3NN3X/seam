@@ -5,12 +5,14 @@
 //! `SWP_ASYNCWINDOWPOS`) or is skipped for a window that has stopped answering.
 
 use crate::log;
+use crate::wincontrol;
 use crate::wm::Pinned;
 use seam::api::PinKind;
+use seam::classify::{classify, Verdict, WindowFacts};
 use seam::winutil;
-use seam::workspace::{self, Candidate, OtherWindows, Pin, Rule, Target, WinState, Workspace};
+use seam::workspace::{self, Candidate, OtherWindows, Pin, Rule, Shown, Target, WinState, Workspace};
 use seam::zones::{self, Rect, ZoneLayout};
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
@@ -102,29 +104,71 @@ struct Seen {
     sticky: bool,
 }
 
-fn is_seam(exe: &str) -> bool {
-    let name = exe.rsplit('\\').next().unwrap_or(exe).to_lowercase();
-    name == "seam.exe" || name == "seam-settings.exe"
+/// What a capture or a switch knows about a process, read once per process ID.
+/// The AUMID isn't here: windows of one process can have different ones (PWAs).
+struct Proc {
+    path: Option<String>,
+    elevated: bool,
 }
 
+type Procs = HashMap<u32, Proc>;
+
 /// The windows a workspace may use, topmost first. Seam's own are never among them.
-fn snapshot() -> Vec<Seen> {
+fn snapshot(procs: &mut Procs) -> Vec<Seen> {
+    snapshot_with(&[], procs, &mut |_, _| {})
+}
+
+/// `snapshot`, leaving out the apps in `exclude` (lower-case exe names) and telling
+/// `skip` why each other window was left out. The window's own facts decide first,
+/// so only windows that pass them open their process.
+fn snapshot_with(exclude: &[String], procs: &mut Procs, skip: &mut dyn FnMut(&'static str, &WindowFacts)) -> Vec<Seen> {
     let own = std::process::id();
-    let capturable = winutil::top_level_windows().into_iter().filter(|h| winutil::is_capturable(*h, own));
+    let excluded = |name: &str| exclude.iter().any(|x| x == name);
     let mut seen = Vec::new();
-    for h in capturable {
-        let Some(exe) = winutil::exe_path(h).filter(|exe| !is_seam(exe)) else { continue };
+    for h in winutil::top_level_windows() {
+        let mut facts = winutil::window_facts(h, own);
+        if let Verdict::Skip(why) = classify(&facts, &excluded) {
+            skip(why, &facts);
+            continue;
+        }
+        let pid = winutil::process_id(h);
+        let proc = procs
+            .entry(pid)
+            .or_insert_with(|| Proc { path: winutil::exe_path_of(pid), elevated: winutil::elevated_over_us(pid) });
+        let Some(exe) = proc.path.clone().and_then(|path| winutil::exe_path_from(h, path)) else {
+            skip("no exe", &facts);
+            continue;
+        };
+        facts.exe_name = winutil::file_name(&exe);
+        if let Verdict::Skip(why) = classify(&facts, &excluded) {
+            skip(why, &facts);
+            continue;
+        }
+        let elevated = proc.elevated;
         let cand = Candidate {
             hwnd: h.0 as isize,
             exe,
             aumid: winutil::aumid(h),
-            class: winutil::class_name(h),
+            class: facts.class,
             title: winutil::title(h),
             z: seen.len(),
         };
-        seen.push(Seen { cand, elevated: winutil::is_elevated_over_us(h), sticky: winutil::is_sticky(h) });
+        seen.push(Seen { cand, elevated, sticky: winutil::is_sticky(h) });
     }
     seen
+}
+
+/// How the window is shown now.
+fn shown_of(h: HWND) -> Shown {
+    if winutil::is_minimized(h) {
+        Shown::Minimized
+    } else if winutil::is_maximized(h) {
+        Shown::Maximized
+    } else if winutil::is_full_screen(h) {
+        Shown::Fullscreen
+    } else {
+        Shown::Normal
+    }
 }
 
 /// What to call an app in a message: its exe's name, or failing that its window title.
@@ -139,6 +183,8 @@ pub struct CaptureJob {
     pub owner: isize,
     pub screens: Vec<Screen>,
     pub gap: u32,
+    /// Lower-case exe names never captured: the zones' exclude list.
+    pub exclude: Vec<String>,
 }
 
 static CAPTURED: Mutex<Option<Vec<Rule>>> = Mutex::new(None);
@@ -149,7 +195,6 @@ pub fn capture(job: CaptureJob) -> bool {
     let spawned = std::thread::Builder::new().name("seam-capture".into()).spawn(move || {
         let _com = Com::enter();
         let rules = capture_rules(&job, false);
-        log::info!("workspace capture: {} windows", rules.len());
         *CAPTURED.lock().unwrap_or_else(|e| e.into_inner()) = Some(rules);
         unsafe {
             let _ = PostMessageW(Some(hwnd_of(job.owner)), WM_APP_CAPTURED, WPARAM(0), LPARAM(0));
@@ -196,25 +241,38 @@ pub fn wait_session(limit: Duration) -> Option<Vec<Rule>> {
 }
 
 fn capture_rules(job: &CaptureJob, session: bool) -> Vec<Rule> {
+    let started = Instant::now();
     let geos = geometry(&job.screens, job.gap);
+    let mut skips: BTreeMap<&'static str, usize> = BTreeMap::new();
+    let seen = snapshot_with(&job.exclude, &mut Procs::new(), &mut |why, facts| {
+        *skips.entry(why).or_default() += 1;
+        // Hidden and cloaked windows are most of them, so those are only counted.
+        if !matches!(why, "hidden" | "cloaked") {
+            log::info!("capture skipped {} {}: {why}", facts.class, facts.exe_name);
+        }
+    });
+    let foreground = unsafe { GetForegroundWindow() }.0 as isize;
     let mut rules = Vec::new();
     // A sticky window belongs to no workspace. The last session keeps it, pinned.
-    for seen in snapshot().into_iter().filter(|s| session || !s.sticky) {
+    for seen in seen.into_iter().filter(|s| session || !s.sticky) {
         let h = hwnd_of(seen.cand.hwnd);
+        let shown = shown_of(h);
         let normal = winutil::normal_rect(h);
         // A minimized window has no place on screen, so it counts where it would restore to.
-        let visible = if winutil::is_minimized(h) { normal } else { winutil::visible_rect(h) };
+        let visible = if shown == Shown::Minimized { normal } else { winutil::visible_rect(h) };
         let Some(visible) = visible else { continue };
         let Some(geo) = geos.iter().find(|g| g.bounds.contains(centre(visible).0, centre(visible).1)) else {
             continue;
         };
-        let target = workspace::target_of(visible, &geo.zones).unwrap_or_else(|| {
-            if winutil::is_maximized(h) {
-                Target::State { state: WinState::Max }
-            } else {
-                Target::Rect { rect: workspace::to_fractions(visible, geo.work) }
-            }
-        });
+        let visible = match shown {
+            Shown::Minimized => winutil::normal_frame(h, geo.dpi).unwrap_or(visible),
+            _ => visible,
+        };
+        let target = match shown {
+            Shown::Maximized => Target::State { state: WinState::Max },
+            _ => workspace::target_of(visible, &geo.zones)
+                .unwrap_or_else(|| Target::Rect { rect: workspace::to_fractions(visible, geo.work) }),
+        };
         let c = seen.cand;
         rules.push(Rule {
             exe: c.exe,
@@ -226,8 +284,14 @@ fn capture_rules(job: &CaptureJob, session: bool) -> Vec<Rule> {
             normal_rect: normal.map(|n| workspace::to_fractions(n, geo.work)),
             launch: true,
             pin: if session { Pin::of_bits(winutil::pin_bits(h)) } else { None },
+            shown,
+            z: rules.len() as u32,
+            focused: c.hwnd == foreground,
         });
     }
+    let skipped: Vec<String> = skips.iter().map(|(why, n)| format!("{why} {n}")).collect();
+    let ms = started.elapsed().as_millis();
+    log::info!("workspace capture: {} windows in {ms} ms, skipped {}", rules.len(), skipped.join(", "));
     rules
 }
 
@@ -367,9 +431,65 @@ fn close_to(a: Rect, b: Rect, sized: bool) -> bool {
     sides.into_iter().all(|(p, q)| (p - q).abs() <= CLOSE_ENOUGH)
 }
 
+/// Where a window goes, and how it's shown there.
 enum Kind {
+    /// Shown normally, its visible frame on the rect.
     Rect(Rect),
-    Max { work: Rect, normal: Option<Rect> },
+    Max {
+        work: Rect,
+        normal: Option<Rect>,
+    },
+    /// Minimized, restoring onto the rect later.
+    Min(Rect),
+    /// Borderless on the whole screen.
+    Full(Rect),
+}
+
+/// A matched window as it is now, read once before planning.
+struct Now {
+    window: Rect,
+    /// The visible frame, or for a minimized window the frame it restores to.
+    frame: Rect,
+    shown: Shown,
+    resizable: bool,
+}
+
+fn now_of(h: HWND, dpi: u32) -> Option<Now> {
+    let window = winutil::window_rect(h)?;
+    let shown = shown_of(h);
+    let frame = match shown {
+        Shown::Minimized => winutil::normal_frame(h, dpi)?,
+        _ => winutil::visible_rect(h).unwrap_or(window),
+    };
+    Some(Now { window, frame, shown, resizable: winutil::is_resizable(h) })
+}
+
+/// What a rule asks for on its screen, or `None` for a window to keep where it is.
+fn plan(rule: &Rule, geo: &Geo) -> Option<Kind> {
+    if rule.target == (Target::State { state: WinState::Keep }) {
+        return None;
+    }
+    let rect = workspace::rect_for(&rule.target, &geo.zones, geo.work);
+    let normal = rule.normal_rect.map(|f| workspace::from_fractions(f, geo.work));
+    Some(match (rule.shown, rect) {
+        (Shown::Minimized, _) => Kind::Min(rect.or(normal).unwrap_or(geo.work)),
+        (Shown::Fullscreen, _) => Kind::Full(geo.bounds),
+        (Shown::Normal, Some(r)) => Kind::Rect(r),
+        (Shown::Maximized, _) | (Shown::Normal, None) => Kind::Max { work: geo.work, normal: normal.or(rect) },
+    })
+}
+
+/// Whether the window already is where, and as, the plan wants it. Such a
+/// window takes no call at all.
+fn in_place(kind: &Kind, now: &Now, screen: Rect) -> bool {
+    match *kind {
+        Kind::Rect(r) => now.shown == Shown::Normal && close_to(now.frame, r, now.resizable),
+        Kind::Min(r) => now.shown == Shown::Minimized && close_to(now.frame, r, now.resizable),
+        Kind::Max { .. } => {
+            now.shown == Shown::Maximized && screen.contains(centre(now.window).0, centre(now.window).1)
+        }
+        Kind::Full(r) => now.shown == Shown::Fullscreen && now.window == r,
+    }
 }
 
 /// One window on its way to its place.
@@ -377,19 +497,38 @@ struct Move {
     hwnd: isize,
     app: String,
     kind: Kind,
+    /// How it's shown before the move.
+    was: Shown,
+    /// It's going to another screen, which a maximized window can't do in one step.
+    on_screen: bool,
     /// The screen it's going to has another DPI, so it takes a Move step first (D8).
     crosses: bool,
+    /// The DPI of the screen it's going to.
+    dpi: u32,
     before: Rect,
 }
 
-impl Move {
-    /// Where the visible frame goes first. A window that will be maximized goes to its screen.
-    fn frame(&self) -> Rect {
-        match self.kind {
-            Kind::Rect(r) => r,
-            Kind::Max { work, .. } => work,
-        }
-    }
+/// How the switch is going, for the log and the event.
+#[derive(Default)]
+struct Tally {
+    /// App and reason.
+    skipped: Vec<(String, String)>,
+    placed: usize,
+    moves: usize,
+    in_place: usize,
+    plan: Duration,
+    /// The windows shown on screen after placing, for the stacking and the focus.
+    stack: Vec<Stacked>,
+}
+
+/// A window the switch shows, with where it stood at capture.
+struct Stacked {
+    hwnd: isize,
+    /// The rule's stacking, 0 the topmost.
+    z: u32,
+    /// Its stacking now, if the first snapshot saw it.
+    now: Option<usize>,
+    focused: bool,
 }
 
 fn pause(cancelled: &dyn Fn() -> bool, d: Duration) -> bool {
@@ -397,72 +536,105 @@ fn pause(cancelled: &dyn Fn() -> bool, d: Duration) -> bool {
     !cancelled()
 }
 
-/// Put each window where it goes, one step for all of them at a time, with the
-/// apps' own reactions in between, as the zone snapping does one window at a time.
-/// Returns how many moved.
+/// The calls that wait on the app are skipped for one that has stopped answering.
+fn answering(m: &Move, skipped: &mut Vec<(String, String)>) -> bool {
+    let hung = winutil::is_hung(hwnd_of(m.hwnd));
+    if hung {
+        skipped.push((m.app.clone(), "timeout".into()));
+    }
+    !hung
+}
+
+/// Whether the window ended up as the move wanted.
+fn landed(h: HWND, kind: &Kind) -> bool {
+    match *kind {
+        Kind::Rect(r) => winutil::visible_rect(h).is_some_and(|v| close_to(v, r, winutil::is_resizable(h))),
+        Kind::Max { .. } => winutil::is_maximized(h),
+        Kind::Min(_) => winutil::is_minimized(h),
+        Kind::Full(r) => winutil::window_rect(h) == Some(r),
+    }
+}
+
+/// Put each window where it goes, in one pass. Only a window that goes to a screen
+/// with another DPI, or a maximized one that changes screens, takes a second step
+/// after the apps have had a moment to react (D8), and only those are checked and
+/// retried once. Returns how many moved.
 fn place_all(moves: &[Move], skipped: &mut Vec<(String, String)>, cancelled: &dyn Fn() -> bool) -> usize {
-    // Runs a step on every window. True if any of them did something.
-    let again = |step: &mut dyn FnMut(&Move) -> bool| moves.iter().fold(false, |any, m| step(m) | any);
-    let restored = again(&mut |m| {
+    let mut moved = 0;
+    let mut later: Vec<&Move> = Vec::new();
+    for m in moves {
         let h = hwnd_of(m.hwnd);
         // Seam is moving it, so the zone it was snapped to no longer holds (a re-fit would pull it back).
         winutil::clear_zone_stamp(h);
-        let restore = winutil::is_minimized(h) || winutil::is_maximized(h);
-        if restore {
-            winutil::restore(h);
+        let restoring = matches!(m.was, Shown::Minimized | Shown::Maximized);
+        match m.kind {
+            Kind::Min(r) => {
+                if answering(m, skipped) && winutil::place_minimized(h, r, m.dpi) {
+                    moved += 1;
+                }
+            }
+            Kind::Max { normal, .. } if m.on_screen => {
+                if answering(m, skipped) && winutil::place_maximized(h, normal) {
+                    moved += 1;
+                }
+            }
+            Kind::Max { work, .. } => {
+                if !restoring {
+                    winutil::move_to(h, work);
+                } else if !answering(m, skipped) || !winutil::place_restored(h, work, m.dpi) {
+                    continue;
+                }
+                later.push(m);
+            }
+            // A window that has its caption back isn't full screen any more.
+            Kind::Full(_) if winutil::has_caption(h) => skipped.push((m.app.clone(), "not full screen".into())),
+            Kind::Rect(r) | Kind::Full(r) => {
+                if restoring {
+                    if !answering(m, skipped) || !winutil::place_restored(h, r, m.dpi) {
+                        continue;
+                    }
+                } else if m.crosses {
+                    winutil::move_to(h, r);
+                } else if matches!(m.kind, Kind::Full(_)) {
+                    winutil::set_rect(h, r);
+                } else {
+                    winutil::fit(h, r);
+                }
+                if m.crosses {
+                    later.push(m);
+                } else {
+                    moved += 1;
+                }
+            }
         }
-        restore
-    });
-    if restored && !pause(cancelled, SETTLE) {
-        return 0;
     }
-    let crossed = again(&mut |m| {
-        if m.crosses {
-            winutil::move_to(hwnd_of(m.hwnd), m.frame());
+    if later.is_empty() || !pause(cancelled, SETTLE) {
+        return moved;
+    }
+    // On the new screen, with its DPI, the margins and size are right this time.
+    for m in &later {
+        let h = hwnd_of(m.hwnd);
+        match m.kind {
+            Kind::Rect(r) => winutil::fit(h, r),
+            Kind::Full(r) => winutil::set_rect(h, r),
+            Kind::Max { normal, .. } => {
+                if answering(m, skipped) {
+                    winutil::place_maximized(h, normal);
+                }
+            }
+            Kind::Min(_) => {}
         }
-        m.crosses
-    });
-    if crossed && !pause(cancelled, SETTLE) {
-        return 0;
     }
-    again(&mut |m| {
-        winutil::fit(hwnd_of(m.hwnd), m.frame());
-        true
-    });
     if !pause(cancelled, SETTLE) {
-        return 0;
+        return moved;
     }
-    // An app that answered a DPI change late can leave a window off by its margins.
-    let retried = again(&mut |m| {
+    for m in later {
         let h = hwnd_of(m.hwnd);
-        let landed = winutil::visible_rect(h).is_some_and(|v| close_to(v, m.frame(), winutil::is_resizable(h)));
-        if !landed {
-            winutil::fit(h, m.frame());
+        // An app that answered a DPI change late can leave a window off by its margins.
+        if let (Kind::Rect(r), false) = (&m.kind, landed(h, &m.kind)) {
+            winutil::fit(h, *r);
         }
-        !landed
-    });
-    if retried && !pause(cancelled, SETTLE) {
-        return 0;
-    }
-    again(&mut |m| {
-        let Kind::Max { normal, .. } = m.kind else { return false };
-        let h = hwnd_of(m.hwnd);
-        if winutil::is_hung(h) {
-            skipped.push((m.app.clone(), "timeout".into()));
-        } else {
-            winutil::place_maximized(h, normal);
-        }
-        false
-    });
-    let mut moved = 0;
-    for m in moves {
-        let h = hwnd_of(m.hwnd);
-        // Already in place counts as placed, so compare with where it was meant to go.
-        let landed = match m.kind {
-            Kind::Max { .. } => winutil::is_maximized(h),
-            Kind::Rect(r) => winutil::visible_rect(h).is_some_and(|v| close_to(v, r, winutil::is_resizable(h))),
-        };
-        if landed || winutil::window_rect(h).is_some_and(|now| now != m.before) {
+        if landed(h, &m.kind) || winutil::window_rect(h).is_some_and(|now| now != m.before) {
             moved += 1;
         } else if !skipped.iter().any(|(app, _)| *app == m.app) {
             skipped.push((m.app.clone(), "didn't move".into()));
@@ -472,50 +644,57 @@ fn place_all(moves: &[Move], skipped: &mut Vec<(String, String)>, cancelled: &dy
 }
 
 /// Place the windows of the rules `which` that have one, then pin again what the
-/// rule says was pinned. Returns how many moved.
+/// rule says was pinned. A window already in place takes no call. Adds to `tally`.
 fn place_rules(
     ws: &Workspace,
     found: &[Option<isize>],
     which: &[usize],
     geos: &[Geo],
-    skipped: &mut Vec<(String, String)>,
+    seen: &[Seen],
+    tally: &mut Tally,
     cancelled: &dyn Fn() -> bool,
-) -> usize {
-    let mut moves = Vec::new();
+) {
+    let started = Instant::now();
+    let (mut moves, mut ready) = (Vec::new(), 0);
     for i in which {
         let (rule, Some(hwnd)) = (&ws.windows[*i], found[*i]) else { continue };
         let h = hwnd_of(hwnd);
         // A screen that isn't connected, or a window to keep where it is, isn't moved.
         let Some(geo) = geos.iter().find(|g| g.id == rule.monitor) else { continue };
-        if rule.target == (Target::State { state: WinState::Keep }) || !unsafe { IsWindow(Some(h)) }.as_bool() {
+        let Some(kind) = plan(rule, geo) else { continue };
+        if !unsafe { IsWindow(Some(h)) }.as_bool() {
             continue;
         }
         let app = app_name(rule);
         if winutil::is_sticky(h) {
-            skipped.push((app, "sticky".into()));
+            tally.skipped.push((app, "sticky".into()));
             continue;
         }
-        if winutil::is_elevated_over_us(h) {
-            skipped.push((app, "elevated".into()));
+        let elevated = seen.iter().find(|s| s.cand.hwnd == hwnd).map(|s| s.elevated);
+        if elevated.unwrap_or_else(|| winutil::is_elevated_over_us(h)) {
+            tally.skipped.push((app, "elevated".into()));
             continue;
         }
-        let Some(before) = winutil::window_rect(h) else { continue };
-        let kind = match workspace::rect_for(&rule.target, &geo.zones, geo.work) {
-            Some(rect) => Kind::Rect(rect),
-            None => {
-                let on_it = geo.bounds.contains(centre(before).0, centre(before).1);
-                if winutil::is_maximized(h) && on_it {
-                    continue;
-                }
-                Kind::Max { work: geo.work, normal: rule.normal_rect.map(|f| workspace::from_fractions(f, geo.work)) }
-            }
-        };
+        let Some(now) = now_of(h, geo.dpi) else { continue };
+        if !matches!(kind, Kind::Min(_)) {
+            let now_z = seen.iter().find(|s| s.cand.hwnd == hwnd).map(|s| s.cand.z);
+            tally.stack.push(Stacked { hwnd, z: rule.z, now: now_z, focused: rule.focused });
+        }
+        if in_place(&kind, &now, geo.bounds) {
+            ready += 1;
+            continue;
+        }
+        let on_screen = geo.bounds.contains(centre(now.window).0, centre(now.window).1);
         let crosses = winutil::monitor_dpi(h) != geo.dpi;
-        moves.push(Move { hwnd, app, kind, crosses, before });
+        moves.push(Move { hwnd, app, kind, was: now.shown, on_screen, crosses, dpi: geo.dpi, before: now.window });
     }
-    let placed = place_all(&moves, skipped, cancelled);
+    tally.plan += started.elapsed();
+    tally.moves += moves.len();
+    tally.in_place += ready;
+    // Already in place counts as placed.
+    tally.placed += ready + place_all(&moves, &mut tally.skipped, cancelled);
     if cancelled() {
-        return placed;
+        return;
     }
     // The last session pins what was pinned again, by rule, because a window's handle
     // doesn't outlive a sign-out.
@@ -524,18 +703,43 @@ fn place_rules(
             pin_again(hwnd, pin);
         }
     }
-    placed
+}
+
+/// Stack the shown windows as they were at capture, bottom first, unless they
+/// already are. Windows whose stacking wasn't captured are left where they are.
+fn restack(stack: &[Stacked], moved: bool) {
+    let mut known: Vec<&Stacked> = stack.iter().filter(|s| s.z != u32::MAX).collect();
+    known.sort_by_key(|s| s.z);
+    let mut now = known.clone();
+    now.sort_by_key(|s| s.now.unwrap_or(usize::MAX));
+    // A move can change the stacking, and a window found after the first look has none to compare.
+    let stacked = !moved && known.iter().zip(&now).all(|(a, b)| a.hwnd == b.hwnd && a.now.is_some());
+    if stacked {
+        return;
+    }
+    for s in known.iter().rev() {
+        winutil::raise(hwnd_of(s.hwnd));
+    }
+}
+
+/// The window to focus: the one that had the focus at capture, or else the
+/// topmost. A minimized window is never in `stack`, so never focused.
+fn to_focus(stack: &[Stacked]) -> Option<isize> {
+    let focused = stack.iter().find(|s| s.focused);
+    focused.or_else(|| stack.iter().min_by_key(|s| s.z)).map(|s| s.hwnd)
 }
 
 /// Does the whole switch. Returns `None` if a newer one replaced it.
 fn run_switch(job: &SwitchJob, mine: u64) -> Option<Switched> {
+    let begun = Instant::now();
     let cancelled = || SWITCH_GEN.load(Ordering::SeqCst) != mine;
     let ws = &job.workspace;
     let geos = geometry(&job.screens, job.gap);
-    let mut skipped: Vec<(String, String)> = Vec::new();
+    let mut tally = Tally::default();
+    let mut procs = Procs::new();
 
     // Snapshot and match.
-    let seen = snapshot();
+    let seen = snapshot(&mut procs);
     let mut known: Vec<Candidate> = seen.iter().map(|s| s.cand.clone()).collect();
     let mut found = workspace::assign(&ws.windows, &known);
 
@@ -562,7 +766,7 @@ fn run_switch(job: &SwitchJob, mine: u64) -> Option<Switched> {
                 started.push(i);
                 waiting.push((i, Instant::now()));
             }
-            Err(reason) => skipped.push((app_name(rule), reason.into())),
+            Err(reason) => tally.skipped.push((app_name(rule), reason.into())),
         }
     }
     while !waiting.is_empty() {
@@ -571,7 +775,7 @@ fn run_switch(job: &SwitchJob, mine: u64) -> Option<Switched> {
             return None;
         }
         let claimed: HashSet<isize> = found.iter().flatten().copied().collect();
-        let now: Vec<Candidate> = snapshot().into_iter().map(|s| s.cand).collect();
+        let now: Vec<Candidate> = snapshot(&mut procs).into_iter().map(|s| s.cand).collect();
         let fresh: Vec<Candidate> = now.iter().filter(|c| !claimed.contains(&c.hwnd)).cloned().collect();
         known.extend(now);
         let rules: Vec<Rule> = waiting.iter().map(|(i, _)| ws.windows[*i].clone()).collect();
@@ -580,14 +784,15 @@ fn run_switch(job: &SwitchJob, mine: u64) -> Option<Switched> {
         for ((i, since), hit) in waiting.into_iter().zip(hits) {
             match hit {
                 Some(hwnd) => found[i] = Some(hwnd),
-                None if since.elapsed() >= LAUNCH_WAIT => skipped.push((app_name(&ws.windows[i]), "timeout".into())),
+                None if since.elapsed() >= LAUNCH_WAIT => {
+                    tally.skipped.push((app_name(&ws.windows[i]), "timeout".into()))
+                }
                 None => still.push((i, since)),
             }
         }
         waiting = still;
     }
 
-    let mut placed = 0;
     if let Some(wait) = job.arrange_for {
         // Something else opens the windows, so place each one as it appears, once per rule.
         let mut done = vec![false; ws.windows.len()];
@@ -595,7 +800,7 @@ fn run_switch(job: &SwitchJob, mine: u64) -> Option<Switched> {
         loop {
             let ready: Vec<usize> = (0..done.len()).filter(|i| !done[*i] && found[*i].is_some()).collect();
             if !ready.is_empty() {
-                placed += place_rules(ws, &found, &ready, &geos, &mut skipped, &cancelled);
+                place_rules(ws, &found, &ready, &geos, &seen, &mut tally, &cancelled);
                 ready.iter().for_each(|i| done[*i] = true);
             }
             if done.iter().all(|d| *d) || since.elapsed() >= wait {
@@ -607,7 +812,7 @@ fn run_switch(job: &SwitchJob, mine: u64) -> Option<Switched> {
             }
             let claimed: HashSet<isize> = found.iter().flatten().copied().collect();
             let fresh: Vec<Candidate> =
-                snapshot().into_iter().map(|s| s.cand).filter(|c| !claimed.contains(&c.hwnd)).collect();
+                snapshot(&mut procs).into_iter().map(|s| s.cand).filter(|c| !claimed.contains(&c.hwnd)).collect();
             let missing: Vec<usize> = (0..done.len()).filter(|i| found[*i].is_none()).collect();
             let rules: Vec<Rule> = missing.iter().map(|i| ws.windows[*i].clone()).collect();
             for (i, hit) in missing.into_iter().zip(workspace::assign(&rules, &fresh)) {
@@ -618,13 +823,24 @@ fn run_switch(job: &SwitchJob, mine: u64) -> Option<Switched> {
             ws.windows.iter().zip(&found).filter(|(_, h)| h.is_none()).map(|(r, _)| app_name(r)).collect();
         let shown = found.iter().flatten().count();
         log::info!("{}: placed {shown} of {}, never showed: {}", ws.name, found.len(), absent.join(", "));
-        skipped.extend(absent.into_iter().map(|app| (app, "timeout".to_string())));
+        tally.skipped.extend(absent.into_iter().map(|app| (app, "timeout".to_string())));
     } else {
         let all: Vec<usize> = (0..found.len()).collect();
-        placed = place_rules(ws, &found, &all, &geos, &mut skipped, &cancelled);
+        place_rules(ws, &found, &all, &geos, &seen, &mut tally, &cancelled);
     }
     if cancelled() {
         return None;
+    }
+
+    // Stacking and focus last. A switch that waited up to a minute would take them from
+    // whatever the user opened since.
+    if job.arrange_for.is_none() {
+        restack(&tally.stack, tally.moves > 0);
+        // The tray has foreground rights after a hotkey; otherwise the focus may be refused, and then it stays.
+        let foreground = unsafe { GetForegroundWindow() }.0 as isize;
+        if let Some(hwnd) = to_focus(&tally.stack).filter(|h| *h != foreground) {
+            wincontrol::focus(hwnd_of(hwnd), true);
+        }
     }
 
     // Other windows on this desk's screens: only ones that were there before the switch began,
@@ -632,7 +848,7 @@ fn run_switch(job: &SwitchJob, mine: u64) -> Option<Switched> {
     // splash screens, updaters and real main window may open late.
     if ws.other_windows != OtherWindows::Leave && found.iter().all(Option::is_none) {
         // Without a single match the workspace says nothing about what is on screen.
-        skipped.push(("Other windows".into(), "nothing matched".into()));
+        tally.skipped.push(("Other windows".into(), "nothing matched".into()));
     } else if ws.other_windows != OtherWindows::Leave {
         let claimed: HashSet<isize> = found.iter().flatten().copied().collect();
         let (mut exes, mut aumids): (HashSet<String>, HashSet<String>) = (HashSet::new(), HashSet::new());
@@ -680,18 +896,15 @@ fn run_switch(job: &SwitchJob, mine: u64) -> Option<Switched> {
         }
     }
 
-    // Focus the first window. The tray has foreground rights after a hotkey; otherwise this may be refused, and then it stays.
-    // A switch that waited up to a minute would take focus from whatever the user opened since.
-    if let Some(Some(first)) = found.first().filter(|_| job.arrange_for.is_none()) {
-        let h = hwnd_of(*first);
-        unsafe {
-            if winutil::is_minimized(h) {
-                let _ = ShowWindowAsync(h, SW_RESTORE);
-            }
-            let _ = SetForegroundWindow(h);
-        }
-    }
-    Some(Switched { id: ws.id.clone(), name: ws.name.clone(), launched, placed, skipped })
+    log::info!(
+        "{}: switched in {} ms, plan {} ms, {} moves, {} already in place",
+        ws.name,
+        begun.elapsed().as_millis(),
+        tally.plan.as_millis(),
+        tally.moves,
+        tally.in_place
+    );
+    Some(Switched { id: ws.id.clone(), name: ws.name.clone(), launched, placed: tally.placed, skipped: tally.skipped })
 }
 
 /// Pin a window as a rule says. The seam-wm thread does it and logs how it went.
@@ -725,7 +938,8 @@ pub fn reopen(gone: Pinned) -> bool {
         };
         let app = app_name(&rule);
         // Only a window that wasn't there before the launch counts as the new one.
-        let before: HashSet<isize> = snapshot().into_iter().map(|s| s.cand.hwnd).collect();
+        let mut procs = Procs::new();
+        let before: HashSet<isize> = snapshot(&mut procs).into_iter().map(|s| s.cand.hwnd).collect();
         if let Err(reason) = launch(&rule) {
             log::info!("reopen {app}: not started ({reason})");
             return;
@@ -734,7 +948,7 @@ pub fn reopen(gone: Pinned) -> bool {
         while started.elapsed() < LAUNCH_WAIT {
             std::thread::sleep(POLL);
             let fresh: Vec<Candidate> =
-                snapshot().into_iter().map(|s| s.cand).filter(|c| !before.contains(&c.hwnd)).collect();
+                snapshot(&mut procs).into_iter().map(|s| s.cand).filter(|c| !before.contains(&c.hwnd)).collect();
             if let Some(Some(hwnd)) = workspace::assign(std::slice::from_ref(&rule), &fresh).first() {
                 log::info!("reopen {app}: started, pinning its new window");
                 if let Some(pin) = Pin::of_bits(gone.bits) {

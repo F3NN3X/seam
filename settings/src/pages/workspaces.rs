@@ -465,7 +465,7 @@ fn window_row(
                     let _ = weak.update(cx, |panel, cx| {
                         edit(panel, &id, window, cx, |ws| {
                             let Some(rule) = ws.windows.get_mut(i) else { return };
-                            rule.target = place.target;
+                            rule.set_target(place.target);
                             if let Some(monitor) = place.monitor {
                                 rule.monitor = monitor;
                             }

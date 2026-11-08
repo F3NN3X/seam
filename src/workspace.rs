@@ -4,7 +4,7 @@
 //! Zone numbers here count from 1, as the panel shows them.
 
 use crate::zones::{self, Rect};
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_json::Value;
 use std::collections::{hash_map::RandomState, BTreeMap};
 use std::hash::{BuildHasher, Hasher};
@@ -46,6 +46,19 @@ pub enum Target {
     },
 }
 
+/// How a window is shown. A minimized one stays minimized when switched to,
+/// and restores into its place later.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Shown {
+    #[default]
+    Normal,
+    Minimized,
+    Maximized,
+    /// Borderless and covering the whole screen.
+    Fullscreen,
+}
+
 /// How a window was pinned, for the last session (D120). No pin isn't stored.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -75,8 +88,9 @@ impl Pin {
     }
 }
 
+// Deserialize is written out below, so older files load into the new fields.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(default)]
+#[serde(remote = "Self", default)]
 pub struct Rule {
     /// Full path, matched case-insensitively.
     pub exe: String,
@@ -93,6 +107,11 @@ pub struct Rule {
     /// Only the last session has pins. A switch pins the window it matches again.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub pin: Option<Pin>,
+    pub shown: Shown,
+    /// Stacking at capture, 0 is the topmost. `u32::MAX` when it isn't known.
+    pub z: u32,
+    /// The window that had the focus at capture. At most one per workspace.
+    pub focused: bool,
 }
 
 impl Default for Rule {
@@ -107,7 +126,42 @@ impl Default for Rule {
             normal_rect: None,
             launch: true,
             pin: None,
+            shown: Shown::Normal,
+            z: u32::MAX,
+            focused: false,
         }
+    }
+}
+
+impl Serialize for Rule {
+    fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        Rule::serialize(self, s)
+    }
+}
+
+impl<'de> Deserialize<'de> for Rule {
+    fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        let mut rule = Rule::deserialize(d)?;
+        // Before `shown`, a maximized window was only its target. Nothing is
+        // written back until the next save.
+        if rule.target == (Target::State { state: WinState::Max }) && rule.shown == Shown::Normal {
+            rule.shown = Shown::Maximized;
+        }
+        Ok(rule)
+    }
+}
+
+impl Rule {
+    /// Send the window somewhere else. Full is maximized, and another place
+    /// isn't, but a minimized window stays minimized.
+    pub fn set_target(&mut self, target: Target) {
+        match target {
+            Target::State { state: WinState::Max } => self.shown = Shown::Maximized,
+            Target::State { state: WinState::Keep } => {}
+            _ if matches!(self.shown, Shown::Maximized | Shown::Fullscreen) => self.shown = Shown::Normal,
+            _ => {}
+        }
+        self.target = target;
     }
 }
 

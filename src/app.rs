@@ -521,6 +521,12 @@ fn job_screens(app: &App) -> Vec<SwitchScreen> {
     app.mons.iter().map(screen).collect()
 }
 
+/// A capture of this desk. The apps the zones leave alone are never captured either.
+fn capture_job(app: &App) -> CaptureJob {
+    let exclude = app.cfg.zones.exclude.iter().map(|x| x.to_lowercase()).collect();
+    CaptureJob { owner: app.hwnd.0 as isize, screens: job_screens(app), gap: app.cfg.zones.gap, exclude }
+}
+
 /// Start switching to a workspace on this desk. The worker does the rest and the
 /// result comes back as an event.
 fn start_switch(app: &mut App, id: Option<&str>, name: Option<&str>) -> Reply {
@@ -640,8 +646,7 @@ fn start_capture(
         return Some(Err(RpcError::new(api::NOT_FOUND, "no such workspace on this desk")));
     }
     app.capturing = Some(Capturing { reply, name, into, sig: app.sig.clone() });
-    let job = CaptureJob { owner: app.hwnd.0 as isize, screens: job_screens(app), gap: app.cfg.zones.gap };
-    if switcher::capture(job) {
+    if switcher::capture(capture_job(app)) {
         return None;
     }
     app.capturing = None;

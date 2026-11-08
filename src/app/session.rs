@@ -22,8 +22,7 @@ pub(super) fn start_session_capture(app: &mut App) {
     if !app.cfg.restore_session || app.session_capture.is_some() {
         return;
     }
-    let job = CaptureJob { owner: app.hwnd.0 as isize, screens: job_screens(app), gap: app.cfg.zones.gap };
-    if switcher::capture_session(job) {
+    if switcher::capture_session(capture_job(app)) {
         app.session_capture = Some(app.sig.clone());
     }
 }

@@ -4,6 +4,15 @@ All notable changes to Seam. The format follows [Keep a Changelog](https://keepa
 
 ## [Unreleased]
 
+### Added
+
+- Workspaces remember whether each window was minimized, maximized or full screen, which window was in front of which, and which had the focus, and a switch brings all of that back. A minimized window stays minimized and restores into its zone later.
+
+### Changed
+
+- Capturing a workspace only saves app windows with a taskbar button. Overlays (Discord, GPU, Xbox Game Bar), helper and input windows are left out, and so are the apps the zones leave alone.
+- A switch that has nothing to move now changes nothing and takes a few milliseconds, and one that does only pauses for windows going to a screen with another scale.
+
 ## [0.5.0] - 2026-11-08
 
 ### Added

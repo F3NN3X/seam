@@ -378,6 +378,7 @@ fn icon_strip(i: usize, ws: &Workspace, icons: &Icons, p: Palette) -> Div {
         .items_center()
         .gap(px(4.))
         .children(shown)
+        .when(apps.is_empty(), |d| d.child(div().text_size(px(12.)).text_color(p.muted).child("No windows yet")))
         .when(more > 0, |d| d.child(div().text_size(px(12.)).text_color(p.muted).child(format!("+{more}"))))
 }
 

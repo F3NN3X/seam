@@ -322,7 +322,7 @@ Set up first: turn on **Start with Windows** and **Offer to restore my windows a
 - [ ] **Apps that start themselves.** Have Discord or another app that starts at sign-in in the session. After sign-in, click the offer: Seam uses the window that's already open, starts no second copy, and puts it in its zone.
 - [ ] **Not at a hand start.** Quit Seam and start it from the Start menu: no offer. `seam.exe --updated-from x` after an update: no offer.
 - [ ] **Slow shell.** If the notification can't show yet at sign-in, Seam tries again every 5 s for a minute.
-- [ ] **Turned off.** Turn the switch off, snap windows and sign out and in. No new save happens and no offer shows.
+- [ ] **Turned off.** Turn the switch off: `config.json` no longer has a `last_session` under any desk. Snap windows and sign out and in. No new save happens and no offer shows.
 - [ ] **Shutdown is quick.** Sign out with many apps open: Windows doesn't list Seam as preventing sign-out. A capture that takes longer than 2 s leaves the earlier session saved, and the log says so.
 - [ ] **Other desk.** Unplug to "Laptop only" and sign out and in. The offer is for that desk's own last session, or there is none.
 - [ ] **API.** `session.restore` from the panel token or a Seam process runs the restore and a subscribed client gets `workspace.switched` with id `last_session`. From another client it answers error 4. With nothing saved for the desk it answers error 1.

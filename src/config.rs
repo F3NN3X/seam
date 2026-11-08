@@ -180,14 +180,6 @@ impl Default for WindowSettings {
     }
 }
 
-/// How Seam starts.
-#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(default)]
-pub struct GeneralSettings {
-    /// "Offer to restore my windows after I sign in" (D120). Off saves no session.
-    pub restore_session: bool,
-}
-
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(default)]
 pub struct ApiSettings {
@@ -258,7 +250,9 @@ pub struct Config {
     pub hotkeys: Hotkeys,
     pub zones: ZoneSettings,
     pub windows: WindowSettings,
-    pub general: GeneralSettings,
+    /// "Offer to restore my windows after I sign in" (D120). Off saves no session
+    /// and deletes the saved ones.
+    pub restore_session: bool,
     pub updates: UpdateSettings,
     pub api: ApiSettings,
     /// Layout signature (sorted device paths) -> desk.
@@ -282,7 +276,7 @@ impl Default for Config {
             hotkeys: Hotkeys::default(),
             zones: ZoneSettings::default(),
             windows: WindowSettings::default(),
-            general: GeneralSettings::default(),
+            restore_session: false,
             updates: UpdateSettings::default(),
             api: ApiSettings::default(),
             desks: BTreeMap::new(),
@@ -361,6 +355,9 @@ impl Config {
         let mut config: Config = serde_json::from_value(merged)?;
         config.windows.focus_color = palette::normalise(&config.windows.focus_color, palette::FOCUS_DEFAULT);
         config.windows.pin_color = palette::normalise(&config.windows.pin_color, palette::PIN_DEFAULT);
+        if !config.restore_session {
+            config.desks.values_mut().for_each(|desk| desk.last_session = None);
+        }
         Ok(config)
     }
 

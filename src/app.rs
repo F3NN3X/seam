@@ -693,14 +693,14 @@ fn saved_session(app: &App) -> Option<Session> {
 /// Seam pinned, placed or switched, so save the last session once things have been
 /// quiet for a while. A newer change starts the wait again.
 fn windows_changed(app: &App) {
-    if app.cfg.general.restore_session {
+    if app.cfg.restore_session {
         unsafe { SetTimer(Some(app.hwnd), TIMER_SESSION, SESSION_SAVE_AFTER_MS, None) };
     }
 }
 
 /// Capture the last session on a worker. One at a time.
 fn start_session_capture(app: &mut App) {
-    if !app.cfg.general.restore_session || app.session_capture.is_some() {
+    if !app.cfg.restore_session || app.session_capture.is_some() {
         return;
     }
     let job = CaptureJob { owner: app.hwnd.0 as isize, screens: job_screens(app), gap: app.cfg.zones.gap };
@@ -713,7 +713,7 @@ fn start_session_capture(app: &mut App) {
 /// apps already gone at sign-out than a choice, so the last saved one stays.
 fn store_session(app: &mut App, rules: Vec<Rule>) {
     let Some(sig) = app.session_capture.take() else { return };
-    if rules.is_empty() || !app.cfg.general.restore_session {
+    if rules.is_empty() || !app.cfg.restore_session {
         return;
     }
     let Some(desk) = app.cfg.desks.get_mut(&sig) else { return };
@@ -740,7 +740,7 @@ fn query_end_session(app: &mut App) {
 /// `WM_QUERYENDSESSION` and write it out before the process goes. A capture that
 /// isn't done in time leaves the last saved session as it was.
 fn end_session(app: &mut App) {
-    if !app.cfg.general.restore_session {
+    if !app.cfg.restore_session {
         return;
     }
     // Later than the question, apps may already be closing, so only capture now if it was missed.
@@ -761,7 +761,7 @@ fn end_session(app: &mut App) {
 /// After a sign-in, offer the last session once. Returns whether that's settled,
 /// shown or with nothing to offer.
 fn offer_session(app: &mut App) -> bool {
-    let Some(session) = saved_session(app).filter(|_| app.cfg.general.restore_session) else { return true };
+    let Some(session) = saved_session(app).filter(|_| app.cfg.restore_session) else { return true };
     // The click restores what was offered, even if a save replaces it meanwhile.
     app.session_offer = Some(session.workspace());
     let shown =
@@ -1701,7 +1701,7 @@ pub fn run() {
             with_app(|a| open_panel(a, None));
         }
         // After a sign-in, offer the last session once the desktop has settled (D120).
-        if login && with_app(|a| a.cfg.general.restore_session) == Some(true) {
+        if login && with_app(|a| a.cfg.restore_session) == Some(true) {
             SetTimer(Some(hwnd), TIMER_SESSION_OFFER, SESSION_OFFER_AFTER_MS, None);
         }
         if line_up {

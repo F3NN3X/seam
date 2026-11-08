@@ -135,10 +135,10 @@ pub fn render(panel: &mut Panel, window: &mut Window, cx: &mut Context<Panel>) -
         switch("ask-new-desks", panel.config.ask_new_desks, window, cx, setter(|on| json!({ "ask_new_desks": on })));
     let restore = switch(
         "restore-session",
-        panel.config.general.restore_session,
+        panel.config.restore_session,
         window,
         cx,
-        setter(|on| json!({ "general": { "restore_session": on } })),
+        setter(|on| json!({ "restore_session": on })),
     );
     let selected = usize::from(panel.config.tray_click == TrayClick::LineUp);
     let left_click = ui::segmented("tray-click", &["Open Seam", "Start Line Up"], selected, window, cx, {

@@ -20,7 +20,7 @@ use serde_json::{json, Value};
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 
-const LIST_WIDTH: f32 = 232.;
+const LIST_WIDTH: f32 = 200.;
 
 // ---- What is saved. The config keeps workspaces as raw JSON. Creating, deleting and
 // importing send the whole list; the editor sends one workspace.
@@ -292,7 +292,8 @@ fn summary(panel: &Panel, ws: &Workspace) -> String {
 }
 
 /// How many icons the list card shows before "+n".
-const ICONS_SHOWN: usize = 8;
+/// As many as fit in a 200 px card with the "+n" after them.
+const ICONS_SHOWN: usize = 6;
 
 /// The workspace's apps as a row of icons in rule order, each app once.
 fn icon_strip(i: usize, ws: &Workspace, icons: &Icons, p: Palette) -> Div {
@@ -321,7 +322,11 @@ fn icon_strip(i: usize, ws: &Workspace, icons: &Icons, p: Palette) -> Div {
         .gap(px(4.))
         .children(shown)
         .when(apps.is_empty(), |d| d.child(div().text_size(px(12.)).text_color(p.muted).child("No windows yet")))
-        .when(more > 0, |d| d.child(div().text_size(px(12.)).text_color(p.muted).child(format!("+{more}"))))
+        .when(more > 0, |d| {
+            d.child(
+                div().flex_none().whitespace_nowrap().text_size(px(12.)).text_color(p.muted).child(format!("+{more}")),
+            )
+        })
 }
 
 /// What a workspace card says about itself besides its name.

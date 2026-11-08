@@ -82,7 +82,7 @@ fn main() {
         Panel::bind_keys(cx);
         let options = WindowOptions {
             titlebar: Some(TitlebarOptions { title: Some(tray::PANEL_TITLE.into()), ..Default::default() }),
-            window_bounds: Some(WindowBounds::Windowed(Bounds::centered(None, size(px(1080.), px(780.)), cx))),
+            window_bounds: Some(WindowBounds::Windowed(Bounds::centered(None, size(px(1160.), px(780.)), cx))),
             window_min_size: Some(size(px(900.), px(640.))),
             ..Default::default()
         };

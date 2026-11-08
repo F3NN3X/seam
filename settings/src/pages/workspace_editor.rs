@@ -13,7 +13,7 @@ use gpui_kit::component::checkbox::Checkbox;
 use gpui_kit::component::menu::{DropdownMenu, PopupMenuItem};
 use gpui_kit::component::slider::{Slider, SliderEvent, SliderState};
 use gpui_kit::component::tooltip::Tooltip;
-use gpui_kit::component::{Icon, ThemeStyled, WindowExt};
+use gpui_kit::component::{ActiveTheme, Icon, ThemeStyled, WindowExt};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 use seam::state::Screen;
@@ -23,20 +23,56 @@ use serde_json::json;
 
 const GRIP_WIDTH: f32 = 16.;
 const ICON_WIDTH: f32 = 32.;
-/// The name, Now and Goes to columns start at the width their usual text needs, and
-/// share both the room to spare and the room missing, by these weights, each down
-/// to its least, so the "..." always shows. Now fits "Running in background".
-const NAME_WIDTH: f32 = 150.;
+/// The name, Now and Goes to columns start at the width their usual text needs (see
+/// `Cols`), and share both the room to spare and the room missing, by these weights,
+/// each down to its least, so the "..." always shows.
 const NAME_GROW: f32 = 2.;
 const NAME_LEAST: f32 = 40.;
-const STATUS_WIDTH: f32 = 144.;
 const STATUS_GROW: f32 = 1.;
 const STATUS_LEAST: f32 = 16.;
-const GOES_TO_WIDTH: f32 = 160.;
 const GOES_TO_GROW: f32 = 2.;
 const GOES_TO_LEAST: f32 = 48.;
-const LAUNCH_WIDTH: f32 = 56.;
 const MORE_WIDTH: f32 = 32.;
+/// What the columns are measured on: a usual app name, the longest Now word that
+/// should show in full, and a usual place.
+const USUAL_NAME: &str = "Visual Studio Code";
+const LONGEST_STATUS: &str = "Running in background";
+const USUAL_PLACE: &str = "Screen 2, zone 1";
+/// Around the text: the name's gap and chevron, the status dot and its gap, and the
+/// Goes to button's border, padding, gap and caret.
+const NAME_CHROME: f32 = 4. + 16.;
+const STATUS_CHROME: f32 = 8. + 8.;
+const GOES_TO_CHROME: f32 = 2. + 20. + 8. + 16.;
+
+/// The table's measured widths: where the flexible columns start, and Launch, as wide as its head.
+#[derive(Clone, Copy)]
+pub struct Cols {
+    name: f32,
+    status: f32,
+    goes: f32,
+    launch: f32,
+}
+
+impl Cols {
+    pub fn measure(window: &Window, cx: &App) -> Cols {
+        let width = |text: &str, size: f32| text_width(text, size, window, cx).ceil();
+        Cols {
+            name: width(USUAL_NAME, 14.) + NAME_CHROME,
+            status: width(LONGEST_STATUS, 12.) + STATUS_CHROME,
+            goes: width(USUAL_PLACE, 14.) + GOES_TO_CHROME,
+            launch: width("Launch", 13.).max(16.),
+        }
+    }
+}
+
+/// How wide `text` is at `size` in the panel's font.
+fn text_width(text: &str, size: f32, window: &Window, cx: &App) -> f32 {
+    let mut style = window.text_style();
+    style.font_family = cx.theme().font_family.clone();
+    let run = style.to_run(text.len());
+    let line = window.text_system().shape_line(SharedString::from(text.to_string()), px(size), &[run], None);
+    f32::from(line.width)
+}
 /// Launch details sit under the app's name: past the grip, the icon and their gaps.
 const DETAILS_INDENT: f32 = GRIP_WIDTH + ICON_WIDTH + 16.;
 /// A column that starts at `width`, grows by `grow` and shrinks down to `least`.
@@ -513,7 +549,7 @@ fn details(panel: &mut Panel, i: usize, ws: &Workspace, window: &mut Window, cx:
 
 fn window_row(
     panel: &mut Panel,
-    i: usize,
+    (i, cols): (usize, Cols),
     ws: &Workspace,
     screens: &[Screen],
     window: &mut Window,
@@ -550,7 +586,7 @@ fn window_row(
         .flex()
         .flex_grow(NAME_GROW)
         .flex_shrink(1.)
-        .flex_basis(px(NAME_WIDTH))
+        .flex_basis(px(cols.name))
         .min_w(px(NAME_LEAST))
         .items_center()
         .gap(px(4.))
@@ -590,7 +626,7 @@ fn window_row(
     let state = row_state(panel, ws, i);
     // A closed app that starts with the workspace says so under where it goes.
     let opens = state == Some(RowState::NotRunning) && rule.launch && ws.launch_missing;
-    let goes = column(GOES_TO_WIDTH, GOES_TO_GROW, GOES_TO_LEAST)
+    let goes = column(cols.goes, GOES_TO_GROW, GOES_TO_LEAST)
         .flex()
         .flex_col()
         .gap(px(2.))
@@ -605,9 +641,9 @@ fn window_row(
         .child(grip)
         .child(app_icon(rule, &panel.icons, p))
         .child(name)
-        .child(column(STATUS_WIDTH, STATUS_GROW, STATUS_LEAST).child(status_cell(i, state, p)))
+        .child(column(cols.status, STATUS_GROW, STATUS_LEAST).child(status_cell(i, state, p)))
         .child(goes)
-        .child(div().flex().flex_none().justify_center().w(px(LAUNCH_WIDTH)).child(launch))
+        .child(div().flex().flex_none().justify_center().w(px(cols.launch)).child(launch))
         .child(div().flex().flex_none().justify_end().w(px(MORE_WIDTH)).child(more_menu(i, ws, &title, cx)));
 
     let (keys, dropped, last) = (id.clone(), id.clone(), ws.windows.len() - 1);
@@ -648,7 +684,7 @@ fn window_row(
     body.into_any_element()
 }
 
-fn table_head(p: Palette) -> AnyElement {
+fn table_head(cols: Cols, p: Palette) -> AnyElement {
     let head = |text: &'static str| div().text_size(px(13.)).text_color(p.muted).truncate().child(text);
     div()
         .flex()
@@ -659,10 +695,10 @@ fn table_head(p: Palette) -> AnyElement {
         .child(div().flex_none().w(px(GRIP_WIDTH)))
         // The icon's place, so the columns line up with the rows' as they shrink.
         .child(div().flex_none().w(px(ICON_WIDTH)))
-        .child(column(NAME_WIDTH, NAME_GROW, NAME_LEAST).child(head("App, in start order")))
-        .child(column(STATUS_WIDTH, STATUS_GROW, STATUS_LEAST).child(head("Now")))
-        .child(column(GOES_TO_WIDTH, GOES_TO_GROW, GOES_TO_LEAST).child(head("Goes to")))
-        .child(div().flex().flex_none().justify_center().w(px(LAUNCH_WIDTH)).child(head("Launch")))
+        .child(column(cols.name, NAME_GROW, NAME_LEAST).child(head("App, in start order")))
+        .child(column(cols.status, STATUS_GROW, STATUS_LEAST).child(head("Now")))
+        .child(column(cols.goes, GOES_TO_GROW, GOES_TO_LEAST).child(head("Goes to")))
+        .child(div().flex().flex_none().justify_center().w(px(cols.launch)).child(head("Launch")))
         .child(div().flex_none().w(px(MORE_WIDTH)))
         .into_any_element()
 }
@@ -672,13 +708,14 @@ pub fn rows(panel: &mut Panel, ws: &Workspace, window: &mut Window, cx: &mut Con
     let p = palette(cx);
     let screens = panel.state.as_ref().map(|s| s.screens.clone()).unwrap_or_default();
     icons::request(panel, &ws.windows, cx);
-    let mut rows = vec![table_head(p)];
+    let cols = Cols::measure(window, cx);
+    let mut rows = vec![table_head(cols, p)];
     if ws.windows.is_empty() {
         let text = "No apps yet. Add one, or arrange your windows and choose Update from screen";
         rows.push(div().px(px(16.)).py(px(16.)).child(ui::description(text, p)).into_any_element());
     }
     for i in 0..ws.windows.len() {
-        rows.push(window_row(panel, i, ws, &screens, window, cx));
+        rows.push(window_row(panel, (i, cols), ws, &screens, window, cx));
     }
     rows
 }

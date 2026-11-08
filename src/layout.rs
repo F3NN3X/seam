@@ -18,9 +18,10 @@ pub struct Link {
     pub glued: bool,
 }
 
-/// How far past the edge a move must go before it crosses a gap. None: the
-/// first event past the edge crosses.
-pub const GLUE_RESISTANCE_PX: i32 = 0;
+/// How far the pointer must push past a glued edge, in pixels of the screen it
+/// leaves, before it crosses. Until then it rests at the edge, so an auto-hide
+/// taskbar there can still show.
+pub const GLUE_RESISTANCE_PX: i32 = 60;
 
 #[derive(Default)]
 pub struct Live {
@@ -35,6 +36,14 @@ pub struct Crossing {
     pub src: usize,
     pub dst: usize,
     pub side: Side,
+    /// Pixels past the edge, 0 for the first one out.
+    pub over: i32,
+    /// The glued link it crosses, as an index into `Live::links`. `None` for a
+    /// border that touches in Windows.
+    pub glue: Option<usize>,
+    /// Where the pointer rests while a glued crossing is held back. `None` where
+    /// Windows has no screen under the point and stops the pointer itself.
+    pub hold: Option<(i32, i32)>,
 }
 
 /// Where a move from `prev` to `pt` should land. `None` leaves it to Windows.
@@ -44,7 +53,7 @@ pub fn decide(live: &Live, prev: (i32, i32), pt: (i32, i32)) -> Option<Crossing>
     // The screen under the raw point, looked up once and only for a glued link.
     let mut under: Option<Option<usize>> = None;
     for (side, along, over) in exits_of(&a, prev, pt).into_iter().flatten() {
-        for l in &live.links {
+        for (i, l) in live.links.iter().enumerate() {
             let (dst, map) = if l.a == src && l.side == side {
                 (l.b, l.map)
             } else if l.b == src && l.side.opposite() == side {
@@ -52,19 +61,55 @@ pub fn decide(live: &Live, prev: (i32, i32), pt: (i32, i32)) -> Option<Crossing>
             } else {
                 continue;
             };
+            let mut hold = None;
             if l.glued {
                 // A screen Windows has under the point wins over a glued one.
                 let on = *under.get_or_insert_with(|| live.rects.iter().position(|r| r.contains(pt.0, pt.1)));
-                if over < GLUE_RESISTANCE_PX || on.is_some_and(|i| i != dst) {
+                if on.is_some_and(|j| j != dst) {
                     continue;
                 }
+                // Windows would move the pointer onto a screen there, so hold it here.
+                hold = on.map(|_| inside(&a, pt));
             }
             if let Some(to) = remap_crossing(&a, &live.rects[dst], side, &map, along, over) {
-                return Some(Crossing { to, src, dst, side });
+                return Some(Crossing { to, src, dst, side, over, glue: l.glued.then_some(i), hold });
             }
         }
     }
     None
+}
+
+/// `pt` moved onto the nearest pixel of `a`.
+fn inside(a: &Rect, pt: (i32, i32)) -> (i32, i32) {
+    (pt.0.clamp(a.left, a.right - 1), pt.1.clamp(a.top, a.bottom - 1))
+}
+
+/// How far the pointer has pushed past a glued edge, kept by the hook between
+/// moves.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Push {
+    /// The glued link and the screen the push is leaving.
+    edge: Option<(usize, usize)>,
+    px: i32,
+}
+
+impl Push {
+    /// The push after this move, and whether the move crosses now. A glued
+    /// crossing adds its pixels past the edge and crosses once they reach
+    /// `GLUE_RESISTANCE_PX`. Anything else, such as a move that stays on the
+    /// screen or slides along the edge, starts the count again.
+    pub fn after(self, c: Option<&Crossing>) -> (Push, bool) {
+        let Some(c) = c else { return (Push::default(), false) };
+        let Some(link) = c.glue else { return (Push::default(), true) };
+        let edge = Some((link, c.src));
+        // `over` counts the first pixel out as 0.
+        let px = if self.edge == edge { self.px } else { 0 } + c.over + 1;
+        if px >= GLUE_RESISTANCE_PX {
+            (Push::default(), true)
+        } else {
+            (Push { edge, px }, false)
+        }
+    }
 }
 
 /// Why `plan` refused an arrangement. Indices are into the monitor list; the
@@ -350,6 +395,29 @@ mod tests {
         assert_eq!((c.dst, c.to), (1, (1110, 300)));
         // Far enough to land on the glued screen itself still lines it up.
         assert_eq!(decide(&l, (999, 300), (1150, 300)).unwrap().to, (1250, 300));
+    }
+
+    #[test]
+    fn a_glued_edge_holds_the_pointer_until_the_push_adds_up() {
+        let glued = |link, over| Crossing {
+            to: (0, 0),
+            src: 0,
+            dst: 1,
+            side: Side::Bottom,
+            over,
+            glue: Some(link),
+            hold: None,
+        };
+        let push =
+            |moves: &[Option<Crossing>]| moves.iter().fold((Push::default(), false), |(p, _), c| p.after(c.as_ref())).1;
+        // A slow push of 5 px a move crosses on the twelfth, at 60.
+        assert!(!push(&[Some(glued(0, 4)); 11]));
+        assert!(push(&[Some(glued(0, 4)); 12]));
+        // Sliding along the edge, or pushing on another glued edge, starts again.
+        assert!(!push(&[Some(glued(0, 39)), None, Some(glued(0, 39))]));
+        assert!(!push(&[Some(glued(0, 39)), Some(glued(1, 39))]));
+        // A flick crosses at once.
+        assert!(push(&[Some(glued(0, 59))]));
     }
 
     #[test]

@@ -235,7 +235,7 @@ Windows lines screens up in raw pixels and keeps the same pixel row when the poi
 Without it, Windows blocks the pointer from leaving a screen at a point that has no neighbouring pixels. With different sizes, much of a screen's edge is like that, so the pointer would never get to the border where Seam can carry it across. Seam warns you on the Displays page when it's off. **Turn it on** does it for you. Seam never turns it off, so turn it off in Display settings if you want it off.
 
 **My screens touch on the desk, but Windows has a gap between them. Can the pointer cross it?**
-Yes, if you glue them in Line Up. When the pointer goes past the edge into the gap, Seam carries it to where the other screen physically continues, on the first move past the edge. If Windows has another screen under the pointer there, that screen wins. Align arrangement keeps the gap, and refuses a move that would take a glued screen out from beyond its partner's edge.
+Yes, if you glue them in Line Up. When the pointer goes past the edge into the gap, Seam carries it to where the other screen physically continues. The pointer rests at the edge until you push about 60 px past it, so an auto-hide taskbar on that edge still shows. If Windows has another screen under the pointer there, that screen wins. Align arrangement keeps the gap, and refuses a move that would take a glued screen out from beyond its partner's edge.
 
 **Why can't Seam move some windows?**
 Windows doesn't let a normal app move the windows of an app running as administrator. Seam skips them in zones, window control and workspaces, tells you once when that happens, and shows "can't be moved" in the workspace editor. Run the app without administrator rights if you can.

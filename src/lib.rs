@@ -3,6 +3,7 @@
 pub mod api;
 pub mod config;
 pub mod desk;
+pub mod direction;
 pub mod geom;
 pub mod hotkey;
 pub mod layout;

@@ -135,6 +135,19 @@ struct Engine {
     pending: Option<Pending>,
     warned: bool,
     refit: refit::Refit,
+    /// Window control's moves, one at a time through the same steps.
+    queued: VecDeque<Placement>,
+}
+
+/// Where window control wants a window, worked out on its worker.
+pub struct Placement {
+    pub hwnd: isize,
+    /// The visible frame's rect.
+    pub target: Rect,
+    /// The screen and zones it lands in, or None for a free place.
+    pub zone: Option<(String, usize, usize)>,
+    /// The effective DPI of the screen it lands on.
+    pub dpi: u32,
 }
 
 thread_local! {
@@ -242,6 +255,30 @@ pub fn move_foreground(next: bool) -> Result<(), String> {
     with_engine(|e| e.move_foreground(next)).unwrap_or_else(|| Err("Seam is busy, try again".into()))
 }
 
+/// The screen and zones a window is snapped to, while it's still where it was
+/// put. A window still on its way counts as being where it's going.
+pub fn zone_of(hwnd: HWND) -> Option<(String, usize, usize)> {
+    let key = hwnd.0 as isize;
+    with_engine(|e| {
+        if let Some(q) = e.queued.iter().rev().find(|q| q.hwnd == key) {
+            return q.zone.clone();
+        }
+        let moving = e.pending.as_ref().is_some_and(|p| p.hwnd == key);
+        let s = if moving { e.snapped.get(&key) } else { e.current(hwnd) };
+        s.map(|s| (s.screen.clone(), s.from, s.to))
+    })
+    .flatten()
+}
+
+/// Put windows where window control worked out, one after another. A newer
+/// list replaces what is still waiting.
+pub fn place_all(list: Vec<Placement>) {
+    with_engine(|e| {
+        e.queued = list.into();
+        e.window_pump();
+    });
+}
+
 unsafe extern "system" fn on_event(_: HWINEVENTHOOK, event: u32, hwnd: HWND, object: i32, _: i32, _: u32, _: u32) {
     if object != OBJID_WINDOW.0 {
         return;
@@ -332,6 +369,8 @@ impl Engine {
 
     fn drag_start(&mut self, hwnd: HWND) {
         self.cancel_drag();
+        // A drag takes over from window control's moves still waiting.
+        self.queued.clear();
         let key = hwnd.0 as isize;
         // A placement still waiting would yank the window back under the pointer.
         if self.pending.as_ref().is_some_and(|p| p.hwnd == key) {
@@ -607,7 +646,30 @@ impl Engine {
     fn advance(&mut self) {
         self.advance_step();
         if self.pending.is_none() {
+            self.window_pump();
+        }
+        if self.pending.is_none() {
             self.refit_pump();
+        }
+    }
+
+    /// Start window control's next move once the one before is over.
+    fn window_pump(&mut self) {
+        while self.pending.is_none() && self.drag.is_none() {
+            let Some(p) = self.queued.pop_front() else { break };
+            let hwnd = hwnd_of(p.hwnd);
+            if !unsafe { IsWindow(Some(hwnd)) }.as_bool() {
+                continue;
+            }
+            let geometry = self.geometry();
+            match p.zone.and_then(|(id, from, to)| Some((geometry.iter().find(|g| g.id == id)?, from, to))) {
+                Some((g, from, to)) if to < g.zones.len() => self.snap_to(hwnd, g, (from, to), p.target, None),
+                _ => {
+                    // The screen's DPI, as in `snap_to`.
+                    self.place(hwnd, p.target, winutil::monitor_dpi(hwnd) != p.dpi, false);
+                    self.unsnap(hwnd, winutil::has_zone_stamp(hwnd));
+                }
+            }
         }
     }
 

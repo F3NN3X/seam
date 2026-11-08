@@ -38,6 +38,18 @@ pub struct Hotkeys {
     pub next_zone: Option<String>,
     pub prev_zone: Option<String>,
     pub capture_workspace: Option<String>,
+    pub move_left: Option<String>,
+    pub move_right: Option<String>,
+    pub move_up: Option<String>,
+    pub move_down: Option<String>,
+    pub focus_left: Option<String>,
+    pub focus_right: Option<String>,
+    pub focus_up: Option<String>,
+    pub focus_down: Option<String>,
+    pub swap_left: Option<String>,
+    pub swap_right: Option<String>,
+    pub swap_up: Option<String>,
+    pub swap_down: Option<String>,
 }
 
 impl Default for Hotkeys {
@@ -45,10 +57,44 @@ impl Default for Hotkeys {
         Hotkeys {
             line_up: Some("Ctrl+Shift+Alt+L".into()),
             pause: Some("Ctrl+Shift+Alt+P".into()),
-            next_zone: Some("Win+Alt+Right".into()),
-            prev_zone: Some("Win+Alt+Left".into()),
+            // Win+Alt+arrows moves the window now (D107). A saved file that still has
+            // these on Win+Alt+Left and Right gives way to the moves when registering.
+            next_zone: None,
+            prev_zone: None,
             capture_workspace: None,
+            move_left: Some("Win+Alt+Left".into()),
+            move_right: Some("Win+Alt+Right".into()),
+            move_up: Some("Win+Alt+Up".into()),
+            move_down: Some("Win+Alt+Down".into()),
+            focus_left: Some("Ctrl+Shift+Alt+Left".into()),
+            focus_right: Some("Ctrl+Shift+Alt+Right".into()),
+            focus_up: Some("Ctrl+Shift+Alt+Up".into()),
+            focus_down: Some("Ctrl+Shift+Alt+Down".into()),
+            swap_left: None,
+            swap_right: None,
+            swap_up: None,
+            swap_down: None,
         }
+    }
+}
+
+impl Hotkeys {
+    /// The directional shortcuts as (verb, direction, combo), in the order they register.
+    pub fn directional(&self) -> [(&'static str, &'static str, Option<&String>); 12] {
+        [
+            ("move", "left", self.move_left.as_ref()),
+            ("move", "right", self.move_right.as_ref()),
+            ("move", "up", self.move_up.as_ref()),
+            ("move", "down", self.move_down.as_ref()),
+            ("focus", "left", self.focus_left.as_ref()),
+            ("focus", "right", self.focus_right.as_ref()),
+            ("focus", "up", self.focus_up.as_ref()),
+            ("focus", "down", self.focus_down.as_ref()),
+            ("swap", "left", self.swap_left.as_ref()),
+            ("swap", "right", self.swap_right.as_ref()),
+            ("swap", "up", self.swap_up.as_ref()),
+            ("swap", "down", self.swap_down.as_ref()),
+        ]
     }
 }
 

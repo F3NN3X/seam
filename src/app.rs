@@ -10,9 +10,10 @@ use crate::monitors::{self, Mon};
 use crate::snap::{self, WM_APP_REFIT, WM_APP_SNAP_BLOCKED};
 use crate::switcher::{self, CaptureJob, Screen as SwitchScreen, SwitchJob, WM_APP_CAPTURED, WM_APP_SWITCHED};
 use crate::tray::{self, CLASS, WM_APP_API, WM_APP_LINEUP};
-use crate::{arrange, ease, hotkey, identify, overlay};
-use seam::api::{self, Client, Command, Reply, RpcError};
+use crate::{arrange, ease, hotkey, identify, overlay, wincontrol};
+use seam::api::{self, Client, Command, Reply, RpcError, WindowVerb};
 use seam::config::TrayClick;
+use seam::direction::Dir;
 use seam::state::{self, AlignResult, DeskRef, HotkeyError, Remap, Screen, Snapshot, State, UpdateState, WorkspaceRef};
 use seam::workspace::{self, Workspace};
 use seam::zones;
@@ -69,6 +70,9 @@ const HOTKEY_PAUSE: i32 = 2;
 const HOTKEY_NEXT_ZONE: i32 = 3;
 const HOTKEY_PREV_ZONE: i32 = 4;
 const HOTKEY_CAPTURE: i32 = 5;
+/// The twelve directional shortcuts, in `Hotkeys::directional` order, from here up.
+const HOTKEY_WINDOW: i32 = 10;
+const WINDOW_KEYS: i32 = 12;
 /// One hotkey id per workspace on the desk, from here up.
 const HOTKEY_WORKSPACE: i32 = 100;
 const NIN_KEYSELECT: u32 = NIN_SELECT | NINF_KEY;
@@ -409,6 +413,11 @@ fn apply_hotkeys(app: &mut App) {
         (HOTKEY_PREV_ZONE, "prev_zone".to_string(), keys.prev_zone.clone()),
         (HOTKEY_CAPTURE, "capture_workspace".to_string(), keys.capture_workspace.clone()),
     ];
+    let directional = keys.directional();
+    for (id, (verb, dir, combo)) in (HOTKEY_WINDOW..).zip(directional) {
+        wanted.push((id, format!("{verb}_{dir}"), combo.cloned()));
+    }
+    let taken: Vec<hotkey::Combo> = directional.iter().filter_map(|(_, _, c)| hotkey::parse(c.as_ref()?)).collect();
     for (id, ws) in (HOTKEY_WORKSPACE..).zip(desk_workspaces(app)) {
         wanted.push((id, format!("workspace:{}", ws.id), ws.hotkey));
     }
@@ -423,6 +432,13 @@ fn apply_hotkeys(app: &mut App) {
     }
     for (id, action, combo) in &wanted {
         let Some(combo) = combo else { continue };
+        // A file saved before D107 still has next and previous zone on Win+Alt+Right
+        // and Left. The moves hold those keys now, so the old ones quietly give way.
+        let zone_step = matches!(*id, HOTKEY_NEXT_ZONE | HOTKEY_PREV_ZONE);
+        if zone_step && hotkey::parse(combo).is_some_and(|c| taken.contains(&c)) {
+            log::info!("hotkey {action} gives way to a directional key: {combo}");
+            continue;
+        }
         let registered = hotkey::parse(combo)
             .is_some_and(|c| unsafe { RegisterHotKey(Some(app.hwnd), *id, HOT_KEY_MODIFIERS(c.mods), c.vk).is_ok() });
         if !registered {
@@ -463,6 +479,28 @@ fn start_switch(app: &mut App, id: Option<&str>, name: Option<&str>) -> Reply {
     } else {
         refused("Couldn't start the switch")
     }
+}
+
+/// Queue a window command for the focused window. The worker answers.
+fn start_window(app: &App, verb: WindowVerb, dir: Dir, reply: Option<Sender<Reply>>) {
+    let hwnd = unsafe { GetForegroundWindow() };
+    let desk = app.cfg.desks.get(&app.sig).filter(|_| app.cfg.zones.enabled);
+    let layout = |m: &Mon| desk.and_then(|d| d.zones.get(&m.id)).and_then(zones::layout_of);
+    wincontrol::start(wincontrol::Job {
+        owner: app.hwnd.0 as isize,
+        verb,
+        dir,
+        hwnd: hwnd.0 as isize,
+        snapped: snap::zone_of(hwnd),
+        mons: app.mons.clone(),
+        links: app.links.clone(),
+        layouts: app.mons.iter().map(layout).collect(),
+        gap: app.cfg.zones.gap,
+        exclude: app.cfg.zones.exclude.iter().map(|x| x.to_lowercase()).collect(),
+        // A hotkey gives the tray the right to take focus. The API has to earn it.
+        from_api: reply.is_some(),
+        reply,
+    });
 }
 
 /// A switch finished: say which workspace is in use, and how it went.
@@ -861,6 +899,10 @@ fn run_command(app: &mut App, queued: Queued) {
             Ok(()) => ok(),
             Err(why) => refused(why),
         },
+        Command::Window(verb, dir) => {
+            start_window(app, verb, dir, Some(reply));
+            return;
+        }
         Command::WorkspaceSwitch { id, name } => start_switch(app, id.as_deref(), name.as_deref()),
         Command::WorkspaceCapture { name, into } => {
             if let Some(refusal) = start_capture(app, name, into, Some(reply.clone())) {
@@ -1040,6 +1082,14 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                 HOTKEY_CAPTURE => {
                     with_app(|a| start_capture(a, None, None, None));
                 }
+                id if (HOTKEY_WINDOW..HOTKEY_WINDOW + WINDOW_KEYS).contains(&id) => {
+                    with_app(|a| {
+                        let (verb, dir, _) = a.cfg.hotkeys.directional()[(id - HOTKEY_WINDOW) as usize];
+                        if let (Some(verb), Some(dir)) = (WindowVerb::parse(verb), Dir::parse(dir)) {
+                            start_window(a, verb, dir, None);
+                        }
+                    });
+                }
                 slot if slot >= HOTKEY_WORKSPACE => {
                     with_app(|a| {
                         let action = a.bound.iter().find(|(id, ..)| *id == slot).map(|(_, action, _)| action.clone());
@@ -1088,6 +1138,10 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
         }
         WM_APP_REFIT => {
             snap::refit_found();
+            LRESULT(0)
+        }
+        wincontrol::WM_APP_WINDOW => {
+            wincontrol::planned();
             LRESULT(0)
         }
         // The work area changed, which is what a scaling change or a moved taskbar does.

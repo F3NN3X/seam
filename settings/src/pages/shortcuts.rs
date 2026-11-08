@@ -26,6 +26,22 @@ fn combo_of(k: &Keystroke) -> Option<String> {
     hotkey::parse(&combo).map(|_| combo)
 }
 
+/// The Windows rows, in `Hotkeys::directional` order. Search lists the same titles.
+const WINDOW_TITLES: [&str; 12] = [
+    "Move window left",
+    "Move window right",
+    "Move window up",
+    "Move window down",
+    "Focus window to the left",
+    "Focus window to the right",
+    "Focus window above",
+    "Focus window below",
+    "Swap with window to the left",
+    "Swap with window to the right",
+    "Swap with window above",
+    "Swap with window below",
+];
+
 /// Ctrl+Alt is AltGr on many layouts, so it can eat a typed character.
 fn types_characters(combo: &str) -> bool {
     let printable = combo.rsplit('+').next().is_some_and(|key| key.chars().count() == 1);
@@ -135,12 +151,20 @@ pub fn render(panel: &mut Panel, _: &mut Window, cx: &mut Context<Panel>) -> imp
         row("Move window to next zone", "next_zone", keys.next_zone.as_ref(), 2),
         row("Move window to previous zone", "prev_zone", keys.prev_zone.as_ref(), 3),
     ];
+    // Move, focus and swap in each direction on the desk.
+    let window_rows: Vec<AnyElement> = keys
+        .directional()
+        .into_iter()
+        .zip(WINDOW_TITLES)
+        .enumerate()
+        .map(|(i, ((verb, dir, combo), title))| row(title, &format!("{verb}_{dir}"), combo, 5 + i))
+        .collect();
     // One row for each workspace on this desk, then the capture shortcut.
     let on_desk = workspaces::on_desk(panel);
     let mut workspace_rows: Vec<AnyElement> = on_desk
         .iter()
         .enumerate()
-        .map(|(i, ws)| row(&ws.name, &format!("workspace:{}", ws.id), ws.hotkey.as_ref(), 10 + i))
+        .map(|(i, ws)| row(&ws.name, &format!("workspace:{}", ws.id), ws.hotkey.as_ref(), 20 + i))
         .collect();
     workspace_rows.push(row("Capture current windows", "capture_workspace", keys.capture_workspace.as_ref(), 4));
     div()
@@ -149,6 +173,7 @@ pub fn render(panel: &mut Panel, _: &mut Window, cx: &mut Context<Panel>) -> imp
         .gap(px(ui::SECTION_GAP))
         .child(ui::page_title("Shortcuts", "These work anywhere in Windows, even with this window closed", p))
         .child(section("Displays", card(rows, p), p))
+        .child(section("Windows", card(window_rows, p), p))
         .child(section("Zones", card(zone_rows, p), p))
         .child(section("Workspaces", card(workspace_rows, p), p))
 }

@@ -22,12 +22,24 @@ use seam::zones;
 use serde_json::json;
 
 const GRIP_WIDTH: f32 = 16.;
+const ICON_WIDTH: f32 = 32.;
+/// The name, Now and Goes to columns start at these widths and give way together
+/// when the panel is narrow, each down to its least, so the "..." always shows.
+const NAME_WIDTH: f32 = 160.;
+const NAME_LEAST: f32 = 40.;
 const STATUS_WIDTH: f32 = 120.;
+const STATUS_LEAST: f32 = 16.;
 const GOES_TO_WIDTH: f32 = 200.;
+const GOES_TO_LEAST: f32 = 48.;
 const LAUNCH_WIDTH: f32 = 56.;
 const MORE_WIDTH: f32 = 32.;
 /// Launch details sit under the app's name: past the grip, the icon and their gaps.
-const DETAILS_INDENT: f32 = GRIP_WIDTH + 32. + 16.;
+const DETAILS_INDENT: f32 = GRIP_WIDTH + ICON_WIDTH + 16.;
+/// A column that starts at `width` and shrinks down to `least`.
+fn column(width: f32, least: f32) -> Div {
+    div().flex_shrink(1.).flex_basis(px(width)).min_w(px(least))
+}
+
 const SHOW_AS: [(&str, Shown); 4] = [
     ("Normal", Shown::Normal),
     ("Minimized", Shown::Minimized),
@@ -288,7 +300,8 @@ fn exe_line(rule: &Rule) -> String {
 
 /// The app's icon, or its first letter while there is none.
 fn app_icon(rule: &Rule, icons: &Icons, p: Palette) -> Div {
-    let tile = div().flex().flex_none().items_center().justify_center().size(px(32.)).rounded(px(8.)).bg(p.raised);
+    let tile =
+        div().flex().flex_none().items_center().justify_center().size(px(ICON_WIDTH)).rounded(px(8.)).bg(p.raised);
     match icons.get(rule) {
         Some(image) => tile.child(img(image).size(px(16.))),
         None => {
@@ -315,8 +328,8 @@ fn status_cell(state: Option<RowState>, p: Palette) -> Div {
         Some(RowState::CantMove) => (ui::dot(p.negative, false), "Can't move: runs as administrator"),
         None => return div(),
     };
-    let cell = div().flex().items_center().gap(px(8.));
-    cell.child(dot).child(div().min_w_0().text_size(px(12.)).text_color(p.secondary).child(word))
+    let cell = div().flex().items_center().gap(px(8.)).min_w_0();
+    cell.child(dot.flex_none()).child(div().min_w_0().text_size(px(12.)).text_color(p.secondary).truncate().child(word))
 }
 
 /// A row being dragged to another place in the start order.
@@ -397,9 +410,10 @@ fn goes_menu(panel: &Panel, i: usize, ws: &Workspace, screens: &[Screen], cx: &m
             let _ = weak.update(cx, |panel, cx| where_it_is(panel, &here, i, window, cx));
         }))
     };
-    ui::secondary(("goes-to", i), current, cx)
+    ui::secondary(("goes-to", i), current.clone(), cx)
         .dropdown_caret(true)
-        .w(px(GOES_TO_WIDTH))
+        .w_full()
+        .tooltip(current)
         .dropdown_menu(menu)
         .into_any_element()
 }
@@ -519,14 +533,17 @@ fn window_row(
         });
 
     // What will run is shown in full on hover. A click opens the launch details.
-    let full_path = SharedString::from(if rule.exe.is_empty() { exe_line(rule) } else { rule.exe.clone() });
+    let path = if rule.exe.is_empty() { exe_line(rule) } else { rule.exe.clone() };
+    let full_path = SharedString::from(format!("{title}: {path}"));
     let chevron = if open { assets::IconName::ChevronDown } else { assets::IconName::ChevronRight };
     let toggle = id.clone();
     let name = div()
         .id(("app-name", i))
         .flex()
-        .flex_1()
-        .min_w_0()
+        .flex_grow(1.)
+        .flex_shrink(1.)
+        .flex_basis(px(NAME_WIDTH))
+        .min_w(px(NAME_LEAST))
         .items_center()
         .gap(px(4.))
         .cursor_pointer()
@@ -539,7 +556,7 @@ fn window_row(
                 .child(div().text_size(px(14.)).truncate().child(title.clone()))
                 .child(div().text_size(px(12.)).text_color(p.muted).truncate().child(exe_line(rule))),
         )
-        .child(Icon::new(chevron).size(px(16.)).text_color(p.muted))
+        .child(Icon::new(chevron).flex_none().size(px(16.)).text_color(p.muted))
         .on_click(cx.listener(move |panel, _, _, cx| {
             let this = Some((toggle.clone(), i));
             panel.editing.expanded = if panel.editing.expanded == this { None } else { this };
@@ -565,14 +582,12 @@ fn window_row(
     let state = row_state(panel, ws, i);
     // A closed app that starts with the workspace says so under where it goes.
     let opens = state == Some(RowState::NotRunning) && rule.launch && ws.launch_missing;
-    let goes = div()
+    let goes = column(GOES_TO_WIDTH, GOES_TO_LEAST)
         .flex()
         .flex_col()
-        .flex_none()
         .gap(px(2.))
-        .w(px(GOES_TO_WIDTH))
         .child(goes_menu(panel, i, ws, screens, cx))
-        .when(opens, |d| d.child(div().text_size(px(12.)).text_color(p.muted).child("Will open")));
+        .when(opens, |d| d.child(div().text_size(px(12.)).text_color(p.muted).truncate().child("Will open")));
     let main = div()
         .flex()
         .items_center()
@@ -582,7 +597,7 @@ fn window_row(
         .child(grip)
         .child(app_icon(rule, &panel.icons, p))
         .child(name)
-        .child(div().flex_none().w(px(STATUS_WIDTH)).child(status_cell(state, p)))
+        .child(column(STATUS_WIDTH, STATUS_LEAST).child(status_cell(state, p)))
         .child(goes)
         .child(div().flex().flex_none().justify_center().w(px(LAUNCH_WIDTH)).child(launch))
         .child(div().flex().flex_none().justify_end().w(px(MORE_WIDTH)).child(more_menu(i, ws, &title, cx)));
@@ -626,7 +641,7 @@ fn window_row(
 }
 
 fn table_head(p: Palette) -> AnyElement {
-    let head = |text: &'static str| div().text_size(px(13.)).text_color(p.muted).child(text);
+    let head = |text: &'static str| div().text_size(px(13.)).text_color(p.muted).truncate().child(text);
     div()
         .flex()
         .items_center()
@@ -634,9 +649,11 @@ fn table_head(p: Palette) -> AnyElement {
         .px(px(16.))
         .py(px(10.))
         .child(div().flex_none().w(px(GRIP_WIDTH)))
-        .child(div().flex_1().child(head("App, in start order")))
-        .child(div().flex_none().w(px(STATUS_WIDTH)).child(head("Now")))
-        .child(div().flex_none().w(px(GOES_TO_WIDTH)).child(head("Goes to")))
+        // The icon's place, so the columns line up with the rows' as they shrink.
+        .child(div().flex_none().w(px(ICON_WIDTH)))
+        .child(column(NAME_WIDTH, NAME_LEAST).flex_grow(1.).child(head("App, in start order")))
+        .child(column(STATUS_WIDTH, STATUS_LEAST).child(head("Now")))
+        .child(column(GOES_TO_WIDTH, GOES_TO_LEAST).child(head("Goes to")))
         .child(div().flex().flex_none().justify_center().w(px(LAUNCH_WIDTH)).child(head("Launch")))
         .child(div().flex_none().w(px(MORE_WIDTH)))
         .into_any_element()

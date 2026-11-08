@@ -117,6 +117,8 @@ pub enum Command {
     WorkspaceSnapBack,
     /// Save the windows on screen into the workspace in use, or a new one (§7).
     WorkspaceQuickSave,
+    /// The workspace taken as in use at start when none is remembered, or none.
+    WorkspaceSetDefault(Option<String>),
     /// "Put apps in place when they open".
     AutoApplySet(bool),
     RemapSet(bool),
@@ -218,6 +220,7 @@ fn command(method: &str, p: &Value) -> Result<Command, RpcError> {
         },
         "workspace.snap_back" => Command::WorkspaceSnapBack,
         "workspace.quick_save" => Command::WorkspaceQuickSave,
+        "workspace.set_default" => Command::WorkspaceSetDefault(str_param(p, "id")?),
         "autoapply.set" => Command::AutoApplySet(on_param(p)?),
         "remap.set" => Command::RemapSet(on_param(p)?),
         "zones.set" => Command::ZonesSet(on_param(p)?),
@@ -278,7 +281,10 @@ fn allowed(command: &Command, peer: Peer) -> Result<(), RpcError> {
     }
     let permitted = match command {
         Command::ConfigPatch(_) | Command::WorkspaceUpdate { .. } => peer.panel,
-        Command::AppQuit | Command::WorkspaceCapture { .. } | Command::SessionRestore => peer.panel || peer.own_image,
+        Command::AppQuit
+        | Command::WorkspaceCapture { .. }
+        | Command::SessionRestore
+        | Command::WorkspaceSetDefault(_) => peer.panel || peer.own_image,
         Command::UpdateReady => peer.own_image,
         _ => true,
     };
@@ -341,6 +347,7 @@ pub fn workspaces_list(snapshot: &Snapshot, desk: Option<&str>) -> Reply {
         return Err(RpcError::new(NOT_FOUND, "no such desk"));
     };
     let active = snapshot.state.workspace.as_ref().map(|w| w.id.as_str());
+    let default = desk["default_workspace"].as_str();
     let workspaces = desk["workspaces"].as_array().into_iter().flatten().map(|w| {
         json!({
             "id": w["id"],
@@ -348,6 +355,7 @@ pub fn workspaces_list(snapshot: &Snapshot, desk: Option<&str>) -> Reply {
             "hotkey": w["hotkey"],
             "windows": w["windows"].as_array().map_or(0, Vec::len),
             "active": w["id"].as_str() == active,
+            "default": default.is_some() && w["id"].as_str() == default,
         })
     });
     Ok(Value::Array(workspaces.collect()))

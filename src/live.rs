@@ -17,6 +17,8 @@ use windows::Win32::UI::WindowsAndMessaging::{PostMessageW, WM_APP};
 
 /// The worker checked the active workspace for drift. Read it with `take_drift`.
 pub const WM_APP_DRIFT: u32 = WM_APP + 27;
+/// The worker looked which workspace's windows are all in place. Read it with `take_detected`.
+pub const WM_APP_DETECTED: u32 = WM_APP + 28;
 
 /// What the worker found about the active workspace.
 pub struct Drift {
@@ -26,8 +28,20 @@ pub struct Drift {
     pub placed: bool,
 }
 
+/// Which workspace looks like the one in use, for the desk it was asked about.
+pub struct Detected {
+    pub sig: String,
+    /// None unless exactly one qualifies.
+    pub id: Option<String>,
+}
+
 enum Job {
     Drift,
+    /// Find the one workspace of these whose running apps are all in place.
+    Detect {
+        sig: String,
+        workspaces: Vec<LiveWorkspace>,
+    },
     Opened(isize),
     /// A switch finished, so the windows that opened during it get their turn.
     SwitchEnded,
@@ -49,6 +63,7 @@ enum Job {
 static ACTIVE: Mutex<Option<Arc<LiveWorkspace>>> = Mutex::new(None);
 static OWNER: AtomicIsize = AtomicIsize::new(0);
 static DRIFT: Mutex<Option<Drift>> = Mutex::new(None);
+static DETECTED: Mutex<Option<Detected>> = Mutex::new(None);
 static WORKER: OnceLock<Option<Sender<Job>>> = OnceLock::new();
 
 fn active() -> Option<Arc<LiveWorkspace>> {
@@ -75,6 +90,15 @@ pub fn check_drift() {
 /// A window opened and has settled. Called from the seam-wm thread, which never waits.
 pub fn opened(hwnd: isize) {
     send(Job::Opened(hwnd));
+}
+
+/// With nothing remembered or chosen at start, find the workspace in use by its windows.
+pub fn detect(sig: String, workspaces: Vec<LiveWorkspace>) {
+    send(Job::Detect { sig, workspaces });
+}
+
+pub fn take_detected() -> Option<Detected> {
+    DETECTED.lock().unwrap_or_else(|e| e.into_inner()).take()
 }
 
 /// A switch finished. Called from the tray thread, which never waits.
@@ -116,6 +140,7 @@ fn work(jobs: Receiver<Job>) {
             match job {
                 Job::Stamp { key, windows, whole } => stamp_windows(*key, windows, *whole),
                 Job::Restamp { key, moves } => restamp_windows(*key, moves),
+                Job::Detect { sig, workspaces } => detect_in_use(sig, workspaces),
                 _ => {}
             }
         }
@@ -145,6 +170,21 @@ fn work(jobs: Receiver<Job>) {
                 let _ = PostMessageW(Some(owner), WM_APP_DRIFT, WPARAM(0), LPARAM(0));
             }
         }
+    }
+}
+
+fn detect_in_use(sig: &str, workspaces: &[LiveWorkspace]) {
+    let fits: Vec<&LiveWorkspace> =
+        workspaces.iter().filter(|live| workspace::all_in_place(&switcher::status(live))).collect();
+    let id = match fits[..] {
+        [one] => Some(one.workspace.id.clone()),
+        _ => None,
+    };
+    log::info!("workspace in use at start: {} of {} have every running app in place", fits.len(), workspaces.len());
+    *DETECTED.lock().unwrap_or_else(|e| e.into_inner()) = Some(Detected { sig: sig.to_string(), id });
+    let owner = HWND(OWNER.load(Ordering::SeqCst) as *mut _);
+    unsafe {
+        let _ = PostMessageW(Some(owner), WM_APP_DETECTED, WPARAM(0), LPARAM(0));
     }
 }
 

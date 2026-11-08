@@ -329,6 +329,13 @@ pub fn drifted(rows: &[RowStatus]) -> bool {
     rows.iter().any(|r| matches!(r.state, RowState::Moved | RowState::Minimized))
 }
 
+/// The workspace looks like the one in use: it has an app running, and every app
+/// that runs is where it puts it.
+pub fn all_in_place(rows: &[RowStatus]) -> bool {
+    let mut running = rows.iter().filter(|r| r.state != RowState::NotRunning).peekable();
+    running.peek().is_some() && running.all(|r| r.state == RowState::InPlace)
+}
+
 /// A random id that isn't in `taken`.
 pub fn new_id(taken: &[String]) -> String {
     loop {

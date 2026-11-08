@@ -4,11 +4,18 @@ All notable changes to Seam. The format follows [Keep a Changelog](https://keepa
 
 ## [Unreleased]
 
+### Added
+
+- **Set as default** on a workspace's "..." menu: when no workspace is remembered, it's the one in use when Seam starts. `workspace.set_default` in the API, and `default` in `workspaces.list`.
+
 ### Changed
 
 - The workspace in use shows a green dot and "Active" in the Workspaces list, instead of "in use", and "Active, moved" once one of its windows moved.
+- After a restart or a desk change, the workspace last in use on that desk shows as active again, else the default, else the only one whose open apps are all in place. Nothing moves.
 
 ### Fixed
+
+- The "..." on each app in the workspace editor no longer gets cut off: the name and Goes to columns shrink and end in "..." instead, down to the panel's smallest size.
 
 - A workspace counts as moved as soon as you snap one of its windows with Win+arrow or use the maximize button, not only after a drag.
 - Reordering or removing apps in a workspace no longer mixes up which open window belongs to which app, so Snap back and opening apps put them in the right place.

@@ -29,6 +29,11 @@ pub fn desk_sig(panel: &Panel) -> String {
     panel.state.as_ref().map(|s| s.desk.sig.clone()).unwrap_or_default()
 }
 
+/// The workspace this desk takes as in use at start when none is remembered.
+fn default_id(panel: &Panel) -> Option<String> {
+    panel.config.desks.get(&desk_sig(panel)).and_then(|d| d.default_workspace.clone())
+}
+
 fn saved(panel: &Panel) -> Vec<Value> {
     panel.config.desks.get(&desk_sig(panel)).map(|d| d.workspaces.clone()).unwrap_or_default()
 }
@@ -140,6 +145,16 @@ fn create_empty(panel: &mut Panel, window: &mut Window, cx: &mut Context<Panel>)
     list.push(workspace::to_value(&created));
     save(panel, list, window, cx);
     start_naming(panel, cx);
+}
+
+/// The workspace taken as in use at start, or none. The tray saves it.
+fn set_default(panel: &mut Panel, id: Option<String>, window: &mut Window, cx: &mut Context<Panel>) {
+    panel.call("workspace.set_default", json!({ "id": id }), window, cx, |panel, result, window, cx| {
+        if let Err(e) = result {
+            window.push_notification(refusal("Default left as it was", &error_text(&e)), cx);
+        }
+        panel.reload_config(window, cx);
+    });
 }
 
 fn delete(panel: &mut Panel, id: &str, window: &mut Window, cx: &mut Context<Panel>) {
@@ -309,24 +324,27 @@ fn icon_strip(i: usize, ws: &Workspace, icons: &Icons, p: Palette) -> Div {
         .when(more > 0, |d| d.child(div().text_size(px(12.)).text_color(p.muted).child(format!("+{more}"))))
 }
 
-fn list_card(
-    i: usize,
-    ws: &Workspace,
-    icons: &Icons,
-    // Some while it's the workspace in use, saying whether its windows drifted.
-    active: Option<bool>,
+/// What a workspace card says about itself besides its name.
+struct Marks {
     picked: bool,
-    p: Palette,
-    cx: &mut Context<Panel>,
-) -> AnyElement {
+    /// Some while it's the workspace in use, saying whether its windows drifted.
+    active: Option<bool>,
+    default: bool,
+}
+
+fn list_card(i: usize, ws: &Workspace, icons: &Icons, marks: Marks, p: Palette, cx: &mut Context<Panel>) -> AnyElement {
     let id = ws.id.clone();
-    let name = div()
+    let picked = marks.picked;
+    let default = marks.default.then(|| div().text_size(px(12.)).text_color(p.secondary).child("Default"));
+    let tags = div()
         .flex()
+        .flex_none()
         .items_center()
-        .justify_between()
         .gap(px(8.))
-        .child(div().text_size(px(14.)).font_weight(FontWeight::MEDIUM).truncate().child(ws.name.clone()))
-        .children(active.map(|drifted| active_status(drifted, p)));
+        .children(default)
+        .children(marks.active.map(|drifted| active_status(drifted, p)));
+    let title = div().min_w_0().text_size(px(14.)).font_weight(FontWeight::MEDIUM).truncate().child(ws.name.clone());
+    let name = div().flex().items_center().justify_between().gap(px(8.)).child(title).child(tags);
     let detail = div()
         .flex()
         .items_center()
@@ -413,7 +431,7 @@ fn detail(panel: &mut Panel, ws: Workspace, window: &mut Window, cx: &mut Contex
     let title = if panel.naming {
         div().w(px(220.)).child(Input::new(&panel.name_input)).into_any_element()
     } else {
-        div().text_size(px(16.)).font_weight(FontWeight::MEDIUM).child(ws.name.clone()).into_any_element()
+        div().text_size(px(16.)).font_weight(FontWeight::MEDIUM).truncate().child(ws.name.clone()).into_any_element()
     };
     let update = ui::secondary("update-workspace", "Update from screen", cx).on_click({
         let ws = ws.clone();
@@ -426,14 +444,21 @@ fn detail(panel: &mut Panel, ws: Workspace, window: &mut Window, cx: &mut Contex
         }));
     let view = cx.entity().downgrade();
     let more_ws = ws.clone();
+    let is_default = default_id(panel).as_deref() == Some(ws.id.as_str());
     let more = ui::secondary("more-workspace", "", cx)
         .ghost()
         .icon(Icon::new(assets::IconName::Ellipsis))
         .dropdown_menu(move |menu, _, _| {
             let (rename, exporting, importing, deleting) = (view.clone(), view.clone(), view.clone(), view.clone());
             let (to_export, id) = (more_ws.clone(), more_ws.id.clone());
+            let (defaulting, default_to) = (view.clone(), (!is_default).then(|| more_ws.id.clone()));
+            let default_label = if is_default { "Stop being the default" } else { "Set as default" };
             menu.item(PopupMenuItem::new("Rename").on_click(move |_, _, cx| {
                 let _ = rename.update(cx, start_naming);
+            }))
+            .item(PopupMenuItem::new(default_label).on_click(move |_, window, cx| {
+                let id = default_to.clone();
+                let _ = defaulting.update(cx, |panel, cx| set_default(panel, id, window, cx));
             }))
             .item(PopupMenuItem::new("Export…").on_click(move |_, window, cx| {
                 let to_export = to_export.clone();
@@ -454,9 +479,9 @@ fn detail(panel: &mut Panel, ws: Workspace, window: &mut Window, cx: &mut Contex
         .px(px(16.))
         .py(px(12.))
         .child(div().flex().flex_col().gap(px(2.)).flex_1().min_w_0().child(title).child(ui::description(summary, p)))
-        .child(update)
-        .child(switch_now)
-        .child(more)
+        .child(div().flex_none().child(update))
+        .child(div().flex_none().child(switch_now))
+        .child(div().flex_none().child(more))
         .into_any_element();
 
     let mut rows = vec![header];
@@ -529,6 +554,7 @@ pub fn render(panel: &mut Panel, window: &mut Window, cx: &mut Context<Panel>) -
     let rules: Vec<Rule> = list.iter().flat_map(|ws| ws.windows.iter().cloned()).collect();
     icons::request(panel, &rules, cx);
     let active = panel.state.as_ref().and_then(|s| s.workspace.as_ref()).map(|w| (w.id.clone(), w.drifted));
+    let default = default_id(panel);
     let current = selected(panel);
     // A workspace on show for the first time asks how its apps are doing.
     let known = panel.status.as_ref().map(|(id, _)| id.as_str());
@@ -541,7 +567,8 @@ pub fn render(panel: &mut Panel, window: &mut Window, cx: &mut Context<Panel>) -
         .map(|(i, ws)| {
             let picked = current.as_ref().is_some_and(|c| c.id == ws.id);
             let in_use = active.as_ref().filter(|(id, _)| *id == ws.id).map(|(_, drifted)| *drifted);
-            list_card(i, ws, &panel.icons, in_use, picked, p, cx)
+            let marks = Marks { picked, active: in_use, default: default.as_deref() == Some(ws.id.as_str()) };
+            list_card(i, ws, &panel.icons, marks, p, cx)
         })
         .collect();
     // The dashed frame has nothing else on it, so the hover fill sits on the button inside.

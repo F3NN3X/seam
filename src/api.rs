@@ -12,7 +12,7 @@ use std::io::{self, BufRead, BufReader, Write};
 use std::os::windows::fs::OpenOptionsExt;
 use std::os::windows::io::AsRawHandle;
 use std::sync::mpsc::{channel, Receiver};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use windows::Win32::Foundation::HANDLE;
 use windows::Win32::Storage::FileSystem::{SECURITY_IDENTIFICATION, SECURITY_SQOS_PRESENT};
 use windows::Win32::System::Pipes::GetNamedPipeServerProcessId;
@@ -368,24 +368,41 @@ fn event_of(message: &Value) -> Option<Event> {
     Some(Event { kind: params.get("type")?.as_str()?.to_string(), data: params.get("data")?.clone() })
 }
 
+/// The tray drops a connection that sends no request for 30 s unless it
+/// subscribed, so a client quiet for this long connects again before its next call.
+const RECONNECT_AFTER: Duration = Duration::from_secs(25);
+
 /// One blocking connection to the tray.
 pub struct Client {
     pipe: File,
     reader: BufReader<File>,
     next_id: u64,
+    name: String,
+    token: Option<String>,
+    last: Instant,
 }
 
 impl Client {
     pub fn connect(client: &str, token: Option<&str>) -> Result<Client, CallError> {
         let pipe = open_pipe()?;
         let reader = BufReader::new(pipe.try_clone()?);
-        let mut c = Client { pipe, reader, next_id: 1 };
+        let (name, owned) = (client.to_string(), token.map(str::to_string));
+        let mut c = Client { pipe, reader, next_id: 1, name, token: owned, last: Instant::now() };
         let version = env!("CARGO_PKG_VERSION");
-        c.call("hello", json!({ "client": client, "version": version, "token": token }))?;
+        c.request("hello", json!({ "client": client, "version": version, "token": token }))?;
         Ok(c)
     }
 
     pub fn call(&mut self, method: &str, params: Value) -> Result<Value, CallError> {
+        if self.last.elapsed() >= RECONNECT_AFTER {
+            *self = Client::connect(&self.name, self.token.as_deref())?;
+        }
+        let result = self.request(method, params);
+        self.last = Instant::now();
+        result
+    }
+
+    fn request(&mut self, method: &str, params: Value) -> Result<Value, CallError> {
         let id = self.next_id;
         self.next_id += 1;
         let request = json!({ "jsonrpc": "2.0", "id": id, "method": method, "params": params });
@@ -412,7 +429,7 @@ impl Client {
     /// this keeps `call` usable on the first connection.
     pub fn subscribe(client: &str, token: Option<&str>, topics: &[&str]) -> Result<Receiver<Event>, CallError> {
         let mut events = Client::connect(client, token)?;
-        events.call("events.subscribe", json!({ "topics": topics }))?;
+        events.request("events.subscribe", json!({ "topics": topics }))?;
         let (tx, rx) = channel();
         std::thread::Builder::new().name("seam-api-events".into()).spawn(move || {
             let mut line = String::new();

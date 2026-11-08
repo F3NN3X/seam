@@ -1,5 +1,8 @@
 //! Tray app: owns config, tracks monitor changes, runs the hook and the overlay.
 
+mod session;
+mod update;
+
 use crate::api_server::{self, Queued};
 use crate::config::{signature, Config};
 use crate::desk::{self, has_neighbours, resolve};
@@ -25,12 +28,19 @@ use seam::workspace::{self, Rule, Session, Workspace, SESSION_ID};
 use seam::zones;
 use seam::{autostart, install, package, process, restart_apps, updates};
 use serde_json::{json, Value};
+use session::{
+    check_restart_apps, end_session, offer_session, pin_closed, query_end_session, reopen_closed, restore_session,
+    saved_session, session_captured, start_session_capture, sync_restart_apps, windows_changed,
+};
 use std::cell::RefCell;
 use std::os::windows::process::CommandExt;
 use std::sync::mpsc::{channel, Sender};
 use std::sync::Mutex;
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use update::{
+    arm_auto_install, auto_install, check_for_updates, clean_up_after_update, read_update_state, update_read,
+};
 use windows::core::{w, PCWSTR};
 use windows::Win32::Foundation::*;
 use windows::Win32::Graphics::Gdi::*;
@@ -213,17 +223,6 @@ struct App {
     /// Windows' Restart apps was on when Seam last looked (D128).
     restart_apps: bool,
 }
-
-/// What a worker found in the updater's state file.
-struct UpdateRead {
-    update: Option<UpdateState>,
-    failed: bool,
-    /// A new version, so say so.
-    announce: bool,
-}
-
-/// Hands the state file's contents from a worker to the main thread.
-static UPDATE_READ: Mutex<Option<UpdateRead>> = Mutex::new(None);
 
 thread_local! {
     static APP: RefCell<Option<App>> = const { RefCell::new(None) };
@@ -693,174 +692,6 @@ fn captured(app: &mut App) {
     notify(app, "Workspace captured", &body, BalloonAction::OpenPanel("workspaces"));
 }
 
-// ---- Last session (D120)
-
-/// The last session saved for the desk that is connected.
-fn saved_session(app: &App) -> Option<Session> {
-    app.cfg.desks.get(&app.sig)?.last_session.as_ref().and_then(Session::parse)
-}
-
-/// Seam pinned, placed or switched, so save the last session once things have been
-/// quiet for a while. A newer change starts the wait again.
-fn windows_changed(app: &App) {
-    if app.cfg.restore_session {
-        unsafe { SetTimer(Some(app.hwnd), TIMER_SESSION, SESSION_SAVE_AFTER_MS, None) };
-    }
-}
-
-/// Capture the last session on a worker. One at a time.
-fn start_session_capture(app: &mut App) {
-    if !app.cfg.restore_session || app.session_capture.is_some() {
-        return;
-    }
-    let job = CaptureJob { owner: app.hwnd.0 as isize, screens: job_screens(app), gap: app.cfg.zones.gap };
-    if switcher::capture_session(job) {
-        app.session_capture = Some(app.sig.clone());
-    }
-}
-
-/// Keep a finished capture as the desk's last session. An empty one is more likely
-/// apps already gone at sign-out than a choice, so the last saved one stays.
-fn store_session(app: &mut App, rules: Vec<Rule>) {
-    let Some(sig) = app.session_capture.take() else { return };
-    if rules.is_empty() || !app.cfg.restore_session {
-        return;
-    }
-    let Some(desk) = app.cfg.desks.get_mut(&sig) else { return };
-    log::info!("last session saved: {} windows", rules.len());
-    desk.last_session = Some(Session { saved_at: unix_now(), windows: rules }.to_value());
-    persist(app);
-    publish(app);
-}
-
-fn session_captured(app: &mut App) {
-    if let Some(rules) = switcher::take_session() {
-        store_session(app, rules);
-    }
-}
-
-/// Windows asks whether the session may end. Capture now, while the apps are still
-/// there, and never hold up the sign-out.
-fn query_end_session(app: &mut App) {
-    app.session_ending = true;
-    start_session_capture(app);
-}
-
-/// Windows is ending the session: finish the capture started at
-/// `WM_QUERYENDSESSION` and write it out before the process goes. A capture that
-/// isn't done in time leaves the last saved session as it was.
-fn end_session(app: &mut App) {
-    if !app.cfg.restore_session {
-        return;
-    }
-    // Later than the question, apps may already be closing, so only capture now if it was missed.
-    if !app.session_ending {
-        start_session_capture(app);
-    }
-    if app.session_capture.is_some() {
-        match switcher::wait_session(SESSION_END_WAIT) {
-            Some(rules) => store_session(app, rules),
-            None => log::info!("last session not captured in time, the saved one stays"),
-        }
-    }
-    if let Some(saver) = app.saver.take() {
-        saver.finish();
-    }
-}
-
-/// After a sign-in, offer the last session once. Returns whether that's settled,
-/// shown or with nothing to offer.
-fn offer_session(app: &mut App) -> bool {
-    let Some(session) = saved_session(app).filter(|_| app.cfg.restore_session) else { return true };
-    // The click restores what was offered, even if a save replaces it meanwhile.
-    app.session_offer = Some(session.workspace());
-    let shown =
-        notify(app, "Last session", "Restore your last session? Click to restore", BalloonAction::RestoreSession);
-    app.session_offer_tries += 1;
-    shown || app.session_offer_tries >= SESSION_OFFER_TRIES
-}
-
-/// Run the last session as a workspace: nothing else is touched, and the pins come
-/// back by rule. Seam starts the missing apps as captured only when it reopens them;
-/// otherwise Windows or the apps do, and Seam places each window as it appears (D128).
-fn restore_session(app: &mut App, session: Workspace) -> Reply {
-    let mode = app.cfg.restore_apps;
-    log::info!("restoring the last session: {} windows, apps reopened by {mode:?}", session.windows.len());
-    let arrange_for = (mode == RestoreApps::Windows).then_some(ARRANGE_WAIT);
-    start_switch_job(app, session, arrange_for)
-}
-
-// ---- Windows' Restart apps (D128)
-
-/// Seam reopens the apps, so Windows' Restart apps would open them a second time.
-fn holds_restart_apps(cfg: &Config) -> bool {
-    cfg.restore_session && cfg.restore_apps == RestoreApps::Seam
-}
-
-/// Turn Windows' Restart apps off while Seam reopens the apps, keeping the value it
-/// had the first time, and give that value back when Seam stops. A failed write is
-/// logged and the mode stays as chosen.
-fn sync_restart_apps(app: &mut App) {
-    let wanted = holds_restart_apps(&app.cfg);
-    match (wanted, app.cfg.restore_apps_saved) {
-        (true, None) => match restart_apps::read() {
-            Ok(found) => {
-                app.cfg.restore_apps_saved = Some(found);
-                persist(app);
-                match restart_apps::write(0) {
-                    Ok(()) => log::info!("Windows' Restart apps turned off (was {found:#x})"),
-                    Err(e) => log::info!("Windows' Restart apps not turned off: {e:?}"),
-                }
-            }
-            Err(e) => log::info!("Windows' Restart apps not read: {e:?}"),
-        },
-        (false, Some(saved)) => {
-            match restart_apps::write(saved) {
-                Ok(()) => log::info!("Windows' Restart apps given back ({saved:#x})"),
-                Err(e) => log::info!("Windows' Restart apps not given back: {e:?}"),
-            }
-            app.cfg.restore_apps_saved = None;
-            persist(app);
-        }
-        _ => {}
-    }
-    app.restart_apps = restart_apps::is_on();
-}
-
-/// At start: the user may have turned Restart apps back on in Windows. Seam doesn't
-/// turn it off again, it says so in the panel.
-fn check_restart_apps(app: &mut App) {
-    if holds_restart_apps(&app.cfg) && app.cfg.restore_apps_saved.is_some() {
-        app.restart_apps = restart_apps::is_on();
-        if app.restart_apps {
-            log::info!("Windows' Restart apps is on again, so apps may open twice");
-        }
-        return;
-    }
-    sync_restart_apps(app);
-}
-
-// ---- Pinned window closed (D119)
-
-fn pin_closed(app: &mut App) {
-    let Some(gone) = wm::take_closed() else { return };
-    if !app.cfg.windows.notify_pinned_close {
-        return;
-    }
-    let body = format!("{} was pinned and has closed. Click to reopen", switcher::closed_name(&gone));
-    // One notice at a time: a second close replaces what the click reopens.
-    app.reopen = Some(gone);
-    notify(app, "Pinned window closed", &body, BalloonAction::Reopen);
-}
-
-fn reopen_closed(app: &mut App) {
-    if let Some(gone) = app.reopen.take() {
-        if !switcher::reopen(gone) {
-            log::info!("reopen: couldn't start the worker");
-        }
-    }
-}
-
 fn set_remap(app: &mut App, on: bool) {
     app.cfg.enabled = on;
     persist(app);
@@ -936,120 +767,6 @@ fn tray_click(app: &mut App) {
         }
         TrayClick::LineUp => start_lineup(app),
     }
-}
-
-/// Start `seam-settings.exe` with no window, for the updater.
-fn run_settings(args: &[&str]) -> Option<std::process::Child> {
-    let panel = std::env::current_exe().ok()?.with_file_name("seam-settings.exe");
-    std::process::Command::new(panel).args(args).creation_flags(CREATE_NO_WINDOW).spawn().ok()
-}
-
-/// Read the updater's state file, then tell the main thread. Runs on a worker.
-fn read_update_file(hwnd: isize) {
-    let file = updates::read();
-    let current = env!("CARGO_PKG_VERSION");
-    let failed = file.error.is_some();
-    let available = file.available.filter(|v| v != current && updates::is_plain_version(v));
-    let update = available.map(|available| UpdateState { available, ready: file.ready });
-    let new = update.as_ref().filter(|u| u.ready && updates::notified().as_deref() != Some(u.available.as_str()));
-    let announce = new.is_some();
-    if let Some(new) = new {
-        updates::set_notified(&new.available);
-    }
-    // Two workers can finish before the main thread looks. Keep an announcement either found.
-    let mut slot = UPDATE_READ.lock().unwrap_or_else(|e| e.into_inner());
-    let announce = announce || slot.as_ref().is_some_and(|earlier| earlier.announce);
-    *slot = Some(UpdateRead { update, failed, announce });
-    drop(slot);
-    unsafe {
-        let _ = PostMessageW(Some(HWND(hwnd as *mut _)), WM_APP_UPDATE, WPARAM(0), LPARAM(0));
-    }
-}
-
-fn read_update_state(app: &App) {
-    let hwnd = app.hwnd.0 as isize;
-    let _ = std::thread::Builder::new().name("seam-update-state".into()).spawn(move || read_update_file(hwnd));
-}
-
-/// Run the check as its own process, so the tray never touches the network.
-fn check_for_updates(hwnd: HWND) {
-    let hwnd = hwnd.0 as isize;
-    let _ = std::thread::Builder::new().name("seam-update-check".into()).spawn(move || {
-        if let Some(mut check) = run_settings(&["--check-updates"]) {
-            let _ = check.wait();
-        }
-        read_update_file(hwnd);
-    });
-}
-
-/// The updater has news, or the file was read at start.
-fn update_read(app: &mut App) {
-    let Some(read) = UPDATE_READ.lock().unwrap_or_else(|e| e.into_inner()).take() else { return };
-    app.update = read.update;
-    app.update_failed = read.failed;
-    publish(app);
-    if let (true, Some(available)) = (read.announce, app.update.as_ref().map(|u| u.available.clone())) {
-        let body = format!("Seam {available} is ready to install");
-        notify(app, "Update ready", &body, BalloonAction::OpenPanel("about"));
-        api_server::broadcast("update.ready", &json!({ "version": available }));
-    }
-    arm_auto_install(app);
-}
-
-/// An automatic install is wanted, and the PC may not be idle yet.
-fn arm_auto_install(app: &App) {
-    let wanted = app.cfg.updates.auto_install && !app.packaged && !app.update_failed;
-    let ready = app.update.as_ref().filter(|u| u.ready && app.install_started.as_deref() != Some(&u.available));
-    if wanted && ready.is_some() {
-        unsafe { SetTimer(Some(app.hwnd), TIMER_AUTO_INSTALL, AUTO_INSTALL_RETRY_MS, None) };
-    }
-}
-
-/// No Line Up, no button held, and no input for 2 minutes.
-fn is_idle() -> bool {
-    if overlay::is_active() {
-        return false;
-    }
-    unsafe {
-        let held = |key: VIRTUAL_KEY| GetAsyncKeyState(i32::from(key.0)) < 0;
-        if held(VK_LBUTTON) || held(VK_RBUTTON) {
-            return false;
-        }
-        let mut last = LASTINPUTINFO { cbSize: size_of::<LASTINPUTINFO>() as u32, dwTime: 0 };
-        GetLastInputInfo(&mut last).as_bool() && GetTickCount().wrapping_sub(last.dwTime) >= IDLE_BEFORE_INSTALL_MS
-    }
-}
-
-/// Install a ready update once the PC is idle. The new tray says it updated.
-fn auto_install(app: &mut App) {
-    let version = app.update.as_ref().filter(|u| u.ready).map(|u| u.available.clone());
-    let Some(version) = version.filter(|v| app.install_started.as_ref() != Some(v) && !app.update_failed) else {
-        unsafe {
-            let _ = KillTimer(Some(app.hwnd), TIMER_AUTO_INSTALL);
-        }
-        return;
-    };
-    if !app.cfg.updates.auto_install || !is_idle() {
-        return;
-    }
-    unsafe {
-        let _ = KillTimer(Some(app.hwnd), TIMER_AUTO_INSTALL);
-    }
-    log::info!("installing {version} while idle");
-    app.install_started = Some(version.clone());
-    let _ = std::thread::Builder::new().name("seam-update-install".into()).spawn(move || {
-        run_settings(&["--install", &version]);
-    });
-}
-
-/// Delete what an update left behind. Best effort and silent.
-fn clean_up_after_update() {
-    if let Ok(exe) = std::env::current_exe() {
-        for name in ["seam.exe.old", "seam-settings.exe.old"] {
-            let _ = std::fs::remove_file(exe.with_file_name(name));
-        }
-    }
-    updates::clear();
 }
 
 fn refused(message: impl Into<String>) -> Reply {

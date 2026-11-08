@@ -85,6 +85,22 @@ Use a small client that opens `\\.\pipe\seam-<your username>` and writes one JSO
 - [ ] **Crossing it.** Move left off the upper part of screen 4. The pointer enters screen 2 where the lines meet, not the top-right of screen 1. Lower down it still enters screen 1. Move right off screen 2 and it enters screen 4.
 - [ ] **Align arrangement.** With that border saved, Align arrangement only moves screens along borders that touch in Windows, and the 2 to 4 border stays lined up afterwards.
 
+## Glue
+
+Two steps move a screen in Display settings. Ask before moving a screen, and note where it was so it can go back.
+
+- [ ] **Make a gap (ask before moving a screen).** In Display settings, drag screen 4 about 100 px right of screen 1 and press Apply. The log shows `display change`, and the 1 to 4 border is either kept or dropped with `dropped`.
+- [ ] **Line Up offers it.** Open Line Up. After the touching borders comes "Glue screen 4 to screen 1". Both facing edges are dashed amber with "Gap in Windows, 100 px" beside them (the real gap), and the lines are bright, because the screens' sizes put them side by side.
+- [ ] **G turns it off.** Press G. Screen 4 reads "Do screens 1 and 4 touch on your desk?" with "G glues them, Enter skips", and screen 1 reads "G glues screen 4 to this one, Enter skips". The lines and edges dim. Dragging, arrows, Tab and R do nothing, and the pointer is a plain arrow on screen 4. Press G again and it's back as it was, with "G unglues them" under the tips.
+- [ ] **Crossing the gap.** While it's glued, move right off screen 1 at the height of the lines. The pointer enters screen 4 on the first move past the edge, where the lines meet, and never sticks at the edge. Move left off screen 4 and it comes back. Slowly and fast both work. The log shows `remap` lines for `border 0->3`.
+- [ ] **Off means Windows.** Turn it off with G and cross again. The pointer stops at the edge of screen 1, as it does without Seam.
+- [ ] **Saving.** Glue it, finish Line Up. In `config.json` the 1 to 4 border has `"glued": true`, and no other border has a `glued` key. Restart Seam: the log shows the link resolved, and crossing still works.
+- [ ] **Displays.** The border row reads "Glued to the right edge of 1" next to "Lined up today". On the map, screen 4 sits against screen 1, not off to the side.
+- [ ] **Align.** With **Also align Windows arrangement** ticked, finish Line Up. On this desk the plan is still refused for screen 3, and the gap is untouched. If a move would take screen 4 out from right of screen 1, the balloon names it: "Moving screen N would break its glue with screen M".
+- [ ] **Skipping.** Open Line Up, press G to turn the glue off, and finish. The 1 to 4 border is gone from `config.json`.
+- [ ] **Close the gap (ask before moving a screen).** Glue it again and finish. Then drag screen 4 back against screen 1 in Display settings. The border still resolves, crossings land where the lines meet, and after another Line Up the border keeps `"glued": true`.
+- [ ] **Put it back.** Restore the arrangement you noted, and check the original three borders resolve.
+
 ## Zones
 
 Set up first: on Zones, pick **Priority** for screen 1 and **Grid** for screen 2, with **Shift** to show and **Ctrl** to span.

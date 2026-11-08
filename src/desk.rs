@@ -77,18 +77,24 @@ pub fn has_neighbours(mons: &[Mon]) -> bool {
 /// Every pair of touching screens: the lined-up ones first, then the rest.
 pub fn border_states(mons: &[Mon], links: &[Link]) -> Vec<Border> {
     let number = |i: usize| i as u32 + 1;
-    let lined_up =
-        links.iter().map(|l| Border { a: number(l.a), b: number(l.b), side: l.side, state: BorderState::LinedUp });
+    let lined_up = links.iter().map(|l| Border {
+        a: number(l.a),
+        b: number(l.b),
+        side: l.side,
+        state: BorderState::LinedUp,
+        glued: l.glued,
+    });
     let linked = |i: usize, j: usize| links.iter().any(|l| (l.a, l.b) == (i, j) || (l.a, l.b) == (j, i));
     let open = (0..mons.len()).flat_map(|i| (i + 1..mons.len()).map(move |j| (i, j))).filter_map(|(i, j)| {
         let side = touching(&mons[i].rect, &mons[j].rect).filter(|_| !linked(i, j))?;
-        Some(Border { a: number(i), b: number(j), side, state: BorderState::NotLinedUp })
+        Some(Border { a: number(i), b: number(j), side, state: BorderState::NotLinedUp, glued: false })
     });
     let apart = apart_neighbours(mons, links).into_iter().filter(|p| !linked(p.a, p.b)).map(|p| Border {
         a: number(p.a),
         b: number(p.b),
         side: p.side,
         state: BorderState::NotLinedUp,
+        glued: false,
     });
     lined_up.chain(open).chain(apart).collect()
 }

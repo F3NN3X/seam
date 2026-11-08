@@ -185,7 +185,14 @@ fn border_rows(panel: &Panel, state: &State, p: Palette) -> Vec<AnyElement> {
                     .flex_none()
                     .w(px(BORDER_NAME_WIDTH))
                     .child(div().text_size(px(14.)).line_height(px(20.)).child(format!("Screen {a} to screen {other}")))
-                    .child(ui::description(format!("{} edge of {a}", edge(b.side)), p)),
+                    .child(ui::description(
+                        if b.glued {
+                            format!("Glued to the {} edge of {a}", edge(b.side).to_lowercase())
+                        } else {
+                            format!("{} edge of {a}", edge(b.side))
+                        },
+                        p,
+                    )),
             )
             .child(ui::tabular(ui::description(detail, p)).flex_1().min_w_0())
             .child(status)

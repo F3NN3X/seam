@@ -215,6 +215,7 @@ Seam has a built-in updater that only installs releases signed with Seam's key. 
    - **Drag anywhere else** to move both lines. This sets the height.
    - Arrow keys nudge the selected line (Shift moves 10 px, Ctrl moves both). Tab switches lines. R resets to the guess from your monitors' EDID.
    - The pointer already follows your lines while you adjust, so move it across the border to check.
+   - **G** glues two screens that touch on your desk but have a gap between them in Windows. Line Up asks about each such pair after the touching borders. Pairs whose sizes put them side by side start glued, and the rest start off and are skipped unless you press G. Glued screens get the same two lines.
    - **Enter** goes to the next border, or finishes after the last one. **Backspace** goes back, **Esc** cancels.
 4. **Pick zone layouts.** Open **Zones**, pick a layout for each screen, and hold Shift while you drag a window.
 5. **Capture a workspace.** Arrange your windows, open **Workspaces**, and press **Capture current windows**. Give it a shortcut on the Shortcuts page.
@@ -232,6 +233,9 @@ Windows lines screens up in raw pixels and keeps the same pixel row when the poi
 
 **Why must "Ease cursor movement between displays" be on?**
 Without it, Windows blocks the pointer from leaving a screen at a point that has no neighbouring pixels. With different sizes, much of a screen's edge is like that, so the pointer would never get to the border where Seam can carry it across. Seam warns you on the Displays page when it's off. **Turn it on** does it for you. Seam never turns it off, so turn it off in Display settings if you want it off.
+
+**My screens touch on the desk, but Windows has a gap between them. Can the pointer cross it?**
+Yes, if you glue them in Line Up. When the pointer goes past the edge into the gap, Seam carries it to where the other screen physically continues, on the first move past the edge. If Windows has another screen under the pointer there, that screen wins. Align arrangement keeps the gap, and refuses a move that would take a glued screen out from beyond its partner's edge.
 
 **Why can't Seam move some windows?**
 Windows doesn't let a normal app move the windows of an app running as administrator. Seam skips them in zones, window control and workspaces, tells you once when that happens, and shows "can't be moved" in the workspace editor. Run the app without administrator rights if you can.
@@ -300,7 +304,7 @@ The hook runs on its own high-priority thread, so UI work can never delay mouse 
 
 - An app or game confines the pointer (`ClipCursor`).
 - Input is injected (remote desktop, automation tools).
-- The screens no longer touch on the same side as when you calibrated.
+- The screens no longer touch on the same side as when you calibrated, or for glued screens, no longer face each other on that side.
 
 ## Debug log
 
@@ -322,7 +326,7 @@ This builds the tray app, `target\release\seam.exe`. To include the settings pan
 
 ## Limits
 
-- Borders are found from the Windows arrangement: two screens must touch there. Screens that touch on your desk but have a gap in the layout ("glue") aren't supported yet.
+- Borders are found from the Windows arrangement. Screens with a gap between them there can be glued, but only when Windows has them the same way round as your desk, and Line Up only offers pairs whose edges face each other across up to 400 px with no other screen in between. A screen that faces nothing stays unreachable, as it is in Windows.
 - Rotated screens work as long as Windows reports their rotated size, which it does. Mirrored screens have nothing to line up.
 - "Align Windows arrangement" refuses layouts where moving one screen would break another border (some 2x2 grids). The pointer remap still works in those layouts.
 - Windows of apps running as administrator are skipped by workspaces and zones, because Windows doesn't let Seam move them.

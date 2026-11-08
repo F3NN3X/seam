@@ -136,6 +136,40 @@
 			]
 		},
 		{
+			"UUID": "co.f3nn3x.seam.window-move",
+			"Name": "Move window",
+			"Tooltip": "Move the focused window left, right, up or down on the desk, zone to zone and across screens.",
+			"Icon": "imgs/actions/window-move/icon",
+			"PropertyInspectorPath": "ui/direction.html",
+			"Controllers": [
+				"Keypad"
+			],
+			"States": [
+				{
+					"Image": "imgs/actions/window-move/key",
+					"Title": "Move window",
+					"TitleAlignment": "bottom"
+				}
+			]
+		},
+		{
+			"UUID": "co.f3nn3x.seam.window-focus",
+			"Name": "Focus window",
+			"Tooltip": "Focus the nearest window left, right, up or down on the desk.",
+			"Icon": "imgs/actions/window-focus/icon",
+			"PropertyInspectorPath": "ui/direction.html",
+			"Controllers": [
+				"Keypad"
+			],
+			"States": [
+				{
+					"Image": "imgs/actions/window-focus/key",
+					"Title": "Focus window",
+					"TitleAlignment": "bottom"
+				}
+			]
+		},
+		{
 			"UUID": "co.f3nn3x.seam.desk",
 			"Name": "Desk",
 			"Tooltip": "Shows the name of the active desk. Press it to open the Displays page.",

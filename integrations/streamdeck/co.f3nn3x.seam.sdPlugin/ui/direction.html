@@ -1,0 +1,83 @@
+<!doctype html>
+<html>
+	<head lang="en">
+		<title>Direction</title>
+		<meta charset="utf-8" />
+		<style>
+			body {
+				margin: 0;
+				padding: 8px 12px;
+				font: 13px "Segoe UI", sans-serif;
+				color: #d8d8d8;
+				background: #2d2d2d;
+			}
+			label {
+				display: flex;
+				align-items: center;
+				gap: 12px;
+			}
+			span {
+				width: 70px;
+				flex: none;
+			}
+			select {
+				flex: 1;
+				min-width: 0;
+				padding: 4px 6px;
+				font: inherit;
+				color: #d8d8d8;
+				background: #3d3d3d;
+				border: 1px solid #1d1d1d;
+				border-radius: 3px;
+			}
+		</style>
+	</head>
+
+	<body>
+		<label>
+			<span>Direction</span>
+			<select id="dir">
+				<option value="" disabled selected>Choose a direction</option>
+				<option value="left">Left</option>
+				<option value="right">Right</option>
+				<option value="up">Up</option>
+				<option value="down">Down</option>
+			</select>
+		</label>
+
+		<script>
+			// Stream Deck gives the inspector a socket to the app. The setting is
+			// "left", "right", "up" or "down", as on the desk.
+			let socket;
+			let uuid;
+			let settings = {};
+			const select = document.getElementById("dir");
+
+			const send = (message) => socket.send(JSON.stringify(message));
+
+			function show() {
+				select.value = settings.dir ?? "";
+			}
+
+			select.addEventListener("change", () => {
+				settings = { ...settings, dir: select.value };
+				send({ event: "setSettings", context: uuid, payload: settings });
+			});
+
+			window.connectElgatoStreamDeckSocket = (port, inUuid, registerEvent, _info, actionInfo) => {
+				uuid = inUuid;
+				settings = JSON.parse(actionInfo).payload?.settings ?? {};
+				show();
+				socket = new WebSocket(`ws://127.0.0.1:${port}`);
+				socket.onopen = () => send({ event: registerEvent, uuid });
+				socket.onmessage = (message) => {
+					const data = JSON.parse(message.data);
+					if (data.event === "didReceiveSettings") {
+						settings = data.payload?.settings ?? settings;
+						show();
+					}
+				};
+			};
+		</script>
+	</body>
+</html>

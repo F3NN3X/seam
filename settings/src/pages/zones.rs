@@ -159,7 +159,21 @@ fn swatches(
             .border_1()
             .border_color(p.hairline_strong)
             .bg(fill.unwrap_or(p.raised))
-            .when(fill.is_none(), |d| d.text_size(px(11.)).text_color(p.secondary).child("A"));
+            .text_size(px(12.))
+            .when(fill.is_none() && !selected, |d| d.text_color(p.secondary).child("A"))
+            .when(selected, |d| {
+                // Black or white, whichever reads better on the swatch.
+                let ink = fill.map_or(p.text, |f| {
+                    let c = Rgba::from(f);
+                    let luma = 0.2126 * c.r + 0.7152 * c.g + 0.0722 * c.b;
+                    if luma > 0.5 {
+                        hsla(0., 0., 0., 1.)
+                    } else {
+                        hsla(0., 0., 1., 1.)
+                    }
+                });
+                d.text_color(ink).child("✓")
+            });
         let tip = why_off.unwrap_or(swatch.title);
         let mut face = div()
             .id(id.clone())

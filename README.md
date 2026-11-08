@@ -220,6 +220,9 @@ Seam has a built-in updater that only installs releases signed with Seam's key. 
    - The pointer already follows your lines while you adjust, so move it across the border to check.
    - **G** glues two screens that touch on your desk but have a gap between them in Windows. Line Up asks about each such pair after the touching borders. Pairs whose sizes put them side by side start glued, and the rest start off and are skipped unless you press G. Glued screens get the same two lines.
    - **N** marks two screens that touch in Windows but not on your desk. Seam then stops the pointer at that border instead of letting it cross, and the lines dim. Press N again to undo it.
+   - Each step names both screens with their model, such as "Line up screen 3 (HDMI) with screen 4 (U3477)".
+   - A band of faint diagonal stripes runs along the shared edge on both screens, 10 mm apart on the desk. If they run on straight across the edge, the screens are lined up. If they step, the offset is off, and if the spacing changes, the scale is off. Screens that report no size get no stripes.
+   - **M** types the offset instead of dragging, when its switch on the Displays page is on. It asks how many cm screen B's top (or left) edge sits below (or to the right of) screen A's, and moves the lines to match. Tab flips below and above, Enter applies and Esc closes the field. It needs both screens to report their size.
    - **Enter** goes to the next border, or finishes after the last one. **Backspace** goes back, **Esc** cancels.
 4. **Pick zone layouts.** Open **Zones**, pick a layout for each screen, and hold Shift while you drag a window.
 5. **Capture a workspace.** Arrange your windows, open **Workspaces**, and press **Capture current windows**. Give it a shortcut on the Shortcuts page.

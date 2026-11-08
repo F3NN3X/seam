@@ -480,7 +480,7 @@ fn start_lineup(app: &mut App) {
     let mons = monitors::enumerate();
     let sig = signature(mons.iter().map(|m| m.id.as_str()));
     let saved = app.cfg.desks.get(&sig).map(|d| d.borders.clone()).unwrap_or_default();
-    if !overlay::start(app.hwnd, mons, &saved) {
+    if !overlay::start(app.hwnd, mons, &saved, app.cfg.lineup_measure) {
         notify(
             app,
             "Nothing to line up",

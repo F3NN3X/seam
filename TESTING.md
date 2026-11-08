@@ -103,6 +103,20 @@ Two steps move a screen in Display settings. Ask before moving a screen, and not
 - [ ] **Close the gap (ask before moving a screen).** Glue it again and finish. Then drag screen 4 back against screen 1 in Display settings. The border still resolves, crossings land where the lines meet, and after another Line Up the border keeps `"glued": true`.
 - [ ] **Put it back.** Restore the arrangement you noted, and check the original three borders resolve.
 
+## Line Up aids
+
+On my desk the HDMI panel is screen 3, the U3477 is screen 4 and the PG32UCDM is screen 1.
+
+- [ ] **Named steps.** Open Line Up. The step titles read like "Line up screen 3 (HDMI) with screen 4 (U3477)" and "Glue screen 3 (HDMI) to screen 1 (PG32UCDM)", and the reference screen's text names both screens the same way.
+- [ ] **Stripes.** On both screens of a step a band of faint diagonal stripes, about 6 cm deep, runs along the shared edge. Line the two screens up well: the stripes run on straight across the bezel. Drag both lines by 20 px on screen B: they step by about that much. Drag only one line: the spacing on B changes. They follow the lines as you drag, and the blue and pink lines stay the clear ones.
+- [ ] **Gap.** On the glue step the stripes carry on across the gap when the lines are right.
+- [ ] **Dimmed steps.** With N on, or an unglued gap, no stripes show.
+- [ ] **No size.** A screen with no EDID size, if you have one: the step text says "No stripe check: a screen on this pair reports no size", and the band is missing on both screens.
+- [ ] **M off.** With `lineup_measure` false or missing in `config.json`, nothing mentions M and pressing it does nothing.
+- [ ] **M on.** Set `"lineup_measure": true`, restart Seam and open Line Up. Screen B's text adds "M: type the offset in cm". Press M: "Screen 4's top edge is [ _ ] cm below screen 3's top edge". Tab flips below and above. Type "1,5" or "1.5": one separator only, no letters. Backspace deletes a digit. Esc closes the field and leaves the lines alone, and Enter and Backspace still mean next and back with the field closed.
+- [ ] **M applies.** Measure the offset between two screens' top edges with a ruler, type it and press Enter. The lines move, the stripes run on straight across, and dragging afterwards still works. A negative offset (above) moves B's lines the other way.
+- [ ] **M and no size.** With a screen that reports no size, B's text says typing isn't offered and M does nothing.
+
 ## Not on your desk
 
 On my desk the panel (screen 3) touches the U3477 (screen 4) in Windows, 18 px below the 4K, but sits under the 4K on the desk, glued to it.

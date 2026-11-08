@@ -151,6 +151,39 @@ pub fn facing(a: &Rect, b: &Rect, side: Side) -> bool {
     }
 }
 
+/// The widest gap in Windows' arrangement that two screens can still face each
+/// other across.
+pub const MAX_GLUE_GAP_PX: i32 = 400;
+
+/// If `b` faces `a` across a gap in the pixel layout, the side of `a` it is on
+/// and the gap in pixels. They must share at least a pixel along the edge.
+pub fn facing_gap(a: &Rect, b: &Rect) -> Option<(Side, i32)> {
+    if touching(a, b).is_some() {
+        return None;
+    }
+    let vy = span_overlap(a.top, a.bottom, b.top, b.bottom) >= 1;
+    let hx = span_overlap(a.left, a.right, b.left, b.right) >= 1;
+    let found = [
+        (Side::Right, b.left - a.right, vy),
+        (Side::Left, a.left - b.right, vy),
+        (Side::Bottom, b.top - a.bottom, hx),
+        (Side::Top, a.top - b.bottom, hx),
+    ];
+    found.into_iter().find(|&(_, gap, shared)| shared && (1..=MAX_GLUE_GAP_PX).contains(&gap)).map(|(s, g, _)| (s, g))
+}
+
+/// The empty strip between `a` and `b` where they face each other on `side`.
+pub fn corridor(a: &Rect, b: &Rect, side: Side) -> Rect {
+    let (top, bottom) = (a.top.max(b.top), a.bottom.min(b.bottom));
+    let (left, right) = (a.left.max(b.left), a.right.min(b.right));
+    match side {
+        Side::Right => Rect { left: a.right, top, right: b.left, bottom },
+        Side::Left => Rect { left: b.right, top, right: a.left, bottom },
+        Side::Bottom => Rect { left, top: a.bottom, right, bottom: b.top },
+        Side::Top => Rect { left, top: b.bottom, right, bottom: a.top },
+    }
+}
+
 /// First guess before the user calibrates: scale from the monitors' physical
 /// DPI (from EDID), offset so the middle of the current layout overlap lines up.
 pub fn predict(a: &Rect, b: &Rect, side: Side, dpi_a: f64, dpi_b: f64) -> EdgeMap {

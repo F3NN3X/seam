@@ -45,6 +45,8 @@ const POLL: Duration = Duration::from_millis(250);
 const LAUNCH_POLL: Duration = Duration::from_secs(1);
 /// What `skipped` says about an app whose window didn't show in time.
 const TOOK_TOO_LONG: &str = "Took too long to open";
+/// What `skipped` says about an app whose program runs with no window.
+const RUNS_IN_BACKGROUND: &str = "Running in the background";
 /// How often an arranging switch looks for windows that have appeared.
 const ARRANGE_POLL: Duration = Duration::from_millis(500);
 /// Time for an app to react to a move before the next step.
@@ -138,6 +140,39 @@ struct Proc {
 
 type Procs = HashMap<u32, Proc>;
 
+fn proc_of(procs: &mut Procs, pid: u32) -> &Proc {
+    procs
+        .entry(pid)
+        .or_insert_with(|| Proc { path: winutil::exe_path_of(pid), elevated: winutil::elevated_over_us(pid) })
+}
+
+/// Whether an app with no window still runs, as one closed to the tray does. The
+/// process list is read once, when first needed, and paths come from `Procs`.
+#[derive(Default)]
+struct Background {
+    running: Option<Vec<(u32, String)>>,
+    families: HashMap<u32, Option<String>>,
+}
+
+impl Background {
+    /// A process runs the rule's program, or for a Store app, belongs to its package.
+    fn runs(&mut self, rule: &Rule, procs: &mut Procs) -> bool {
+        let Background { running, families } = self;
+        let running = running.get_or_insert_with(winutil::processes);
+        let name = winutil::file_name(&rule.exe);
+        let mut same_exe =
+            |pid: u32| proc_of(procs, pid).path.as_deref().is_some_and(|path| path.eq_ignore_ascii_case(&rule.exe));
+        if !rule.exe.is_empty() && running.iter().any(|(pid, n)| *n == name && same_exe(*pid)) {
+            return true;
+        }
+        let Some((family, _)) = rule.aumid.as_deref().and_then(|a| a.split_once('!')) else { return false };
+        running.iter().any(|(pid, _)| {
+            let of = families.entry(*pid).or_insert_with(|| winutil::package_family_of(*pid));
+            of.as_deref().is_some_and(|f| f.eq_ignore_ascii_case(family))
+        })
+    }
+}
+
 /// The windows a workspace may use, topmost first. Seam's own are never among them.
 fn snapshot(procs: &mut Procs) -> Vec<Seen> {
     snapshot_with(&[], procs, &mut |_, _| {})
@@ -169,10 +204,7 @@ fn seen_of(
         skip(why, &facts);
         return None;
     }
-    let pid = winutil::process_id(h);
-    let proc = procs
-        .entry(pid)
-        .or_insert_with(|| Proc { path: winutil::exe_path_of(pid), elevated: winutil::elevated_over_us(pid) });
+    let proc = proc_of(procs, winutil::process_id(h));
     let Some(exe) = proc.path.clone().and_then(|path| winutil::exe_path_from(h, path)) else {
         skip("no exe", &facts);
         return None;
@@ -1099,11 +1131,15 @@ fn run_switch(job: &SwitchJob, mine: u64) -> Option<Switched> {
                 found[i] = hit;
             }
         }
-        let absent: Vec<String> =
-            ws.windows.iter().zip(&found).filter(|(_, h)| h.is_none()).map(|(r, _)| app_name(r)).collect();
+        let absent: Vec<&Rule> = ws.windows.iter().zip(&found).filter(|(_, h)| h.is_none()).map(|(r, _)| r).collect();
+        let names: Vec<String> = absent.iter().map(|r| app_name(r)).collect();
         let shown = found.iter().flatten().count();
-        log::info!("{}: placed {shown} of {}, never showed: {}", ws.name, found.len(), absent.join(", "));
-        tally.skipped.extend(absent.into_iter().map(|app| (app, "timeout".to_string())));
+        log::info!("{}: placed {shown} of {}, never showed: {}", ws.name, found.len(), names.join(", "));
+        let mut background = Background::default();
+        for rule in absent {
+            let why = if background.runs(rule, &mut procs) { RUNS_IN_BACKGROUND } else { "timeout" };
+            tally.skipped.push((app_name(rule), why.into()));
+        }
     } else {
         // What is running already goes in one pass, before anything starts.
         let running: Vec<usize> = (0..found.len()).filter(|i| found[*i].is_some()).collect();
@@ -1116,6 +1152,15 @@ fn run_switch(job: &SwitchJob, mine: u64) -> Option<Switched> {
         if !starting.is_empty() {
             let mut waits = Waits { found: &mut found, known: &mut known, procs: &mut procs, seen: &seen };
             run_stages(&run, mine, &starting, &mut waits, &mut starts, &mut tally)?;
+        }
+        // An app this switch doesn't start and that has no window is reported when its
+        // program still runs, closed to the tray.
+        let mut background = Background::default();
+        let idle = ws.windows.iter().enumerate().filter(|(i, _)| found[*i].is_none() && !starting.contains(i));
+        for (_, rule) in idle {
+            if background.runs(rule, &mut procs) {
+                tally.skipped.push((app_name(rule), RUNS_IN_BACKGROUND.into()));
+            }
         }
     }
     if cancelled() {
@@ -1228,11 +1273,20 @@ pub struct LiveWorkspace {
 pub fn status(live: &LiveWorkspace) -> Vec<RowStatus> {
     let _com = Com::enter();
     let geos = geometry(&live.screens, live.gap);
-    let seen = snapshot(&mut Procs::new());
+    let mut procs = Procs::new();
+    let seen = snapshot(&mut procs);
     let cands: Vec<Candidate> = seen.iter().map(|s| s.cand.clone()).collect();
     let found = workspace::assign(&live.workspace.windows, &cands);
+    // An app with no window may still run, closed to the tray.
+    let mut background = Background::default();
     let rows = live.workspace.windows.iter().zip(found).enumerate();
-    let row = |(i, (rule, hit))| RowStatus { rule_index: i, state: row_state(rule, hit, &seen, &geos, live) };
+    let row = |(i, (rule, hit)): (usize, (&Rule, Option<isize>))| {
+        let state = match hit {
+            None if background.runs(rule, &mut procs) => RowState::Background,
+            _ => row_state(rule, hit, &seen, &geos, live),
+        };
+        RowStatus { rule_index: i, state }
+    };
     rows.map(row).collect()
 }
 

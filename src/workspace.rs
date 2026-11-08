@@ -313,6 +313,8 @@ pub enum RowState {
     /// Minimized, and the workspace wants it shown.
     Minimized,
     NotRunning,
+    /// Its program runs with no window, as an app closed to the tray does.
+    Background,
     /// Runs as administrator, so Seam can't move it.
     CantMove,
 }
@@ -329,10 +331,11 @@ pub fn drifted(rows: &[RowStatus]) -> bool {
     rows.iter().any(|r| matches!(r.state, RowState::Moved | RowState::Minimized))
 }
 
-/// The workspace looks like the one in use: it has an app running, and every app
-/// that runs is where it puts it.
+/// The workspace looks like the one in use: it has an app with a window, and every
+/// app with a window is where it puts it. One in the background counts as neither.
 pub fn all_in_place(rows: &[RowStatus]) -> bool {
-    let mut running = rows.iter().filter(|r| r.state != RowState::NotRunning).peekable();
+    let mut running =
+        rows.iter().filter(|r| !matches!(r.state, RowState::NotRunning | RowState::Background)).peekable();
     running.peek().is_some() && running.all(|r| r.state == RowState::InPlace)
 }
 

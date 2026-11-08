@@ -325,6 +325,7 @@ fn status_cell(state: Option<RowState>, p: Palette) -> Div {
         Some(RowState::Moved) => (ui::dot(p.secondary, false), "Moved"),
         Some(RowState::Minimized) => (ui::dot(p.secondary, false), "Minimized"),
         Some(RowState::NotRunning) => (ui::dot(p.muted, true), "Not running"),
+        Some(RowState::Background) => (ui::dot(p.muted, false), "Running in the background"),
         Some(RowState::CantMove) => (ui::dot(p.negative, false), "Can't move: runs as administrator"),
         None => return div(),
     };

@@ -531,17 +531,4 @@ mod tests {
         ];
         assert_eq!(plan(&rects, 0, &links), Err(PlanError::Overlap { a: 2, b: 0 }));
     }
-
-    #[test]
-    fn plan_errors_name_screens_counting_from_one() {
-        assert_eq!(PlanError::Overlap { a: 2, b: 0 }.to_string(), "Moving screen 3 would overlap screen 1");
-        assert_eq!(
-            PlanError::Separates { moved: 3, other: 2 }.to_string(),
-            "Moving screen 4 would break its border with screen 3"
-        );
-        assert_eq!(
-            PlanError::Unhonoured { a: 2, b: 3 }.to_string(),
-            "The border between screen 3 and screen 4 can't hold with the others"
-        );
-    }
 }

@@ -254,8 +254,9 @@ fn free(h: HWND, g: &Geo, target: Rect) -> Placement {
 }
 
 /// Give a window focus. A caller with no input of its own first sends an
-/// empty mouse move, which the hook lets pass untouched (§3.3).
-fn focus(h: HWND, nudge: bool) {
+/// empty mouse move, which the hook lets pass untouched (§3.3). A workspace
+/// switch focuses through here too.
+pub fn focus(h: HWND, nudge: bool) {
     unsafe {
         if nudge {
             let mi = MOUSEINPUT { dwFlags: MOUSEEVENTF_MOVE, dwExtraInfo: SEAM_INPUT_TAG, ..Default::default() };

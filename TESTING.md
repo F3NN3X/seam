@@ -277,6 +277,37 @@ Use the 4-screen desk with Priority zones on screen 1.
 - [ ] **Desk change.** Unplug to "Laptop only". That desk has its own workspaces and shortcuts, and the old shortcuts stop working. Plug back in and they return.
 - [ ] **API.** With a test client, `workspaces.list` returns the workspaces, `workspace.switch` with `{"name":"coding"}` (any case) starts a switch and a subscribed client gets `workspace.switched`, and an unknown name gets error 1. `workspace.capture` with `{"name":"From API"}` returns an id, and with `into` overwrites that workspace.
 
+### Only real app windows
+
+Turn the debug log on. Each check captures, then reads the table and the log. A skipped window shows as `capture skipped <class> <exe>: <reason>`, and the capture line ends with a count per reason. Hidden and cloaked windows are only counted.
+
+- [ ] **Busy desk.** With everything below open, capture. The table has only apps with a taskbar button, and the log's `workspace capture: N windows in X ms` is under 100 ms with about 30 windows open.
+- [ ] **Discord overlay.** Start a game with Discord's overlay on and capture. Discord's main window is in the table, the overlay isn't (`no activate` or `transparent`).
+- [ ] **NVIDIA or AMD overlay.** With GeForce Experience / the NVIDIA app or AMD Software running, capture. Their overlay and helper windows aren't in the table.
+- [ ] **Xbox Game Bar.** Open Game Bar with Win+G, close it, capture. Nothing from `gamebar.exe` is in the table (`system`, or `cloaked`).
+- [ ] **Tray app.** Close Spotify to the tray and capture: it isn't in the table (`hidden`). Show it again and capture: it is.
+- [ ] **File Explorer.** Open two folders and capture. Both folder windows are in the table. The taskbar, the desktop and the tray overflow aren't (`shell`).
+- [ ] **Dialogs and tool windows.** Open Notepad's Save as dialog and capture. Notepad is in the table and the dialog isn't (`owned`). A palette or tool window of an app isn't either (`tool window`).
+- [ ] **Tiny and parked windows.** The log lists some helpers as `too small` or `off screen`, and none of them is in the table.
+- [ ] **Input host.** Open the touch keyboard or emoji panel (Win+.), capture. `textinputhost.exe` isn't in the table.
+- [ ] **Never include.** Add `notepad.exe` to the zones' exclude list in `config.json`. Capture with Notepad open: it isn't in the table, and the log says `never include`.
+- [ ] **Pins still work.** Pin a Notepad window on top, then pin File Explorer. Both pin. A dialog or the taskbar can't be pinned.
+
+### Window state
+
+- [ ] **Gate A, all states.** Minimize two windows, maximize one, put a browser in full screen with F11 and leave one window normal, with focus on the normal one. Capture. In `config.json` the rules have `"shown"` `minimized` (twice), `maximized`, `fullscreen` and `normal`, a `"z"` from 0 up, and `"focused": true` on the one window that had focus. Rearrange everything: restore, un-maximize, leave full screen, move and restack. Switch back. The two windows are minimized again, and restoring them puts each in its zone. The maximized one is maximized on its screen, the browser is full screen again, the stacking is as it was, and focus is on the window that had it.
+- [ ] **Minimized stays minimized.** Capture a workspace with a minimized window, restore that window and move it, switch. It's minimized again without showing on screen first, and restores into its zone.
+- [ ] **Minimized on another screen.** Capture a minimized window whose zone is on screen 2, move it to screen 1 and minimize it, switch, restore it. It opens in its zone on screen 2.
+- [ ] **Full screen lost its frame.** Capture a browser in F11 full screen, press F11 again so it has its title bar back, switch. It isn't forced into full screen, and `skipped` has it with `not full screen`.
+- [ ] **PowerPoint slideshow.** If PowerPoint is installed, capture a running slideshow on screen 2, move it, switch. It goes back over the whole of screen 2.
+- [ ] **Gate A, no-op switch.** Switch to the active workspace twice. The second time the log says `<name>: switched in X ms, plan Y ms, 0 moves, N already in place` with X under 30, nothing flickers, and `placed` still counts every window.
+- [ ] **Two windows moved.** With every app running, move two windows out of place and switch. The log's switch line has `2 moves` and is under 300 ms.
+- [ ] **Across a DPI change.** Move a window that belongs on the 100 % screen to the 150 % one, switch. It lands exactly in its zone, after one short pause only.
+- [ ] **Focus without the hotkey.** Switch from the tray menu and from the API. The focused window from the capture gets the focus, and the log doesn't say `Windows kept the focus where it was`.
+- [ ] **Old workspaces.** With a `config.json` from before this version, which has `"state": "max"` targets and no `shown`, switch: maximized windows come back maximized and nothing else changes. `config.json` isn't rewritten until something else is saved, and then those rules have `"shown": "maximized"`.
+- [ ] **Administrator window.** Capture with an app running as administrator. A switch skips it with `elevated` and never changes its state or its stacking.
+- [ ] **Gate A, hook.** During all of the above, the log's hook timing lines are the same as before.
+
 ## Settings panel
 
 - [ ] **Open.** Choose **Open Seam…** in the tray menu. The panel opens in your Windows theme on the last page you used, and the sidebar shows the current remap state.

@@ -1,6 +1,7 @@
 //! Win32 helpers for moving other apps' windows: which ones may move, and
 //! placing one so its visible frame lands on a rect.
 
+use crate::classify::{classify, Verdict, WindowFacts};
 use crate::zones::{frame_adjust, Rect};
 use std::sync::OnceLock;
 use windows::core::{w, BOOL, PCWSTR, PWSTR};
@@ -8,7 +9,7 @@ use windows::Win32::Foundation::{CloseHandle, ERROR_ACCESS_DENIED, HANDLE, HWND,
 use windows::Win32::Graphics::Dwm::{DwmGetWindowAttribute, DWMWA_CLOAKED, DWMWA_EXTENDED_FRAME_BOUNDS};
 use windows::Win32::Graphics::Gdi::{
     GetMonitorInfoW, MonitorFromPoint, MonitorFromRect, MonitorFromWindow, MONITORINFO, MONITOR_DEFAULTTONEAREST,
-    MONITOR_DEFAULTTOPRIMARY,
+    MONITOR_DEFAULTTONULL, MONITOR_DEFAULTTOPRIMARY,
 };
 use windows::Win32::Security::{GetTokenInformation, TokenElevation, TOKEN_ELEVATION, TOKEN_QUERY};
 use windows::Win32::Storage::EnhancedStorage::PKEY_AppUserModel_ID;
@@ -18,7 +19,7 @@ use windows::Win32::System::Threading::{
     GetCurrentProcess, OpenProcess, OpenProcessToken, QueryFullProcessImageNameW, PROCESS_NAME_WIN32,
     PROCESS_QUERY_LIMITED_INFORMATION,
 };
-use windows::Win32::UI::HiDpi::{GetDpiForMonitor, MDT_EFFECTIVE_DPI};
+use windows::Win32::UI::HiDpi::{GetDpiForMonitor, GetSystemMetricsForDpi, MDT_EFFECTIVE_DPI};
 use windows::Win32::UI::Shell::PropertiesSystem::{IPropertyStore, SHGetPropertyStoreForWindow};
 use windows::Win32::UI::WindowsAndMessaging::*;
 
@@ -114,6 +115,10 @@ pub fn is_maximized(h: HWND) -> bool {
     unsafe { IsZoomed(h).as_bool() }
 }
 
+pub fn has_caption(h: HWND) -> bool {
+    unsafe { GetWindowLongW(h, GWL_STYLE) as u32 & WS_CAPTION.0 == WS_CAPTION.0 }
+}
+
 /// A window with no sizing border keeps its size.
 pub fn is_resizable(h: HWND) -> bool {
     unsafe { GetWindowLongW(h, GWL_STYLE) as u32 & WS_THICKFRAME.0 != 0 }
@@ -133,6 +138,12 @@ pub fn monitor_dpi(h: HWND) -> u32 {
     }
 }
 
+/// Borderless and covering its whole screen, but not maximized: a video,
+/// a slideshow or a browser after F11.
+pub fn is_full_screen(h: HWND) -> bool {
+    unsafe { !IsIconic(h).as_bool() && !IsZoomed(h).as_bool() && is_fullscreen(h, GetWindowLongW(h, GWL_STYLE) as u32) }
+}
+
 /// Whether the process is elevated.
 fn token_elevated(process: HANDLE) -> Result<bool, windows::core::Error> {
     unsafe {
@@ -150,13 +161,18 @@ fn token_elevated(process: HANDLE) -> Result<bool, windows::core::Error> {
 /// Whether the window's process is elevated and Seam isn't, so Windows won't let
 /// Seam move it. Being refused the process or its token counts as elevated.
 pub fn is_elevated_over_us(h: HWND) -> bool {
+    elevated_over_us(process_id(h))
+}
+
+/// `is_elevated_over_us` by process ID, so a caller can ask once per process.
+pub fn elevated_over_us(pid: u32) -> bool {
     static OWN: OnceLock<bool> = OnceLock::new();
     let refused = |e: &windows::core::Error| e.code() == ERROR_ACCESS_DENIED.to_hresult();
     unsafe {
         if *OWN.get_or_init(|| token_elevated(GetCurrentProcess()).unwrap_or(false)) {
             return false;
         }
-        let process = match OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, process_id(h)) {
+        let process = match OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid) {
             Ok(process) => process,
             Err(e) => return refused(&e),
         };
@@ -338,7 +354,8 @@ pub fn title(h: HWND) -> String {
     String::from_utf16_lossy(buf.get(..len.max(0) as usize).unwrap_or_default())
 }
 
-fn exe_path_of(pid: u32) -> Option<String> {
+/// The full path of the program a process runs.
+pub fn exe_path_of(pid: u32) -> Option<String> {
     unsafe {
         let process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid).ok()?;
         let mut buf = [0u16; 1024];
@@ -361,7 +378,11 @@ unsafe extern "system" fn find_core_window(h: HWND, data: LPARAM) -> BOOL {
 /// The full path of the program that owns the window. A packaged app's frame is
 /// drawn by ApplicationFrameHost, so its hosted `CoreWindow` says whose it is.
 pub fn exe_path(h: HWND) -> Option<String> {
-    let path = exe_path_of(process_id(h))?;
+    exe_path_from(h, exe_path_of(process_id(h))?)
+}
+
+/// `exe_path`, given the path of the window's own process.
+pub fn exe_path_from(h: HWND, path: String) -> Option<String> {
     if !path.to_lowercase().ends_with(r"\applicationframehost.exe") {
         return Some(path);
     }
@@ -384,23 +405,76 @@ pub fn aumid(h: HWND) -> Option<String> {
     }
 }
 
-const IGNORED_CLASSES: [&str; 5] =
-    ["Progman", "WorkerW", "Shell_TrayWnd", "Shell_SecondaryTrayWnd", "Windows.UI.Core.CoreWindow"];
-
-/// Whether a window is one the user would call an app window: visible, not
-/// cloaked, titled, not a tool window, and not the shell's own. `own_pid` keeps
-/// Seam's windows out.
-pub fn is_capturable(h: HWND, own_pid: u32) -> bool {
+/// The Alt+Tab walk (Raymond Chen's): from the root owner, follow the last
+/// active popup while it is hidden. A window counts if the walk ends on it.
+fn is_alt_tab_root(h: HWND) -> bool {
     unsafe {
-        if h.is_invalid() || !IsWindowVisible(h).as_bool() || is_cloaked(h) || GetWindowTextLengthW(h) == 0 {
-            return false;
+        let mut walk = GetAncestor(h, GA_ROOTOWNER);
+        // A chain of popups is short. The bound only guards against a loop.
+        for _ in 0..32 {
+            let next = GetLastActivePopup(walk);
+            if next == walk || IsWindowVisible(next).as_bool() {
+                break;
+            }
+            walk = next;
         }
-        let ex = GetWindowLongW(h, GWL_EXSTYLE) as u32;
-        if ex & WS_EX_TOOLWINDOW.0 != 0 && ex & WS_EX_APPWINDOW.0 == 0 {
-            return false;
-        }
-        process_id(h) != own_pid && !IGNORED_CLASSES.contains(&class_name(h).as_str())
+        walk == h
     }
+}
+
+/// The alpha a layered window set, if it set one.
+fn layered_alpha(h: HWND) -> Option<u8> {
+    let (mut alpha, mut flags) = (0u8, LAYERED_WINDOW_ATTRIBUTES_FLAGS(0));
+    unsafe { GetLayeredWindowAttributes(h, None, Some(&mut alpha), Some(&mut flags)).ok()? };
+    (flags.0 & LWA_ALPHA.0 != 0).then_some(alpha)
+}
+
+/// What the capture rules look at, without opening the window's process: the
+/// caller fills in the exe's name, once per process. A hidden window stops at that.
+pub fn window_facts(h: HWND, own_pid: u32) -> WindowFacts {
+    unsafe {
+        if h.is_invalid() || !IsWindowVisible(h).as_bool() {
+            return WindowFacts::default();
+        }
+        let ex_style = GetWindowLongW(h, GWL_EXSTYLE) as u32;
+        let minimized = IsIconic(h).as_bool();
+        // A minimized window is parked off screen, so where it restores to counts.
+        let rect = if minimized { normal_rect(h) } else { visible_rect(h).or_else(|| window_rect(h)) };
+        let rect = rect.unwrap_or_default();
+        let r = RECT { left: rect.x, top: rect.y, right: rect.x + rect.w, bottom: rect.y + rect.h };
+        WindowFacts {
+            style: GetWindowLongW(h, GWL_STYLE) as u32,
+            ex_style,
+            class: class_name(h),
+            title_len: GetWindowTextLengthW(h).max(0) as usize,
+            visible: true,
+            cloaked: is_cloaked(h),
+            minimized,
+            owned: GetWindow(h, GW_OWNER).is_ok_and(|o| !o.is_invalid()),
+            root_owner_is_self: is_alt_tab_root(h),
+            rect,
+            on_any_screen: !MonitorFromRect(&r, MONITOR_DEFAULTTONULL).is_invalid(),
+            layered_alpha: if ex_style & WS_EX_LAYERED.0 != 0 { layered_alpha(h) } else { None },
+            own_process: process_id(h) == own_pid,
+            exe_name: String::new(),
+        }
+    }
+}
+
+/// The lower-case file name of an exe path.
+pub fn file_name(path: &str) -> String {
+    path.rsplit('\\').next().unwrap_or(path).to_lowercase()
+}
+
+/// Whether a window is a real app window, one with a taskbar button, by the
+/// capture rules but without anyone's exclude list. `own_pid` keeps Seam's windows out.
+pub fn is_capturable(h: HWND, own_pid: u32) -> bool {
+    let mut facts = window_facts(h, own_pid);
+    if classify(&facts, &|_| false) != Verdict::Capture {
+        return false;
+    }
+    facts.exe_name = exe_name(h).unwrap_or_default();
+    classify(&facts, &|_| false) == Verdict::Capture
 }
 
 pub fn is_minimized(h: HWND) -> bool {
@@ -438,14 +512,80 @@ pub fn normal_rect(h: HWND) -> Option<Rect> {
     Some(rect_of(RECT { left: r.left + dx, top: r.top + dy, right: r.right + dx, bottom: r.bottom + dy }))
 }
 
-/// Maximize on the screen the window is on now, and set the size it gets when
-/// un-maximized. This call waits on the app, so the caller checks `is_hung` first.
-pub fn place_maximized(h: HWND, normal: Option<Rect>) -> bool {
+/// Show the window as `show` says, with `normal` (screen pixels) as the size and
+/// place it has when it isn't maximized or minimized. This call waits on the app,
+/// so the caller checks `is_hung` first.
+fn place(h: HWND, normal: Option<Rect>, show: SHOW_WINDOW_CMD) -> bool {
     let Some(mut wp) = placement_of(h) else { return false };
     if let Some(n) = normal {
         let (dx, dy) = workspace_offset();
         wp.rcNormalPosition = RECT { left: n.x - dx, top: n.y - dy, right: n.x + n.w - dx, bottom: n.y + n.h - dy };
     }
-    wp.showCmd = SW_SHOWMAXIMIZED.0 as u32;
+    if show != SW_SHOWMAXIMIZED {
+        // It restores to `normal`, not to maximized.
+        wp.flags &= !WPF_RESTORETOMAXIMIZED;
+    }
+    wp.showCmd = show.0 as u32;
     unsafe { SetWindowPlacement(h, &wp).is_ok() }
+}
+
+/// Maximize on the screen the window is on now, and set the size it gets when
+/// un-maximized. This call waits on the app, so the caller checks `is_hung` first.
+pub fn place_maximized(h: HWND, normal: Option<Rect>) -> bool {
+    place(h, normal, SW_SHOWMAXIMIZED)
+}
+
+/// Minimize without showing or activating the window, so it restores onto
+/// `frame` later. Waits on the app, like `place_maximized`.
+pub fn place_minimized(h: HWND, frame: Rect, dpi: u32) -> bool {
+    place(h, Some(grow(frame, frame_margin(h, dpi))), SW_SHOWMINNOACTIVE)
+}
+
+/// Restore a minimized or maximized window straight onto `frame`, without
+/// activating it. Waits on the app, like `place_maximized`.
+pub fn place_restored(h: HWND, frame: Rect, dpi: u32) -> bool {
+    let window = match (is_minimized(h), window_rect(h), visible_rect(h)) {
+        // A minimized window's frame can't be read, so its margins are Windows' usual ones.
+        (false, Some(window), Some(visible)) => frame_adjust(frame, window, visible),
+        _ => grow(frame, frame_margin(h, dpi)),
+    };
+    place(h, Some(window), SW_SHOWNOACTIVATE)
+}
+
+/// Put the window exactly on `r`, with no frame correction: a full-screen window has none.
+pub fn set_rect(h: HWND, r: Rect) {
+    unsafe {
+        let _ = SetWindowPos(h, None, r.x, r.y, r.w, r.h, FLAGS);
+    }
+}
+
+/// Raise the window to the top of the others that aren't topmost, without activating it.
+pub fn raise(h: HWND) {
+    let flags = SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_ASYNCWINDOWPOS;
+    unsafe {
+        let _ = SetWindowPos(h, Some(HWND_TOP), 0, 0, 0, 0, flags);
+    }
+}
+
+/// The invisible resize border Windows gives a sizable window on the left,
+/// right and bottom at `dpi`. Only for a window whose real margins can't be read.
+fn frame_margin(h: HWND, dpi: u32) -> i32 {
+    if !is_resizable(h) {
+        return 0;
+    }
+    unsafe { GetSystemMetricsForDpi(SM_CXSIZEFRAME, dpi) + GetSystemMetricsForDpi(SM_CXPADDEDBORDER, dpi) }
+}
+
+fn grow(r: Rect, m: i32) -> Rect {
+    Rect { x: r.x - m, y: r.y, w: r.w + 2 * m, h: r.h + m }
+}
+
+fn shrink(r: Rect, m: i32) -> Rect {
+    Rect { x: r.x + m, y: r.y, w: (r.w - 2 * m).max(1), h: (r.h - m).max(1) }
+}
+
+/// Where a minimized window's visible frame will be when it restores, at `dpi`.
+/// The inverse of what `place_minimized` sets, so a capture and a switch agree.
+pub fn normal_frame(h: HWND, dpi: u32) -> Option<Rect> {
+    normal_rect(h).map(|n| shrink(n, frame_margin(h, dpi)))
 }

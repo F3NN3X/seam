@@ -3,12 +3,93 @@
 	<head lang="en">
 		<title>Switch workspace</title>
 		<meta charset="utf-8" />
-		<script src="https://sdpi-components.dev/releases/v4/sdpi-components.js"></script>
+		<style>
+			body {
+				margin: 0;
+				padding: 8px 12px;
+				font: 13px "Segoe UI", sans-serif;
+				color: #d8d8d8;
+				background: #2d2d2d;
+			}
+			label {
+				display: flex;
+				align-items: center;
+				gap: 12px;
+			}
+			span {
+				width: 70px;
+				flex: none;
+			}
+			select {
+				flex: 1;
+				min-width: 0;
+				padding: 4px 6px;
+				font: inherit;
+				color: #d8d8d8;
+				background: #3d3d3d;
+				border: 1px solid #1d1d1d;
+				border-radius: 3px;
+			}
+		</style>
 	</head>
 
 	<body>
-		<sdpi-item label="Workspace">
-			<sdpi-select setting="id" datasource="getWorkspaces" loading="Loading workspaces" placeholder="Choose a workspace"></sdpi-select>
-		</sdpi-item>
+		<label>
+			<span>Workspace</span>
+			<select id="workspace" disabled>
+				<option>Loading workspaces</option>
+			</select>
+		</label>
+
+		<script>
+			// Stream Deck gives the inspector a socket to the app. The plugin
+			// answers "getWorkspaces" with the list for the dropdown.
+			let socket;
+			let uuid;
+			let action;
+			let settings = {};
+			const select = document.getElementById("workspace");
+
+			const send = (message) => socket.send(JSON.stringify(message));
+
+			function fill(items) {
+				select.replaceChildren();
+				if (!items.some((item) => item.value === settings.id)) {
+					select.append(new Option("Choose a workspace", "", true, true));
+					select.options[0].disabled = true;
+				}
+				for (const item of items) {
+					const option = new Option(item.label, item.value, false, item.value === settings.id);
+					option.disabled = !!item.disabled;
+					select.append(option);
+				}
+				select.disabled = false;
+			}
+
+			select.addEventListener("change", () => {
+				settings = { ...settings, id: select.value };
+				send({ event: "setSettings", context: uuid, payload: settings });
+			});
+
+			window.connectElgatoStreamDeckSocket = (port, inUuid, registerEvent, _info, actionInfo) => {
+				uuid = inUuid;
+				const info = JSON.parse(actionInfo);
+				action = info.action;
+				settings = info.payload?.settings ?? {};
+				socket = new WebSocket(`ws://127.0.0.1:${port}`);
+				socket.onopen = () => {
+					send({ event: registerEvent, uuid });
+					send({ event: "sendToPlugin", action, context: uuid, payload: { event: "getWorkspaces" } });
+				};
+				socket.onmessage = (message) => {
+					const data = JSON.parse(message.data);
+					if (data.event === "sendToPropertyInspector" && data.payload?.event === "getWorkspaces") {
+						fill(data.payload.items);
+					} else if (data.event === "didReceiveSettings") {
+						settings = data.payload?.settings ?? settings;
+					}
+				};
+			};
+		</script>
 	</body>
 </html>

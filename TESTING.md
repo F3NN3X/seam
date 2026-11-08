@@ -286,6 +286,24 @@ Quit any GitHub copy first, unless the step says otherwise.
 - [ ] **Import.** With a GitHub `config.json` in `%APPDATA%\Seam` and no package config (uninstall the package to clear it), start the packaged Seam. It starts with default settings, and the window shows "Import settings from your earlier Seam". **Import** brings the old settings in. Reopen the window: no offer. If the offer never shows, the package can't read `%APPDATA%\Seam`, which needs a decision.
 - [ ] **Uninstall.** Remove the package. Seam leaves the tray, and the GitHub copy still starts.
 
+## Stream Deck
+
+Build the plugin with `pnpm install`, `pnpm build` and `pnpm pack` in `integrations/streamdeck`. Run these with Seam running and **Let other apps control Seam** on, and the Stream Deck app open.
+
+- [ ] **Install the packed file.** Double-click `dist\co.f3nn3x.seam.streamDeckPlugin`. Stream Deck installs it, and a Seam group with seven actions appears in the action list. General in Seam lists "streamdeck" among the connected apps.
+- [ ] **Switch workspace.** Drag the action to a key and pick a workspace in the dropdown, which lists the current desk's workspaces. The key shows its name. Press it: the workspace is applied, and the key lights once it's in use. Switch to another workspace by hotkey. The key goes dark.
+- [ ] **Renamed workspace.** Rename the workspace in Seam, then switch to it. The key's title shows the new name. Delete it and capture one with the same name. The key still switches to it.
+- [ ] **Line up screens.** Press the key. Line Up opens. Press it while Line Up is open. The key shows an alert and Line Up stays as it is.
+- [ ] **Pause or resume remap.** The key reads "Remap on" and is lit. Press it. Crossings stop remapping, and the key reads "Remap paused". Press it again to resume. Pause from the tray menu instead. The key follows. With no borders lined up, the key shows paused.
+- [ ] **Zones on or off.** The key follows the Zones page. Press it to turn zones off and on. Change the setting on the Zones page. The key follows.
+- [ ] **Next and previous zone.** Focus a window and press each key. The window moves one zone forward or back. Press one with the desktop focused. The key shows an alert.
+- [ ] **Desk.** The key shows the active desk's name. Press it. The Displays page opens.
+- [ ] **Desk change.** Unplug the U3477. The desk key and the workspace keys change to match, and a workspace key from the other desk goes dark. Replug it. They come back.
+- [ ] **Seam isn't running.** Quit Seam from the tray. Every Seam key shows "Seam isn't running", and pressing one shows an alert. The workspace dropdown lists "Seam isn't running".
+- [ ] **Reconnect.** Start Seam again. Within 30 s every key goes back to its own title and state without touching the Stream Deck app.
+- [ ] **Off switch.** Set `api.enabled` to false in `config.json` and reload. The keys show "Other apps are off in Seam". Set it back. They recover.
+- [ ] **Plugin log.** In the Stream Deck app's plugin logs for Seam, a failed press logs one line. The plugin keeps running.
+
 ## Reconnecting and sleep
 
 - [ ] **Unplug a screen.** Unplug the U3477. The log shows `display change`, then `no saved layout for these screens`. The other screens behave as plain Windows.

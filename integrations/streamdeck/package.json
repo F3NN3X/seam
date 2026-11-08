@@ -1,0 +1,31 @@
+{
+  "name": "co.f3nn3x.seam",
+  "version": "0.5.0",
+  "private": true,
+  "description": "Stream Deck plugin for Seam.",
+  "type": "module",
+  "scripts": {
+    "art": "node scripts/build-art.mjs",
+    "typecheck": "tsc --noEmit",
+    "build": "rollup -c",
+    "watch": "rollup -c -w",
+    "validate": "streamdeck validate co.f3nn3x.seam.sdPlugin",
+    "pack": "streamdeck pack co.f3nn3x.seam.sdPlugin --output dist --force"
+  },
+  "dependencies": {
+    "@elgato/streamdeck": "^3.0.4"
+  },
+  "devDependencies": {
+    "@elgato/cli": "^1.10.4",
+    "@elgato/utils": "0.6.2",
+    "@resvg/resvg-js": "^2.6.2",
+    "@rollup/plugin-commonjs": "^29.0.3",
+    "@rollup/plugin-node-resolve": "^16.0.3",
+    "@rollup/plugin-terser": "^1.0.2",
+    "@rollup/plugin-typescript": "^12.3.1",
+    "@types/node": "^24.19.2",
+    "rollup": "^4.68.0",
+    "tslib": "^2.9.1",
+    "typescript": "^5.9.3"
+  }
+}

@@ -64,6 +64,22 @@ Running `seam.exe` again while it's already running opens the Seam window. `seam
 
 If another app already holds one, Seam keeps running without it.
 
+## Stream Deck
+
+A Stream Deck plugin in `integrations/streamdeck` puts Seam on keys. It talks to the running Seam over the local API, so **Let other apps control Seam** has to stay on in General. These are its actions:
+
+- **Switch workspace**: pick a workspace on the current desk. The key lights while it's in use.
+- **Line up screens**: opens Line Up.
+- **Pause or resume remap** and **Zones on or off**: two-state keys that follow Seam, so they stay right when you change a setting elsewhere.
+- **Next zone** and **Previous zone**: move the focused window.
+- **Desk**: shows the active desk's name. Pressing it opens the Displays page.
+
+When Seam isn't running, every key says so and reconnects by itself once it is.
+
+On a PC shared with other Windows accounts, the plugin can't check that the program answering on Seam's connection is really Seam. Seam's own apps do check. The plugin only sends commands like "switch workspace" and reads status, so the most another account could do is see that status or ignore the keys.
+
+To install it, download `co.f3nn3x.seam.streamDeckPlugin` and open it. The Stream Deck app installs it and adds a Seam group to the action list. To build it yourself, run `pnpm install`, `pnpm build` and `pnpm pack` in `integrations/streamdeck`. The packed file lands in its `dist` folder.
+
 ## Install and update
 
 Download `seam-X.Y.Z-windows-x64.zip` from [Releases](https://github.com/F3NN3X/seam/releases), unzip it and keep both exes together. It's unsigned, so Windows warns about an unknown publisher the first time. See [Troubleshooting](#troubleshooting). A Microsoft Store version is planned for later.

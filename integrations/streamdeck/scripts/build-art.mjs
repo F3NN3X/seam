@@ -1,0 +1,120 @@
+// Draws every image the plugin ships, from the Seam mark: two screen outlines
+// with the amber seam between them. Run `pnpm art` after changing a glyph.
+//
+// A seam drawn solid and amber means the thing is on. A dashed muted seam means
+// it's off, the same way the Displays map draws a border that isn't lined up.
+// The titles in the manifest say the same in words, so colour is never alone.
+
+import { Resvg } from "@resvg/resvg-js";
+import { mkdirSync, writeFileSync } from "node:fs";
+import path from "node:path";
+import url from "node:url";
+
+const root = path.join(path.dirname(url.fileURLToPath(import.meta.url)), "..", "co.f3nn3x.seam.sdPlugin", "imgs");
+
+const color = { page: "#202020", deep: "#1A1A1A", text: "#F3F3F3", muted: "#949494", seam: "#FFB020" };
+
+/** Look of a glyph: the outline colour, and whether the seam is lit. */
+const lit = { line: color.text, seam: color.seam, solid: true, width: 1 };
+const idle = { line: color.muted, seam: color.muted, solid: false, width: 1 };
+/** Action list and category icons are single-colour white. */
+const white = { line: "#FFFFFF", seam: "#FFFFFF", solid: true, width: 1.6 };
+
+const screen = (x, y, w, h, p) => {
+  const half = p.width / 2;
+  return `<rect x="${x + half}" y="${y + half}" width="${w - p.width}" height="${h - p.width}" rx="2" fill="none" stroke="${p.line}" stroke-width="${p.width}"/>`;
+};
+
+const seam = (x, y, h, p) =>
+  p.solid
+    ? `<rect x="${x}" y="${y}" width="2" height="${h}" fill="${p.seam}"/>`
+    : `<line x1="${x + 1}" y1="${y}" x2="${x + 1}" y2="${y + h}" stroke="${p.seam}" stroke-width="2" stroke-dasharray="2 2"/>`;
+
+// Glyphs are drawn in their own units, 32 wide, and placed by `place`.
+const mark = (p) => ({ w: 32, h: 20, svg: screen(0, 2, 12, 16, p) + seam(14, 4, 12, p) + screen(18, 0, 14, 20, p) });
+
+const lineup = (p) => {
+  const base = mark(p);
+  const guide = `<line x1="-3" y1="10" x2="35" y2="10" stroke="${p.line}" stroke-width="0.75" stroke-dasharray="1.5 1.5"/>`;
+  return { ...base, svg: base.svg + guide };
+};
+
+const remap = (p) => {
+  const base = mark(p);
+  const pointer = `<path d="M9 8 V18.5 L11.4 16.2 L13 19.6 L14.8 18.8 L13.2 15.5 H16.4 Z" fill="${p.line}" stroke="${color.page}" stroke-width="0.8" stroke-linejoin="round"/>`;
+  return { ...base, svg: base.svg + pointer };
+};
+
+const zones = (p) => ({
+  w: 32,
+  h: 20,
+  svg:
+    screen(0, 0, 32, 20, p) +
+    seam(15, 1, 18, p) +
+    `<line x1="17" y1="10" x2="31" y2="10" stroke="${p.line}" stroke-width="${Math.min(p.width, 1)}"/>`,
+});
+
+const zoneStep = (dir) => (p) => {
+  const base = zones(p);
+  const [tail, tip, back] = dir === "next" ? [10, 22, 19] : [22, 10, 13];
+  const arrow =
+    `<line x1="${tail}" y1="25" x2="${tip}" y2="25" stroke="${p.line}" stroke-width="${p.width}" stroke-linecap="round"/>` +
+    `<polyline points="${back},22.5 ${tip},25 ${back},27.5" fill="none" stroke="${p.line}" stroke-width="${p.width}" stroke-linecap="round" stroke-linejoin="round"/>`;
+  return { ...base, h: 28, svg: base.svg + arrow };
+};
+
+const place = (glyph, scale, cx, cy) =>
+  `<g transform="translate(${cx - (glyph.w * scale) / 2} ${cy - (glyph.h * scale) / 2}) scale(${scale})">${glyph.svg}</g>`;
+
+const wrap = (size, body) =>
+  `<svg xmlns="http://www.w3.org/2000/svg" width="${size}" height="${size}" viewBox="0 0 ${size} ${size}">${body}</svg>\n`;
+
+/** A key image: the glyph high on a page-grey square, leaving the lower part for the title. */
+const key = (draw, p) => {
+  const glyph = draw(p);
+  return wrap(144, `<rect width="144" height="144" fill="${color.page}"/>${place(glyph, 3.2, 72, 50)}`);
+};
+
+/** A 20 px action list icon. */
+const icon = (draw) => {
+  const glyph = draw(white);
+  return wrap(20, place(glyph, 0.5625, 10, 10));
+};
+
+const write = (file, data) => {
+  const target = path.join(root, file);
+  mkdirSync(path.dirname(target), { recursive: true });
+  writeFileSync(target, data);
+};
+
+const actions = {
+  workspace: { draw: mark, states: ["idle", "lit"] },
+  lineup: { draw: lineup, states: ["lit"] },
+  remap: { draw: remap, states: ["idle", "lit"] },
+  zones: { draw: zones, states: ["idle", "lit"] },
+  "zone-next": { draw: zoneStep("next"), states: ["lit"] },
+  "zone-prev": { draw: zoneStep("prev"), states: ["lit"] },
+  desk: { draw: mark, states: ["lit"] },
+};
+
+for (const [name, { draw, states }] of Object.entries(actions)) {
+  write(`actions/${name}/icon.svg`, icon(draw));
+  for (const state of states) {
+    const file = states.length === 1 ? "key.svg" : `key-${state === "lit" ? "on" : "off"}.svg`;
+    write(`actions/${name}/${file}`, key(draw, state === "lit" ? lit : idle));
+  }
+}
+
+// The plugin icon is a PNG: the mark on a rounded square, like the app icon.
+const pluginIcon = wrap(
+  256,
+  `<rect width="256" height="256" rx="56" fill="${color.deep}"/>${place(mark(lit), 6, 128, 128)}`,
+);
+for (const [file, size] of [
+  ["plugin/icon.png", 256],
+  ["plugin/icon@2x.png", 512],
+]) {
+  write(file, new Resvg(pluginIcon, { fitTo: { mode: "width", value: size } }).render().asPng());
+}
+
+write("plugin/category.svg", wrap(28, place(mark(white), 0.75, 14, 14)));

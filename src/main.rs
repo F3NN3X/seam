@@ -24,6 +24,8 @@ mod snap;
 #[cfg(windows)]
 mod switcher;
 #[cfg(windows)]
+mod wincontrol;
+#[cfg(windows)]
 mod zone_paint;
 
 #[cfg(windows)]

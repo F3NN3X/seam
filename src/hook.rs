@@ -38,6 +38,8 @@ thread_local! {
     static NEXT_NS: Cell<u64> = const { Cell::new(0) };
 }
 
+/// Marks the empty mouse move window control sends so Windows lets it take focus.
+pub const SEAM_INPUT_TAG: usize = 0x5EA3_F0C5;
 const WM_APP_COMMAND: u32 = WM_APP + 20;
 const OFF: usize = 0;
 const ON: usize = 1;
@@ -140,6 +142,10 @@ fn cursor_is_confined(live: &Live) -> bool {
 }
 
 unsafe extern "system" fn ll_proc(code: i32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
+    // Seam's own empty move before it takes focus is never a pointer move to remap.
+    if (*(lparam.0 as *const MSLLHOOKSTRUCT)).dwExtraInfo == SEAM_INPUT_TAG {
+        return CallNextHookEx(None, code, wparam, lparam);
+    }
     if !log::enabled() {
         return on_mouse(code, wparam, lparam);
     }

@@ -46,7 +46,7 @@ Start with a v0.1 `config.json` that has saved borders.
 - [ ] **Line up shortcut.** Press Ctrl+Shift+Alt+L. Line Up opens. Press Esc.
 - [ ] **Pause shortcut.** Press Ctrl+Shift+Alt+P. Crossings stop remapping and the tooltip says paused. Press it again and they work.
 - [ ] **Shortcut taken.** Have another app hold Ctrl+Shift+Alt+L, then start Seam. Seam runs, and `state.get` lists it in `hotkey_errors`.
-- [ ] **Zone shortcuts.** Win+Alt+Right and Win+Alt+Left are registered by default. If another app holds one, `state.get` lists `next_zone` or `prev_zone` in `hotkey_errors`.
+- [ ] **Window shortcuts.** Shift+Win+Alt+arrows and Ctrl+Shift+Alt+arrows are registered by default, and next zone, previous zone and the swaps aren't. If another app holds one, `state.get` lists it in `hotkey_errors` (for example `move_up`).
 - [ ] **Ease balloon.** With Ease cursor movement off, click the balloon. The Seam window opens.
 
 ## Local API
@@ -106,8 +106,9 @@ Set up first: on Zones, pick **Priority** for screen 1 and **Grid** for screen 2
 - [ ] **Window ignoring DPI.** Snap an old app that ignores DPI scaling between the 125% and 100% screens. It lands on the zone in one move with no extra jump.
 - [ ] **Keys.** Choose Alt to show zones. The span choice that matches is greyed out with a tooltip. Choose the key span uses to show zones: span moves to another key.
 - [ ] **Zones off.** Turn **Zones on** off, or run `zones.set` with `{"on":false}`. Shift-drag shows nothing.
-- [ ] **Next and previous zone.** Press Win+Alt+Right with a window focused. An unsnapped window snaps to the zone holding its centre. Press again to step through the zones, and past the last one it lands in the first zone of the next screen. Win+Alt+Left goes back, wrapping the other way.
+- [ ] **Next and previous zone.** On Shortcuts, record a key for next zone and one for previous zone (they're not set by default). Press next with a window focused. An unsnapped window snaps to the zone holding its centre. Press again to step through the zones, and past the last one it lands in the first zone of the next screen. Previous goes back, wrapping the other way.
 - [ ] **Zone hotkeys in the panel.** On Shortcuts, Zones shows both shortcuts. Record new keys and they work from another app. Record one another app holds and the row says so in red.
+- [ ] **Zone key on a move key.** On Shortcuts, set next zone to the same combo as move right, then restart Seam. The log says `hotkey next_zone cleared: a directional key holds it now`, `config.json` has `next_zone` as `null`, and the move key works. Restart again: no such line.
 - [ ] **API.** `zone.move` with `{"dir":"next"}` moves the focused window as the hotkey does. With zones off or no layout set it answers error 3 with the reason.
 - [ ] **Excluded app.** Add an exe name such as `notepad.exe` to `zones.exclude` in `config.json` and reload. Dragging it with Shift held shows no overlay.
 - [ ] **Elevated window.** Run Task Manager as administrator and Shift-drag it onto a zone. It doesn't move, and you get one balloon: "Seam can't move windows from apps running as administrator." A second try in the same session shows no second balloon.
@@ -117,6 +118,27 @@ Set up first: on Zones, pick **Priority** for screen 1 and **Grid** for screen 2
 - [ ] **Overlay timing.** With `--log`, drag windows with Shift held across every screen of the test desk. `zone overlay: main` lines are the tray's time per change (expected well under 2000 us). `zone overlay: worker` lines give the overlay thread's own time: drawing a base once per screen after start-up or a screen change, `worker show` per change. The first drag after start-up shows zones on a screen only once its base is drawn, and later drags find them ready. Compare `hook stats` `own max` in the same minute with and without drags.
 - [ ] **Changing screens.** Change a screen's resolution, then drag with Shift held. The zones match the new size, with no leftover overlay at the old one. Turn Zones off, and Task Manager's memory for `seam.exe` drops back.
 - [ ] **Overlay clean-up.** After every drag no overlay stays on any screen, including when you press Esc mid-drag or close the dragged window.
+
+## Window control
+
+Set up first: Priority zones on screen 1, Grid on screen 2, none on the U3477. Open a few windows on every screen, some snapped and some not.
+
+- [ ] **Move keys register.** Start Seam and check `state.get`: no `move_*` entry in `hotkey_errors`. (Win+Alt+arrows were the first choice, but Windows 11 build 26300 holds them.)
+- [ ] **Move in zones.** Snap a window into screen 1's left zone and press Shift+Win+Alt+Right. It moves into the zone to its right, at the zone's size, with no jump afterwards. Win+Alt+Left brings it back. Up and down step between stacked zones.
+- [ ] **Move across screens.** Press Shift+Win+Alt+Up on a snapped window on screen 1. It lands in the nearest zone of screen 2, at the right size on the 125% screen, with no jump after it settles. Press Shift+Win+Alt+Down to come back.
+- [ ] **Move to a screen with no zones.** Press Shift+Win+Alt+Right on a window in screen 1's rightmost zone. It goes to the U3477 at the same place in its work area, sized for that screen's scaling, and is no longer snapped.
+- [ ] **Move with no zone.** Press Shift+Win+Alt+Left on an unsnapped window on the U3477, near its top. It goes to screen 2 (the upper screen on the desk), not screen 1, in the same place there. Lower down it goes to screen 1.
+- [ ] **Nothing that way.** Press Shift+Win+Alt+Up on a window on screen 2. Nothing moves, and the log says `Nothing in that direction`.
+- [ ] **Focus.** Press Ctrl+Shift+Alt+Right with a window focused on screen 1. The nearest window to its right takes focus, on the same screen first, then on the U3477. Ctrl+Shift+Alt+Left from the top of the U3477 reaches a window on screen 2.
+- [ ] **Focus, empty screen.** Leave screen 2 with no windows and press Ctrl+Shift+Alt+Up from screen 1. Focus stays where it was and the log says `No window on the screen in that direction`.
+- [ ] **Swap.** Record keys for the swaps on Shortcuts. Snap two windows side by side on screen 1 and press swap right on the left one. They change places, each filling the other's zone. Swap an unsnapped window with a snapped one on another screen: each takes the other's place, and only the snapped place is kept as snapped.
+- [ ] **Left alone.** Run Task Manager as administrator and press Shift+Win+Alt+Right on it. Nothing moves and the log says it runs as administrator. With the Seam window focused, nothing moves either. Swap towards Task Manager doesn't move it or the other window.
+- [ ] **Hung window.** Hang a test app (a debugger break, or a test app that sleeps on its UI thread) and press Shift+Win+Alt+Right on it. Nothing moves and the log says it isn't responding. Focus and swap skip it.
+- [ ] **Rapid presses.** Hold Shift+Win+Alt and tap Right five times quickly. The window ends up where the last press sends it from the place it had reached, with no window left half-moved.
+- [ ] **Panel.** On Shortcuts, the Windows section lists move, focus and swap in each direction with their keys. Record a new key and it works from another app. Search "swap" or "focus" and the rows are found.
+- [ ] **API.** `window.move`, `window.focus` and `window.swap` with `{"dir":"left"}` act on the focused window and answer `{"ok":true}`. With nothing that way, on an administrator window, or on a hung one they answer error 3 with the reason. `{"dir":"next"}` answers error -32602.
+- [ ] **API focus.** From a test client run from a terminal, send `window.focus` with `{"dir":"right"}` while another app is focused. The window to the right takes focus, its taskbar button doesn't just flash, and the pointer doesn't move.
+- [ ] **Hook timings unchanged.** Note `hook stats`, then use every move, focus and swap key and the API calls for 30 s while moving the pointer across the borders. `own max` and `avg` match a run without them, crossings still remap, and `SPI_SETFOREGROUNDLOCKTIMEOUT` is unchanged (`SystemParametersInfo` reads the same before and after).
 
 ## Zone editor
 
@@ -290,13 +312,15 @@ Quit any GitHub copy first, unless the step says otherwise.
 
 Build the plugin with `pnpm install`, `pnpm build` and `pnpm pack` in `integrations/streamdeck`. Run these with Seam running and **Let other apps control Seam** on, and the Stream Deck app open.
 
-- [ ] **Install the packed file.** Double-click `dist\co.f3nn3x.seam.streamDeckPlugin`. Stream Deck installs it, and a Seam group with seven actions appears in the action list. General in Seam lists "streamdeck" among the connected apps.
+- [ ] **Install the packed file.** Double-click `dist\co.f3nn3x.seam.streamDeckPlugin`. Stream Deck installs it, and a Seam group with nine actions appears in the action list. General in Seam lists "streamdeck" among the connected apps.
 - [ ] **Switch workspace.** Drag the action to a key and pick a workspace in the dropdown, which lists the current desk's workspaces. The key shows its name. Press it: the workspace is applied, and the key lights once it's in use. Switch to another workspace by hotkey. The key goes dark.
 - [ ] **Renamed workspace.** Rename the workspace in Seam, then switch to it. The key's title shows the new name. Delete it and capture one with the same name. The key still switches to it.
 - [ ] **Line up screens.** Press the key. Line Up opens. Press it while Line Up is open. The key shows an alert and Line Up stays as it is.
 - [ ] **Pause or resume remap.** The key reads "Remap on" and is lit. Press it. Crossings stop remapping, and the key reads "Remap paused". Press it again to resume. Pause from the tray menu instead. The key follows. With no borders lined up, the key shows paused.
 - [ ] **Zones on or off.** The key follows the Zones page. Press it to turn zones off and on. Change the setting on the Zones page. The key follows.
 - [ ] **Next and previous zone.** Focus a window and press each key. The window moves one zone forward or back. Press one with the desktop focused. The key shows an alert.
+- [ ] **Move window.** Drag the action to a key and pick each direction in its settings. The key's title names the direction. Press it: the focused window moves that way as Shift+Win+Alt+arrows does. With nothing that way the key shows an alert.
+- [ ] **Focus window.** Drag the action to a key, pick a direction and press it while an app is focused. The window that way takes focus, even though the press came from the Stream Deck. With no window that way the key shows an alert.
 - [ ] **Desk.** The key shows the active desk's name. Press it. The Displays page opens.
 - [ ] **Desk change.** Unplug the U3477. The desk key and the workspace keys change to match, and a workspace key from the other desk goes dark. Replug it. They come back.
 - [ ] **Seam isn't running.** Quit Seam from the tray. Every Seam key shows "Seam isn't running", and pressing one shows an alert. The workspace dropdown lists "Seam isn't running".

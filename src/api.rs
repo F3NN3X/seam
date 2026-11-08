@@ -1,6 +1,7 @@
 //! The local API: JSON-RPC over JSON Lines on a per-user named pipe. This is
 //! the protocol and the blocking client; the server is in the tray.
 
+use crate::direction;
 use crate::log;
 use crate::process;
 use crate::state::Snapshot;
@@ -52,6 +53,25 @@ pub enum Dir {
     Prev,
 }
 
+/// What `window.*` does to the focused window.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum WindowVerb {
+    Focus,
+    Move,
+    Swap,
+}
+
+impl WindowVerb {
+    pub fn parse(text: &str) -> Option<WindowVerb> {
+        match text {
+            "focus" => Some(WindowVerb::Focus),
+            "move" => Some(WindowVerb::Move),
+            "swap" => Some(WindowVerb::Swap),
+            _ => None,
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub enum Command {
     Hello { client: String, version: String, token: Option<String> },
@@ -66,6 +86,7 @@ pub enum Command {
     RemapSet(bool),
     ZonesSet(bool),
     ZoneMove(Dir),
+    Window(WindowVerb, direction::Dir),
     LineupStart,
     ArrangementAlign,
     ScreenIdentify(u32),
@@ -134,6 +155,13 @@ fn command(method: &str, p: &Value) -> Result<Command, RpcError> {
             Some("prev") => Command::ZoneMove(Dir::Prev),
             _ => return Err(RpcError::new(INVALID_PARAMS, "dir must be next or prev")),
         },
+        "window.focus" | "window.move" | "window.swap" => {
+            let verb = method.strip_prefix("window.").and_then(WindowVerb::parse);
+            match (verb, p.get("dir").and_then(Value::as_str).and_then(direction::Dir::parse)) {
+                (Some(verb), Some(dir)) => Command::Window(verb, dir),
+                _ => return Err(RpcError::new(INVALID_PARAMS, "dir must be left, right, up or down")),
+            }
+        }
         "lineup.start" => Command::LineupStart,
         "arrangement.align" => Command::ArrangementAlign,
         "screen.identify" => Command::ScreenIdentify(
@@ -382,6 +410,16 @@ mod tests {
             (request("state.get", "{}"), anyone, Command::StateGet),
             (request("remap.set", r#"{"on":false}"#), anyone, Command::RemapSet(false)),
             (request("zone.move", r#"{"dir":"prev"}"#), anyone, Command::ZoneMove(Dir::Prev)),
+            (
+                request("window.move", r#"{"dir":"left"}"#),
+                anyone,
+                Command::Window(WindowVerb::Move, direction::Dir::Left),
+            ),
+            (
+                request("window.focus", r#"{"dir":"down"}"#),
+                anyone,
+                Command::Window(WindowVerb::Focus, direction::Dir::Down),
+            ),
             (request("screen.identify", r#"{"number":3}"#), anyone, Command::ScreenIdentify(3)),
             (request("panel.open", r#"{"page":"about"}"#), anyone, Command::PanelOpen(Some("about".into()))),
             (
@@ -419,6 +457,7 @@ mod tests {
             (request("window.close", "{}"), anyone, METHOD_NOT_FOUND),
             (request("remap.set", r#"{"on":"yes"}"#), anyone, INVALID_PARAMS),
             (request("zone.move", r#"{"dir":"up"}"#), anyone, INVALID_PARAMS),
+            (request("window.swap", r#"{"dir":"next"}"#), anyone, INVALID_PARAMS),
             (request("screen.identify", r#"{"number":-1}"#), anyone, INVALID_PARAMS),
             (request("workspace.switch", "{}"), anyone, INVALID_PARAMS),
             (request("config.patch", r#"{"patch":3}"#), panel, INVALID_PARAMS),

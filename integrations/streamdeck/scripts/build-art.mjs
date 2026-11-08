@@ -63,6 +63,25 @@ const zoneStep = (dir) => (p) => {
   return { ...base, h: 28, svg: base.svg + arrow };
 };
 
+const arrowBelow = (p) =>
+  `<line x1="8" y1="25" x2="24" y2="25" stroke="${p.line}" stroke-width="${p.width}" stroke-linecap="round"/>` +
+  `<polyline points="21,22.5 24,25 21,27.5" fill="none" stroke="${p.line}" stroke-width="${p.width}" stroke-linecap="round" stroke-linejoin="round"/>`;
+
+/** A window on the left screen, and the arrow it moves along. */
+const windowMove = (p) => {
+  const base = mark(p);
+  const window = `<rect x="3" y="6" width="6" height="8" rx="1" fill="${p.line}"/>`;
+  return { ...base, h: 28, svg: base.svg + window + arrowBelow(p) };
+};
+
+/** An outlined window on the left screen, and the filled one focus goes to. */
+const windowFocus = (p) => {
+  const base = mark(p);
+  const from = `<rect x="3.5" y="6.5" width="5" height="7" rx="1" fill="none" stroke="${p.line}" stroke-width="${Math.min(p.width, 1)}"/>`;
+  const to = `<rect x="22" y="5" width="6" height="10" rx="1" fill="${p.line}"/>`;
+  return { ...base, h: 28, svg: base.svg + from + to + arrowBelow(p) };
+};
+
 const place = (glyph, scale, cx, cy) =>
   `<g transform="translate(${cx - (glyph.w * scale) / 2} ${cy - (glyph.h * scale) / 2}) scale(${scale})">${glyph.svg}</g>`;
 
@@ -95,6 +114,8 @@ const actions = {
   "zone-next": { draw: zoneStep("next"), states: ["lit"] },
   "zone-prev": { draw: zoneStep("prev"), states: ["lit"] },
   desk: { draw: mark, states: ["lit"] },
+  "window-move": { draw: windowMove, states: ["lit"] },
+  "window-focus": { draw: windowFocus, states: ["lit"] },
 };
 
 for (const [name, { draw, states }] of Object.entries(actions)) {

@@ -1,7 +1,7 @@
 {
 	"UUID": "co.f3nn3x.seam",
 	"Name": "Seam",
-	"Version": "0.5.0.0",
+	"Version": "0.6.0.0",
 	"Author": "F3NN3X",
 	"Description": "Switch workspaces, line up screens, and pause the pointer remap or the zones from a Stream Deck key. Needs Seam running.",
 	"URL": "https://github.com/F3NN3X/seam",
@@ -131,6 +131,40 @@
 				{
 					"Image": "imgs/actions/zone-prev/key",
 					"Title": "Previous zone",
+					"TitleAlignment": "bottom"
+				}
+			]
+		},
+		{
+			"UUID": "co.f3nn3x.seam.window-move",
+			"Name": "Move window",
+			"Tooltip": "Move the focused window left, right, up or down on the desk, zone to zone and across screens.",
+			"Icon": "imgs/actions/window-move/icon",
+			"PropertyInspectorPath": "ui/direction.html",
+			"Controllers": [
+				"Keypad"
+			],
+			"States": [
+				{
+					"Image": "imgs/actions/window-move/key",
+					"Title": "Move window",
+					"TitleAlignment": "bottom"
+				}
+			]
+		},
+		{
+			"UUID": "co.f3nn3x.seam.window-focus",
+			"Name": "Focus window",
+			"Tooltip": "Focus the nearest window left, right, up or down on the desk.",
+			"Icon": "imgs/actions/window-focus/icon",
+			"PropertyInspectorPath": "ui/direction.html",
+			"Controllers": [
+				"Keypad"
+			],
+			"States": [
+				{
+					"Image": "imgs/actions/window-focus/key",
+					"Title": "Focus window",
 					"TitleAlignment": "bottom"
 				}
 			]

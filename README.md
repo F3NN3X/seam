@@ -22,7 +22,7 @@ When you finish, Seam saves the layout for that exact set of screens and turns o
 
 Open **Zones** in the Seam window, pick a layout for each screen (Columns, Rows, Grid or Priority), and hold **Shift** while you drag a window. The zones show on the screen under the pointer, the one under it turns amber, and letting go snaps the window into it. Hold **Ctrl** as well to cover several zones with one window. Both keys, the gap between zones and whether a window gets its old size back when you drop it outside a zone are on the same page.
 
-**Win+Alt+Right** and **Win+Alt+Left** move the focused window to the next or previous zone, carrying on to the next screen after the last zone. A window that isn't in a zone snaps to the one holding its centre. Layouts belong to the set of screens you have connected, so each desk keeps its own.
+Layouts belong to the set of screens you have connected, so each desk keeps its own.
 
 Windows 11 shows its own snap layouts when you drag a window to the top of the screen. Seam leaves that alone. To turn it off, go to **Settings → System → Multitasking** and switch off "Show snap layouts when I drag a window to the top of my screen".
 
@@ -33,6 +33,16 @@ To make your own layout, press **Edit layout** on the Zones page (or the **Custo
 The editor opens on the screen itself, over its work area, so you line zones up at full size. The Seam window stays in front for Split, Merge and Done. If you'd rather edit in the preview, turn off **Edit layouts on the screen** and the screen shows a live view that clicks pass through.
 
 Experimental: turn on **Keep windows in their zones** on the Zones page and Seam moves snapped windows back into their zones after a screen, resolution or scaling change, or after waking the PC. It's off by default, and windows you've moved since they snapped are left alone.
+
+### Window control
+
+"Left" here means left on your desk, as the screens physically stand, not in Windows' pixel layout. So left from the top of a tall screen beside two stacked ones goes to the upper one.
+
+- **Shift+Win+Alt+arrows** move the focused window. A window in a zone goes to the next zone that way, and at the edge onto the nearest zone of the screen next to it. A window in no zone goes to the next screen, in the same place there.
+- **Ctrl+Shift+Alt+arrows** focus the nearest window that way.
+- **Swap** trades places with the nearest window that way, zones included. It has no key until you set one.
+
+Seam leaves windows from apps running as administrator, windows that aren't responding and its own windows alone. Next and previous zone are still on the Shortcuts page and in the API. New installs give them no key, and an earlier `config.json` keeps the keys it has. Win+Alt+arrows aren't the move keys because some Windows builds hold them already.
 
 ### Workspaces
 
@@ -59,7 +69,9 @@ Running `seam.exe` again while it's already running opens the Seam window. `seam
 
 - **Ctrl+Shift+Alt+L**: Line Up.
 - **Ctrl+Shift+Alt+P**: pause or resume the remap.
-- **Win+Alt+Right** and **Win+Alt+Left**: move the focused window to the next or previous zone.
+- **Shift+Win+Alt+arrows**: move the focused window that way on the desk.
+- **Ctrl+Shift+Alt+arrows**: focus the window that way.
+- Swap, and next or previous zone, have no key until you set one.
 - One per workspace, and one to capture the current windows, all set on the Shortcuts page. Ctrl+Shift+Alt plus a number is a good choice, since Ctrl+Alt alone types characters on many keyboards.
 
 If another app already holds one, Seam keeps running without it.
@@ -72,6 +84,7 @@ A Stream Deck plugin in `integrations/streamdeck` puts Seam on keys. It talks to
 - **Line up screens**: opens Line Up.
 - **Pause or resume remap** and **Zones on or off**: two-state keys that follow Seam, so they stay right when you change a setting elsewhere.
 - **Next zone** and **Previous zone**: move the focused window.
+- **Move window** and **Focus window**: pick a direction in the key's settings. They work as the shortcuts do.
 - **Desk**: shows the active desk's name. Pressing it opens the Displays page.
 
 When Seam isn't running, every key says so and reconnects by itself once it is.

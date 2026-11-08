@@ -5,13 +5,31 @@ import streamDeck, {
 	type SendToPluginEvent,
 } from "@elgato/streamdeck";
 import type { JsonValue } from "@elgato/utils";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { NOT_FOUND, seam, SeamError, type SeamState } from "../seam.js";
 import { SeamAction } from "./seam-action.js";
 
 type Settings = { id?: string; name?: string };
 
-/** The lit key with an amber dot in its corner: in use, but a window of it moved. */
-const DRIFT_IMAGE = "imgs/actions/workspace/key-drift.svg";
+/**
+ * The lit key with an amber dot in its corner: in use, but a window of it moved. Sent
+ * as image data, since Stream Deck doesn't load every file path a plugin passes it.
+ */
+const DRIFT_IMAGE = driftImage();
+
+/** The lit state, the one a workspace in use shows. */
+const LIT = 1;
+
+function driftImage(): string | undefined {
+	try {
+		const file = fileURLToPath(new URL("../imgs/actions/workspace/key-drift.svg", import.meta.url));
+		return `data:image/svg+xml;base64,${readFileSync(file).toString("base64")}`;
+	} catch (error) {
+		streamDeck.logger.warn(`No drift image: ${(error as Error).message}`);
+		return undefined;
+	}
+}
 
 /**
  * Switch to the workspace chosen in the property inspector. Lit while it's the one in use,
@@ -41,13 +59,17 @@ export class SwitchWorkspace extends SeamAction<Settings> {
 		if (on === this.#dotted.has(key.id)) {
 			return;
 		}
+		if (on && !DRIFT_IMAGE) {
+			return;
+		}
+		streamDeck.logger.info(`Workspace key ${key.id}: dot ${on ? "on" : "off"}`);
 		if (on) {
 			this.#dotted.add(key.id);
-			await key.setImage(DRIFT_IMAGE);
+			await key.setImage(DRIFT_IMAGE, { state: LIT });
 		} else {
 			this.#dotted.delete(key.id);
-			// Undefined is the manifest's image for the key's state.
-			await key.setImage();
+			// Undefined is the manifest's image for that state.
+			await key.setImage(undefined, { state: LIT });
 		}
 	}
 

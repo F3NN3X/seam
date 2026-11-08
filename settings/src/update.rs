@@ -16,10 +16,9 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 pub const REPO: &str = "https://github.com/F3NN3X/seam";
 const RELEASES: &str = "https://api.github.com/repos/F3NN3X/seam/releases?per_page=10";
-/// The public half of Seam's minisign key: the second line of `seam.pub`.
-/// It's a placeholder until the key exists. A placeholder isn't a key, so
-/// every check stops at the signature and records why. See packaging/README.md.
-pub const SEAM_PUBLIC_KEY: &str = "REPLACE_WITH_THE_SEAM_MINISIGN_PUBLIC_KEY";
+/// The public half of Seam's minisign key (ID DD3DF0F7CB3ACA88): the second
+/// line of `seam.pub`. See packaging/README.md.
+pub const SEAM_PUBLIC_KEY: &str = "RWSIyjrL9/A93aX1yKj6IwVEqWPJfCHdaObPGMyLiD3ri5I/VvS9FnGQ";
 const EXES: [&str; 2] = ["seam.exe", "seam-settings.exe"];
 const MANIFEST: &str = "latest.json";
 const SIGNATURE: &str = "latest.json.minisig";

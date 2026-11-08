@@ -92,11 +92,15 @@ Add yourself as required reviewer under Settings, Environments, store. Then run 
 
 ## The update key
 
-The GitHub build installs an update only if Seam's minisign key signed its `latest.json`. No key exists yet, so the public key in `settings/src/update.rs` is a placeholder, and every update check stops at the signature and records why. Create the key once, on your machine:
+The GitHub build installs an update only if Seam's minisign key (ID `DD3DF0F7CB3ACA88`) signed its `latest.json`. Its public half is `SEAM_PUBLIC_KEY` in `settings/src/update.rs`, and `release.yml` fails rather than draft a release nobody can update to. The key already exists; these are the steps for a new one. Install minisign and create the key once, on your machine, outside the repository:
 
 ```powershell
+winget install jedisct1.minisign
+# open a new terminal so minisign is on PATH
 minisign -G -p seam.pub -s seam.key
 ```
+
+It asks for a password. That password is `MINISIGN_PASSWORD` below.
 
 Then:
 
@@ -118,13 +122,14 @@ If the secret key might have been exposed, treat the key as lost: make a new pai
 ## Release on GitHub
 
 1. Set `version` to the same number in `Cargo.toml` and `settings/Cargo.toml`. CI fails if the two differ.
-2. Tag it with an annotation. The annotation becomes the release notes, so write them as `- ` bullets:
+2. In `CHANGELOG.md`, move **Unreleased** under a `## [X.Y.Z] - YYYY-MM-DD` heading. That section becomes the release notes, and its `- ` bullets become the notes the updater shows.
+3. Merge that through a pull request, then tag the merge commit on `main` and push the tag:
 
 ```powershell
-git tag -a v0.2.0 -m "- First line of notes`n- Second line"
-git push origin v0.2.0
+git tag v0.4.0
+git push origin v0.4.0
 ```
 
-3. `release.yml` builds, writes and signs `latest.json`, and creates a **draft** release. Look at the draft, then publish it yourself.
+4. `release.yml` checks the versions, the CHANGELOG section and that CI passed for that commit (or the pull request that merged it). Then it builds, writes and signs `latest.json`, and creates a **draft** release. Look at the draft, then publish it yourself.
 
 The draft holds `seam-X.Y.Z-windows-x64.zip`, `seam.exe`, `seam-settings.exe`, `latest.json` and `latest.json.minisig`. A tag with a hyphen (`v0.3.0-beta.1`) makes a pre-release.

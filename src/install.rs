@@ -73,27 +73,30 @@ pub fn kind() -> &'static str {
     }
 }
 
+/// The entry's name. Installers before 0.7 wrote "Seam <version>", which the
+/// updater never changed, so it showed the version of the last setup run.
+const DISPLAY_NAME: &str = "Seam";
+
 /// Write the version the updater just installed into Installed apps, so it
-/// never shows one that isn't running. Nothing to do for any other copy.
+/// never shows one that isn't running, and the plain name over an old
+/// versioned one. Nothing to do for any other copy.
 pub fn note_version(version: &str) -> Result<(), String> {
     if !is_installed_copy() {
         return Ok(());
     }
-    let data: Vec<u16> = version.encode_utf16().chain(std::iter::once(0)).collect();
+    set_string(w!("DisplayVersion"), version)?;
+    set_string(w!("DisplayName"), DISPLAY_NAME)
+}
+
+fn set_string(name: windows::core::PCWSTR, value: &str) -> Result<(), String> {
+    let data: Vec<u16> = value.encode_utf16().chain(std::iter::once(0)).collect();
     let written = unsafe {
-        RegSetKeyValueW(
-            HKEY_CURRENT_USER,
-            &key(),
-            w!("DisplayVersion"),
-            REG_SZ.0,
-            Some(data.as_ptr().cast()),
-            (data.len() * 2) as u32,
-        )
+        RegSetKeyValueW(HKEY_CURRENT_USER, &key(), name, REG_SZ.0, Some(data.as_ptr().cast()), (data.len() * 2) as u32)
     };
     if written == ERROR_SUCCESS {
         Ok(())
     } else {
-        Err(format!("Couldn't write the version to Installed apps ({})", written.0))
+        Err(format!("Couldn't write {value:?} to Installed apps ({})", written.0))
     }
 }
 

@@ -1,12 +1,23 @@
 import streamDeck from "@elgato/streamdeck";
 import { seam } from "./seam.js";
-import { LineUp, NextZone, PreviousZone, PinOnTop, ReleasePinned, Remap, Desk, Zones } from "./actions/simple.js";
+import {
+	LineUp,
+	NextZone,
+	PreviousZone,
+	PinOnTop,
+	ReleasePinned,
+	Remap,
+	Desk,
+	SnapBack,
+	Zones,
+} from "./actions/simple.js";
 import { FocusWindow, MoveWindow } from "./actions/window.js";
 import { SwitchWorkspace } from "./actions/workspace.js";
 
 streamDeck.logger.setLevel("info");
 
 streamDeck.actions.registerAction(new SwitchWorkspace());
+streamDeck.actions.registerAction(new SnapBack());
 streamDeck.actions.registerAction(new LineUp());
 streamDeck.actions.registerAction(new Remap());
 streamDeck.actions.registerAction(new Zones());

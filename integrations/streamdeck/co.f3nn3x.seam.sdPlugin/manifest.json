@@ -1,7 +1,7 @@
 {
 	"UUID": "co.f3nn3x.seam",
 	"Name": "Seam",
-	"Version": "0.6.1.0",
+	"Version": "0.7.1.0",
 	"Author": "F3NN3X",
 	"Description": "Switch workspaces, line up screens, and pause the pointer remap or the zones from a Stream Deck key. Needs Seam running.",
 	"URL": "https://github.com/F3NN3X/seam",
@@ -26,7 +26,7 @@
 		{
 			"UUID": "co.f3nn3x.seam.workspace",
 			"Name": "Switch workspace",
-			"Tooltip": "Switch to a workspace on the current desk. The key lights while that workspace is in use.",
+			"Tooltip": "Switch to a workspace on the current desk. The key lights while that workspace is in use, with an amber dot once a window of it was moved or minimized.",
 			"Icon": "imgs/actions/workspace/icon",
 			"PropertyInspectorPath": "ui/workspace.html",
 			"Controllers": [
@@ -41,6 +41,22 @@
 				{
 					"Image": "imgs/actions/workspace/key-on",
 					"Title": "Workspace",
+					"TitleAlignment": "bottom"
+				}
+			]
+		},
+		{
+			"UUID": "co.f3nn3x.seam.snap-back",
+			"Name": "Snap back",
+			"Tooltip": "Put the windows of the workspace in use back where it puts them.",
+			"Icon": "imgs/actions/snap-back/icon",
+			"Controllers": [
+				"Keypad"
+			],
+			"States": [
+				{
+					"Image": "imgs/actions/snap-back/key",
+					"Title": "Snap back",
 					"TitleAlignment": "bottom"
 				}
 			]

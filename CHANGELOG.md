@@ -12,6 +12,9 @@ All notable changes to Seam. The format follows [Keep a Changelog](https://keepa
 - Launch details per app: a delay of up to 30 s, and waiting for an app's window before the next ones start.
 - **Never include this app** on a workspace's app, and the **Never manage these apps** list on General to take it back.
 - **Pinned windows stay when I switch workspaces**, on the Zones page: a switch leaves a window pinned on top where it is. Off until you turn it on.
+- The workspace editor shows how each app is doing now: in place, moved, minimized, not running, or can't be moved because it runs as administrator. **Put windows back** shows when something moved.
+- **Snap back to this workspace** puts moved and minimized windows back: a shortcut (no key until you set one), `workspace.snap_back` in the API, and a Stream Deck action. A workspace key on the Stream Deck shows an amber dot while its workspace has drifted.
+- **Put apps in place when they open**, on the Workspaces page: an app of the workspace in use that you open by hand goes to its place once. Off until you turn it on.
 
 ### Changed
 

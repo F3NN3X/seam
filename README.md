@@ -62,6 +62,8 @@ Arrange your windows the way you like them, then press **Capture current windows
 
 The workspace's table is an editor, and each change saves at once with Undo. Pick where an app goes, including **Where it is now**, and how it shows: normal, minimized, maximized or full screen. The rows are the start order: drag one by its grip, or press Alt+Up and Alt+Down on it. Click an app's name for its launch details: a delay of up to 30 seconds, and **Wait for this app's window before opening the next**, which shows as a "then wait" line. Apps that are already running are put in place first, and each started app as soon as its window shows. **Add an app** picks one from the windows open now or from the Start menu's apps. The **...** on a row removes the app, or with **Never include this app** also keeps it out of every capture and of the zones. **Never manage these apps** on General lists those apps.
 
+While the page is open, the **Now** column shows how each app is doing: in place, moved, minimized, not running (with "Will open" when the switch would start it), or can't be moved because it runs as administrator. When something moved or was minimized, **Put windows back** puts it back. That's Snap back, which also has a shortcut, **Snap back to this workspace**, and a Stream Deck key. **Put apps in place when they open**, at the bottom of the page, is off until you turn it on. Then an app of the workspace in use that you open by hand goes to its place once, a moment after its window shows. A second window of it, an app the workspace doesn't have, and a window you drag away are left alone.
+
 **Pinned windows stay when I switch workspaces**, on the Zones page, makes a switch leave a window pinned on top alone, like a sticky one, though capture still saves it. It's off until you turn it on.
 
 **Other windows** says what a switch does with everything else on the desk's screens: leave it, minimize it, or close it. Close only asks. Each app gets a normal close request, so one with unsaved work shows its own prompt and stays open. Seam never ends a process.
@@ -91,7 +93,7 @@ Running `seam.exe` again while it's already running opens the Seam window. `seam
 - **Shift+Win+Alt+arrows**: move the focused window that way on the desk.
 - **Ctrl+Shift+Alt+arrows**: focus the window that way.
 - Swap, next or previous zone, and the three pin keys have no key until you set one.
-- One per workspace, and one to capture the current windows, all set on the Shortcuts page. Ctrl+Shift+Alt plus a number is a good choice, since Ctrl+Alt alone types characters on many keyboards.
+- One per workspace, one to capture the current windows, and **Snap back to this workspace**, all set on the Shortcuts page. Ctrl+Shift+Alt plus a number is a good choice, since Ctrl+Alt alone types characters on many keyboards.
 
 If another app already holds one, Seam keeps running without it.
 
@@ -99,7 +101,8 @@ If another app already holds one, Seam keeps running without it.
 
 A Stream Deck plugin in `integrations/streamdeck` puts Seam on keys. It talks to the running Seam over the local API, so **Let other apps control Seam** has to stay on in General. These are its actions:
 
-- **Switch workspace**: pick a workspace on the current desk. The key lights while it's in use.
+- **Switch workspace**: pick a workspace on the current desk. The key lights while it's in use, with an amber dot once a window of it was moved or minimized. Pressing it puts them back.
+- **Snap back**: puts the windows of the workspace in use back.
 - **Line up screens**: opens Line Up.
 - **Pause or resume remap** and **Zones on or off**: two-state keys that follow Seam, so they stay right when you change a setting elsewhere.
 - **Next zone** and **Previous zone**: move the focused window.

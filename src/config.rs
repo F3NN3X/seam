@@ -54,6 +54,8 @@ pub struct Hotkeys {
     pub pin_top: Option<String>,
     pub pin_sticky: Option<String>,
     pub release_all: Option<String>,
+    /// "Snap back to this workspace": switch to the active workspace again.
+    pub snap_back: Option<String>,
 }
 
 impl Default for Hotkeys {
@@ -81,6 +83,7 @@ impl Default for Hotkeys {
             pin_top: None,
             pin_sticky: None,
             release_all: None,
+            snap_back: None,
         }
     }
 }
@@ -270,6 +273,9 @@ pub struct Config {
     pub restore_session: bool,
     /// Who reopens the last session's apps (D128).
     pub restore_apps: RestoreApps,
+    /// "Put apps in place when they open": a window that opens and matches a rule of
+    /// the active workspace goes to its place once (§11.1). Off by default.
+    pub auto_apply: bool,
     /// Windows' `RestartApps` as it was before Seam turned it off, `u32::MAX` if it
     /// wasn't there, or `None` while Seam leaves it alone. Only the tray writes it.
     pub restore_apps_saved: Option<u32>,
@@ -298,6 +304,7 @@ impl Default for Config {
             windows: WindowSettings::default(),
             restore_session: false,
             restore_apps: RestoreApps::Windows,
+            auto_apply: false,
             restore_apps_saved: None,
             updates: UpdateSettings::default(),
             api: ApiSettings::default(),

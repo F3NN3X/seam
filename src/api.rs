@@ -109,6 +109,14 @@ pub enum Command {
         id: String,
         workspace: Value,
     },
+    /// How each app of a workspace on this desk is doing right now.
+    WorkspaceStatus {
+        id: String,
+    },
+    /// Switch to the active workspace again, so drifted windows go back.
+    WorkspaceSnapBack,
+    /// "Put apps in place when they open".
+    AutoApplySet(bool),
     RemapSet(bool),
     ZonesSet(bool),
     ZoneMove(Dir),
@@ -203,6 +211,11 @@ fn command(method: &str, p: &Value) -> Result<Command, RpcError> {
                 .cloned()
                 .ok_or_else(|| RpcError::new(INVALID_PARAMS, "workspace must be an object"))?,
         },
+        "workspace.status" => Command::WorkspaceStatus {
+            id: str_param(p, "id")?.ok_or_else(|| RpcError::new(INVALID_PARAMS, "id is required"))?,
+        },
+        "workspace.snap_back" => Command::WorkspaceSnapBack,
+        "autoapply.set" => Command::AutoApplySet(on_param(p)?),
         "remap.set" => Command::RemapSet(on_param(p)?),
         "zones.set" => Command::ZonesSet(on_param(p)?),
         "zone.move" => match p.get("dir").and_then(Value::as_str) {
@@ -513,6 +526,9 @@ mod tests {
                 anyone,
                 Command::WorkspaceSwitch { id: None, name: Some("Coding".into()) },
             ),
+            (request("workspace.status", r#"{"id":"ws_1"}"#), anyone, Command::WorkspaceStatus { id: "ws_1".into() }),
+            (request("workspace.snap_back", "{}"), anyone, Command::WorkspaceSnapBack),
+            (request("autoapply.set", r#"{"on":true}"#), anyone, Command::AutoApplySet(true)),
             (
                 request("events.subscribe", r#"{"topics":["state"]}"#),
                 anyone,
@@ -556,6 +572,8 @@ mod tests {
             (request("window.swap", r#"{"dir":"next"}"#), anyone, INVALID_PARAMS),
             (request("screen.identify", r#"{"number":-1}"#), anyone, INVALID_PARAMS),
             (request("workspace.switch", "{}"), anyone, INVALID_PARAMS),
+            (request("workspace.status", "{}"), anyone, INVALID_PARAMS),
+            (request("autoapply.set", "{}"), anyone, INVALID_PARAMS),
             (request("config.patch", r#"{"patch":3}"#), panel, INVALID_PARAMS),
             (request("config.patch", r#"{"patch":{}}"#), anyone, FORBIDDEN),
             (request("workspace.update", r#"{"id":"ws_1","workspace":{}}"#), anyone, FORBIDDEN),

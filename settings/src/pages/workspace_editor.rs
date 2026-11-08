@@ -17,11 +17,12 @@ use gpui_kit::component::{Icon, ThemeStyled, WindowExt};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 use seam::state::Screen;
-use seam::workspace::{self, Rule, Shown, Target, WinState, Workspace};
+use seam::workspace::{self, RowState, Rule, Shown, Target, WinState, Workspace};
 use seam::zones;
 use serde_json::json;
 
 const GRIP_WIDTH: f32 = 16.;
+const STATUS_WIDTH: f32 = 120.;
 const GOES_TO_WIDTH: f32 = 200.;
 const LAUNCH_WIDTH: f32 = 56.;
 const MORE_WIDTH: f32 = 32.;
@@ -297,6 +298,27 @@ fn app_icon(rule: &Rule, icons: &Icons, p: Palette) -> Div {
     }
 }
 
+/// What the tray last said about this row's app, while it's about this workspace.
+pub fn row_state(panel: &Panel, ws: &Workspace, i: usize) -> Option<RowState> {
+    let (id, rows) = panel.status.as_ref()?;
+    let row = rows.iter().find(|r| r.rule_index == i).filter(|_| *id == ws.id)?;
+    Some(row.state)
+}
+
+/// The status cell: a dot and a word.
+fn status_cell(state: Option<RowState>, p: Palette) -> Div {
+    let (dot, word) = match state {
+        Some(RowState::InPlace) => (ui::dot(p.positive, true), "In place"),
+        Some(RowState::Moved) => (ui::dot(p.secondary, false), "Moved"),
+        Some(RowState::Minimized) => (ui::dot(p.secondary, false), "Minimized"),
+        Some(RowState::NotRunning) => (ui::dot(p.muted, true), "Not running"),
+        Some(RowState::CantMove) => (ui::dot(p.negative, false), "Can't move: runs as administrator"),
+        None => return div(),
+    };
+    let cell = div().flex().items_center().gap(px(8.));
+    cell.child(dot).child(div().min_w_0().text_size(px(12.)).text_color(p.secondary).child(word))
+}
+
 /// A row being dragged to another place in the start order.
 #[derive(Clone)]
 struct DragRow {
@@ -540,6 +562,17 @@ fn window_row(
             });
         });
 
+    let state = row_state(panel, ws, i);
+    // A closed app that starts with the workspace says so under where it goes.
+    let opens = state == Some(RowState::NotRunning) && rule.launch && ws.launch_missing;
+    let goes = div()
+        .flex()
+        .flex_col()
+        .flex_none()
+        .gap(px(2.))
+        .w(px(GOES_TO_WIDTH))
+        .child(goes_menu(panel, i, ws, screens, cx))
+        .when(opens, |d| d.child(div().text_size(px(12.)).text_color(p.muted).child("Will open")));
     let main = div()
         .flex()
         .items_center()
@@ -549,7 +582,8 @@ fn window_row(
         .child(grip)
         .child(app_icon(rule, &panel.icons, p))
         .child(name)
-        .child(div().flex_none().w(px(GOES_TO_WIDTH)).child(goes_menu(panel, i, ws, screens, cx)))
+        .child(div().flex_none().w(px(STATUS_WIDTH)).child(status_cell(state, p)))
+        .child(goes)
         .child(div().flex().flex_none().justify_center().w(px(LAUNCH_WIDTH)).child(launch))
         .child(div().flex().flex_none().justify_end().w(px(MORE_WIDTH)).child(more_menu(i, ws, &title, cx)));
 
@@ -601,6 +635,7 @@ fn table_head(p: Palette) -> AnyElement {
         .py(px(10.))
         .child(div().flex_none().w(px(GRIP_WIDTH)))
         .child(div().flex_1().child(head("App, in start order")))
+        .child(div().flex_none().w(px(STATUS_WIDTH)).child(head("Now")))
         .child(div().flex_none().w(px(GOES_TO_WIDTH)).child(head("Goes to")))
         .child(div().flex().flex_none().justify_center().w(px(LAUNCH_WIDTH)).child(head("Launch")))
         .child(div().flex_none().w(px(MORE_WIDTH)))

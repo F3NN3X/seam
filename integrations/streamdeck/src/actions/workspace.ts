@@ -5,18 +5,72 @@ import streamDeck, {
 	type SendToPluginEvent,
 } from "@elgato/streamdeck";
 import type { JsonValue } from "@elgato/utils";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { NOT_FOUND, seam, SeamError, type SeamState } from "../seam.js";
 import { SeamAction } from "./seam-action.js";
 
 type Settings = { id?: string; name?: string };
 
-/** Switch to the workspace chosen in the property inspector. Lit while it's the one in use. */
+/**
+ * The lit key with an amber dot in its corner: in use, but a window of it moved. Sent
+ * as image data, since Stream Deck doesn't load every file path a plugin passes it.
+ */
+const DRIFT_IMAGE = driftImage();
+
+/** The lit state, the one a workspace in use shows. */
+const LIT = 1;
+
+function driftImage(): string | undefined {
+	try {
+		const file = fileURLToPath(new URL("../imgs/actions/workspace/key-drift.svg", import.meta.url));
+		return `data:image/svg+xml;base64,${readFileSync(file).toString("base64")}`;
+	} catch (error) {
+		streamDeck.logger.warn(`No drift image: ${(error as Error).message}`);
+		return undefined;
+	}
+}
+
+/**
+ * Switch to the workspace chosen in the property inspector. Lit while it's the one in use,
+ * with a dot while it has drifted. Pressing it then puts the windows back.
+ */
 @action({ UUID: "co.f3nn3x.seam.workspace" })
 export class SwitchWorkspace extends SeamAction<Settings> {
+	/** Keys showing the dot, so the image is only sent when that changes. */
+	readonly #dotted = new Set<string>();
+
 	protected async render(key: KeyAction<Settings>, settings: Settings, state: SeamState): Promise<void> {
-		await key.setState(settings.id && state.workspace?.id === settings.id ? 1 : 0);
+		const active = Boolean(settings.id) && state.workspace?.id === settings.id;
+		await key.setState(active ? 1 : 0);
+		await this.#dot(key, active && state.workspace?.drifted === true);
 		const name = await this.#currentName(settings, state);
 		await key.setTitle(name);
+	}
+
+	protected override async paint(key: KeyAction<Settings>): Promise<void> {
+		if (seam.status !== "online" || !seam.state) {
+			await this.#dot(key, false);
+		}
+		await super.paint(key);
+	}
+
+	async #dot(key: KeyAction<Settings>, on: boolean): Promise<void> {
+		if (on === this.#dotted.has(key.id)) {
+			return;
+		}
+		if (on && !DRIFT_IMAGE) {
+			return;
+		}
+		streamDeck.logger.info(`Workspace key ${key.id}: dot ${on ? "on" : "off"}`);
+		if (on) {
+			this.#dotted.add(key.id);
+			await key.setImage(DRIFT_IMAGE, { state: LIT });
+		} else {
+			this.#dotted.delete(key.id);
+			// Undefined is the manifest's image for that state.
+			await key.setImage(undefined, { state: LIT });
+		}
 	}
 
 	protected async press(_key: KeyAction<Settings>, settings: Settings): Promise<void> {

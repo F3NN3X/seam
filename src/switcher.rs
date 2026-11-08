@@ -329,6 +329,7 @@ fn capture_rules(job: &CaptureJob, session: bool) -> Vec<Rule> {
             focused: c.hwnd == foreground,
             size_px,
             size_mm,
+            captured_on: Some(geo.id.clone()),
             ..Rule::default()
         });
     }
@@ -552,9 +553,9 @@ fn plan(rule: &Rule, geo: &Geo) -> Option<Kind> {
 
 /// Where a rule puts its window, and on which screen. With "Keep its pixel size" or
 /// "Keep its real size", a free place restored on a screen other than the one it was
-/// captured on keeps the pixels or the millimetres it had at capture (§11.4): on its
-/// own screen when the saved fractions no longer give that size, or, with that screen
-/// gone, on the one the window is on now. Then it comes with the line to log once
+/// captured on (`captured_on`, or without it, one where the saved fractions no longer
+/// give that size) keeps the pixels or the millimetres it had at capture (§11.4): on
+/// its own screen, or, with that screen gone, on the one the window is on now. Then it comes with the line to log once
 /// it's moved. `tell` logs a window Windows scales because a screen doesn't report
 /// its size. `None` leaves the window where it is.
 fn destination<'g>(rule: &Rule, geos: &'g [Geo], h: HWND, mode: WindowSize, tell: bool) -> Option<Planned<'g>> {
@@ -576,14 +577,21 @@ fn destination<'g>(rule: &Rule, geos: &'g [Geo], h: HWND, mode: WindowSize, tell
     };
     let kind = plan(rule, geo)?;
     let (Kind::Rect(at) | Kind::Min(at)) = kind else { return Some((geo, kind, None)) };
-    // The screen it was captured on, if the fractions still give the size it had:
+    // Restored on the screen it was captured on. Without that record, the screen
+    // it was captured on is the one whose fractions still give the size it had:
     // in millimetres where both screens report one, else in pixels.
-    let near = |now: [f32; 2], then: [f32; 2]| (0..2).all(|i| (now[i] - then[i]).abs() <= then[i] * SAME_SIZE);
-    let same = match (rule.size_mm, desk::size_mm(at.w, at.h, geo.raw_dpi)) {
-        (Some(then), Some(now)) => near(now, then),
-        _ => px.is_none_or(|then| near([at.w as f32, at.h as f32], then)),
+    let same = match &rule.captured_on {
+        Some(id) => *id == geo.id,
+        None => {
+            let near = |now: [f32; 2], then: [f32; 2]| (0..2).all(|i| (now[i] - then[i]).abs() <= then[i] * SAME_SIZE);
+            let size = match (rule.size_mm, desk::size_mm(at.w, at.h, geo.raw_dpi)) {
+                (Some(then), Some(now)) => near(now, then),
+                _ => px.is_none_or(|then| near([at.w as f32, at.h as f32], then)),
+            };
+            saved.is_some() && size
+        }
     };
-    if saved.is_some() && same {
+    if same {
         return Some((geo, kind, None));
     }
     let size = (f64::from(kept[0]), f64::from(kept[1]));

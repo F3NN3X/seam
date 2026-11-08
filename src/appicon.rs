@@ -75,8 +75,8 @@ unsafe fn read_bitmap(bitmap: HBITMAP) -> Option<Icon> {
 /// BGRA from the shell is premultiplied; undo that and put red first. A bitmap with
 /// no alpha at all is opaque.
 fn straight_rgba(mut px: Vec<u8>) -> Vec<u8> {
-    let opaque = px.chunks_exact(4).all(|p| p[3] == 0);
-    for p in px.chunks_exact_mut(4) {
+    let opaque = px.as_chunks::<4>().0.iter().all(|p| p[3] == 0);
+    for p in px.as_chunks_mut::<4>().0 {
         let a = if opaque { 255 } else { p[3] as u32 };
         let un = |c: u8| if a == 0 || a == 255 { c } else { ((c as u32 * 255 + a / 2) / a).min(255) as u8 };
         let (b, g, r) = (un(p[0]), un(p[1]), un(p[2]));

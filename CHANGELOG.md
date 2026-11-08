@@ -4,6 +4,8 @@ All notable changes to Seam. The format follows [Keep a Changelog](https://keepa
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-11-08
+
 ### Added
 
 - Workspaces: capture which apps sit in which zone, then switch back with a shortcut, the tray menu or the API. Missing apps start, and other windows can be left, minimized or closed.
@@ -12,6 +14,10 @@ All notable changes to Seam. The format follows [Keep a Changelog](https://keepa
 ### Changed
 
 - Releases are signed, so the built-in updater installs them. Versions 0.2.0 and 0.3.0 can't check the signature, so download this version by hand once.
+
+### Security
+
+- Seam's apps check that the program behind Seam's local connection runs as you, and the updater only installs into its own folder. This matters on a PC shared with other Windows accounts.
 
 ## [0.3.0] - 2026-11-05
 

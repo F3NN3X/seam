@@ -49,3 +49,26 @@ jobs:
             target/release/seam.exe
             target/release/seam-settings.exe
           if-no-files-found: error
+      # A broken seam.iss shows up at merge time, not at tag time. The setup is
+      # only kept as an artifact for testing, and goes nowhere else.
+      - name: Install Inno Setup
+        if: github.event_name == 'push'
+        shell: pwsh
+        run: ./packaging/install-inno.ps1
+      - name: Build installer
+        if: github.event_name == 'push'
+        shell: pwsh
+        run: |
+          $id = (Get-Content packaging/installer.json -Raw | ConvertFrom-Json).app_id
+          $version = (Select-String -Path Cargo.toml -Pattern '^version\s*=\s*"([^"]+)"' | Select-Object -First 1).Matches[0].Groups[1].Value
+          New-Item -ItemType Directory -Path dist | Out-Null
+          Copy-Item target/release/seam.exe, target/release/seam-settings.exe dist
+          & $env:ISCC "/DAppVersion=$version" "/DAppId=$id" "/DSourceDir=$PWD\dist" "/O$PWD\dist" packaging\seam.iss
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+      - if: github.event_name == 'push'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: installer
+          path: dist/Seam-Setup-*.exe
+          retention-days: 3
+          if-no-files-found: error

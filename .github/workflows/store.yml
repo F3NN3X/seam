@@ -27,15 +27,32 @@ jobs:
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - name: Short build id
+      # The Store gets the exes the published release holds, so it can't differ
+      # from the GitHub version. Nothing is built here.
+      - name: Download the release's exes
         shell: bash
-        run: echo "SEAM_BUILD=${GITHUB_SHA::7}" >> "$GITHUB_ENV"
-      - run: cargo build --release --workspace
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          mkdir release
+          gh release download "v$VERSION" -D release -p seam.exe -p seam-settings.exe -p latest.json -p latest.json.minisig
+          python - "$VERSION" <<'PY'
+          import hashlib, json, sys
+          manifest = json.load(open("release/latest.json"))
+          if manifest["version"] != sys.argv[1]:
+              sys.exit(f"::error::latest.json is for {manifest['version']}, not {sys.argv[1]}")
+          bad = [f["name"] for f in manifest["files"]
+                 if hashlib.sha256(open(f"release/{f['name']}", "rb").read()).hexdigest() != f["sha256"]]
+          if bad:
+              sys.exit(f"::error::{', '.join(bad)} doesn't match latest.json")
+          PY
       - name: Pack the unsigned -store.msix
         shell: pwsh
         env:
           EXPECT_VERSION: ${{ inputs.version }}
-        run: ./packaging/pack-msix.ps1 -ExpectVersion $env:EXPECT_VERSION
+        run: ./packaging/pack-msix.ps1 -ExpectVersion $env:EXPECT_VERSION -From release
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: store-msix

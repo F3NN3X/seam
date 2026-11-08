@@ -144,6 +144,35 @@ jobs:
         shell: pwsh
         run: Compress-Archive -Path dist/seam.exe, dist/seam-settings.exe, README.md, LICENSE -DestinationPath "dist/seam-$($env:GITHUB_REF_NAME.TrimStart('v'))-windows-x64.zip"
 
+      # Inno Setup 7 isn't on Chocolatey, so this takes the official release at a
+      # pinned version and SHA-256, and ignores any Inno the runner already has.
+      - name: Install Inno Setup
+        shell: pwsh
+        run: ./packaging/install-inno.ps1
+
+      # Built from dist\, the files latest.json hashes. The setup isn't added to
+      # latest.json, because the updater only stages the two exes.
+      - name: Build installer
+        shell: pwsh
+        run: |
+          $id = (Get-Content packaging/installer.json -Raw | ConvertFrom-Json).app_id
+          $version = $env:GITHUB_REF_NAME.TrimStart('v')
+          & $env:ISCC "/DAppVersion=$version" "/DAppId=$id" "/DSourceDir=$PWD\dist" "/O$PWD\dist" packaging\seam.iss
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+
+      # The zip, the setup and the Store package all hold the exes latest.json hashes.
+      - name: The exes are still the ones latest.json hashes
+        shell: bash
+        run: |
+          python - <<'PY'
+          import hashlib, json, sys
+          bad = [f["name"] for f in json.load(open("dist/latest.json"))["files"]
+                 if hashlib.sha256(open(f"dist/{f['name']}", "rb").read()).hexdigest() != f["sha256"]]
+          if bad:
+              print(f"::error::{', '.join(bad)} changed after latest.json was written")
+              sys.exit(1)
+          PY
+
       # A draft only. Publishing is a person's click.
       - name: Draft release
         shell: bash

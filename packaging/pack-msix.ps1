@@ -13,7 +13,10 @@
   -Upload   sends the -store.msix to Partner Center as a draft with msstore
             (publish --noCommit). It never commits the submission.
 
-  Build first: cargo build --release --workspace
+  -From     the folder that holds seam.exe and seam-settings.exe. Defaults to
+            target\release. The Store workflow passes the published release's exes.
+
+  Build first, unless -From is given: cargo build --release --workspace
 #>
 [CmdletBinding()]
 param(
@@ -21,14 +24,15 @@ param(
     [switch]$Install,
     [switch]$Upload,
     # The workflow passes the version it was asked for, so a mismatch stops the run.
-    [string]$ExpectVersion
+    [string]$ExpectVersion,
+    [string]$From
 )
 
 $ErrorActionPreference = 'Stop'
 if ($Install) { $Sign = $true }
 
 $root = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
-$release = Join-Path $root 'target\release'
+$release = if ($From) { (Resolve-Path $From).Path } else { Join-Path $root 'target\release' }
 $work = Join-Path $root 'target\msix'
 $layout = Join-Path $work 'layout'
 $dist = Join-Path $root 'dist'
@@ -60,7 +64,7 @@ if ($placeholder) {
 }
 
 foreach ($exe in 'seam.exe', 'seam-settings.exe') {
-    if (-not (Test-Path (Join-Path $release $exe))) { throw "$exe is missing from target\release. Run: cargo build --release --workspace" }
+    if (-not (Test-Path (Join-Path $release $exe))) { throw "$exe is missing from $release. Run: cargo build --release --workspace" }
 }
 
 # 4. Stage a clean layout. No VFS: both exes sit at the package root.

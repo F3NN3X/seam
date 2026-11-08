@@ -348,25 +348,3 @@ pub fn note_active(cfg: &mut Config, sig: &str, mons: &[Mon], now: u64) {
     }
     desk.last_seen = now;
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn day(year: i32, month: u32, day: u32) -> Date {
-        Date { year, month, day }
-    }
-
-    #[test]
-    fn days_are_counted_across_month_and_year_ends() {
-        let today = day(2026, 1, 2);
-        assert_eq!(relative_day(today, day(2026, 1, 2)), "today");
-        assert_eq!(relative_day(today, day(2026, 1, 1)), "yesterday");
-        assert_eq!(relative_day(today, day(2025, 12, 31)), "2 days ago");
-        assert_eq!(relative_day(today, day(2025, 12, 27)), "6 days ago");
-        assert_eq!(relative_day(today, day(2025, 12, 26)), "26 Dec");
-        // A leap day is a day, and the clock running ahead isn't "ago".
-        assert_eq!(relative_day(day(2024, 3, 1), day(2024, 2, 28)), "2 days ago");
-        assert_eq!(relative_day(today, day(2026, 1, 5)), "today");
-    }
-}

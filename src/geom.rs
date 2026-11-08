@@ -423,6 +423,8 @@ mod tests {
     fn window_is_centred_and_kept_on_its_screen() {
         // A screen left of the primary has a negative origin.
         assert_eq!(centre_in(&Rect::new(-1920, 0, 1920, 1040), 1160, 780), Rect::new(-1540, 130, 1160, 780));
+        // A short, wide screen keeps its width and loses only height.
+        assert_eq!(centre_in(&Rect::new(3833, 2178, 1920, 550), 1178, 827), Rect::new(4204, 2178, 1178, 550));
         // A screen smaller than the window shrinks it rather than overhanging.
         assert_eq!(centre_in(&Rect::new(100, 50, 1024, 700), 1160, 780), Rect::new(100, 50, 1024, 700));
     }

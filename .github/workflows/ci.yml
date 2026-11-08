@@ -22,6 +22,7 @@ on:
 
 permissions:
   contents: read
+  pull-requests: read
 
 # A newer push to the same pull request replaces the run. Runs on main queue.
 concurrency:
@@ -29,7 +30,38 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  # What a pull request touches, so a docs-only change skips the builds. A job
+  # skipped by its `if` counts as passed for the ruleset's required checks; the
+  # release gate still wants a real pass, and a version bump always builds.
+  # Everything but a pull request builds everything.
+  changes:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      rust: ${{ steps.filter.outputs.rust }}
+      streamdeck: ${{ steps.filter.outputs.streamdeck }}
+    steps:
+      - id: filter
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ github.event.pull_request.number }}
+        run: |
+          if [ -z "$PR" ]; then
+            echo "rust=true" >> "$GITHUB_OUTPUT"; echo "streamdeck=true" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          files=$(gh api "repos/$GITHUB_REPOSITORY/pulls/$PR/files" --paginate --jq '.[].filename')
+          echo "$files"
+          docs='(\.md$|^docs/|^LICENSE$)'
+          plugin='^integrations/streamdeck/'
+          rust=false; streamdeck=false
+          if echo "$files" | grep -Ev "$docs" | grep -Evq "$plugin"; then rust=true; fi
+          if echo "$files" | grep -Ev "$docs" | grep -Eq "$plugin|^\.github/workflows/ci\.yml$"; then streamdeck=true; fi
+          echo "rust=$rust" >> "$GITHUB_OUTPUT"; echo "streamdeck=$streamdeck" >> "$GITHUB_OUTPUT"
+          echo "rust=$rust streamdeck=$streamdeck"
+
   build:
+    needs: changes
+    if: needs.changes.outputs.rust == 'true'
     runs-on: windows-latest
     timeout-minutes: 30
     steps:
@@ -75,6 +107,8 @@ jobs:
   # code they cover is the same on both, so this only has to compile and lint.
   # Required next to `build`, by the ruleset and the release gate.
   arm64:
+    needs: changes
+    if: needs.changes.outputs.rust == 'true'
     runs-on: windows-latest
     timeout-minutes: 30
     steps:
@@ -98,10 +132,10 @@ jobs:
       - if: github.event_name != 'pull_request'
         run: cargo build --release --workspace --target aarch64-pc-windows-msvc
 
-  # The Stream Deck plugin, from its lockfile, with the scripts it defines. Runs
-  # on every change: it takes about a minute, and a paths filter would need an
-  # extra action for a check nothing is waiting on.
+  # The Stream Deck plugin, from its lockfile, with the scripts it defines.
   streamdeck:
+    needs: changes
+    if: needs.changes.outputs.streamdeck == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     defaults:

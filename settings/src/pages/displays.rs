@@ -154,6 +154,7 @@ fn border_rows(panel: &Panel, state: &State, p: Palette) -> Vec<AnyElement> {
         let link = panel.links.iter().find(|l| (l.a + 1, l.b + 1) == (a, other));
         let no_size = [a, other].into_iter().find(|n| panel.mons.get(n - 1).is_some_and(|m| m.raw_dpi <= 0.));
         let detail = match (link, no_size) {
+            (Some(l), _) if l.not_on_desk => "The pointer stops at this edge".to_string(),
             (Some(l), _) => format!("Scale {:.2}, offset {:+.0} px", l.map.s, l.map.o),
             (None, Some(n)) => format!("Screen {n} reports no size. Line up guesses a scale of 1"),
             (None, None) => "Line up this border to set it".to_string(),
@@ -186,7 +187,9 @@ fn border_rows(panel: &Panel, state: &State, p: Palette) -> Vec<AnyElement> {
                     .w(px(BORDER_NAME_WIDTH))
                     .child(div().text_size(px(14.)).line_height(px(20.)).child(format!("Screen {a} to screen {other}")))
                     .child(ui::description(
-                        if b.glued {
+                        if b.not_on_desk {
+                            "Not on your desk".to_string()
+                        } else if b.glued {
                             format!("Glued to the {} edge of {a}", edge(b.side).to_lowercase())
                         } else {
                             format!("{} edge of {a}", edge(b.side))

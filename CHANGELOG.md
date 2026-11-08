@@ -8,6 +8,7 @@ All notable changes to Seam. The format follows [Keep a Changelog](https://keepa
 
 - **Glue** in Line Up: screens that touch on your desk but have a gap between them in Windows can be glued with G, and the pointer crosses the gap where they physically meet. Align arrangement keeps glued screens apart, and Displays marks a glued border "Glued to the right edge of 1". `glued` on a border in `config.json` and in the state's `borders`.
 - A glued edge holds the pointer until you push about 60 px past it, so an auto-hide taskbar on that edge still shows.
+- **Not on your desk** in Line Up: press N on a border Windows has but your desk doesn't, and the pointer stops there, or crosses to a glued screen past that edge. Displays shows such a border as "Not on your desk". `not_on_desk` on a border in `config.json` and in the state's `borders`.
 - **Set as default** on a workspace's "..." menu: when no workspace is remembered, it's the one in use when Seam starts. `workspace.set_default` in the API, and `default` in `workspaces.list`.
 - A **Help** page in the Seam window, with a topic for each part of Seam and a button to its page. Search finds the topics by their text.
 - Seam can turn on Windows' **Ease cursor movement between displays** for you: the Seam window asks once while it's off, and the Displays alert has **Turn it on**. Seam never turns it off. `cursor_easing.set` in the API, and `windows_cursor_easing` in the state.

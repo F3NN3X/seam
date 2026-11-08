@@ -103,6 +103,20 @@ Two steps move a screen in Display settings. Ask before moving a screen, and not
 - [ ] **Close the gap (ask before moving a screen).** Glue it again and finish. Then drag screen 4 back against screen 1 in Display settings. The border still resolves, crossings land where the lines meet, and after another Line Up the border keeps `"glued": true`.
 - [ ] **Put it back.** Restore the arrangement you noted, and check the original three borders resolve.
 
+## Not on your desk
+
+On my desk the panel (screen 3) touches the U3477 (screen 4) in Windows, 18 px below the 4K, but sits under the 4K on the desk, glued to it.
+
+- [ ] **Line Up offers N.** Open Line Up and go to the screen 4 to screen 3 border. Under the tips, screen 3 reads "Screen 3 doesn't touch screen 4 on your desk? Press N, and Seam stops the pointer crossing here".
+- [ ] **N turns it on.** Press N. Screen 3 reads "Screen 3 doesn't touch screen 4 on your desk", and screen 4 says Seam stops the pointer crossing here. The lines and edges dim, and dragging, arrows, Tab and R do nothing. Press N again and it's back as it was.
+- [ ] **Saving.** Press N and finish. In `config.json` the 4 to 3 border has `"not_on_desk": true`, and no other border has that key. Open Line Up again: the step starts with N on.
+- [ ] **Up off the panel.** Push slowly up off the panel where the 4K is above it on the desk. The pointer rests at the edge, never lands on the U3477, and after about 60 px enters the 4K where the glue lines meet. A quick flick crosses at once.
+- [ ] **Blocked where no glue maps.** Push up off the right part of the panel, past where the 4K ends on the desk. The pointer stays at the edge and never reaches the U3477. Push down off the bottom of the U3477 over the panel: it stays on the U3477.
+- [ ] **Off means Windows.** Press N to turn it off and finish. Going up off the panel under the U3477 lands on the U3477 again, as Windows has it.
+- [ ] **Displays.** With it on, the 4 to 3 row reads "Not on your desk" and "The pointer stops at this edge". On the map the panel sits under the 4K, not under the U3477.
+- [ ] **Align.** With it on, Align arrangement doesn't move the panel to match the 4 to 3 border.
+- [ ] **Games and remote input.** In a game that confines the pointer, or over Remote Desktop, the pointer moves between screen 4 and the panel as Windows has it.
+
 ## Zones
 
 Set up first: on Zones, pick **Priority** for screen 1 and **Grid** for screen 2, with **Shift** to show and **Ctrl** to span.

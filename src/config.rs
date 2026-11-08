@@ -23,6 +23,10 @@ pub struct SavedBorder {
     /// border holds while `b` stays beyond that side of `a`.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub glued: bool,
+    /// The screens touch in Windows but not on the desk, so the pointer stops
+    /// at this border instead of crossing it.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub not_on_desk: bool,
 }
 
 /// What a left-click on the tray icon does.
@@ -511,7 +515,7 @@ mod tests {
     use crate::geom::Rect;
 
     fn border(a: &str, b: &str, side: Side, s: f64, o: f64) -> SavedBorder {
-        SavedBorder { a: a.into(), b: b.into(), side, map: EdgeMap { s, o }, glued: false }
+        SavedBorder { a: a.into(), b: b.into(), side, map: EdgeMap { s, o }, glued: false, not_on_desk: false }
     }
 
     fn mon(name: &str) -> Mon {

@@ -4,7 +4,7 @@
 //! The hook lives on its own high-priority thread with its own message loop, so
 //! UI work like painting the overlay can never delay mouse input.
 
-use crate::layout::{decide, Crossing, Live, Push};
+use crate::layout::{decide, Crossing, Live, Move, Push};
 use crate::log;
 use std::cell::Cell;
 use std::sync::mpsc::{channel, Sender};
@@ -132,25 +132,29 @@ fn run_command(cmd: usize) {
     });
 }
 
-/// Where this move should land, unless the pointer is confined.
-fn crossing(from: (i32, i32), pt: (i32, i32)) -> Option<Crossing> {
+/// What to do with this move, unless the pointer is confined.
+fn crossing(from: (i32, i32), pt: (i32, i32)) -> Option<Move> {
     let live = LIVE.try_read().ok()?;
     // Most moves cross nothing, so only then pay for the system call.
-    let c = decide(&live, from, pt)?;
-    (!cursor_is_confined(&live)).then_some(c)
+    let m = decide(&live, from, pt)?;
+    (!cursor_is_confined(&live)).then_some(m)
 }
 
 /// Where this move should put the pointer, with the crossing if it crosses. A
-/// glued crossing waits at the edge until the push past it adds up.
+/// glued crossing waits at the edge until the push past it adds up, and a
+/// border that isn't on the desk keeps the pointer at the edge.
 fn target(from: (i32, i32), pt: (i32, i32)) -> Option<((i32, i32), Option<Crossing>)> {
-    let c = crossing(from, pt);
+    let m = crossing(from, pt);
+    let c = match m {
+        Some(Move::Cross(c)) => Some(c),
+        _ => None,
+    };
     let (push, go) = PUSH.get().after(c.as_ref());
     PUSH.set(push);
-    let c = c?;
-    if go {
-        Some((c.to, Some(c)))
-    } else {
-        c.hold.map(|at| (at, None))
+    match m? {
+        Move::Block(at) => Some((at, None)),
+        Move::Cross(c) if go => Some((c.to, Some(c))),
+        Move::Cross(c) => c.hold.map(|at| (at, None)),
     }
 }
 

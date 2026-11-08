@@ -216,6 +216,7 @@ Seam has a built-in updater that only installs releases signed with Seam's key. 
    - Arrow keys nudge the selected line (Shift moves 10 px, Ctrl moves both). Tab switches lines. R resets to the guess from your monitors' EDID.
    - The pointer already follows your lines while you adjust, so move it across the border to check.
    - **G** glues two screens that touch on your desk but have a gap between them in Windows. Line Up asks about each such pair after the touching borders. Pairs whose sizes put them side by side start glued, and the rest start off and are skipped unless you press G. Glued screens get the same two lines.
+   - **N** marks two screens that touch in Windows but not on your desk. Seam then stops the pointer at that border instead of letting it cross, and the lines dim. Press N again to undo it.
    - **Enter** goes to the next border, or finishes after the last one. **Backspace** goes back, **Esc** cancels.
 4. **Pick zone layouts.** Open **Zones**, pick a layout for each screen, and hold Shift while you drag a window.
 5. **Capture a workspace.** Arrange your windows, open **Workspaces**, and press **Capture current windows**. Give it a shortcut on the Shortcuts page.
@@ -236,6 +237,9 @@ Without it, Windows blocks the pointer from leaving a screen at a point that has
 
 **My screens touch on the desk, but Windows has a gap between them. Can the pointer cross it?**
 Yes, if you glue them in Line Up. When the pointer goes past the edge into the gap, Seam carries it to where the other screen physically continues. The pointer rests at the edge until you push about 60 px past it, so an auto-hide taskbar on that edge still shows. If Windows has another screen under the pointer there, that screen wins. Align arrangement keeps the gap, and refuses a move that would take a glued screen out from beyond its partner's edge.
+
+**Windows has two screens touching that don't on my desk**
+Press N on that border in Line Up. Seam stops the pointer there, both ways, as if Windows had a gap. If you've glued another screen past that edge, the pointer goes there instead, after the same push as any glued edge. Align arrangement never moves a screen to match that border, and Displays lists it as "Not on your desk".
 
 **Why can't Seam move some windows?**
 Windows doesn't let a normal app move the windows of an app running as administrator. Seam skips them in zones, window control and workspaces, tells you once when that happens, and shows "can't be moved" in the workspace editor. Run the app without administrator rights if you can.

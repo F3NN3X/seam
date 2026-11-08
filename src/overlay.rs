@@ -691,35 +691,50 @@ unsafe fn paint(hwnd: HWND, idx: usize) {
             let last = c.cur + 1 == c.steps.len();
             let (a, b) = (step.a + 1, step.b + 1);
             let next = if last { "done" } else { "next border" };
+            // Where B is from A, and the reverse, in desk words: "straight below" reads
+            // better than "continues across the bezel" when the screens are far apart.
+            let (b_from_a, a_from_b, lands) = match step.side {
+                Side::Bottom => ("below", "above", "straight below"),
+                Side::Top => ("above", "below", "straight above"),
+                Side::Right => ("to the right", "to the left", "level with"),
+                Side::Left => ("to the left", "to the right", "level with"),
+            };
             let msg = match (role_b, step.glue) {
                 (true, Some(false)) => format!(
                     "Glue screen {b} to screen {a}?\n\n\
-                     Do this if the two screens touch on your desk. Windows has a gap between them, \
-                     so today the pointer stops at the edge.\n\n\
-                     1. Press G to glue them.\n\
-                     2. Line them up like any other border: drag the lines here until each one \
-                     continues the matching line on screen {a}, straight across the bezel.\n\
-                     3. Press Enter.\n\n\
+                     Do this if this screen touches screen {a} on your desk. Windows has a gap \
+                     between them, so today the pointer stops at the edge.\n\n\
+                     Press G, then line them up as they stand on your desk.\n\n\
                      Enter: skip   ·   Backspace: back   ·   Esc: cancel"
                 ),
                 (true, glue) => format!(
                     "{title}\n\n\
-                     Drag the lines on this screen until each one continues straight across the bezel from screen {a}.\n\
-                     Grab a line to move just that one. Drag anywhere else to move both.\n\n\
+                     Screen {a}, {a_from_b}, has a blue line 1 and a pink line 2.\n\
+                     Move this screen's blue line 1 until it sits {lands} screen {a}'s blue line, \
+                     as if one line ran across both screens. Then do the same with the pink line 2.{gap}\n\n\
+                     Grab a line to move just that one, or drag anywhere else to move both.\n\
                      Arrows nudge  ·  Shift ×10  ·  Ctrl = both  ·  Tab switches line  ·  R resets\n\
-                     The pointer already follows your lines, so try crossing as you go.{unglue}\n\n\
+                     The pointer follows your lines already, so cross over to check.{unglue}\n\n\
                      Enter: {next}   ·   Backspace: back   ·   Esc: cancel",
                     title = if glue.is_some() {
                         format!("Glue screen {b} to screen {a}")
                     } else {
                         format!("Line up screen {b} with screen {a}")
                     },
+                    gap = if glue.is_some() {
+                        "\nThe gap doesn't matter: line them up as the screens stand on your desk."
+                    } else {
+                        ""
+                    },
                     unglue = if glue.is_some() { "\nG unglues them" } else { "" },
                 ),
-                (false, Some(false)) => {
-                    format!("Reference screen\n\nScreen {b} may touch this one on your desk. Look at screen {b} to glue them.")
-                }
-                (false, _) => format!("Reference screen\n\nThe lines here stay put. Adjust the matching lines on screen {b}."),
+                (false, Some(false)) => format!(
+                    "Reference screen\n\nScreen {b}, {b_from_a}, may touch this one on your desk. Look at screen {b} to glue them."
+                ),
+                (false, _) => format!(
+                    "Reference screen\n\nThe blue and pink lines here stay put.\n\
+                     On screen {b}, {b_from_a}, move its lines until each sits {lands} the matching line here."
+                ),
             };
             text(mem, &msg, center, (20.0 * s) as i32, false, (226, 230, 238), DT_CENTER | DT_WORDBREAK, true);
         } else {

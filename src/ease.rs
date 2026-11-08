@@ -6,7 +6,7 @@
 //! turns it on, and only when asked to.
 
 use windows::core::{w, PCWSTR};
-use windows::Win32::Foundation::{ERROR_FILE_NOT_FOUND, ERROR_SUCCESS, LPARAM, WPARAM};
+use windows::Win32::Foundation::{ERROR_FILE_NOT_FOUND, ERROR_SUCCESS, LPARAM, WIN32_ERROR, WPARAM};
 use windows::Win32::System::Registry::*;
 use windows::Win32::UI::WindowsAndMessaging::*;
 
@@ -30,9 +30,16 @@ pub fn read() -> Option<bool> {
             Some(&mut size),
         )
     };
+    // Only a missing value needs the build.
+    let build = if code == ERROR_FILE_NOT_FOUND { crate::winver::build().parse().ok() } else { None };
+    interpret(code, value, build)
+}
+
+/// What a registry read means: the value if there was one, else on from `FIRST_BUILD`.
+fn interpret(code: WIN32_ERROR, value: u32, build: Option<u32>) -> Option<bool> {
     match code {
         ERROR_SUCCESS => Some(value != 0),
-        ERROR_FILE_NOT_FOUND => (crate::winver::build().parse::<u32>().ok()? >= FIRST_BUILD).then_some(true),
+        ERROR_FILE_NOT_FOUND => (build? >= FIRST_BUILD).then_some(true),
         _ => None,
     }
 }
@@ -55,10 +62,14 @@ pub fn turn_on() -> Result<(), String> {
             size_of::<u32>() as u32,
         )
     };
-    if code == ERROR_SUCCESS {
+    if code != ERROR_SUCCESS {
+        return Err(format!("Windows didn't save the setting ({})", code.0));
+    }
+    // Something may have put it back, so read it again.
+    if read() == Some(true) {
         Ok(())
     } else {
-        Err(format!("Windows didn't save the setting ({})", code.0))
+        Err("Windows didn't keep Ease cursor movement on".into())
     }
 }
 
@@ -81,5 +92,21 @@ pub fn announce() {
             Some(&mut result),
         );
         crate::log::info!("cursor easing: WM_SETTINGCHANGE sent {}", sent.0 != 0);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use windows::Win32::Foundation::ERROR_ACCESS_DENIED;
+
+    #[test]
+    fn a_missing_value_is_on_only_from_the_first_build() {
+        assert_eq!(interpret(ERROR_SUCCESS, 0, None), Some(false));
+        assert_eq!(interpret(ERROR_SUCCESS, 1, None), Some(true));
+        assert_eq!(interpret(ERROR_FILE_NOT_FOUND, 1, Some(FIRST_BUILD)), Some(true));
+        assert_eq!(interpret(ERROR_FILE_NOT_FOUND, 1, Some(FIRST_BUILD - 1)), None);
+        assert_eq!(interpret(ERROR_FILE_NOT_FOUND, 1, None), None);
+        assert_eq!(interpret(ERROR_ACCESS_DENIED, 1, Some(FIRST_BUILD)), None);
     }
 }

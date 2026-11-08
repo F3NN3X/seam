@@ -38,13 +38,13 @@ const ENTRIES: &[Entry] = &[
         Page::Zones,
         "Focus border colour",
         "Windows accent follows Settings > Personalisation > Colours",
-        "swatch amber blue teal green red pink white",
+        "swatch none custom hex amber blue teal green red pink white",
     ),
     entry(
         Page::Zones,
         "Pin border colour",
         "Border of a window pinned on top or kept out of workspace switches",
-        "swatch amber blue teal green red pink white sticky topmost",
+        "swatch none custom hex amber blue teal green red pink white sticky topmost",
     ),
     entry(
         Page::Zones,

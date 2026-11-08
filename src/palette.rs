@@ -1,5 +1,6 @@
-//! The border colours the tray paints and the panel offers (D118). The config
-//! keeps a name, so the colours can change here without touching saved settings.
+//! The border colours the tray paints and the panel offers (D118, D122). The config
+//! keeps a name, "none" or a `#RRGGBB` colour, so the named colours can change here
+//! without touching saved settings.
 
 /// One choice in a swatch row. `rgb` is 0xRRGGBB, and None means Windows' accent colour.
 pub struct Swatch {
@@ -8,6 +9,8 @@ pub struct Swatch {
     pub rgb: Option<u32>,
 }
 
+/// The value for "leave the border alone".
+pub const NONE: &str = "none";
 pub const FOCUS_DEFAULT: &str = "accent";
 pub const PIN_DEFAULT: &str = "amber";
 
@@ -22,10 +25,48 @@ pub static SWATCHES: [Swatch; 8] = [
     Swatch { name: "white", title: "White", rgb: Some(0xF2F2F2) },
 ];
 
-/// The swatch called `name`, or the one called `default` if there is none.
-pub fn find(name: &str, default: &str) -> &'static Swatch {
-    let by_name = |n: &str| SWATCHES.iter().find(|s| s.name == n);
-    by_name(name).or_else(|| by_name(default)).unwrap_or(&SWATCHES[0])
+/// What a config value asks for.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Colour {
+    /// Seam leaves that border alone.
+    None,
+    /// Windows' accent colour, read when it is painted.
+    Accent,
+    Rgb(u32),
+}
+
+/// `#RRGGBB` as 0xRRGGBB. Nothing else counts: no short form, no alpha.
+pub fn parse_hex(value: &str) -> Option<u32> {
+    let hex = value.strip_prefix('#')?;
+    if hex.len() != 6 || !hex.bytes().all(|b| b.is_ascii_hexdigit()) {
+        return None;
+    }
+    u32::from_str_radix(hex, 16).ok()
+}
+
+/// "none", a swatch name or `#RRGGBB`.
+fn parse(value: &str) -> Option<Colour> {
+    if value == NONE {
+        return Some(Colour::None);
+    }
+    if let Some(rgb) = parse_hex(value) {
+        return Some(Colour::Rgb(rgb));
+    }
+    SWATCHES.iter().find(|s| s.name == value).map(|s| s.rgb.map_or(Colour::Accent, Colour::Rgb))
+}
+
+/// The colour a config value stands for, or the default's if it isn't one.
+pub fn colour(value: &str, default: &str) -> Colour {
+    parse(value).or_else(|| parse(default)).unwrap_or(Colour::Accent)
+}
+
+/// The value to keep: a hex colour in upper case, or the default for a value that isn't a colour.
+pub fn normalise(value: &str, default: &str) -> String {
+    match (parse_hex(value), parse(value)) {
+        (Some(rgb), _) => format!("#{rgb:06X}"),
+        (None, Some(_)) => value.to_string(),
+        (None, None) => default.to_string(),
+    }
 }
 
 /// 0xRRGGBB as a COLORREF (0x00BBGGRR), which is what DWM takes. The swap is
@@ -65,11 +106,13 @@ pub fn accent_colorref() -> Option<u32> {
     Some(colorref(argb & 0x00FF_FFFF))
 }
 
-/// The colour to paint for a config value, as a COLORREF. The accent is read now.
+/// The colour to paint for a config value, as a COLORREF, or None to leave the
+/// border alone. The accent is read now.
 #[cfg(windows)]
-pub fn resolve(name: &str, default: &str) -> u32 {
-    match find(name, default).rgb {
-        Some(rgb) => colorref(rgb),
-        None => accent_colorref().unwrap_or(windows::Win32::Graphics::Dwm::DWMWA_COLOR_DEFAULT),
+pub fn resolve(value: &str, default: &str) -> Option<u32> {
+    match colour(value, default) {
+        Colour::None => None,
+        Colour::Rgb(rgb) => Some(colorref(rgb)),
+        Colour::Accent => Some(accent_colorref().unwrap_or(windows::Win32::Graphics::Dwm::DWMWA_COLOR_DEFAULT)),
     }
 }

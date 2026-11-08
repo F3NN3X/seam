@@ -160,7 +160,8 @@ pub struct WindowSettings {
     pub focus_border: bool,
     /// "Another window manager handles my windows" (D110).
     pub other_wm: bool,
-    /// A name from `palette::SWATCHES`. An unknown one reads as the default (D118).
+    /// "none", a name from `palette::SWATCHES` or `#RRGGBB`. Anything else reads as
+    /// the default (D118, D122).
     pub focus_color: String,
     pub pin_color: String,
 }
@@ -340,7 +341,10 @@ impl Config {
         for (action, _) in hotkeys.filter(|(_, value)| value.is_null()) {
             merged["hotkeys"][action] = serde_json::Value::Null;
         }
-        serde_json::from_value(merged)
+        let mut config: Config = serde_json::from_value(merged)?;
+        config.windows.focus_color = palette::normalise(&config.windows.focus_color, palette::FOCUS_DEFAULT);
+        config.windows.pin_color = palette::normalise(&config.windows.pin_color, palette::PIN_DEFAULT);
+        Ok(config)
     }
 
     pub fn path() -> PathBuf {

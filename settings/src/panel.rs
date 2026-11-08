@@ -101,6 +101,12 @@ pub struct Panel {
     /// The name field should take focus when it next draws.
     pub focus_name: bool,
     pub name_input: Entity<InputState>,
+    /// The custom colour field under a swatch row: which `windows` setting it sets, and
+    /// whether what was typed was refused. It takes focus when it next draws.
+    pub colour_open: Option<&'static str>,
+    pub colour_invalid: bool,
+    pub colour_focus: bool,
+    pub colour_input: Entity<InputState>,
     /// The Gap slider. It sends the new gap when it's let go.
     pub gap: Entity<SliderState>,
     pub search: Entity<InputState>,
@@ -134,6 +140,7 @@ impl Panel {
         let page = page.or(saved.and_then(|s| Page::from_arg(s.trim()))).unwrap_or(Page::Displays);
         let search = cx.new(|cx| InputState::new(window, cx).placeholder("Search"));
         let name_input = cx.new(|cx| InputState::new(window, cx).placeholder("Workspace name"));
+        let colour_input = cx.new(|cx| InputState::new(window, cx).placeholder("#RRGGBB"));
         let gap =
             cx.new(|_| SliderState::new().min(0.).max(32.).step(2.).default_value(Config::default().zones.gap as f32));
         let subscriptions = vec![
@@ -149,6 +156,11 @@ impl Panel {
             cx.subscribe_in(&name_input, window, |this, _, event: &InputEvent, window, cx| {
                 if matches!(event, InputEvent::PressEnter { .. } | InputEvent::Blur) {
                     pages::workspaces::finish_naming(this, window, cx);
+                }
+            }),
+            cx.subscribe_in(&colour_input, window, |this, _, event: &InputEvent, window, cx| {
+                if matches!(event, InputEvent::PressEnter { .. } | InputEvent::Blur) {
+                    pages::zones::finish_colour(this, window, cx);
                 }
             }),
             cx.subscribe_in(&search, window, |this, input, event: &InputEvent, _, cx| {
@@ -192,6 +204,10 @@ impl Panel {
             naming: false,
             focus_name: false,
             name_input,
+            colour_open: None,
+            colour_invalid: false,
+            colour_focus: false,
+            colour_input,
             gap,
             search,
             focus,

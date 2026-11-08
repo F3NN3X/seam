@@ -108,7 +108,7 @@ pub struct WmState {
     /// "Another window manager handles my windows" is on.
     pub manual_other_wm: bool,
     pub focus_border: bool,
-    /// The swatch names in use, from `palette::SWATCHES`.
+    /// The colour settings as stored: "none", a swatch name or `#RRGGBB`.
     pub focus_color: String,
     pub pin_color: String,
 }

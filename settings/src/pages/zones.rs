@@ -4,6 +4,7 @@ use crate::pages::zone_editor;
 use crate::panel::Panel;
 use crate::theme::{palette, Palette};
 use crate::ui::{self, card, row, section, switch};
+use gpui_kit::component::input::Input;
 use gpui_kit::component::slider::Slider;
 use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::component::ThemeStyled;
@@ -122,18 +123,68 @@ fn tile(
         .into_any_element()
 }
 
-/// What a swatch is filled with. Windows' accent is read here, and None means
-/// it couldn't be, so the swatch is neutral and says "A".
-fn swatch_fill(swatch: &colours::Swatch) -> Option<Hsla> {
-    let hex = match swatch.rgb {
-        Some(hex) => hex,
-        None => colours::colorref(colours::accent_colorref()?),
-    };
-    Some(rgb(hex).into())
+/// One swatch in a row: "none" first, the named colours, then the custom one.
+enum Choice {
+    None,
+    Named(&'static colours::Swatch),
+    Custom,
+}
+
+impl Choice {
+    fn all() -> impl Iterator<Item = Choice> {
+        [Choice::None].into_iter().chain(colours::SWATCHES.iter().map(Choice::Named)).chain([Choice::Custom])
+    }
+
+    fn key(&self) -> &'static str {
+        match self {
+            Choice::None => colours::NONE,
+            Choice::Named(s) => s.name,
+            Choice::Custom => "custom",
+        }
+    }
+
+    fn title(&self) -> &'static str {
+        match self {
+            Choice::None => "None",
+            Choice::Named(s) => s.title,
+            Choice::Custom => "Custom colour",
+        }
+    }
+
+    fn selected(&self, chosen: &str) -> bool {
+        match self {
+            Choice::Custom => chosen.starts_with('#'),
+            other => other.key() == chosen,
+        }
+    }
+
+    /// What the swatch is filled with. Windows' accent is read here, and None means
+    /// there is no colour to show: a neutral swatch with a glyph instead.
+    fn fill(&self, chosen: &str) -> Option<Hsla> {
+        let hex = match self {
+            Choice::None => return None,
+            Choice::Named(s) => match s.rgb {
+                Some(hex) => hex,
+                None => colours::colorref(colours::accent_colorref()?),
+            },
+            Choice::Custom => colours::parse_hex(chosen)?,
+        };
+        Some(rgb(hex).into())
+    }
+
+    /// Shown on a neutral swatch that isn't chosen.
+    fn glyph(&self) -> &'static str {
+        match self {
+            Choice::None => "/",
+            Choice::Named(_) => "A",
+            Choice::Custom => "+",
+        }
+    }
 }
 
 /// A row of round swatches for one `windows` colour setting. A swatch is one
-/// tab stop, and Enter or Space picks it. Off, the row shows `why` and does nothing.
+/// tab stop, and Enter or Space picks it. Off, the row shows `why_off` and does nothing.
+/// The custom swatch opens the colour field instead of picking.
 fn swatches(
     prefix: &'static str,
     field: &'static str,
@@ -144,12 +195,12 @@ fn swatches(
     cx: &mut Context<Panel>,
 ) -> Div {
     let p = palette(cx);
-    let chosen = colours::find(current, default).name;
+    let chosen = colours::normalise(current, default);
     let mut group = div().flex().items_center().gap(px(4.));
-    for swatch in &colours::SWATCHES {
-        let selected = swatch.name == chosen;
-        let id = ElementId::Name(format!("swatch-{prefix}-{}", swatch.name).into());
-        let fill = swatch_fill(swatch);
+    for choice in Choice::all() {
+        let selected = choice.selected(&chosen);
+        let id = ElementId::Name(format!("swatch-{prefix}-{}", choice.key()).into());
+        let fill = choice.fill(&chosen);
         let dot = div()
             .flex()
             .items_center()
@@ -160,7 +211,7 @@ fn swatches(
             .border_color(p.hairline_strong)
             .bg(fill.unwrap_or(p.raised))
             .text_size(px(12.))
-            .when(fill.is_none() && !selected, |d| d.text_color(p.secondary).child("A"))
+            .when(fill.is_none() && !selected, |d| d.text_color(p.secondary).child(choice.glyph()))
             .when(selected, |d| {
                 // Black or white, whichever reads better on the swatch.
                 let ink = fill.map_or(p.text, |f| {
@@ -174,7 +225,7 @@ fn swatches(
                 });
                 d.text_color(ink).child("✓")
             });
-        let tip = why_off.unwrap_or(swatch.title);
+        let tip = why_off.unwrap_or(choice.title());
         let mut face = div()
             .id(id.clone())
             .p(px(2.))
@@ -182,20 +233,29 @@ fn swatches(
             .child(dot)
             .tooltip(move |window, cx| Tooltip::new(tip).build(window, cx));
         if why_off.is_none() {
-            let name = swatch.name;
+            let custom = matches!(choice, Choice::Custom);
+            let value = choice.key();
+            let own = chosen.starts_with('#').then(|| chosen.clone());
             let focus = window.use_keyed_state(id, cx, |_, cx| cx.focus_handle()).read(cx).clone();
             let pick = move |panel: &mut Panel, window: &mut Window, cx: &mut Context<Panel>| {
-                panel.patch(json!({ "windows": { field: name } }), window, cx)
+                if custom {
+                    open_colour(panel, field, own.clone().unwrap_or_default(), window, cx);
+                } else {
+                    panel.colour_open = None;
+                    panel.patch(json!({ "windows": { field: value } }), window, cx);
+                }
             };
+            let pick = Rc::new(pick);
+            let (click, key) = (pick.clone(), pick);
             face = face
                 .track_focus(&focus)
                 .tab_index(0)
                 .cursor_pointer()
                 .when(selected || ui::focused(&focus, window), |d| d.focus_ring_style(window, cx))
-                .on_click(cx.listener(move |panel, _, window, cx| pick(panel, window, cx)))
+                .on_click(cx.listener(move |panel, _, window, cx| click(panel, window, cx)))
                 .on_key_down(cx.listener(move |panel, e: &KeyDownEvent, window, cx| {
                     if matches!(e.keystroke.key.as_str(), "space" | "enter") {
-                        pick(panel, window, cx);
+                        key(panel, window, cx);
                     }
                 }));
         } else {
@@ -204,6 +264,61 @@ fn swatches(
         group = group.child(face);
     }
     group
+}
+
+/// Show the colour field under the row for `field`, holding the custom colour if there is one.
+fn open_colour(panel: &mut Panel, field: &'static str, text: String, window: &mut Window, cx: &mut Context<Panel>) {
+    panel.colour_open = Some(field);
+    panel.colour_invalid = false;
+    panel.colour_focus = true;
+    panel.colour_input.update(cx, |input, cx| input.set_value(text, window, cx));
+    cx.notify();
+}
+
+/// Enter or leaving the field: save a valid `#RRGGBB`, or show that it isn't one and
+/// keep the colour as it was. A field left empty just closes.
+pub fn finish_colour(panel: &mut Panel, window: &mut Window, cx: &mut Context<Panel>) {
+    let Some(field) = panel.colour_open else { return };
+    let text = panel.colour_input.read(cx).value().trim().to_string();
+    if text.is_empty() {
+        panel.colour_open = None;
+    } else if let Some(hex) = colours::parse_hex(&text) {
+        panel.colour_open = None;
+        panel.patch(json!({ "windows": { field: format!("#{hex:06X}") } }), window, cx);
+    } else {
+        panel.colour_invalid = true;
+    }
+    cx.notify();
+}
+
+/// The `#RRGGBB` field under a swatch row, when it is open for that row.
+fn colour_field(panel: &mut Panel, field: &'static str, window: &mut Window, cx: &mut Context<Panel>) -> Option<Div> {
+    if panel.colour_open != Some(field) {
+        return None;
+    }
+    let p = palette(cx);
+    if panel.colour_focus {
+        panel.colour_input.update(cx, |input, cx| input.focus(window, cx));
+        panel.colour_focus = false;
+    }
+    let invalid = panel.colour_invalid;
+    let input = div()
+        .w(px(120.))
+        .rounded(px(8.))
+        .border_1()
+        .border_color(if invalid { p.negative } else { hsla(0., 0., 0., 0.) })
+        .child(Input::new(&panel.colour_input));
+    let note = if invalid { "Use six hex digits, like #FFB020" } else { "Enter or leave the field to save" };
+    Some(
+        div()
+            .flex()
+            .items_center()
+            .gap(px(12.))
+            .px(px(16.))
+            .pb(px(12.))
+            .child(input)
+            .child(div().text_size(px(13.)).text_color(if invalid { p.negative } else { p.secondary }).child(note)),
+    )
 }
 
 /// The screen the page is showing, with the layout saved for it on this desk.
@@ -453,16 +568,23 @@ pub fn render(panel: &mut Panel, window: &mut Window, cx: &mut Context<Panel>) -
         focus_swatches,
         p,
     );
+    let pin_colour_row = row(
+        "Pin border colour",
+        Some("Border of a window pinned on top or kept out of workspace switches".into()),
+        pin_swatches,
+        p,
+    );
+    let focus_field = colour_field(panel, "focus_color", window, cx).filter(|_| border_off.is_none());
+    let pin_field = colour_field(panel, "pin_color", window, cx);
     let windows_card = card(
         vec![
             row("Focus border", Some("Colour the border of the window that has focus".into()), border, p),
-            div().when(border_off.is_some(), |d| d.opacity(0.4)).child(focus_colour_row).into_any_element(),
-            row(
-                "Pin border colour",
-                Some("Border of a window pinned on top or kept out of workspace switches".into()),
-                pin_swatches,
-                p,
-            ),
+            div()
+                .when(border_off.is_some(), |d| d.opacity(0.4))
+                .child(focus_colour_row)
+                .children(focus_field)
+                .into_any_element(),
+            div().child(pin_colour_row).children(pin_field).into_any_element(),
             row("Another window manager handles my windows", Some(other_about.into()), manual, p),
         ],
         p,

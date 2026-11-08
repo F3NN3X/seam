@@ -19,7 +19,7 @@ use seam::state::{
 };
 use seam::workspace::{self, Workspace};
 use seam::zones;
-use seam::{autostart, install, package, palette, process, updates};
+use seam::{autostart, install, package, process, updates};
 use serde_json::{json, Value};
 use std::cell::RefCell;
 use std::os::windows::process::CommandExt;
@@ -388,8 +388,8 @@ fn snapshot(app: &App) -> Snapshot {
             other_wm: app.other_wm.map(String::from),
             manual_other_wm: app.cfg.windows.other_wm,
             focus_border: app.cfg.windows.focus_border,
-            focus_color: palette::find(&app.cfg.windows.focus_color, palette::FOCUS_DEFAULT).name.into(),
-            pin_color: palette::find(&app.cfg.windows.pin_color, palette::PIN_DEFAULT).name.into(),
+            focus_color: app.cfg.windows.focus_color.clone(),
+            pin_color: app.cfg.windows.pin_color.clone(),
         },
         desk: DeskRef { sig: app.sig.clone(), name: saved_name.unwrap_or_else(|| desk::default_name(&app.mons)) },
         screens: screens.collect(),

@@ -31,11 +31,12 @@ enum Job {
     Opened(isize),
     /// A switch finished, so the windows that opened during it get their turn.
     SwitchEnded,
-    /// These windows now hold these rows of the workspace with this stamp key, and
-    /// no other window holds one of its rows.
+    /// These windows now hold these rows of the workspace with this stamp key. With
+    /// `whole`, no other window holds one of its rows; otherwise none holds these rows.
     Stamp {
         key: u32,
         windows: Vec<(isize, usize)>,
+        whole: bool,
     },
     /// The workspace's rows moved: what was row i is row `moves[i]` now, or gone.
     Restamp {
@@ -81,9 +82,10 @@ pub fn switch_ended() {
     send(Job::SwitchEnded);
 }
 
-/// Stamp windows a capture saved with their rows, as a switch does.
-pub fn stamp(key: u32, windows: Vec<(isize, usize)>) {
-    send(Job::Stamp { key, windows });
+/// Stamp windows a capture saved with their rows, as a switch does. `whole` for a
+/// capture of every row, so the workspace's stamps on other windows are stale.
+pub fn stamp(key: u32, windows: Vec<(isize, usize)>, whole: bool) {
+    send(Job::Stamp { key, windows, whole });
 }
 
 /// Move the stamps of a workspace whose rows were reordered, removed or added.
@@ -112,7 +114,7 @@ fn work(jobs: Receiver<Job>) {
         let batch: Vec<Job> = std::iter::once(first).chain(jobs.try_iter()).collect();
         for job in &batch {
             match job {
-                Job::Stamp { key, windows } => stamp_windows(*key, windows),
+                Job::Stamp { key, windows, whole } => stamp_windows(*key, windows, *whole),
                 Job::Restamp { key, moves } => restamp_windows(*key, moves),
                 _ => {}
             }
@@ -152,8 +154,12 @@ fn stamped(key: u32) -> impl Iterator<Item = (HWND, usize)> {
     stamps.filter_map(move |(h, stamp)| stamp.filter(|(k, _)| *k == key).map(|(_, row)| (h, row)))
 }
 
-fn stamp_windows(key: u32, windows: &[(isize, usize)]) {
-    for (h, _) in stamped(key).filter(|(h, _)| !windows.iter().any(|(w, _)| *w == h.0 as isize)) {
+fn stamp_windows(key: u32, windows: &[(isize, usize)], whole: bool) {
+    let stale = |(h, row): &(HWND, usize)| {
+        let ours = windows.iter().any(|(w, _)| *w == h.0 as isize);
+        !ours && (whole || windows.iter().any(|(_, r)| r == row))
+    };
+    for (h, _) in stamped(key).filter(stale) {
         winutil::clear_ws_stamp(h);
     }
     for (hwnd, row) in windows {

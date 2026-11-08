@@ -313,7 +313,8 @@ fn list_card(
     i: usize,
     ws: &Workspace,
     icons: &Icons,
-    active: bool,
+    // Some while it's the workspace in use, saying whether its windows drifted.
+    active: Option<bool>,
     picked: bool,
     p: Palette,
     cx: &mut Context<Panel>,
@@ -325,7 +326,7 @@ fn list_card(
         .justify_between()
         .gap(px(8.))
         .child(div().text_size(px(14.)).font_weight(FontWeight::MEDIUM).truncate().child(ws.name.clone()))
-        .when(active, |d| d.child(div().text_size(px(12.)).text_color(p.muted).child("in use")));
+        .children(active.map(|drifted| active_badge(drifted, p)));
     let detail = div()
         .flex()
         .items_center()
@@ -342,8 +343,15 @@ fn list_card(
         .rounded(px(12.))
         .border_1()
         .cursor_pointer()
-        .when(picked, |d| d.bg(p.raised).border_color(p.hairline_strong))
-        .when(!picked, |d| d.bg(p.card).border_color(p.hairline).hover(|d| d.bg(p.raised)))
+        // Picked is a neutral step up, in use is amber, and both is a stronger amber.
+        .map(|d| match (active.is_some(), picked) {
+            (true, true) => d.bg(p.accent.opacity(0.16)).border_color(p.accent),
+            (true, false) => {
+                d.bg(p.accent.opacity(0.08)).border_color(p.accent.opacity(0.5)).hover(|d| d.bg(p.accent.opacity(0.12)))
+            }
+            (false, true) => d.bg(p.raised).border_color(p.hairline_strong),
+            (false, false) => d.bg(p.card).border_color(p.hairline).hover(|d| d.bg(p.raised)),
+        })
         .child(name)
         .child(detail)
         .on_click(cx.listener(move |panel, _, _, cx| {
@@ -352,6 +360,19 @@ fn list_card(
             panel.editing.expanded = None;
             cx.notify();
         }))
+        .into_any_element()
+}
+
+/// The badge on the card of the workspace in use.
+fn active_badge(drifted: bool, p: Palette) -> AnyElement {
+    div()
+        .flex_none()
+        .px(px(8.))
+        .rounded(px(8.))
+        .bg(p.accent.opacity(0.16))
+        .text_size(px(12.))
+        .text_color(p.accent_text)
+        .child(if drifted { "Active, moved" } else { "Active" })
         .into_any_element()
 }
 
@@ -520,7 +541,7 @@ pub fn render(panel: &mut Panel, window: &mut Window, cx: &mut Context<Panel>) -
         .on_click(cx.listener(|panel, _, window, cx| capture(panel, window, cx)));
     let rules: Vec<Rule> = list.iter().flat_map(|ws| ws.windows.iter().cloned()).collect();
     icons::request(panel, &rules, cx);
-    let active = panel.state.as_ref().and_then(|s| s.workspace.as_ref()).map(|w| w.id.clone());
+    let active = panel.state.as_ref().and_then(|s| s.workspace.as_ref()).map(|w| (w.id.clone(), w.drifted));
     let current = selected(panel);
     // A workspace on show for the first time asks how its apps are doing.
     let known = panel.status.as_ref().map(|(id, _)| id.as_str());
@@ -532,7 +553,8 @@ pub fn render(panel: &mut Panel, window: &mut Window, cx: &mut Context<Panel>) -
         .enumerate()
         .map(|(i, ws)| {
             let picked = current.as_ref().is_some_and(|c| c.id == ws.id);
-            list_card(i, ws, &panel.icons, active.as_deref() == Some(ws.id.as_str()), picked, p, cx)
+            let in_use = active.as_ref().filter(|(id, _)| *id == ws.id).map(|(_, drifted)| *drifted);
+            list_card(i, ws, &panel.icons, in_use, picked, p, cx)
         })
         .collect();
     // The dashed frame has nothing else on it, so the hover fill sits on the button inside.

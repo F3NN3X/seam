@@ -852,6 +852,8 @@ fn captured(app: &mut App) {
     let mut before = None;
     // The row each captured window has now, when the save stamps them.
     let mut rows = None;
+    // "Where it is now" stamps its one window.
+    let mut stamps = None;
     let saved = match &job.into {
         Some(into) => {
             let Some(old) = existing.iter().find(|w| w.id == *into) else {
@@ -859,7 +861,10 @@ fn captured(app: &mut App) {
             };
             let updated = match job.row {
                 Some(row) => match workspace::recapture_row(old, row, &rules) {
-                    Some(updated) => updated,
+                    Some((updated, hit)) => {
+                        stamps = Some(vec![(hwnds[hit], row)]);
+                        updated
+                    }
                     None => return answer(refused("That app isn't open, so where it goes stays as it was")),
                 },
                 None => {
@@ -890,8 +895,12 @@ fn captured(app: &mut App) {
     };
     persist(app);
     // The saved windows hold their rows, as after a switch, so drift and auto-apply see them at once.
+    let key = workspace::stamp_key(&saved.id);
     if let Some(rows) = rows {
-        live::stamp(workspace::stamp_key(&saved.id), hwnds.into_iter().zip(rows).collect());
+        live::stamp(key, hwnds.into_iter().zip(rows).collect(), true);
+    } else if let Some(windows) = stamps {
+        // The drift check comes below, once the worker has the updated workspace.
+        live::stamp(key, windows, false);
     }
     if job.quick {
         let created = before.is_none();
@@ -944,7 +953,10 @@ fn update_workspace(app: &mut App, id: &str, sent: Value) -> Reply {
     let patch = json!({ "desks": { app.sig.clone(): { "workspaces": list } } });
     let moves = workspace::moved_rows(&old.windows, &checked.windows);
     let reply = patch_config(app, &patch);
-    // Windows a switch or auto-apply stamped keep the app they were stamped for.
+    // Windows a switch or auto-apply stamped keep the app they were stamped for. The
+    // worker already has the new rows by now, so a window it stamps in between is
+    // remapped from the wrong row. That needs a window to open in those microseconds,
+    // and the next switch stamps everything again.
     let unmoved = moves.len() == checked.windows.len() && moves.iter().enumerate().all(|(i, m)| *m == Some(i));
     if reply.is_ok() && !unmoved {
         live::restamp(workspace::stamp_key(id), moves);

@@ -520,8 +520,8 @@ pub fn moved_rows(old: &[Rule], new: &[Rule]) -> Vec<Option<usize>> {
 }
 
 /// "Where it is now" for one row: the place of the window a capture has for it,
-/// or `None` when the app has no window open.
-pub fn recapture_row(old: &Workspace, row: usize, fresh: &[Rule]) -> Option<Workspace> {
+/// and which of the capture's windows that is, or `None` when the app has no window open.
+pub fn recapture_row(old: &Workspace, row: usize, fresh: &[Rule]) -> Option<(Workspace, usize)> {
     let rule = old.windows.get(row)?;
     let hit = assign(std::slice::from_ref(rule), &as_candidates(fresh)).into_iter().next().flatten()?;
     let from = &fresh[hit as usize];
@@ -530,7 +530,7 @@ pub fn recapture_row(old: &Workspace, row: usize, fresh: &[Rule]) -> Option<Work
         updated.windows.iter_mut().for_each(|r| r.focused = false);
     }
     updated.windows[row].take_place(from);
-    Some(updated)
+    Some((updated, hit as usize))
 }
 
 /// The rows a switch starts, in start order, cut into stages. A stage ends at a

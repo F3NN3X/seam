@@ -246,13 +246,14 @@ Use the 4-screen desk with Priority zones on screen 1.
 
 - [ ] **Page.** Workspaces is in the sidebar with no "planned" note. With none saved on this desk it shows "No workspaces for <desk> yet" and a **Capture current windows** button.
 - [ ] **Capture.** Open Windows Terminal (packaged), Notepad or another Win32 app, and Discord (Squirrel). Put them in zones and press **Capture current windows**. A workspace named "Workspace 1" is selected with its name field open and focused. Type a name and press Enter. The table lists the three apps with the right screen and zone, the tray's own windows and the Seam window are not in it, and `config.json` holds the workspace under `desks[...].workspaces`.
-- [ ] **Switch from closed.** Close all three apps and press **Switch now**. Each starts (Terminal and Discord through their AUMID), lands in its zone, and the card says "in use". `workspace.switched` has `launched` 3.
+- [ ] **Switch from closed.** Close all three apps and press **Switch now**. Each starts (Terminal and Discord through their AUMID), lands in its zone, and the card shows the "Active" badge. `workspace.switched` has `launched` 3.
 - [ ] **Two Firefox windows.** Capture two Firefox windows in different zones, close them, switch. Each lands in its own zone.
 - [ ] **Maximized.** Capture a maximized window, switch. It comes back maximized on its screen, and un-maximizing gives its saved normal size.
 - [ ] **Other windows.** Set **Leave**: nothing else changes. Set **Minimize**: other windows on this desk's screens minimize, and the Seam window doesn't. Set **Close** with an unsaved Notepad document: Notepad asks to save and nothing else is closed.
 - [ ] **Unticked app.** Untick Launch on an app, close it, switch. It isn't started, and nothing is reported as an error.
 - [ ] **Hung app.** Switch while an app is hung. Seam stays responsive, the other windows still land, and the log's hook timing line doesn't move.
-- [ ] **Newer switch wins.** Switch to one workspace, then another straight away. The second one finishes and only it is "in use".
+- [ ] **Newer switch wins.** Switch to one workspace, then another straight away. The second one finishes and only its card is marked active.
+- [ ] **Active card.** In dark and in light mode, the card of the workspace in use has a faint amber fill, an amber border and an "Active" badge right after its name, readable in both modes. Pick another card: it gets the neutral raised fill and a grey border, and the active one keeps its amber. Pick the active card: its fill and border turn a stronger amber, so active, picked, and both are told apart. Move one of its windows: within a second the badge reads "Active, moved", and after **Put windows back** it reads "Active" again. With no workspace in use (plug a screen in or out), no card has the badge or the amber.
 - [ ] **Hotkeys.** On Shortcuts, give each workspace a shortcut (Ctrl+Shift+Alt+1, +2). Both work with the Seam window closed, and the tray submenu shows them at the right.
 - [ ] **Conflict.** Give two workspaces the same shortcut. The second shows the red keycaps and the conflict line, and `hotkey_errors` has `workspace:<id>`.
 - [ ] **Capture shortcut.** Set one for **Capture current windows** and press it. A balloon says it saved, and clicking it opens Workspaces.
@@ -322,6 +323,7 @@ Each change below saves at once, with no Save button, and shows a notification w
 - [ ] **Rename and switches.** Rename, the shortcut on Shortcuts, **Start missing apps** and **Other windows** still save, without a notice.
 - [ ] **Refused.** With the tray stopped, change anything: "Seam isn't running" shows and nothing changes. In `config.json`, give a rule a zone the screen's layout doesn't have, then rename the workspace: that still saves, and the rule keeps its zone.
 - [ ] **Not the panel.** A test client that isn't the panel gets error 4 from `workspace.update`.
+- [ ] **Where it is now stamps.** With **Put apps in place when they open** off, add an app with **Add an app** to the workspace in use, open it by hand, put it where you want it and pick **Where it is now** on its row. Drag it away: its row shows "Moved" within a second and the log has `workspace <id>: drifted`, without a switch first.
 - [ ] **Reorder with windows open.** Turn the debug log on, switch to the workspace so its apps are placed, then drag the first row below the second. The log has `workspace rows changed: 2 stamps moved, 0 cleared`. Turn **Put apps in place when they open** on, close the app that is now first and open it again: it goes to its own place, not the other app's. Remove a row whose app is running: the log has `1 cleared`, and dragging that app's window no longer marks the workspace as drifted. Rename the workspace: no `workspace rows changed` line.
 
 ### Adding an app

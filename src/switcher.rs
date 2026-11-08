@@ -46,7 +46,7 @@ const LAUNCH_POLL: Duration = Duration::from_secs(1);
 /// What `skipped` says about an app whose window didn't show in time.
 const TOOK_TOO_LONG: &str = "Took too long to open";
 /// What `skipped` says about an app whose program runs with no window.
-const RUNS_IN_BACKGROUND: &str = "Running in the background";
+const RUNS_IN_BACKGROUND: &str = "Running in background";
 /// How often an arranging switch looks for windows that have appeared.
 const ARRANGE_POLL: Duration = Duration::from_millis(500);
 /// Time for an app to react to a move before the next step.

@@ -10,7 +10,7 @@ Seam makes the pointer cross exactly where your screens physically meet, snaps w
 
 [![Latest release](https://img.shields.io/github/v/release/F3NN3X/seam?style=flat-square)](https://github.com/F3NN3X/seam/releases/latest)
 [![CI](https://img.shields.io/github/actions/workflow/status/F3NN3X/seam/ci.yml?branch=main&style=flat-square&label=CI)](https://github.com/F3NN3X/seam/actions/workflows/ci.yml)
-[![License](https://img.shields.io/github/license/F3NN3X/seam?style=flat-square)](LICENSE)
+[![License](https://img.shields.io/badge/license-MIT-blue?style=flat-square)](LICENSE)
 [![Downloads](https://img.shields.io/github/downloads/F3NN3X/seam/total?style=flat-square)](https://github.com/F3NN3X/seam/releases)
 ![Windows 11](https://img.shields.io/badge/Windows-11-0078D4?style=flat-square)
 

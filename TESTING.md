@@ -505,6 +505,18 @@ Finishing Line Up with the setting on calls `SetDisplayConfig` only if the plan 
 - [ ] **Setting off.** Untick it and finish Line Up. The log shows `arrangement skipped: setting is off`.
 - [ ] **Undo in Settings.** Only if an arrangement was actually applied: drag the screens back in Display settings, press Apply, and confirm the log shows `display change` and borders resolve again. If a screen no longer touches on its calibrated side, the log shows `dropped` for that border.
 
+## Workspace app icons
+
+Needs workspaces on this desk that hold the apps below.
+
+- [ ] **Win32 apps.** A workspace with a few desktop apps (Notepad, Firefox, Explorer) shows each app's own icon in a 16 px row under the name, in the order of the rules. The "n windows" caption is gone. Hover an icon: the tooltip is the app name the detail table shows.
+- [ ] **Store apps.** Add Windows Terminal and Calculator. Each shows its logo, not a blank or generic icon.
+- [ ] **Exe gone.** Rename or uninstall an app a workspace holds. Its slot shows a grey rounded square, no error or toast, and the other icons are unaffected.
+- [ ] **Many apps.** A workspace with 12 different apps shows eight icons and "+4". Two windows of the same app show one icon.
+- [ ] **Light and dark.** Switch Windows between light and dark. The placeholder and the "+n" are readable in both, and icons with transparent corners show no black or white fringe.
+- [ ] **150% scaling.** Set display scaling to 150%. Icons are sharp, not blurry, and still 16 logical px.
+- [ ] **No stall.** Open the Workspaces page with a workspace of many apps. The page draws at once and the icons fill in a moment later.
+
 ## Report back
 
 For each failure, give the step, what you saw, and the matching lines from `seam.log`.

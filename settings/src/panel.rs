@@ -97,6 +97,8 @@ pub struct Panel {
     pub screen_window: Option<pages::screen_editor::Shown>,
     /// The workspace the Workspaces page shows, by id. `None` shows the first.
     pub workspace: Option<String>,
+    /// App icons for the workspace list, loaded as they are first needed.
+    pub icons: crate::icons::Icons,
     /// The name field is open on the selected workspace.
     pub naming: bool,
     /// The name field should take focus when it next draws.
@@ -207,6 +209,7 @@ impl Panel {
             editor: None,
             screen_window: None,
             workspace: None,
+            icons: Default::default(),
             naming: false,
             focus_name: false,
             name_input,

@@ -33,6 +33,12 @@ const WM_APP_COMMAND: u32 = WM_APP + 21;
 const WM_APP_EVENT: u32 = WM_APP + 22;
 /// How often to look for another window manager.
 const CHECK_EVERY_MS: u32 = 30_000;
+/// Apps such as Chromium and Windows Terminal set their own border colour, often on
+/// focus. After a focus change Seam paints again this long after, and once more later.
+const REPAINT_FIRST_MS: u32 = 100;
+const REPAINT_SECOND_MS: u32 = 500;
+/// While a pin exists or the focus border is on, how often to paint them again.
+const REFRESH_EVERY_MS: u32 = 2_000;
 /// The first Windows 11 build, the first with `DWMWA_BORDER_COLOR`.
 const BORDER_BUILD: u32 = 22000;
 
@@ -117,15 +123,16 @@ fn wm_thread() -> u32 {
             let mut wm = Wm::default();
             wm.adopt();
             wm.check();
-            let _ = SetTimer(None, 0, CHECK_EVERY_MS, None);
+            wm.check_timer = SetTimer(None, 0, CHECK_EVERY_MS, None);
             while GetMessageW(&mut msg, None, 0, 0).as_bool() {
                 match msg.message {
                     WM_APP_COMMAND => wm.run(*Box::from_raw(msg.lParam.0 as *mut Command)),
                     WM_APP_EVENT => wm.event(msg.wParam.0 as u32, HWND(msg.lParam.0 as *mut _)),
-                    WM_TIMER => {
+                    WM_TIMER if msg.wParam.0 == wm.check_timer => {
                         wm.check();
                         wm.write_stats();
                     }
+                    WM_TIMER => wm.timer(msg.wParam.0),
                     _ => {}
                 }
             }
@@ -237,6 +244,14 @@ struct Wm {
     pinned: Vec<isize>,
     foreground_hook: Option<HWINEVENTHOOK>,
     destroy_hook: Option<HWINEVENTHOOK>,
+    /// The window that had focus at the last foreground event.
+    foreground: Option<isize>,
+    /// Windows to paint again after a focus change, and which of the two repaints is next.
+    repaint: Vec<isize>,
+    repaint_second: bool,
+    check_timer: usize,
+    repaint_timer: usize,
+    refresh_timer: usize,
     other_wm: Option<&'static str>,
     stats: Stats,
 }
@@ -262,11 +277,30 @@ fn sync_hook(slot: &mut Option<HWINEVENTHOOK>, event: u32, wanted: bool) {
 }
 
 impl Wm {
-    /// Only what a feature that is on needs: focus changes for the border,
-    /// closed windows while anything is pinned.
+    /// Only what a feature that is on needs: focus changes for the border and for
+    /// pins that apps may paint over, closed windows while anything is pinned, and
+    /// the refresh timer while either applies.
     fn sync_hooks(&mut self) {
-        sync_hook(&mut self.foreground_hook, EVENT_SYSTEM_FOREGROUND, self.focus_border && borders_supported());
+        let painting = (self.focus_border || !self.pinned.is_empty()) && borders_supported();
+        sync_hook(&mut self.foreground_hook, EVENT_SYSTEM_FOREGROUND, painting);
         sync_hook(&mut self.destroy_hook, EVENT_OBJECT_DESTROY, !self.pinned.is_empty());
+        match (painting, self.refresh_timer) {
+            (true, 0) => self.refresh_timer = unsafe { SetTimer(None, 0, REFRESH_EVERY_MS, None) },
+            (false, id) if id != 0 => {
+                let _ = unsafe { KillTimer(None, id) };
+                self.refresh_timer = 0;
+                self.stop_repaint();
+            }
+            _ => {}
+        }
+    }
+
+    fn stop_repaint(&mut self) {
+        if self.repaint_timer != 0 {
+            let _ = unsafe { KillTimer(None, self.repaint_timer) };
+            self.repaint_timer = 0;
+        }
+        self.repaint.clear();
     }
 
     /// A tray that starts again keeps the pins it finds, and takes back borders
@@ -353,10 +387,72 @@ impl Wm {
         }
     }
 
+    /// Run `work`, and count it in the stats while logging.
+    fn timed(&mut self, work: impl FnOnce(&mut Self)) {
+        let started = log::enabled().then(Instant::now);
+        work(self);
+        if let Some(started) = started {
+            let ns = started.elapsed().as_nanos() as u64;
+            let s = &mut self.stats;
+            (s.events, s.total_ns, s.max_ns) = (s.events + 1, s.total_ns + ns, s.max_ns.max(ns));
+        }
+    }
+
+    /// A repaint or refresh timer fired.
+    fn timer(&mut self, id: usize) {
+        if id == self.repaint_timer && id != 0 {
+            self.timed(|wm| {
+                wm.paint_again(&wm.repaint);
+                if wm.repaint_second {
+                    wm.stop_repaint();
+                } else {
+                    wm.repaint_second = true;
+                    wm.repaint_timer =
+                        unsafe { SetTimer(None, wm.repaint_timer, REPAINT_SECOND_MS - REPAINT_FIRST_MS, None) };
+                }
+            });
+        } else if id == self.refresh_timer && id != 0 {
+            self.timed(|wm| {
+                wm.paint_again(&wm.pinned);
+                wm.paint_again(&wm.bordered.into_iter().collect::<Vec<_>>());
+            });
+        }
+    }
+
+    /// Paint the right colour on each of these windows again, if they still exist.
+    fn paint_again(&self, keys: &[isize]) {
+        for key in keys {
+            let h = hwnd_of(*key);
+            if !unsafe { IsWindow(Some(h)) }.as_bool() {
+                continue;
+            }
+            if self.pinned.contains(key) {
+                self.paint_pin(h);
+            } else if self.bordered == Some(*key) {
+                self.paint_focus();
+            }
+        }
+    }
+
+    /// Focus moved: paint the new window and the pinned one it left again soon,
+    /// in case their app paints its own border colour over ours. A newer focus
+    /// change starts over.
+    fn focus_moved(&mut self, key: isize) {
+        let left = self.foreground.replace(key).filter(|prev| self.pinned.contains(prev));
+        self.repaint = std::iter::once(key).chain(left).collect();
+        self.repaint_second = false;
+        self.repaint_timer = unsafe { SetTimer(None, self.repaint_timer, REPAINT_FIRST_MS, None) };
+    }
+
     fn event(&mut self, event: u32, h: HWND) {
         let started = log::enabled().then(Instant::now);
         match event {
-            EVENT_SYSTEM_FOREGROUND if self.focus_border => self.border(h),
+            EVENT_SYSTEM_FOREGROUND => {
+                if self.focus_border {
+                    self.border(h);
+                }
+                self.focus_moved(h.0 as isize);
+            }
             EVENT_OBJECT_DESTROY => {
                 let key = h.0 as isize;
                 self.pinned.retain(|p| *p != key);

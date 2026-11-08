@@ -58,8 +58,8 @@ pub struct Crossing {
     /// The glued link it crosses, as an index into `Live::links`. `None` for a
     /// border that touches in Windows.
     pub glue: Option<usize>,
-    /// Where the pointer rests while a glued crossing is held back. `None` where
-    /// Windows has no screen under the point and stops the pointer itself.
+    /// Where the pointer rests while a glued crossing is held back. Always set for
+    /// a glued link, `None` otherwise.
     pub hold: Option<(i32, i32)>,
 }
 
@@ -92,8 +92,10 @@ pub fn decide(live: &Live, prev: (i32, i32), pt: (i32, i32)) -> Option<Move> {
                 if on.is_some_and(|j| j != dst && !off_desk(j)) {
                     continue;
                 }
-                // Windows would move the pointer onto a screen there, so hold it here.
-                hold = on.map(|_| inside(&a, pt));
+                // Hold it here ourselves, never by passing the move on: Windows would
+                // put it on the screen under the point, or with Ease cursor movement
+                // on, jump it from a dead edge to the nearest screen.
+                hold = Some(inside(&a, pt));
             }
             if let Some(to) = remap_crossing(&a, &live.rects[dst], side, &map, along, over) {
                 return Some(Move::Cross(Crossing { to, src, dst, side, over, glue: l.glued.then_some(i), hold }));

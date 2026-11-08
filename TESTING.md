@@ -59,6 +59,9 @@ Use a small client that opens `\\.\pipe\seam-<your username>` and writes one JSO
 - [ ] **Events.** Subscribe with `events.subscribe`, unplug the U3477. `desk.changed` arrives. Open and cancel Line Up. `lineup.finished` arrives with `saved` false.
 - [ ] **Identify.** `screen.identify` with `{"number":4}`. The number shows on the U3477 for 1.5 s.
 - [ ] **Off switch.** Set `api.enabled` to false in `config.json` and reload. Calls from your client get error 5.
+- [ ] **Someone else's pipe.** Quit Seam. From another Windows user, or a script that runs as a different account, create `\\.\pipe\seam-<your username>` first, then start `seam-settings.exe`. Nothing connects, and the log says the pipe is served by another user's process.
+- [ ] **Copied exe.** Copy `seam.exe` to another folder and connect from it. `app.quit` and `update.ready` are refused with error 4, and with `api.enabled` false the calls get error 5.
+- [ ] **Capture.** A test client that isn't Seam gets error 4 from `workspace.capture`, and `workspace.switch` still works.
 - [ ] **Bad input.** Send a line that isn't JSON, an unknown method, and a line over 1 MB. You get errors, or the connection closes, and Seam keeps running.
 - [ ] **Slow client.** Subscribe and stop reading while a second client toggles the remap for 30 s. Events go out at most 10 times a second, so the first client is dropped after about 26 s, and crossings stay smooth.
 - [ ] **Busy.** Open the tray menu and send `remap.set`. It's answered once the menu closes.
@@ -248,6 +251,9 @@ Needs the real minisign key in `SEAM_PUBLIC_KEY`, and a published pre-release on
 - [ ] **Bad download.** Change one byte of a file in `updates\<version>\` and press **Check now**. The folder is replaced and the check succeeds. Then publish a copy of the release with a broken `latest.json.minisig`: the check is refused with "The update's signature doesn't match Seam's key".
 - [ ] **Install and restart.** Press **Install and restart**. Seam closes and comes back on the new version with your borders, and a balloon says "Updated to 0.2.1-beta.1". A minute later no `seam.exe.old` or `updates` folder is left.
 - [ ] **Can't install here.** Put both exes in `C:\Program Files\Seam` and run from there with an update ready. **Install and restart** ends in "Can't install here" with **Download**, which opens the release page. Nothing changed.
+- [ ] **Tray from another folder.** Run `seam.exe` from a second folder and `seam-settings.exe` from the first, with an update ready. **Install and restart** ends in "Seam is running from another folder, so nothing was changed". Neither tray closes and nothing starts.
+- [ ] **Older release.** Stage an older signed release in `updates\<version>\`, and `--install` it. It's refused with "That isn't newer than this version of Seam".
+- [ ] **Staged file swapped.** Change one byte of a staged exe right after the install starts (or use a debugger pause before the copy). Install is refused, the old version is back and the tray is running, and no `.new` file is left.
 - [ ] **Rollback.** Make `seam-settings.exe` read-only and locked by another program, then install. Seam is back on the old version, the error is shown, and the tray is running.
 - [ ] **On their own.** Turn on **Install updates on their own**. While you use the PC nothing happens. Leave it alone for two minutes with an update ready, and Seam restarts on the new version with the balloon. With Line Up open, it waits.
 - [ ] **No network.** Turn Wi-Fi off and press **Check now**. About shows one line saying what happened, with **Try again**, and the remap keeps working.

@@ -17,6 +17,7 @@ use windows::core::{w, PCWSTR};
 use windows::Win32::Foundation::*;
 use windows::Win32::Storage::FileSystem::GetDriveTypeW;
 use windows::Win32::System::Com::{CoInitializeEx, CoUninitialize, COINIT_APARTMENTTHREADED};
+use windows::Win32::System::SystemInformation::GetWindowsDirectoryW;
 use windows::Win32::UI::Shell::ShellExecuteW;
 use windows::Win32::UI::WindowsAndMessaging::*;
 
@@ -261,6 +262,16 @@ pub fn take_switched() -> Option<Switched> {
     SWITCHED.lock().unwrap_or_else(|e| e.into_inner()).take()
 }
 
+/// Explorer by its full path, so a copy of it in the app folder never wins.
+fn explorer_path() -> String {
+    let mut buf = [0u16; 260];
+    let len = unsafe { GetWindowsDirectoryW(Some(&mut buf)) } as usize;
+    match len {
+        1..=259 => format!(r"{}\explorer.exe", String::from_utf16_lossy(&buf[..len])),
+        _ => r"C:\Windows\explorer.exe".to_string(),
+    }
+}
+
 fn shell_open(file: &str, parameters: Option<&str>) -> bool {
     let wide = |s: &str| -> Vec<u16> { s.encode_utf16().chain(std::iter::once(0)).collect() };
     let (file, parameters) = (wide(file), parameters.map(wide));
@@ -280,7 +291,7 @@ fn launch(rule: &Rule) -> Result<(), &'static str> {
     }
     let aumid = rule.aumid.as_deref().filter(|a| workspace::safe_aumid(a));
     if let Some(aumid) = aumid {
-        if shell_open("explorer.exe", Some(&format!(r"shell:AppsFolder\{aumid}"))) {
+        if shell_open(&explorer_path(), Some(&format!(r"shell:AppsFolder\{aumid}"))) {
             return Ok(());
         }
     }

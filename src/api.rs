@@ -1,13 +1,20 @@
 //! The local API: JSON-RPC over JSON Lines on a per-user named pipe. This is
 //! the protocol and the blocking client; the server is in the tray.
 
+use crate::log;
+use crate::process;
 use crate::state::Snapshot;
 use serde::Serialize;
 use serde_json::{json, Value};
 use std::fs::{File, OpenOptions};
 use std::io::{self, BufRead, BufReader, Write};
+use std::os::windows::fs::OpenOptionsExt;
+use std::os::windows::io::AsRawHandle;
 use std::sync::mpsc::{channel, Receiver};
 use std::time::Duration;
+use windows::Win32::Foundation::HANDLE;
+use windows::Win32::Storage::FileSystem::{SECURITY_IDENTIFICATION, SECURITY_SQOS_PRESENT};
+use windows::Win32::System::Pipes::GetNamedPipeServerProcessId;
 
 pub const API_VERSION: u32 = 1;
 /// Longest accepted line, in bytes.
@@ -158,7 +165,7 @@ fn allowed(command: &Command, peer: Peer) -> Result<(), RpcError> {
     }
     let permitted = match command {
         Command::ConfigPatch(_) => peer.panel,
-        Command::AppQuit => peer.panel || peer.own_image,
+        Command::AppQuit | Command::WorkspaceCapture { .. } => peer.panel || peer.own_image,
         Command::UpdateReady => peer.own_image,
         _ => true,
     };
@@ -241,10 +248,28 @@ pub fn pipe_name() -> String {
 
 const ERROR_PIPE_BUSY: i32 = 231;
 
+/// The process serving this pipe runs as the same user as this one.
+fn server_is_ours(pipe: &File) -> bool {
+    let mut pid = 0u32;
+    let got = unsafe { GetNamedPipeServerProcessId(HANDLE(pipe.as_raw_handle()), &mut pid) };
+    got.is_ok() && process::runs_as_us(pid)
+}
+
+/// Anyone can create a pipe under a name this predictable, so the server is
+/// checked, and it only gets to identify us, never to act as us.
 fn open_pipe() -> io::Result<File> {
     for _ in 0..20 {
-        match OpenOptions::new().read(true).write(true).open(pipe_name()) {
+        let opened = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .security_qos_flags(SECURITY_SQOS_PRESENT.0 | SECURITY_IDENTIFICATION.0)
+            .open(pipe_name());
+        match opened {
             Err(e) if e.raw_os_error() == Some(ERROR_PIPE_BUSY) => std::thread::sleep(Duration::from_millis(50)),
+            Ok(pipe) if !server_is_ours(&pipe) => {
+                log::info!("api client: the pipe is served by another user's process, so it was not used");
+                return Err(io::Error::new(io::ErrorKind::PermissionDenied, "Something else is using Seam's pipe"));
+            }
             other => return other,
         }
     }

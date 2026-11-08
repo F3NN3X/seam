@@ -47,6 +47,7 @@ Seam leaves windows from apps running as administrator, windows that aren't resp
 - **Pin window on top** keeps the focused window above the others until you press it again.
 - **Keep window out of workspace switches** makes the focused window sticky: a workspace switch never moves, minimizes or closes it, and capture leaves it out.
 - **Focus border**, on the Zones page, colours the border of the window that has focus in your Windows accent colour, the one under Settings > Personalisation > Colours. It's off until you turn it on, needs Windows 11, and skips windows from apps running as administrator.
+- **Pin border**: a window pinned on top or sticky gets a Seam amber border, which wins over the focus border until you unpin it. Both colours are picked from a row of swatches under the Windows card on the Zones page: Windows accent, Seam amber, blue, teal, green, red, pink or white.
 - **Release pinned windows**, in the tray menu, takes back every pin and border Seam set. Seam does the same when you quit it. An update or a restart that you didn't ask for keeps the pins: the next start keeps the pins it finds and resets the borders.
 
 The three pin keys have no key until you set one on the Shortcuts page.

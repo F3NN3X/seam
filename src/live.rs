@@ -1,12 +1,13 @@
 //! The active workspace while it's in use: whether its windows drifted, and
 //! putting the windows that open into place (§5, §11.1). One worker does both,
 //! one job at a time, so two windows opening together never take the same row.
-//! The tray thread only hands it the workspace and reads what it found.
+//! It also keeps the `Seam_ws` stamps right after a save changes a workspace's
+//! rows. The tray thread only hands it the workspace and reads what it found.
 
 use crate::log;
 use crate::switcher::{self, LiveWorkspace};
 use seam::api::Reply;
-use seam::workspace;
+use seam::{winutil, workspace};
 use serde_json::json;
 use std::sync::atomic::{AtomicIsize, Ordering};
 use std::sync::mpsc::{channel, Receiver, Sender};
@@ -28,6 +29,19 @@ pub struct Drift {
 enum Job {
     Drift,
     Opened(isize),
+    /// A switch finished, so the windows that opened during it get their turn.
+    SwitchEnded,
+    /// These windows now hold these rows of the workspace with this stamp key, and
+    /// no other window holds one of its rows.
+    Stamp {
+        key: u32,
+        windows: Vec<(isize, usize)>,
+    },
+    /// The workspace's rows moved: what was row i is row `moves[i]` now, or gone.
+    Restamp {
+        key: u32,
+        moves: Vec<Option<usize>>,
+    },
 }
 
 /// The workspace in use, with what placing its windows needs, and who to tell.
@@ -62,6 +76,21 @@ pub fn opened(hwnd: isize) {
     send(Job::Opened(hwnd));
 }
 
+/// A switch finished. Called from the tray thread, which never waits.
+pub fn switch_ended() {
+    send(Job::SwitchEnded);
+}
+
+/// Stamp windows a capture saved with their rows, as a switch does.
+pub fn stamp(key: u32, windows: Vec<(isize, usize)>) {
+    send(Job::Stamp { key, windows });
+}
+
+/// Move the stamps of a workspace whose rows were reordered, removed or added.
+pub fn restamp(key: u32, moves: Vec<Option<usize>>) {
+    send(Job::Restamp { key, moves });
+}
+
 fn send(job: Job) {
     let worker = WORKER.get_or_init(|| {
         let (tx, rx) = channel();
@@ -74,18 +103,35 @@ fn send(job: Job) {
     }
 }
 
-/// Jobs that came in together run as one: every opened window, then one drift check.
+/// Jobs that came in together run as one: the stamps first, then every opened
+/// window, then one drift check. Windows that open while a switch runs wait for
+/// it to end, and then go through auto-apply like any other.
 fn work(jobs: Receiver<Job>) {
+    let mut later: Vec<isize> = Vec::new();
     while let Ok(first) = jobs.recv() {
         let batch: Vec<Job> = std::iter::once(first).chain(jobs.try_iter()).collect();
-        let Some(live) = active() else { continue };
-        let mut placed = false;
+        for job in &batch {
+            match job {
+                Job::Stamp { key, windows } => stamp_windows(*key, windows),
+                Job::Restamp { key, moves } => restamp_windows(*key, moves),
+                _ => {}
+            }
+        }
         for job in &batch {
             if let Job::Opened(hwnd) = job {
-                if let Some(what) = switcher::place_opened(&live, *hwnd) {
-                    log::info!("auto-apply {}: {what}", live.workspace.name);
-                    placed = true;
+                if !later.contains(hwnd) {
+                    later.push(*hwnd);
                 }
+            }
+        }
+        // The switch stamps what it waited for, so only the others are placed after it.
+        let opened = if switcher::switching() { Vec::new() } else { std::mem::take(&mut later) };
+        let Some(live) = active() else { continue };
+        let mut placed = false;
+        for hwnd in opened {
+            if let Some(what) = switcher::place_opened(&live, hwnd) {
+                log::info!("auto-apply {}: {what}", live.workspace.name);
+                placed = true;
             }
         }
         if placed || batch.iter().any(|j| matches!(j, Job::Drift)) {
@@ -98,6 +144,39 @@ fn work(jobs: Receiver<Job>) {
             }
         }
     }
+}
+
+/// Every top-level window with this workspace's stamp, and its row.
+fn stamped(key: u32) -> impl Iterator<Item = (HWND, usize)> {
+    let stamps = winutil::top_level_windows().into_iter().map(|h| (h, winutil::ws_stamp(h)));
+    stamps.filter_map(move |(h, stamp)| stamp.filter(|(k, _)| *k == key).map(|(_, row)| (h, row)))
+}
+
+fn stamp_windows(key: u32, windows: &[(isize, usize)]) {
+    for (h, _) in stamped(key).filter(|(h, _)| !windows.iter().any(|(w, _)| *w == h.0 as isize)) {
+        winutil::clear_ws_stamp(h);
+    }
+    for (hwnd, row) in windows {
+        winutil::set_ws_stamp(HWND(*hwnd as *mut _), key, *row);
+    }
+}
+
+fn restamp_windows(key: u32, moves: &[Option<usize>]) {
+    let (mut moved, mut cleared) = (0, 0);
+    for (h, row) in stamped(key).collect::<Vec<_>>() {
+        match moves.get(row).copied().flatten() {
+            Some(to) if to == row => {}
+            Some(to) => {
+                winutil::set_ws_stamp(h, key, to);
+                moved += 1;
+            }
+            None => {
+                winutil::clear_ws_stamp(h);
+                cleared += 1;
+            }
+        }
+    }
+    log::info!("workspace rows changed: {moved} stamps moved, {cleared} cleared");
 }
 
 /// Answer `workspace.status` from a worker of its own, so a slow app holds up nobody.

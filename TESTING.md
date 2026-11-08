@@ -322,6 +322,7 @@ Each change below saves at once, with no Save button, and shows a notification w
 - [ ] **Rename and switches.** Rename, the shortcut on Shortcuts, **Start missing apps** and **Other windows** still save, without a notice.
 - [ ] **Refused.** With the tray stopped, change anything: "Seam isn't running" shows and nothing changes. In `config.json`, give a rule a zone the screen's layout doesn't have, then rename the workspace: that still saves, and the rule keeps its zone.
 - [ ] **Not the panel.** A test client that isn't the panel gets error 4 from `workspace.update`.
+- [ ] **Reorder with windows open.** Turn the debug log on, switch to the workspace so its apps are placed, then drag the first row below the second. The log has `workspace rows changed: 2 stamps moved, 0 cleared`. Turn **Put apps in place when they open** on, close the app that is now first and open it again: it goes to its own place, not the other app's. Remove a row whose app is running: the log has `1 cleared`, and dragging that app's window no longer marks the workspace as drifted. Rename the workspace: no `workspace rows changed` line.
 
 ### Adding an app
 
@@ -362,6 +363,8 @@ Turn the debug log on. Use a workspace with four apps on two screens, switch to 
 - [ ] **In place.** After the switch every running app's row shows a filled green dot and "In place" in the **Now** column, a closed app a filled grey dot and "Not running", and no **Put windows back** button shows.
 - [ ] **Will open.** For the closed app with Launch ticked and **Start missing apps** on, "Will open" shows under Goes to. Untick Launch: it goes. Turn Start missing apps off: it goes too.
 - [ ] **Moved.** Drag one window to another zone. Within a second, with no click in the panel, its row shows a hollow ring and "Moved", and **Put windows back** appears under the table. The log has `workspace <id>: drifted`.
+- [ ] **Snaps and maximize.** Press Win+Left on a placed window: within a second its row shows "Moved" and the log has `workspace <id>: drifted`. Press **Put windows back**, then click a placed window's maximize button: "Moved" again. Click it again to restore: "In place". A window the workspace shows maximized that you restore with the button shows "Moved".
+- [ ] **Drag timings.** With the focus border off and nothing pinned, drag a placed window around for 10 s without letting go. The next `wm stats` line has `max` well under 1000 µs and an `avg` of a few µs, the log has at most one `drifted` line for the whole drag, and dragging a window of no workspace adds no `drifted` or `in place` line.
 - [ ] **Minimized.** Minimize a window the workspace shows normally: "Minimized" with a hollow ring. A window set to Show as Minimized that is minimized shows "In place".
 - [ ] **Administrator.** Start an app of the workspace as administrator: its row shows a red ring and "Can't move: runs as administrator", and a switch skips it.
 - [ ] **Snap back from the panel.** Press **Put windows back**. The moved and minimized windows go back, the rows show "In place", the button goes, and the log has `workspace <id>: in place`.
@@ -380,6 +383,7 @@ Turn the debug log on, and **Put apps in place when they open** on, at the botto
 - [ ] **Gate B, second window.** Open a second window of one of those apps (a new Firefox or Explorer window). It's left alone and the log has no auto-apply line for it.
 - [ ] **Gate B, an app not in the workspace.** Open an app the workspace doesn't have. Nothing moves it and nothing is logged.
 - [ ] **Gate B, during a switch.** Close the apps, turn Start missing apps on, switch, and open two of its apps by hand while the switch is still starting the others. Every window moves at most once: no window jumps twice, and the log has no auto-apply line for a window the switch placed.
+- [ ] **Opened during a switch.** Untick Launch for one app, close it, and switch with Start missing apps on so the switch starts the others. Open the unticked app by hand while the switch is still starting them. It isn't moved until the switch's `switched in` line, then it goes to its place once, with an auto-apply line after that line. Close it before the switch ends: nothing is logged for it. Open a second window of an app the switch is waiting for: once the switch has placed the first, the second is left alone.
 - [ ] **Gate B, hook timings.** With auto-apply on, open and close apps and drag windows for 60 s while crossing the borders. `hook stats` `own max` and `avg` match a run with auto-apply off, and the `wm stats` lines every 30 s have `max` well under 1000 µs.
 - [ ] **Drag while it settles.** Open an app and start dragging its window at once. Auto-apply leaves it where you drop it.
 - [ ] **Restore isn't an open.** Minimize a window you dragged away and restore it. It isn't put back in its zone. Close an app to the tray and show it again: it isn't moved either.
@@ -425,6 +429,7 @@ Turn the debug log on. Set **Save windows to the active workspace** on Shortcuts
 - [ ] **Into the workspace in use.** Switch to a workspace, move two of its windows and open an app it doesn't have. Press the key. A notification says "Saved <name>" and "N windows saved. Click to undo". The editor shows the moved rows at their new places, the new app at the end, and the launch details and order of the rest as they were, the same as **Update from screen**. The log has `quick save: N windows into <name>`.
 - [ ] **Undo.** Do it again and click the notification within 8 s. The workspace is as it was before the save, and the log has `quick save: undone`. Click a quick save's notification after 8 s (from the Action Center): nothing changes and the log says `quick save: too late to undo`.
 - [ ] **No workspace in use.** Plug a screen in or out, so no workspace is in use, and press the key. A new workspace "Workspace N", with the next free number, appears on this desk, the notification says it's now in use, and the Stream Deck workspace key for it lights. Click the notification within 8 s: the workspace goes, and none is in use again.
+- [ ] **Stamped at once.** With **Put apps in place when they open** on and no workspace in use, press the key, then drag one of the saved windows to another zone without switching: its row shows "Moved" within a second. Close one of the saved apps and open it again: it goes back to where it was saved. The same after **Update from screen** on the workspace in use: a window the update added at the end counts at once.
 - [ ] **Busy.** Press the key twice quickly: the second press logs `quick save hotkey: Already capturing`.
 - [ ] **API.** `workspace.quick_save` answers `{id, created}` once the capture is saved, with the same notification. Any client may call it.
 - [ ] **Stream Deck.** Put the **Save windows** action on a key and press it: the same as the hotkey.
@@ -666,6 +671,7 @@ Needs workspaces on this desk that hold the apps below.
 - [ ] **Win32 apps.** A workspace with a few desktop apps (Notepad, Firefox, Explorer) shows each app's own icon in a 16 px row under the name, in the order of the rules. The "n windows" caption is gone. Hover an icon: the tooltip is the app name the detail table shows.
 - [ ] **Store apps.** Add Windows Terminal and Calculator. Each shows its logo, not a blank or generic icon.
 - [ ] **Exe gone.** Rename or uninstall an app a workspace holds. Its slot shows a grey rounded square, no error or toast, and the other icons are unaffected.
+- [ ] **Exe back.** With the panel still open, rename the app back. Go to another page and back to Workspaces within a minute: still the grey square. After a minute, go away and back again: its icon shows. Staying on the page doesn't retry it.
 - [ ] **Many apps.** A workspace with 12 different apps shows eight icons and "+4". Two windows of the same app show one icon.
 - [ ] **Light and dark.** Switch Windows between light and dark. The placeholder and the "+n" are readable in both, and icons with transparent corners show no black or white fringe.
 - [ ] **150% scaling.** Set display scaling to 150%. Icons are sharp, not blurry, and still 16 logical px.

@@ -33,7 +33,8 @@ use windows::Win32::UI::WindowsAndMessaging::*;
 pub const WM_APP_WM: u32 = WM_APP + 19;
 /// A pinned window closed and the user asked to hear about it. Read it with `take_closed`.
 pub const WM_APP_PIN_CLOSED: u32 = WM_APP + 24;
-/// A window stamped for a workspace was moved or minimized: the stamp's workspace key in wParam.
+/// A window stamped for a workspace was moved, snapped, maximized or minimized: the
+/// stamp's workspace key in wParam.
 pub const WM_APP_WS_MOVED: u32 = WM_APP + 26;
 /// A command for the thread, boxed in lParam.
 const WM_APP_COMMAND: u32 = WM_APP + 21;
@@ -54,6 +55,9 @@ const ASKED_TO_CLOSE: Duration = Duration::from_secs(30);
 /// Chromium, Electron and Office resize themselves right after they show, so
 /// auto-apply waits this long before it places a window that opened (§11.1).
 const SETTLE: Duration = Duration::from_millis(150);
+/// A stamped window's moves come as a burst (a drag, a snap's animation), so they are
+/// told once it has been still this long.
+const RELOCATED_QUIET_MS: u32 = 100;
 
 /// Who a pinned window was, kept from when it was pinned, because a window that
 /// is gone can't be asked (D119).
@@ -344,6 +348,7 @@ struct Wm {
     name_hook: Option<HWINEVENTHOOK>,
     movesize_hook: Option<HWINEVENTHOOK>,
     minimize_hook: Option<HWINEVENTHOOK>,
+    location_hook: Option<HWINEVENTHOOK>,
     /// The switch waiting for windows to show, and where to send them.
     shown_to: Option<(u64, Sender<isize>)>,
     /// A workspace is in use, and windows that open are put in place.
@@ -355,6 +360,9 @@ struct Wm {
     /// Windows that opened, and when they have settled enough to be placed.
     settling: Vec<(isize, Instant)>,
     settle_timer: usize,
+    /// Workspace keys of stamped windows that moved, told when the burst is over.
+    relocated: Vec<u32>,
+    relocated_timer: usize,
     /// The window that had focus at the last foreground event.
     foreground: Option<isize>,
     /// Windows to paint again after a focus change, and which of the two repaints is next.
@@ -390,7 +398,7 @@ fn sync_hook(slot: &mut Option<HWINEVENTHOOK>, first: u32, last: u32, wanted: bo
 impl Wm {
     /// Only what a feature that is on needs: focus changes for the border and for
     /// pins that apps may paint over, closed windows while anything is pinned,
-    /// shown windows while a switch waits for them, moves and minimizes while a
+    /// shown windows while a switch waits for them, moves, snaps and minimizes while a
     /// workspace is in use, opened windows while auto-apply runs, and the refresh
     /// timer while the first applies.
     fn sync_hooks(&mut self) {
@@ -414,6 +422,13 @@ impl Wm {
         let active = self.workspace_active;
         sync_hook(&mut self.movesize_hook, EVENT_SYSTEM_MOVESIZESTART, EVENT_SYSTEM_MOVESIZEEND, active);
         sync_hook(&mut self.minimize_hook, EVENT_SYSTEM_MINIMIZESTART, EVENT_SYSTEM_MINIMIZEEND, active);
+        // Win+arrow snaps and the maximize button send no drag or minimize event.
+        let location = EVENT_OBJECT_LOCATIONCHANGE;
+        sync_hook(&mut self.location_hook, location, location, active);
+        if !active {
+            self.relocated.clear();
+            self.stop_relocated_timer();
+        }
         match (painting, self.refresh_timer) {
             (true, 0) => self.refresh_timer = unsafe { SetTimer(None, 0, REFRESH_EVERY_MS, None) },
             (false, id) if id != 0 => {
@@ -444,8 +459,8 @@ impl Wm {
     }
 
     /// A window showed or got its title. If it's new, it's placed once it has
-    /// settled. A window that was there, a minimized one, one already stamped and
-    /// one a running switch waits for aren't opens.
+    /// settled. A window that was there, a minimized one and one already stamped
+    /// aren't opens. One that opens during a switch waits on the worker for it to end.
     fn opened(&mut self, h: HWND) {
         let key = h.0 as isize;
         if self.seen_before.contains(&key) {
@@ -456,7 +471,7 @@ impl Wm {
             return;
         }
         self.seen_before.insert(key);
-        if self.shown_to.is_some() || winutil::is_minimized(h) || winutil::ws_stamp(h).is_some() {
+        if winutil::is_minimized(h) || winutil::ws_stamp(h).is_some() {
             return;
         }
         self.settling.push((key, Instant::now() + SETTLE));
@@ -476,10 +491,42 @@ impl Wm {
 
     /// A move or minimize of a window a workspace placed: tell the tray which workspace.
     fn moved(&self, h: HWND) {
-        if let (Some((key, _)), true) = (winutil::ws_stamp(h), self.owner != 0) {
+        if let Some((key, _)) = winutil::ws_stamp(h) {
+            self.tell_moved(key);
+        }
+    }
+
+    fn tell_moved(&self, key: u32) {
+        if self.owner != 0 {
             unsafe {
                 let _ = PostMessageW(Some(hwnd_of(self.owner)), WM_APP_WS_MOVED, WPARAM(key as usize), LPARAM(0));
             }
+        }
+    }
+
+    /// Some window moved or changed size. Only a stamped one counts, which its
+    /// property alone says, and its workspace is told once the burst is over.
+    fn relocated(&mut self, h: HWND) {
+        let Some((key, _)) = winutil::ws_stamp(h) else { return };
+        if !self.relocated.contains(&key) {
+            self.relocated.push(key);
+        }
+        // The same id starts the wait again.
+        self.relocated_timer = unsafe { SetTimer(None, self.relocated_timer, RELOCATED_QUIET_MS, None) };
+    }
+
+    /// The stamped windows that moved have been still a moment.
+    fn relocated_due(&mut self) {
+        self.stop_relocated_timer();
+        for key in std::mem::take(&mut self.relocated) {
+            self.tell_moved(key);
+        }
+    }
+
+    fn stop_relocated_timer(&mut self) {
+        if self.relocated_timer != 0 {
+            let _ = unsafe { KillTimer(None, self.relocated_timer) };
+            self.relocated_timer = 0;
         }
     }
 
@@ -639,6 +686,8 @@ impl Wm {
             });
         } else if id == self.settle_timer && id != 0 {
             self.timed(Self::settled);
+        } else if id == self.relocated_timer && id != 0 {
+            self.timed(Self::relocated_due);
         }
     }
 
@@ -712,6 +761,7 @@ impl Wm {
                 self.settling.retain(|(k, _)| *k != key);
             }
             EVENT_SYSTEM_MOVESIZEEND | EVENT_SYSTEM_MINIMIZESTART | EVENT_SYSTEM_MINIMIZEEND => self.moved(h),
+            EVENT_OBJECT_LOCATIONCHANGE => self.relocated(h),
             _ => {}
         }
         if let Some(started) = started {

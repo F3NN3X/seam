@@ -670,6 +670,8 @@ fn switched(app: &mut App) {
         app.recheck = true;
         unsafe { SetTimer(Some(app.hwnd), TIMER_DRIFT, DRIFT_AFTER_MS, None) };
     }
+    // Apps opened by hand during the switch go to their places now.
+    live::switch_ended();
     windows_changed(app);
     publish(app);
     let skipped: Vec<Value> =
@@ -838,7 +840,7 @@ fn undo_quick_save(app: &mut App) {
 
 /// A capture finished: save it as a new workspace, or over the one it was asked to update.
 fn captured(app: &mut App) {
-    let (Some(rules), Some(job)) = (switcher::take_captured(), app.capturing.take()) else { return };
+    let (Some((rules, hwnds)), Some(job)) = (switcher::take_captured(), app.capturing.take()) else { return };
     let answer = |r: Reply| {
         if let Some(tx) = &job.reply {
             let _ = tx.send(r);
@@ -848,6 +850,8 @@ fn captured(app: &mut App) {
     let existing = workspace::list(&desk.workspaces);
     // The workspace as it was, for a quick save's Undo.
     let mut before = None;
+    // The row each captured window has now, when the save stamps them.
+    let mut rows = None;
     let saved = match &job.into {
         Some(into) => {
             let Some(old) = existing.iter().find(|w| w.id == *into) else {
@@ -858,7 +862,10 @@ fn captured(app: &mut App) {
                     Some(updated) => updated,
                     None => return answer(refused("That app isn't open, so where it goes stays as it was")),
                 },
-                None => Workspace { windows: workspace::merge_capture(old, rules), ..old.clone() },
+                None => {
+                    rows = Some(workspace::capture_rows(old, &rules));
+                    Workspace { windows: workspace::merge_capture(old, rules), ..old.clone() }
+                }
             };
             let same = |v: &&mut Value| workspace::parse(v).is_some_and(|w| w.id == *into);
             if let Some(slot) = desk.workspaces.iter_mut().find(same) {
@@ -873,17 +880,29 @@ fn captured(app: &mut App) {
                 Some(name) if !name.is_empty() => workspace::unique_name(name, &names),
                 _ => workspace::next_name(&names),
             };
+            if job.quick {
+                rows = Some((0..rules.len()).collect());
+            }
             let created = Workspace { id: workspace::new_id(&ids), name, windows: rules, ..Workspace::default() };
             desk.workspaces.push(workspace::to_value(&created));
             created
         }
     };
     persist(app);
+    // The saved windows hold their rows, as after a switch, so drift and auto-apply see them at once.
+    if let Some(rows) = rows {
+        live::stamp(workspace::stamp_key(&saved.id), hwnds.into_iter().zip(rows).collect());
+    }
     if job.quick {
         let created = before.is_none();
         quick_saved(app, &saved, before);
+        live::check_drift();
         publish(app);
         return answer(Ok(json!({ "id": saved.id, "created": created })));
+    }
+    if app.workspace.as_deref() == Some(saved.id.as_str()) {
+        sync_live(app);
+        live::check_drift();
     }
     publish(app);
     if job.reply.is_some() {
@@ -923,7 +942,14 @@ fn update_workspace(app: &mut App, id: &str, sent: Value) -> Reply {
         )
         .collect();
     let patch = json!({ "desks": { app.sig.clone(): { "workspaces": list } } });
-    patch_config(app, &patch)
+    let moves = workspace::moved_rows(&old.windows, &checked.windows);
+    let reply = patch_config(app, &patch);
+    // Windows a switch or auto-apply stamped keep the app they were stamped for.
+    let unmoved = moves.len() == checked.windows.len() && moves.iter().enumerate().all(|(i, m)| *m == Some(i));
+    if reply.is_ok() && !unmoved {
+        live::restamp(workspace::stamp_key(id), moves);
+    }
+    reply
 }
 
 fn set_remap(app: &mut App, on: bool) {

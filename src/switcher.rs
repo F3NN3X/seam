@@ -223,15 +223,16 @@ pub struct CaptureJob {
     pub exclude: Vec<String>,
 }
 
-static CAPTURED: Mutex<Option<Vec<Rule>>> = Mutex::new(None);
+/// A capture's rules, and the window each came from.
+static CAPTURED: Mutex<Option<(Vec<Rule>, Vec<isize>)>> = Mutex::new(None);
 static SESSION: Mutex<Option<Vec<Rule>>> = Mutex::new(None);
 
 /// Start a capture. The main thread gets `WM_APP_CAPTURED` when it's done.
 pub fn capture(job: CaptureJob) -> bool {
     let spawned = std::thread::Builder::new().name("seam-capture".into()).spawn(move || {
         let _com = Com::enter();
-        let rules = capture_rules(&job, false);
-        *CAPTURED.lock().unwrap_or_else(|e| e.into_inner()) = Some(rules);
+        let captured = capture_rules(&job, false);
+        *CAPTURED.lock().unwrap_or_else(|e| e.into_inner()) = Some(captured);
         unsafe {
             let _ = PostMessageW(Some(hwnd_of(job.owner)), WM_APP_CAPTURED, WPARAM(0), LPARAM(0));
         }
@@ -239,7 +240,7 @@ pub fn capture(job: CaptureJob) -> bool {
     spawned.is_ok()
 }
 
-pub fn take_captured() -> Option<Vec<Rule>> {
+pub fn take_captured() -> Option<(Vec<Rule>, Vec<isize>)> {
     CAPTURED.lock().unwrap_or_else(|e| e.into_inner()).take()
 }
 
@@ -248,7 +249,7 @@ pub fn take_captured() -> Option<Vec<Rule>> {
 pub fn capture_session(job: CaptureJob) -> bool {
     let spawned = std::thread::Builder::new().name("seam-session".into()).spawn(move || {
         let _com = Com::enter();
-        let rules = capture_rules(&job, true);
+        let (rules, _) = capture_rules(&job, true);
         *SESSION.lock().unwrap_or_else(|e| e.into_inner()) = Some(rules);
         unsafe {
             let _ = PostMessageW(Some(hwnd_of(job.owner)), WM_APP_SESSION, WPARAM(0), LPARAM(0));
@@ -276,7 +277,8 @@ pub fn wait_session(limit: Duration) -> Option<Vec<Rule>> {
     }
 }
 
-fn capture_rules(job: &CaptureJob, session: bool) -> Vec<Rule> {
+/// The rules, and the window each came from.
+fn capture_rules(job: &CaptureJob, session: bool) -> (Vec<Rule>, Vec<isize>) {
     let started = Instant::now();
     let geos = geometry(&job.screens, job.gap);
     let mut skips: BTreeMap<&'static str, usize> = BTreeMap::new();
@@ -288,7 +290,7 @@ fn capture_rules(job: &CaptureJob, session: bool) -> Vec<Rule> {
         }
     });
     let foreground = unsafe { GetForegroundWindow() }.0 as isize;
-    let mut rules = Vec::new();
+    let (mut rules, mut hwnds) = (Vec::new(), Vec::new());
     // A sticky window belongs to no workspace. The last session keeps it, pinned.
     for seen in seen.into_iter().filter(|s| session || s.pin & winutil::PIN_STICKY == 0) {
         let h = hwnd_of(seen.cand.hwnd);
@@ -314,6 +316,7 @@ fn capture_rules(job: &CaptureJob, session: bool) -> Vec<Rule> {
         let size_px = free.then_some([visible.w, visible.h]);
         let size_mm = free.then(|| desk::size_mm(visible.w, visible.h, geo.raw_dpi)).flatten();
         let c = seen.cand;
+        hwnds.push(c.hwnd);
         rules.push(Rule {
             exe: c.exe,
             aumid: c.aumid,
@@ -336,7 +339,7 @@ fn capture_rules(job: &CaptureJob, session: bool) -> Vec<Rule> {
     let skipped: Vec<String> = skips.iter().map(|(why, n)| format!("{why} {n}")).collect();
     let ms = started.elapsed().as_millis();
     log::info!("workspace capture: {} windows in {ms} ms, skipped {}", rules.len(), skipped.join(", "));
-    rules
+    (rules, hwnds)
 }
 
 // ---- Switch
@@ -399,9 +402,12 @@ pub fn switch(job: SwitchJob) -> bool {
     let spawned = std::thread::Builder::new().name("seam-switch".into()).spawn(move || {
         // Waits until the thread really exists, so a failed spawn replaces nothing.
         let Ok(mine) = started.recv() else { return };
-        let _running = Running::enter();
+        let running = Running::enter();
         let _com = Com::enter();
-        let Some(result) = run_switch(&job, mine) else { return };
+        let result = run_switch(&job, mine);
+        // Over before the tray hears, so auto-apply can take the windows that opened meanwhile.
+        drop(running);
+        let Some(result) = result else { return };
         if SWITCH_GEN.load(Ordering::SeqCst) != mine {
             return;
         }

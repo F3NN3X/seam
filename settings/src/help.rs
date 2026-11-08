@@ -48,7 +48,7 @@ pub const TOPICS: &[Topic] = &[
             Text("Seam makes the pointer cross where your screens physically meet, and puts your windows where you want them. Three steps get you there."),
             Step {
                 title: "Line up your screens",
-                text: "Drag two lines across each border until they run straight over the bezel",
+                text: "Drag two lines across each border until the stripes run straight over the bezel",
                 page: Page::Displays,
             },
             Step { title: "Pick zone layouts", text: "Choose Columns, Rows, Grid or Priority for each screen", page: Page::Zones },
@@ -72,8 +72,48 @@ pub const TOPICS: &[Topic] = &[
                 "Enter goes to the next border or finishes, Backspace goes back and Esc cancels",
             ]),
             Text("When you finish, Seam saves the borders and turns on **Remap pointer at borders**. Ctrl+Shift+Alt+P pauses and resumes it. With **Also align Windows arrangement** on, Seam also moves your screens in Display settings to match."),
-            Text("Each set of screens is a desk, with its own borders, zones and workspaces. **Saved desks** lists them, and each desk's menu has **Rename** and **Forget**."),
-            Text("Seam relies on Windows' **Ease cursor movement between displays**, so the pointer can always leave a screen toward its neighbour. When it's off, the Displays page says so, and **Turn it on** turns it on for you. Seam never turns it off."),
+            Text("Each set of screens is a desk, with its own borders, zones and workspaces. **Saved desks** lists them, with when each was lined up, in your local time. Each desk's menu has **Rename** and **Forget**."),
+            Text("Seam relies on Windows' **Ease cursor movement between displays**, so the pointer can always leave a screen toward its neighbour. When it's off, the Displays page says so, and **Turn it on** turns it on for you and checks that Windows kept it. Seam never turns it off."),
+        ],
+        opens: Some(Page::Displays),
+    },
+    Topic {
+        title: "Line Up aids",
+        blocks: &[
+            Text("Each step names both screens with their models, such as \"Line up screen 3 (HDMI) with screen 4 (U3477)\", and says which way to move each line, such as straight below or level with the line on the reference screen."),
+            List(&[
+                "A band of faint stripes runs along the shared edge on both screens, 10 mm apart on your desk. If they run on straight across the edge, the screens are lined up. If they step, the offset is off, and if the spacing changes, the scale is off.",
+                "A screen that reports no size gets no stripes",
+                "With **Type measurements in Line Up** on, on the Displays page, M types the offset instead of dragging. It asks how many cm one screen's top or left edge is below or to the right of the other's, and moves the lines to match. Tab flips the direction, Enter applies and Esc closes the field.",
+                "Typing needs both screens to report their size",
+            ]),
+        ],
+        opens: Some(Page::Displays),
+    },
+    Topic {
+        title: "Glue and Not on my desk",
+        blocks: &[
+            Text("Windows doesn't always have your screens as they stand on your desk. Line Up handles two cases."),
+            Text("**Glue** is for screens that touch on your desk but have a gap in Windows. Line Up offers each pair after the touching borders. Press G to glue it, then line the two up as they stand on your desk. The gap doesn't matter. A pair found from the screens' sizes starts glued, and a pair found only from the pixel layout starts off, so Enter skips it."),
+            List(&[
+                "The pointer rests at a glued edge until you push about 60 px past it, so an auto-hide taskbar there still shows. A quick flick crosses at once.",
+                "Past the end of a glue, the edge is a dead edge, and Seam holds the pointer there",
+                "**Align arrangement** keeps glued screens apart, and refuses a move that would break a glue",
+            ]),
+            Text("**Not on my desk** is for two screens that touch in Windows but not on your desk. Press N in Line Up, or choose **Not on my desk** in the border's **...** menu on Displays. The pointer stops at that edge both ways, or crosses to a glued screen past it. **On my desk** takes it back."),
+            Text("Displays describes these borders as glued or \"Not on your desk\"."),
+        ],
+        opens: Some(Page::Displays),
+    },
+    Topic {
+        title: "Layout views",
+        blocks: &[
+            Text("The **Physical layout** card on Displays shows your screens two ways. Switch between them above the map."),
+            List(&[
+                "**Seam** is your desk, at the screens' real sizes. A lined up border is a solid line, a glued one is dashed and one that isn't on your desk is dotted.",
+                "**Windows** is the arrangement as Windows has it, in pixels. A gap shows a note such as \"18 px gap\".",
+            ]),
+            Text("Click a screen to flash its number on it. **Show on screens** draws the chosen view on every real screen for a few seconds, with each screen's number and model and a band along each edge that has a neighbour. Esc or a click closes it."),
         ],
         opens: Some(Page::Displays),
     },

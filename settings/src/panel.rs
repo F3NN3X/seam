@@ -558,6 +558,9 @@ impl Panel {
         if page == Page::Workspaces {
             self.icons.retry_failed();
         }
+        if page == Page::Displays {
+            self.ease_on = seam::ease::is_on();
+        }
         let _ = std::fs::write(last_page_file(), page.title());
         self.ask_status(cx);
         if let Some(title) = reveal {
@@ -716,6 +719,20 @@ impl Panel {
                 cx.notify();
             }));
             banners.push(ui::note("Import settings from your earlier Seam", Some(import), p));
+        }
+        // Asked once. Displays has its own alert with the same button.
+        if self.state.is_some() && !self.ease_on && !self.config.cursor_easing_asked && self.page != Page::Displays {
+            let text = "Seam needs Windows' Ease cursor movement between displays, so the pointer can always leave a screen toward its neighbour. Turn it on?";
+            let turn_on =
+                ui::primary("ask-turn-on-easing", "Turn it on").on_click(cx.listener(|panel, _, window, cx| {
+                    pages::displays::turn_on_easing(panel, window, cx);
+                }));
+            let not_now =
+                ui::secondary("ask-not-now-easing", "Not now", cx).on_click(cx.listener(|panel, _, window, cx| {
+                    panel.patch(json!({ "cursor_easing_asked": true }), window, cx);
+                }));
+            let buttons = div().flex().flex_none().gap(px(8.)).child(not_now).child(turn_on);
+            banners.push(ui::note(text, None, p).child(buttons));
         }
         banners
     }

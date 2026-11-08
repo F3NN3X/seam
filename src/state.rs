@@ -139,6 +139,9 @@ pub struct State {
     pub session: Option<SessionRef>,
     /// Windows' "Restart apps" sign-in option was on when Seam last looked (D128).
     pub restart_apps: bool,
+    /// Windows' "Ease cursor movement between displays" as the tray last read it.
+    /// `None` on a Windows without the setting.
+    pub windows_cursor_easing: Option<bool>,
     pub hotkey_errors: Vec<HotkeyError>,
     pub last_align: Option<AlignResult>,
     pub update: Option<UpdateState>,

@@ -214,6 +214,8 @@ struct App {
     balloon_action: BalloonAction,
     /// Warn once per run if Windows may stop the pointer before Seam sees it.
     ease_warned: bool,
+    /// Windows' "Ease cursor movement between displays" as last read, `None` where it doesn't exist.
+    cursor_easing: Option<bool>,
     /// What the last arrangement attempt did, for the panel.
     last_align: Option<AlignResult>,
     saver: Option<Saver>,
@@ -472,6 +474,7 @@ fn snapshot(app: &App) -> Snapshot {
         last_align: app.last_align.clone(),
         clients: app.clients.clone(),
         restart_apps: app.restart_apps,
+        windows_cursor_easing: app.cursor_easing,
     };
     Snapshot { state, config: serde_json::to_value(&app.cfg).unwrap_or_default() }
 }
@@ -1051,24 +1054,58 @@ fn update_workspace(app: &mut App, id: &str, sent: Value) -> Reply {
 }
 
 fn set_remap(app: &mut App, on: bool) {
+    let turned_on = on && !app.cfg.enabled;
     app.cfg.enabled = on;
     persist(app);
     relink(app);
+    if turned_on {
+        warn_about_ease(app);
+    }
     publish(app);
 }
 
-/// The remap needs this Windows setting, so say so if it's off.
+/// The remap needs this Windows setting, so say so if it's off. Read again each
+/// time, since it has no change event. While the panel is open it asks instead
+/// and shows the setting on Displays, so the balloon is only for when it's closed.
 fn warn_about_ease(app: &mut App) {
-    if app.links.is_empty() || app.ease_warned || ease::is_on() {
+    app.cursor_easing = ease::read();
+    let panel_open = app.clients.iter().any(|c| c == "panel");
+    if app.links.is_empty() || app.ease_warned || app.cursor_easing != Some(false) || panel_open {
         return;
     }
     log::info!("Ease cursor movement is off");
     app.ease_warned = notify(
         app,
         "Ease cursor movement is off",
-        "Turn it on in Display settings, or the pointer can stop at screen edges.",
+        "Click to turn it on in Seam, or the pointer can stop at screen edges.",
         BalloonAction::OpenPanel("displays"),
     );
+}
+
+/// Turn on Windows' "Ease cursor movement between displays". Seam never turns it off.
+fn set_cursor_easing(app: &mut App, on: bool) -> Reply {
+    if !on {
+        return refused("Seam only turns Ease cursor movement on. Turn it off in Display settings");
+    }
+    let before = ease::read();
+    let written = ease::turn_on();
+    app.cursor_easing = ease::read();
+    log::info!("cursor easing: {before:?} to {:?}, {written:?}", app.cursor_easing);
+    if let Err(why) = written {
+        publish(app);
+        return refused(why);
+    }
+    // Nothing is left to ask about.
+    if !app.cfg.cursor_easing_asked {
+        app.cfg.cursor_easing_asked = true;
+        persist(app);
+    }
+    // The broadcast waits on other apps' windows, so it stays off this thread.
+    if std::thread::Builder::new().name("seam-easing".into()).spawn(ease::announce).is_err() {
+        log::info!("cursor easing: couldn't start the broadcast");
+    }
+    publish(app);
+    Ok(json!({ "on": app.cursor_easing }))
 }
 
 fn start_lineup(app: &mut App) {
@@ -1151,6 +1188,7 @@ fn patch_config(app: &mut App, patch: &Value) -> Reply {
     next.layouts.clear();
     // What Windows' Restart apps was before Seam changed it is the tray's to keep.
     next.restore_apps_saved = app.cfg.restore_apps_saved;
+    let remap_turned_on = next.enabled && !app.cfg.enabled;
     app.cfg = next;
     forget_deleted(app);
     sync_restart_apps(app);
@@ -1158,6 +1196,9 @@ fn patch_config(app: &mut App, patch: &Value) -> Reply {
     log::apply(app.cfg.debug_log);
     apply_hotkeys(app);
     relink(app);
+    if remap_turned_on {
+        warn_about_ease(app);
+    }
     publish(app);
     arm_auto_install(app);
     Ok(json!({ "ok": true }))
@@ -1293,6 +1334,7 @@ fn run_command(app: &mut App, queued: Queued) {
             }
             return;
         }
+        Command::CursorEasingSet(on) => set_cursor_easing(app, on),
         Command::AutoApplySet(on) => {
             app.cfg.auto_apply = on;
             persist(app);
@@ -1851,6 +1893,7 @@ pub fn run() {
             taskbar_created: RegisterWindowMessageW(w!("TaskbarCreated")),
             balloon_action: BalloonAction::None,
             ease_warned: false,
+            cursor_easing: ease::read(),
             last_align: None,
             saver: Saver::start(),
             token: api_server::new_token().unwrap_or_default(),

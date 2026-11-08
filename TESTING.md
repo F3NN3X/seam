@@ -672,7 +672,14 @@ powershell -c "(Select-String 'hook ([0-9.]+)us' $env:APPDATA\Seam\seam.log).Mat
 
 Turn off **Settings → System → Display → Multiple displays → Ease cursor movement between displays**.
 
-- [ ] **Warning.** Restart Seam with the setting off. A balloon warns once, and the log shows `Ease cursor movement is off`. The settings panel shows it as off.
+- [ ] **Warning.** Close the Seam window and restart Seam with the setting off. A balloon warns once, and the log shows `Ease cursor movement is off`. Clicking it opens Displays, which shows the alert with **Turn it on**.
+- [ ] **No double warning.** With the Seam window open, pause and resume the remap. No balloon comes, because the window shows the setting itself.
+- [ ] **First-run ask.** With `cursor_easing_asked` false or missing in `config.json`, open the Seam window on any page but Displays. A dashed note at the top says "Seam needs Windows' Ease cursor movement between displays…" with **Not now** and **Turn it on**. On Displays the note doesn't show, and the alert does.
+- [ ] **Not now.** Press **Not now**. The note goes, `cursor_easing_asked` is true, and it doesn't come back after restarting Seam or turning the remap off and on. The Displays alert stays while the setting is off.
+- [ ] **Turn it on.** Set it off again and `cursor_easing_asked` back to false. Press **Turn it on** in the note. Without signing out: the Windows Settings toggle shows on (reopen the page), the pointer crosses where it used to stop at an edge, and the log shows `cursor easing: Some(false) to Some(true), Ok(())` plus the `SPI_SETCURSORS` and `WM_SETTINGCHANGE` lines. "Turned on Ease cursor movement" shows, the alert goes, and the note never comes back. Record whether the crossing works straight away or only after a sign-out.
+- [ ] **Alert button.** Turn it off in Windows Settings, come back to Displays: the alert shows **Open Display settings** and **Turn it on**. **Turn it on** works as above. With it on, there's no alert.
+- [ ] **State.** `state.get` has `windows_cursor_easing` false while off and true after. `cursor_easing.set` from a client without the panel's token is refused, and `{"on":false}` is refused with nothing changed.
+- [ ] **Search.** Type "deadzone", "easing" and "jump": each finds "Ease cursor movement between displays", which opens Displays at the top.
 - [ ] **Describe what happens.** Expected: crossings where both screens have pixels at that row still remap. Elsewhere the pointer stops at the edge, because Seam only acts when a move leaves the screen across a calibrated border and lands on a physical screen. Try the top of screen 1 left of x=596, and the right edge of screen 1 below where screen 4 ends. Record what you see, then turn it back on.
 
 ## Align arrangement

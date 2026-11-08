@@ -38,6 +38,12 @@ const ENTRIES: &[Entry] = &[
     entry(Page::Displays, "Saved desks", "Rename or forget a desk", "layouts"),
     entry(Page::Displays, "Remap pointer at borders", "Cross where the screens physically meet", "pause mouse"),
     entry(Page::Displays, "Also align Windows arrangement", "Move screens in Display settings to match", ""),
+    entry(
+        Page::Displays,
+        "Ease cursor movement between displays",
+        "Windows' setting Seam needs. Displays offers to turn it on while it's off",
+        "ease cursor easing deadzone jump pointer stuck",
+    ),
     entry(Page::Zones, "Zones on", "Hold a key while you drag a window to drop it into a zone", "snap enable"),
     entry(Page::Zones, "Layout", "Columns, rows, grid or priority for each screen", "template tiles"),
     entry(Page::Zones, "Edit layout", "Split, merge and resize the zones of a screen", "editor custom divider"),

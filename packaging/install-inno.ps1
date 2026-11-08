@@ -39,8 +39,13 @@ if ($install.ExitCode -ne 0) { throw "The Inno Setup installer exited with $($in
 
 $iscc = Join-Path $Dir 'ISCC.exe'
 if (-not (Test-Path $iscc)) { throw "ISCC.exe is missing from $Dir." }
-$banner = (& $iscc '/?' 2>&1 | Out-String)
-if ($banner -notmatch [regex]::Escape($version)) { throw "ISCC.exe doesn't report $version:`n$banner" }
+# ISCC prints only "Inno Setup 7" and its files carry no version, so the
+# per-user uninstall entry the installer just wrote is the record of what's there.
+$entry = Get-ItemProperty 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\Inno Setup 7_is1' -ErrorAction SilentlyContinue
+if (-not $entry -or $entry.DisplayVersion -ne $version) { throw "Inno Setup ${version} isn't what got installed (found $($entry.DisplayVersion))." }
+if ((Resolve-Path $entry.InstallLocation).Path.TrimEnd('\') -ne (Resolve-Path $Dir).Path.TrimEnd('\')) {
+    throw "Inno Setup ${version} is registered at $($entry.InstallLocation), not $Dir."
+}
 Write-Host "Inno Setup $version at $iscc"
 
 if ($env:GITHUB_ENV) { "ISCC=$iscc" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8 }

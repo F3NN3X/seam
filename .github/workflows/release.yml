@@ -1,4 +1,6 @@
-# Drafts a GitHub release on a version tag. A person publishes it. Signing is
+# Drafts a GitHub release on a version tag. A person publishes it. `gate` first
+# checks the versions and that CI passed for the tagged commit, or for the pull
+# request that merged it, so tests aren't run again here. Signing is
 # skipped until the `release` environment holds MINISIGN_SECRET_KEY (the full
 # contents of the minisign secret key file) and MINISIGN_PASSWORD. Without a
 # signature the updater ignores the release, so it's a manual download only.
@@ -11,7 +13,7 @@ on:
     tags: ["v*"]
 
 permissions:
-  contents: write
+  contents: read
 
 # A second tag waits for the first. A cancelled release can leave half a draft.
 concurrency:
@@ -19,23 +21,55 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  release:
-    runs-on: windows-latest
-    timeout-minutes: 45
-    environment: release
-    env:
-      SIGN: ${{ secrets.MINISIGN_SECRET_KEY != '' }}
+  gate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      checks: read
+      pull-requests: read
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Versions match the tag
-        shell: bash
         run: |
           tag="${GITHUB_REF_NAME#v}"
           for f in Cargo.toml settings/Cargo.toml; do
             v=$(grep -m1 '^version' "$f" | cut -d'"' -f2)
-            [ "$v" = "$tag" ] || { echo "$f is $v, tag is $tag"; exit 1; }
+            [ "$v" = "$tag" ] || { echo "::error::$f is $v, tag is $tag"; exit 1; }
           done
+
+      # A squash merge makes a new commit, so its own run on main may still be going.
+      # The pull request's head passed the same checks, so either one counts.
+      - name: CI passed for this commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # An API error counts as "not green", so the gate fails closed.
+          green() {
+            local n
+            n=$(gh api "repos/$GITHUB_REPOSITORY/commits/$1/check-runs?check_name=build"               --jq '[.check_runs[] | select(.conclusion == "success")] | length' 2>/dev/null) || n=0
+            echo "${n:-0}"
+          }
+          if [ "$(green "$GITHUB_SHA")" -gt 0 ]; then echo "CI passed on $GITHUB_SHA"; exit 0; fi
+          heads=$(gh api "repos/$GITHUB_REPOSITORY/commits/$GITHUB_SHA/pulls"             --jq '.[] | select(.merged_at != null) | .head.sha' 2>/dev/null) || heads=""
+          for head in $heads; do
+            if [ "$(green "$head")" -gt 0 ]; then echo "CI passed on $head, the pull request that merged $GITHUB_SHA"; exit 0; fi
+          done
+          echo "::error::No passing CI build for $GITHUB_SHA or the pull request that merged it"
+          exit 1
+
+  release:
+    needs: gate
+    runs-on: windows-latest
+    timeout-minutes: 45
+    environment: release
+    permissions:
+      contents: write
+    env:
+      SIGN: ${{ secrets.MINISIGN_SECRET_KEY != '' }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Short build id
         shell: bash

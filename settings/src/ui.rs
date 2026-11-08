@@ -318,7 +318,7 @@ pub fn choice(
             .id(i)
             .role(Role::RadioButton)
             .aria_label(label.clone())
-            .aria_selected(i == selected)
+            .aria_toggled(if i == selected { Toggled::True } else { Toggled::False })
             .px(px(12.))
             .py(px(4.))
             .rounded(px(6.))

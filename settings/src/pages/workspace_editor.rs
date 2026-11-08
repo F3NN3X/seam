@@ -421,7 +421,14 @@ fn stage_line(p: Palette) -> Div {
         .child(div().flex_1().h(px(1.)).bg(p.hairline_strong))
 }
 
-fn goes_menu(panel: &Panel, i: usize, ws: &Workspace, screens: &[Screen], cx: &mut Context<Panel>) -> AnyElement {
+fn goes_menu(
+    panel: &Panel,
+    i: usize,
+    ws: &Workspace,
+    screens: &[Screen],
+    title: &str,
+    cx: &mut Context<Panel>,
+) -> AnyElement {
     let rule = &ws.windows[i];
     let current = goes_to(rule, screens);
     let weak = cx.entity().downgrade();
@@ -456,6 +463,7 @@ fn goes_menu(panel: &Panel, i: usize, ws: &Workspace, screens: &[Screen], cx: &m
     };
     ui::secondary(("goes-to", i), current.clone(), cx)
         .dropdown_caret(true)
+        .accessibility_label(format!("Where {title} goes: {current}"))
         .w_full()
         .tooltip(current)
         .dropdown_menu(menu)
@@ -637,7 +645,7 @@ fn window_row(
         .flex()
         .flex_col()
         .gap(px(2.))
-        .child(goes_menu(panel, i, ws, screens, cx))
+        .child(goes_menu(panel, i, ws, screens, &title, cx))
         .when(opens, |d| d.child(div().text_size(px(12.)).text_color(p.muted).truncate().child("Will open")));
     let main = div()
         .flex()

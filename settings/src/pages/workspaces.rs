@@ -350,6 +350,13 @@ fn list_card(i: usize, ws: &Workspace, icons: &Icons, marks: Marks, p: Palette, 
             .children(default)
             .children(marks.active.map(|drifted| active_status(drifted, p)))
     });
+    let mut label = vec![ws.name.clone()];
+    if marks.default {
+        label.push("default".into());
+    }
+    if let Some(drifted) = marks.active {
+        label.push(if drifted { "active, moved" } else { "active" }.into());
+    }
     let name = div().min_w_0().text_size(px(14.)).font_weight(FontWeight::MEDIUM).truncate().child(ws.name.clone());
     let detail = div()
         .flex()
@@ -360,6 +367,9 @@ fn list_card(i: usize, ws: &Workspace, icons: &Icons, marks: Marks, p: Palette, 
         .children(ws.hotkey.as_ref().map(|combo| keycaps(combo, false, p)));
     div()
         .id(("workspace", i))
+        .role(Role::ListItem)
+        .aria_label(label.join(", "))
+        .aria_selected(picked)
         .flex()
         .flex_col()
         .gap(px(6.))

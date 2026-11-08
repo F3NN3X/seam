@@ -266,18 +266,20 @@ pub fn render(panel: &mut Panel, window: &mut Window, cx: &mut Context<Panel>) -
         .enumerate()
         .map(|(i, name)| {
             let name = name.clone();
-            let remove = ui::secondary(("never-manage", i), "Remove", cx).on_click(cx.listener({
-                let name = name.clone();
-                move |panel, _, window, cx| {
-                    let before = panel.config.zones.exclude.clone();
-                    let rest: Vec<String> = before.iter().filter(|x| **x != name).cloned().collect();
-                    panel.patch(json!({ "zones": { "exclude": rest } }), window, cx);
-                    let undo = move |panel: &mut Panel, window: &mut Window, cx: &mut Context<Panel>| {
-                        panel.patch(json!({ "zones": { "exclude": before.clone() } }), window, cx)
-                    };
-                    panel.offer_undo(format!("Removed {name}"), undo, window, cx);
-                }
-            }));
+            let remove = ui::secondary(("never-manage", i), "Remove", cx)
+                .accessibility_label(format!("Remove {name}"))
+                .on_click(cx.listener({
+                    let name = name.clone();
+                    move |panel, _, window, cx| {
+                        let before = panel.config.zones.exclude.clone();
+                        let rest: Vec<String> = before.iter().filter(|x| **x != name).cloned().collect();
+                        panel.patch(json!({ "zones": { "exclude": rest } }), window, cx);
+                        let undo = move |panel: &mut Panel, window: &mut Window, cx: &mut Context<Panel>| {
+                            panel.patch(json!({ "zones": { "exclude": before.clone() } }), window, cx)
+                        };
+                        panel.offer_undo(format!("Removed {name}"), undo, window, cx);
+                    }
+                }));
             row(name, None, remove, p)
         })
         .collect();

@@ -44,6 +44,15 @@ Experimental: turn on **Keep windows in their zones** on the Zones page and Seam
 
 Seam leaves windows from apps running as administrator, windows that aren't responding and its own windows alone. Next and previous zone are still on the Shortcuts page and in the API. New installs give them no key, and an earlier `config.json` keeps the keys it has. Win+Alt+arrows aren't the move keys because some Windows builds hold them already.
 
+- **Pin window on top** keeps the focused window above the others until you press it again.
+- **Keep window out of workspace switches** makes the focused window sticky: a workspace switch never moves, minimizes or closes it, and capture leaves it out.
+- **Focus border**, on the Zones page, colours the border of the window that has focus in your Windows accent colour, the one under Settings > Personalisation > Colours. It's off until you turn it on, needs Windows 11, and skips windows from apps running as administrator.
+- **Release pinned windows**, in the tray menu, takes back every pin and border Seam set. Seam does the same when you quit it. An update or a restart that you didn't ask for keeps the pins: the next start keeps the pins it finds and resets the borders.
+
+The three pin keys have no key until you set one on the Shortcuts page.
+
+If komorebi, GlazeWM or LeopardWM is running, Seam notices within 30 seconds and leaves placing windows to it: drag snapping, the zone keys, move and swap, and keeping windows in their zones are off, and the Zones page says why. **Another window manager handles my windows** on the Zones page does the same for any other one. The pointer remap, Line Up, workspaces, focus keys and pins keep working.
+
 ### Workspaces
 
 Arrange your windows the way you like them, then press **Capture current windows** on the Workspaces page. Seam saves which app is on which screen and in which zone (or maximized, or at its own size), for the desk you have connected. **Switch now**, the workspace's shortcut, or **Workspaces** in the tray menu then puts each app back. Apps that aren't running are started if they're ticked under Launch and **Start missing apps** is on, and Seam waits up to 15 seconds for each window. **Update from screen** saves the windows as they are now into a workspace.
@@ -60,6 +69,7 @@ Other apps, such as a Stream Deck, can switch workspaces through the local API.
 - **Line Up Screens…**: calibrate.
 - **Workspaces**: switch to a workspace on this desk. Only shown when the desk has some.
 - **Remap pointer at borders**: pause or resume the hook.
+- **Release pinned windows**: take back every pin and focus border Seam set.
 
 Left-clicking the icon opens Seam on a new install. If you're upgrading from v0.1 it keeps opening Line Up. `tray_click` in `config.json` sets which.
 
@@ -71,7 +81,7 @@ Running `seam.exe` again while it's already running opens the Seam window. `seam
 - **Ctrl+Shift+Alt+P**: pause or resume the remap.
 - **Shift+Win+Alt+arrows**: move the focused window that way on the desk.
 - **Ctrl+Shift+Alt+arrows**: focus the window that way.
-- Swap, and next or previous zone, have no key until you set one.
+- Swap, next or previous zone, and the three pin keys have no key until you set one.
 - One per workspace, and one to capture the current windows, all set on the Shortcuts page. Ctrl+Shift+Alt plus a number is a good choice, since Ctrl+Alt alone types characters on many keyboards.
 
 If another app already holds one, Seam keeps running without it.
@@ -85,13 +95,15 @@ A Stream Deck plugin in `integrations/streamdeck` puts Seam on keys. It talks to
 - **Pause or resume remap** and **Zones on or off**: two-state keys that follow Seam, so they stay right when you change a setting elsewhere.
 - **Next zone** and **Previous zone**: move the focused window.
 - **Move window** and **Focus window**: pick a direction in the key's settings. They work as the shortcuts do.
+- **Pin on top**: pins the focused window on top, or unpins it.
+- **Release pinned windows**: takes back every pin and focus border Seam set.
 - **Desk**: shows the active desk's name. Pressing it opens the Displays page.
 
 When Seam isn't running, every key says so and reconnects by itself once it is.
 
 On a PC shared with other Windows accounts, the plugin can't check that the program answering on Seam's connection is really Seam. Seam's own apps do check. The plugin only sends commands like "switch workspace" and reads status, so the most another account could do is see that status or ignore the keys.
 
-To install it, download `co.f3nn3x.seam.streamDeckPlugin` and open it. The Stream Deck app installs it and adds a Seam group to the action list. To build it yourself, run `pnpm install`, `pnpm build` and `pnpm pack` in `integrations/streamdeck`. The packed file lands in its `dist` folder.
+To install it, download `co.f3nn3x.seam.streamDeckPlugin` and open it. The Stream Deck app installs it and adds a Seam group to the action list. To build it yourself, run `pnpm install`, `pnpm build` and `pnpm run pack` in `integrations/streamdeck`. The packed file lands in its `dist` folder.
 
 ## Install and update
 

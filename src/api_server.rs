@@ -51,6 +51,8 @@ const COMMAND_TIMEOUT: Duration = Duration::from_secs(60);
 pub struct Queued {
     pub command: Command,
     pub reply: Sender<Reply>,
+    /// Sent by the panel the tray started, which proved it with the token.
+    pub panel: bool,
 }
 
 /// Lines waiting for a client, which its own thread writes.
@@ -324,7 +326,7 @@ impl Session {
             Command::ConfigGet => Ok(read_snapshot(shared).config.clone()),
             Command::DesksList => Ok(desks_list(&read_snapshot(shared))),
             Command::WorkspacesList { desk } => workspaces_list(&read_snapshot(shared), desk.as_deref()),
-            command => run_on_main_thread(shared, command),
+            command => run_on_main_thread(shared, command, self.panel),
         }
     }
 
@@ -353,9 +355,9 @@ impl Session {
     }
 }
 
-fn run_on_main_thread(shared: &Shared, command: Command) -> Reply {
+fn run_on_main_thread(shared: &Shared, command: Command, panel: bool) -> Reply {
     let (reply, answer) = channel();
-    guard(&shared.queue).push_back(Queued { command, reply });
+    guard(&shared.queue).push_back(Queued { command, reply, panel });
     wake_main_thread(shared);
     answer.recv_timeout(COMMAND_TIMEOUT).map_err(|_| RpcError::new(BUSY, "Seam didn't answer in time"))?
 }

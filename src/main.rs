@@ -26,6 +26,8 @@ mod switcher;
 #[cfg(windows)]
 mod wincontrol;
 #[cfg(windows)]
+mod wm;
+#[cfg(windows)]
 mod zone_paint;
 
 #[cfg(windows)]

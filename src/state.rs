@@ -87,6 +87,29 @@ pub struct UpdateState {
     pub ready: bool,
 }
 
+/// Window managers Seam steps aside for (D110): the exe, the name State uses, and the name to show.
+/// LeopardWM's daemon binary is `leopardwm` (crates/daemon in jcardama/LeopardWM).
+pub const OTHER_WMS: [(&str, &str, &str); 3] = [
+    ("komorebi.exe", "komorebi", "komorebi"),
+    ("glazewm.exe", "glazewm", "GlazeWM"),
+    ("leopardwm.exe", "leopardwm", "LeopardWM"),
+];
+
+/// The name to show for a window manager State names.
+pub fn other_wm_title(name: &str) -> &str {
+    OTHER_WMS.iter().find(|(_, id, _)| *id == name).map_or(name, |(_, _, title)| title)
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default)]
+pub struct WmState {
+    /// The window manager found running, if any, by its name in `OTHER_WMS`.
+    pub other_wm: Option<String>,
+    /// "Another window manager handles my windows" is on.
+    pub manual_other_wm: bool,
+    pub focus_border: bool,
+}
+
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(default)]
 pub struct State {
@@ -94,6 +117,7 @@ pub struct State {
     pub packaged: bool,
     pub remap: Remap,
     pub zones: Zones,
+    pub wm: WmState,
     pub desk: DeskRef,
     pub screens: Vec<Screen>,
     pub borders: Vec<Border>,

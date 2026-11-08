@@ -152,13 +152,18 @@ pub fn render(panel: &mut Panel, _: &mut Window, cx: &mut Context<Panel>) -> imp
         row("Move window to previous zone", "prev_zone", keys.prev_zone.as_ref(), 3),
     ];
     // Move, focus and swap in each direction on the desk.
-    let window_rows: Vec<AnyElement> = keys
+    let mut window_rows: Vec<AnyElement> = keys
         .directional()
         .into_iter()
         .zip(WINDOW_TITLES)
         .enumerate()
         .map(|(i, ((verb, dir, combo), title))| row(title, &format!("{verb}_{dir}"), combo, 5 + i))
         .collect();
+    window_rows.extend([
+        row("Pin window on top", "pin_top", keys.pin_top.as_ref(), 17),
+        row("Keep window out of workspace switches", "pin_sticky", keys.pin_sticky.as_ref(), 18),
+        row("Release pinned windows", "release_all", keys.release_all.as_ref(), 19),
+    ]);
     // One row for each workspace on this desk, then the capture shortcut.
     let on_desk = workspaces::on_desk(panel);
     let mut workspace_rows: Vec<AnyElement> = on_desk

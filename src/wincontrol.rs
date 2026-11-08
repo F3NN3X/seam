@@ -153,7 +153,7 @@ fn geometry(job: &Job, screens: &[Screen]) -> Vec<Geo> {
     screens.iter().map(geo).collect()
 }
 
-fn is_seam(h: HWND) -> bool {
+pub fn is_seam(h: HWND) -> bool {
     winutil::exe_name(h).is_some_and(|name| name == "seam.exe" || name == "seam-settings.exe")
 }
 

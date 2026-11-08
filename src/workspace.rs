@@ -126,6 +126,11 @@ pub struct Rule {
     /// The same in millimetres, when its screen reports a size, for "Keep its real size".
     #[serde(skip_serializing_if = "Option::is_none")]
     pub size_mm: Option<[f32; 2]>,
+    /// Device path of the screen the window was on at capture. `monitor` can be
+    /// retargeted later, this stays. A restore on any other screen counts as another
+    /// screen. Without it, the saved size decides.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub captured_on: Option<String>,
 }
 
 impl Default for Rule {
@@ -147,6 +152,7 @@ impl Default for Rule {
             wait_for_window: false,
             size_px: None,
             size_mm: None,
+            captured_on: None,
         }
     }
 }
@@ -212,6 +218,7 @@ impl Rule {
         self.focused = from.focused;
         self.size_px = from.size_px;
         self.size_mm = from.size_mm;
+        self.captured_on = from.captured_on.clone();
     }
 }
 

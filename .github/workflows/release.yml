@@ -148,6 +148,8 @@ jobs:
       # pinned version and SHA-256, and ignores any Inno the runner already has.
       - name: Install Inno Setup
         shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: ./packaging/install-inno.ps1
 
       # Built from dist\, the files latest.json hashes. The setup isn't added to

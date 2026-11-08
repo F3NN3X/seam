@@ -21,14 +21,25 @@ $url = "https://github.com/jrsoftware/issrc/releases/download/is-7_1_1/innosetup
 $sha256 = '8a5a6711c3766a6e5fb74f280ba0e3551e719ce94538d901fdbd1f8f9920b3f0'
 
 $setup = Join-Path ($env:RUNNER_TEMP ?? $env:TEMP) "innosetup-$version-x64.exe"
-foreach ($try in 1..3) {
+# GitHub's release file host answers 504 now and then, sometimes for a minute or
+# more, so this waits longer between tries and alternates the API (gh, when a
+# token is set) with the plain URL.
+$waits = 15, 30, 60, 120
+foreach ($try in 1..5) {
     try {
-        Invoke-WebRequest -Uri $url -OutFile $setup
+        Remove-Item $setup -ErrorAction SilentlyContinue
+        if ($env:GH_TOKEN -and ($try % 2 -eq 1)) {
+            gh release download is-7_1_1 -R jrsoftware/issrc -p "innosetup-$version-x64.exe" -O $setup
+            if ($LASTEXITCODE -ne 0) { throw "gh release download exited with $LASTEXITCODE." }
+        } else {
+            Invoke-WebRequest -Uri $url -OutFile $setup
+        }
         if ((Get-FileHash $setup -Algorithm SHA256).Hash -ieq $sha256) { break }
         throw "innosetup-$version-x64.exe doesn't match its pinned SHA-256."
     } catch {
-        if ($try -eq 3) { throw }
-        Start-Sleep -Seconds (10 * $try)
+        if ($try -eq 5) { throw }
+        Write-Host "Download try $try failed: $_. Waiting $($waits[$try - 1]) s."
+        Start-Sleep -Seconds $waits[$try - 1]
     }
 }
 

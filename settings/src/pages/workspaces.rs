@@ -341,15 +341,16 @@ fn list_card(i: usize, ws: &Workspace, icons: &Icons, marks: Marks, p: Palette, 
     let id = ws.id.clone();
     let picked = marks.picked;
     let default = marks.default.then(|| div().text_size(px(12.)).text_color(p.secondary).child("Default"));
-    let tags = div()
-        .flex()
-        .flex_none()
-        .items_center()
-        .gap(px(8.))
-        .children(default)
-        .children(marks.active.map(|drifted| active_status(drifted, p)));
-    let title = div().min_w_0().text_size(px(14.)).font_weight(FontWeight::MEDIUM).truncate().child(ws.name.clone());
-    let name = div().flex().items_center().justify_between().gap(px(8.)).child(title).child(tags);
+    // The marks get a line of their own, so the name keeps the card's full width.
+    let tags = (marks.default || marks.active.is_some()).then(|| {
+        div()
+            .flex()
+            .items_center()
+            .gap(px(8.))
+            .children(default)
+            .children(marks.active.map(|drifted| active_status(drifted, p)))
+    });
+    let name = div().min_w_0().text_size(px(14.)).font_weight(FontWeight::MEDIUM).truncate().child(ws.name.clone());
     let detail = div()
         .flex()
         .items_center()
@@ -369,6 +370,7 @@ fn list_card(i: usize, ws: &Workspace, icons: &Icons, marks: Marks, p: Palette, 
         .when(picked, |d| d.bg(p.raised).border_color(p.hairline_strong))
         .when(!picked, |d| d.bg(p.card).border_color(p.hairline).hover(|d| d.bg(p.raised)))
         .child(name)
+        .children(tags)
         .child(detail)
         .on_click(cx.listener(move |panel, _, _, cx| {
             panel.workspace = Some(id.clone());

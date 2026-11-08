@@ -6,16 +6,18 @@
 use minisign_verify::{PublicKey, Signature};
 use seam::api::{CallError, Client};
 use seam::updates::{self, UpdateFile};
-use seam::{package, process};
+use seam::{install, log, package, process};
 use semver::Version;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 pub const REPO: &str = "https://github.com/F3NN3X/seam";
 const RELEASES: &str = "https://api.github.com/repos/F3NN3X/seam/releases?per_page=10";
+/// Where every asset of Seam's releases is served from, before GitHub's redirect.
+const RELEASE_DOWNLOADS: &str = "https://github.com/F3NN3X/seam/releases/download/";
 /// The public half of Seam's minisign key (ID DD3DF0F7CB3ACA88): the second
 /// line of `seam.pub`. See packaging/README.md.
 pub const SEAM_PUBLIC_KEY: &str = "RWSIyjrL9/A93aX1yKj6IwVEqWPJfCHdaObPGMyLiD3ri5I/VvS9FnGQ";
@@ -27,6 +29,8 @@ const SLOW_QUIT_WAIT_MS: u32 = 15_000;
 const API_TIMEOUT: Duration = Duration::from_secs(10);
 const DOWNLOAD_TIMEOUT: Duration = Duration::from_secs(300);
 const QUIT_WAIT_MS: u32 = 5000;
+/// How long a freshly started tray gets to answer on the pipe.
+const NEW_TRAY_WAIT: Duration = Duration::from_secs(5);
 
 #[derive(Clone, Debug)]
 pub struct Release {
@@ -58,7 +62,12 @@ impl Release {
 
     fn asset_url(&self, name: &str) -> Result<&str, String> {
         let found = self.assets.iter().find(|a| a.name == name);
-        found.map(|a| a.browser_download_url.as_str()).ok_or_else(|| format!("The release has no {name}"))
+        let url = found.map(|a| a.browser_download_url.as_str()).ok_or_else(|| format!("The release has no {name}"))?;
+        // The signature is the real check. This only keeps a download on Seam's own releases.
+        if !url.starts_with(RELEASE_DOWNLOADS) {
+            return Err("The release points somewhere unexpected".into());
+        }
+        Ok(url)
     }
 }
 
@@ -371,8 +380,25 @@ fn roll_back(dir: &Path, renamed: &[&str]) {
     }
 }
 
-fn start_tray(dir: &Path, args: &[&str]) {
-    let _ = std::process::Command::new(dir.join("seam.exe")).args(args).spawn();
+fn start_tray(dir: &Path, args: &[&str]) -> std::io::Result<std::process::Child> {
+    std::process::Command::new(dir.join("seam.exe")).args(args).spawn()
+}
+
+/// The version of the tray that answers on the pipe, once one does.
+fn tray_version(wait: Duration) -> Option<String> {
+    let started = Instant::now();
+    loop {
+        if let Ok(mut tray) = Client::connect("seam-settings", None) {
+            let info = tray.call("app.info", Value::Null).ok();
+            if let Some(version) = info.and_then(|i| i["seam_version"].as_str().map(str::to_string)) {
+                return Some(version);
+            }
+        }
+        if started.elapsed() >= wait {
+            return None;
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
 }
 
 impl InstallError {
@@ -433,7 +459,7 @@ fn install_signed(version: &str) -> Result<(), InstallError> {
         if !process::wait_for_exit(pid, QUIT_WAIT_MS) {
             // It was told to close, so it will. Never leave without a tray.
             if process::wait_for_exit(pid, SLOW_QUIT_WAIT_MS) {
-                start_tray(&dir, &["--tray-only"]);
+                let _ = start_tray(&dir, &["--tray-only"]);
             }
             return Err(failed("Seam was slow to close, so nothing was changed"));
         }
@@ -441,10 +467,23 @@ fn install_signed(version: &str) -> Result<(), InstallError> {
     let mut renamed = Vec::new();
     if let Err(e) = swap(&dir, &staged, &manifest, &mut renamed) {
         roll_back(&dir, &renamed);
-        start_tray(&dir, &["--tray-only"]);
+        let _ = start_tray(&dir, &["--tray-only"]);
         return Err(failed(format!("Seam is back on its old version. {e}")));
     }
-    start_tray(&dir, &["--updated-from", env!("CARGO_PKG_VERSION")]);
+    // A swap that works is no use if the new tray doesn't come up.
+    let started = start_tray(&dir, &["--updated-from", env!("CARGO_PKG_VERSION")]);
+    if started.is_err() || tray_version(NEW_TRAY_WAIT).as_deref() != Some(version) {
+        if let Ok(mut new) = started {
+            let _ = new.kill();
+            let _ = new.wait();
+        }
+        roll_back(&dir, &renamed);
+        let _ = start_tray(&dir, &["--tray-only"]);
+        return Err(failed("Seam is back on its old version. The new one didn't start"));
+    }
+    if let Err(e) = install::note_version(version) {
+        log::info!("{e}");
+    }
     Ok(())
 }
 
@@ -467,6 +506,21 @@ pub fn install_main(version: &str) -> i32 {
         return 0;
     }
     i32::from(install(version).is_err())
+}
+
+/// `seam-settings.exe --quit-tray`, for the installer. Exits 0 when Seam quit or
+/// wasn't running, 1 when it didn't close in time, 2 when it couldn't be asked
+/// while it is still running.
+pub fn quit_main() -> i32 {
+    let Ok(mut tray) = Client::connect("seam-settings", None) else {
+        return if process::tray_running() { 2 } else { 0 };
+    };
+    let pid = tray.call("app.info", Value::Null).ok().and_then(|i| i["pid"].as_u64());
+    let Some(pid) = pid.and_then(|pid| u32::try_from(pid).ok()) else { return 2 };
+    if tray.call("app.quit", Value::Null).is_err() {
+        return 2;
+    }
+    i32::from(!(process::wait_for_exit(pid, QUIT_WAIT_MS) || process::wait_for_exit(pid, SLOW_QUIT_WAIT_MS)))
 }
 
 #[cfg(test)]

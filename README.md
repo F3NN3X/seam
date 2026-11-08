@@ -59,13 +59,14 @@ Windows arranges screens in **raw pixels**. When two monitors have different pix
 ![The Displays page](docs/images/displays.png)
 
 - **Line Up** opens a full-screen overlay on every monitor, with big numbers so you know which screen is which. For each border you drag two lines until they run straight across the bezel. No measuring.
-- The **Physical layout** card on Displays has two views. **Seam** is the map of your desk, with each border drawn by kind: a solid amber line when it's lined up, a dashed one when it's glued, and a muted dotted one with "Not on your desk" when Windows has the screens touching but your desk doesn't. **Windows** is the arrangement exactly as Windows has it, in pixels, with a note such as "18 px gap" where two screens face each other across a gap. Clicking a screen in either view flashes its number on it. **Show on screens** draws the chosen view on every real screen for a few seconds, with each screen's number and model and a band along each edge that has a neighbour. Esc or a click closes it.
-- Each border's **...** menu on Displays has **Not on my desk** (or **On my desk**, to undo it) for screens that touch in Windows, so you can set that without opening Line Up.
-- **Type measurements in Line Up** (off by default) adds a field to Line Up where you type how far the screens are offset, in cm.
+- The **Physical layout** card on Displays has two views. **Seam** is the map of your desk, with each border drawn by kind: a solid amber line when it's lined up, a dashed one when it's glued, and a muted dotted one with "Not on your desk" when Windows has the screens touching but your desk doesn't. **Windows** is the arrangement exactly as Windows has it, in pixels, with a note such as "18 px gap" where two screens face each other across a gap. Clicking a screen in either view flashes its number on it. **Show on screens** draws the chosen view on every real screen for a few seconds, with each screen's number and model and a band along each edge that has a neighbour. Esc, a click or 8 seconds closes it.
+- **Glue** is for screens that touch on your desk but have a gap between them in Windows. Line Up offers each such pair after the touching borders, and G glues it. The pointer then crosses the gap where the screens physically meet, and rests at the edge until you push about 60 px past it, so an auto-hide taskbar there still shows. Past the end of a glue, the edge is a dead edge that Seam holds. A pair found from the screens' sizes starts glued, and a pair found only from the pixel layout starts off. Displays calls such a border "Glued to the right edge of 1".
+- **Not on my desk** is for screens that touch in Windows but not on your desk. Press N in Line Up, or use **Not on my desk** (and **On my desk**, to undo it) in the border's **...** menu on Displays. The pointer stops at that edge both ways, or crosses to a glued screen past it, and Displays calls it "Not on your desk".
+- Line Up's aids: each step names both screens with their model and says which way to move each line, a band of stripes shows whether the edge runs straight across, and **Type measurements in Line Up** (off by default, on Displays) adds a field to type the offset in cm. See [First run](#first-run).
 - **Remap pointer at borders** pauses and resumes the hook, from the tray or with Ctrl+Shift+Alt+P.
 - **Also align Windows arrangement** (on by default) moves your monitors in the Windows arrangement so each border lines up at the middle of its physical overlap. Dragging a window between screens then looks right even with Seam closed. You can undo it anytime in Display settings.
-- Each set of screens is a **desk**, with its own borders, zones and workspaces. **Saved desks** lists them, and each desk's menu has **Rename** and **Forget**. Reconnect the same screens and the layout comes back.
-- Seam relies on Windows' **Ease cursor movement between displays**, so the pointer can always leave a screen toward its neighbour. It warns you when that's off, and **Turn it on** (on the Displays page, or when the Seam window asks once) turns it on. Seam never turns it off.
+- Each set of screens is a **desk**, with its own borders, zones and workspaces. **Saved desks** lists them, and each desk's menu has **Rename** and **Forget**. Dates show in your local time, as "Lined up today", "yesterday" or "3 days ago". Reconnect the same screens and the layout comes back.
+- Seam relies on Windows' **Ease cursor movement between displays**, so the pointer can always leave a screen toward its neighbour. It warns you when that's off, and **Turn it on** (on the Displays page, or when the Seam window asks once) turns it on and checks that Windows kept it. Seam never turns it off.
 
 ### Zones
 
@@ -162,11 +163,11 @@ Shortcuts work anywhere in Windows, even with the Seam window closed. Each has i
 - **Remap pointer at borders** pauses or resumes the hook.
 - **Release pinned windows** takes back every pin and focus border Seam set.
 
-Left-clicking the icon opens Seam on a new install. If you're upgrading from v0.1 it keeps opening Line Up. `tray_click` in `config.json` sets which. Running `seam.exe` again while it's already running opens the Seam window, and `seam.exe --line-up` opens Line Up, or starts with it open.
+Left-clicking the icon opens Seam on a new install. If you're upgrading from v0.1 it keeps opening Line Up. `tray_click` in `config.json` sets which. Running `seam.exe` again while it's already running opens the Seam window, and `seam.exe --line-up` opens Line Up, or starts with it open. The Seam window opens centred on the screen the pointer is on. `seam-settings.exe --page help` opens it on a page (`displays`, `zones`, `workspaces`, `shortcuts`, `general`, `help` or `about`), and switches a window that is already open to it.
 
 ### Help
 
-**Help**, at the bottom of the Seam window's sidebar, explains each part of Seam in a short topic, starting with Getting started. Each topic has a button to the page it's about, and Search (Ctrl+F) finds the topics too.
+**Help**, at the bottom of the Seam window's sidebar, explains each part of Seam in a short topic, starting with Getting started, and including glue, Not on my desk, the Line Up aids and the two layout views. Each topic has a button to the page it's about, and Search (Ctrl+F) finds the topics too.
 
 ![The Help page](docs/images/help.png)
 
@@ -218,11 +219,11 @@ Seam has a built-in updater that only installs releases signed with Seam's key. 
    - **Drag anywhere else** to move both lines. This sets the height.
    - Arrow keys nudge the selected line (Shift moves 10 px, Ctrl moves both). Tab switches lines. R resets to the guess from your monitors' EDID.
    - The pointer already follows your lines while you adjust, so move it across the border to check.
-   - **G** glues two screens that touch on your desk but have a gap between them in Windows. Line Up asks about each such pair after the touching borders. Pairs whose sizes put them side by side start glued, and the rest start off and are skipped unless you press G. Glued screens get the same two lines.
-   - **N** marks two screens that touch in Windows but not on your desk. Seam then stops the pointer at that border instead of letting it cross, and the lines dim. Press N again to undo it.
-   - Each step names both screens with their model, such as "Line up screen 3 (HDMI) with screen 4 (U3477)".
+   - **G** glues a pair that touches on your desk but has a gap in Windows. Line Up asks about each such pair after the touching borders. Pairs whose sizes put them side by side start glued, and the rest start off and are skipped unless you press G. Glued screens get the same two lines, and you line them up as they stand on your desk.
+   - **N** marks two screens that touch in Windows but not on your desk. The lines dim, and Seam stops the pointer at that border instead of letting it cross. Press N again to undo it.
+   - Each step names both screens with their model, such as "Line up screen 3 (HDMI) with screen 4 (U3477)", and says which way to move each line, such as "straight below" or "level with".
    - A band of faint diagonal stripes runs along the shared edge on both screens, 10 mm apart on the desk. If they run on straight across the edge, the screens are lined up. If they step, the offset is off, and if the spacing changes, the scale is off. Screens that report no size get no stripes.
-   - **M** types the offset instead of dragging, when its switch on the Displays page is on. It asks how many cm screen B's top (or left) edge sits below (or to the right of) screen A's, and moves the lines to match. Tab flips below and above, Enter applies and Esc closes the field. It needs both screens to report their size.
+   - **M** types the offset instead of dragging, when **Type measurements in Line Up** is on in the Pointer card on Displays. It asks how many cm screen B's top (or left) edge sits below (or to the right of) screen A's, and moves the lines to match. Tab flips below and above, Enter applies and Esc closes the field. It needs both screens to report their size.
    - **Enter** goes to the next border, or finishes after the last one. **Backspace** goes back, **Esc** cancels.
 4. **Pick zone layouts.** Open **Zones**, pick a layout for each screen, and hold Shift while you drag a window.
 5. **Capture a workspace.** Arrange your windows, open **Workspaces**, and press **Capture current windows**. Give it a shortcut on the Shortcuts page.
@@ -242,10 +243,10 @@ Windows lines screens up in raw pixels and keeps the same pixel row when the poi
 Without it, Windows blocks the pointer from leaving a screen at a point that has no neighbouring pixels. With different sizes, much of a screen's edge is like that, so the pointer would never get to the border where Seam can carry it across. Seam warns you on the Displays page when it's off. **Turn it on** does it for you. Seam never turns it off, so turn it off in Display settings if you want it off.
 
 **My screens touch on the desk, but Windows has a gap between them. Can the pointer cross it?**
-Yes, if you glue them in Line Up. When the pointer goes past the edge into the gap, Seam carries it to where the other screen physically continues. The pointer rests at the edge until you push about 60 px past it, so an auto-hide taskbar on that edge still shows. If Windows has another screen under the pointer there, that screen wins. Align arrangement keeps the gap, and refuses a move that would take a glued screen out from beyond its partner's edge.
+Yes, if you glue them in Line Up (G). When the pointer goes past the edge into the gap, Seam carries it to where the other screen physically continues, after a push of about 60 px. If Windows has another screen under the pointer there, that screen wins. Align arrangement keeps the gap, and refuses a move that would break a glue.
 
 **Windows has two screens touching that don't on my desk**
-Press N on that border in Line Up. Seam stops the pointer there, both ways, as if Windows had a gap. If you've glued another screen past that edge, the pointer goes there instead, after the same push as any glued edge. Align arrangement never moves a screen to match that border, and Displays lists it as "Not on your desk".
+Press N on that border in Line Up, or choose **Not on my desk** in the border's **...** menu on Displays. Seam stops the pointer there, both ways, as if Windows had a gap. If you've glued another screen past that edge, the pointer goes there instead, after the same push as any glued edge. Align arrangement never moves a screen to match that border.
 
 **Why can't Seam move some windows?**
 Windows doesn't let a normal app move the windows of an app running as administrator. Seam skips them in zones, window control and workspaces, tells you once when that happens, and shows "can't be moved" in the workspace editor. Run the app without administrator rights if you can.
@@ -297,6 +298,7 @@ Set these on the Shortcuts page. Ctrl+Shift+Alt plus a number is a good choice f
 - **The zip won't run.** Windows marks a downloaded zip as untrusted. Unblock it before unzipping: right-click it, choose **Properties**, tick **Unblock**. Or run `Unblock-File seam-X.Y.Z-windows-x64.zip` in PowerShell.
 - **A shortcut doesn't work.** NVIDIA, AMD and Intel overlays hold some combinations. General and Shortcuts show a conflict in red. Choose another one in Shortcuts.
 - **The pointer still jumps.** Check that Ease cursor movement is on, that the remap isn't paused, and that Displays shows the border as lined up. Run Line Up again if you moved a screen.
+- **The pointer jumps to the wrong screen at a gap.** Windows has the screens touching or apart differently from your desk. Glue the pair in Line Up if they touch on your desk with a gap in Windows, or mark the border **Not on my desk** if they touch in Windows but not on your desk.
 - **No update arrives.** About says why when a check fails. The most common cause is a network that blocks `api.github.com`. Check by hand with **Check now**.
 - **Something else.** Turn on the [debug log](#debug-log), reproduce it, and look in `seam.log`.
 
@@ -318,7 +320,7 @@ The hook runs on its own high-priority thread, so UI work can never delay mouse 
 
 ## Debug log
 
-Run `seam.exe --log`, or set `SEAM_LOG=1`, to append to `%APPDATA%\Seam\seam.log`: monitors, resolved borders, every remap with its time in the hook, a once-a-minute line timing all hook events, hook install and removal, display changes, and arrangement results. Quit any running Seam first, because a second launch only opens the window of the first one. Logging is off by default, and then adds only an atomic load to the hook.
+Run `seam.exe --log`, or set `SEAM_LOG=1`, to append to `%APPDATA%\Seam\seam.log`: monitors, resolved borders, every remap with its time in the hook, a once-a-minute line timing all hook events (with histograms of Seam's own time and of other apps' hooks, and counts over 1 ms), hook install and removal, display changes, and arrangement results. Quit any running Seam first, because a second launch only opens the window of the first one. Logging is off by default, and then adds only an atomic load to the hook.
 
 ## Building from source
 

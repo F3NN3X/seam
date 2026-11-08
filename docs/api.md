@@ -120,7 +120,7 @@ A desk is one set of connected screens, with its own borders, zones and workspac
 | `screen.identify` | `number`: Line Up number, from 1 | `{ok: true}` | Any | 1 | `{"method":"screen.identify","params":{"number":2}}` |
 | `layout.show` | `view`: `"seam"` or `"windows"` | `{ok: true}` | Panel | 4 | `{"method":"layout.show","params":{"view":"windows"}}` |
 
-`lineup.start` answers at once and opens the overlay. Watch for `lineup.finished`. `arrangement.align` moves the screens in the Windows arrangement to match the saved borders. It answers when done, and its refusal text (for example that moving a screen would break another border) is in `error.message` and in the state's `last_align`. `screen.identify` shows the screen's number on it for 1.5 seconds. `layout.show` draws the layout on every screen: each screen's number and model, and a band along each edge that has a neighbour, labelled with it. `"seam"` marks the lined-up borders, and `"windows"` the neighbours and gaps in the Windows arrangement. It answers at once, and Esc, a click or 8 seconds closes it.
+`lineup.start` answers at once and opens the overlay. Watch for `lineup.finished`. `arrangement.align` moves the screens in the Windows arrangement to match the saved borders. It answers when done, and its refusal text (for example "Moving screen 3 would overlap screen 1", or that moving a screen would break its border or glue with another) is in `error.message` and in the state's `last_align`. `screen.identify` shows the screen's number on it for 1.5 seconds. `layout.show` draws the layout on every screen: each screen's number and model, and a band along each edge that has a neighbour, labelled with it. `"seam"` marks the lined-up borders, and `"windows"` the neighbours and gaps in the Windows arrangement. It answers at once, and Esc, a click or 8 seconds closes it.
 
 ### Zones and windows
 
@@ -176,7 +176,7 @@ Workspaces belong to a desk, and these methods act on the desk that is connected
 | `update.ready` | none | `{ok: true}` | Seam | 3, 4 | `{"method":"update.ready"}` |
 | `panel.open` | `page?`: a page name | `{ok: true}` | Any | 3 | `{"method":"panel.open","params":{"page":"workspaces"}}` |
 
-`update.ready` is how `seam-settings.exe` tells the tray that the updater has an update waiting, and it is not for other clients. The Store build answers `3`, since the Store updates Seam. `panel.open` opens the Seam window, or brings it to the front, on one of `displays`, `zones`, `workspaces`, `shortcuts`, `general`, `help` or `about`. An unknown page opens the window on its last page. Error `3` means `seam-settings.exe` isn't next to `seam.exe`.
+`update.ready` is how `seam-settings.exe` tells the tray that the updater has an update waiting, and it is not for other clients. The Store build answers `3`, since the Store updates Seam. `panel.open` opens the Seam window on one of `displays`, `zones`, `workspaces`, `shortcuts`, `general`, `help` or `about`. A window that is already open switches to that page and comes to the front. A new one opens centred on the screen the pointer is on. An unknown page opens a new window on its last page, and leaves an open one where it is. Error `3` means `seam-settings.exe` isn't next to `seam.exe`.
 
 ## Events
 

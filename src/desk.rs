@@ -1,7 +1,7 @@
 //! A desk is one set of connected screens. The tray and the panel both resolve
 //! it from here, so they always agree on what's lined up.
 
-use crate::config::{Config, Desk, SavedBorder};
+use crate::config::{Config, Desk, SavedBorder, WindowSize};
 use crate::geom::{touching, EdgeMap, Rect, Side};
 use crate::layout::Link;
 use crate::log;
@@ -183,11 +183,21 @@ pub fn size_mm(w: i32, h: i32, raw_dpi: f64) -> Option<[f32; 2]> {
     (raw_dpi > 0.0).then(|| [to_mm(w as f64, raw_dpi) as f32, to_mm(h as f64, raw_dpi) as f32])
 }
 
-/// Keep physical size (§11.4): a frame `size` pixels big on a screen of `src_dpi`
-/// raw density, the same size in millimetres on one of `dst_dpi`. That is
-/// `px_dst = px_src × raw_dpi_dst / raw_dpi_src` per axis, centred where the move
-/// put the frame (`at`) and kept inside the destination's work area. `None` when
-/// either screen doesn't report its size, so the caller keeps the pixel size.
+/// A frame `size` pixels big, centred where the move put it (`at`) and kept inside
+/// the work area.
+pub fn centred(size: (f64, f64), at: zones::Rect, work: zones::Rect) -> zones::Rect {
+    let w = (size.0.round() as i32).clamp(1, work.w.max(1));
+    let h = (size.1.round() as i32).clamp(1, work.h.max(1));
+    let (cx, cy) = (at.x + at.w / 2, at.y + at.h / 2);
+    let x = (cx - w / 2).min(work.x + work.w - w).max(work.x);
+    let y = (cy - h / 2).min(work.y + work.h - h).max(work.y);
+    zones::Rect { x, y, w, h }
+}
+
+/// Real size (§11.4): a frame `size` pixels big on a screen of `src_dpi` raw
+/// density, the same size on the desk on one of `dst_dpi`. That is
+/// `px_dst = px_src × raw_dpi_dst / raw_dpi_src` per axis, `centred` on `at`.
+/// `None` when either screen doesn't report its size.
 pub fn physical_rect(
     size: (f64, f64),
     src_dpi: f64,
@@ -199,12 +209,25 @@ pub fn physical_rect(
         return None;
     }
     let k = dst_dpi / src_dpi;
-    let w = ((size.0 * k).round() as i32).clamp(1, work.w.max(1));
-    let h = ((size.1 * k).round() as i32).clamp(1, work.h.max(1));
-    let (cx, cy) = (at.x + at.w / 2, at.y + at.h / 2);
-    let x = (cx - w / 2).min(work.x + work.w - w).max(work.x);
-    let y = (cy - h / 2).min(work.y + work.h - h).max(work.y);
-    Some(zones::Rect { x, y, w, h })
+    Some(centred((size.0 * k, size.1 * k), at, work))
+}
+
+/// The frame a window moved to another screen gets, as `mode` says: the pixels it
+/// had there, or its real size, `centred` on where the move put it (`at`). `None`
+/// leaves the size to Windows: its own mode, or a real size where either screen
+/// doesn't report its size.
+pub fn moved_rect(
+    mode: WindowSize,
+    size: (f64, f64),
+    (src_dpi, dst_dpi): (f64, f64),
+    at: zones::Rect,
+    work: zones::Rect,
+) -> Option<zones::Rect> {
+    match mode {
+        WindowSize::Windows => None,
+        WindowSize::Pixels => Some(centred(size, at, work)),
+        WindowSize::Real => physical_rect(size, src_dpi, dst_dpi, at, work),
+    }
 }
 
 /// How far apart two edges can be on the desk and still count as side by side, in mm.

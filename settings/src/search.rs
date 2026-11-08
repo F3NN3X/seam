@@ -34,18 +34,6 @@ const ENTRIES: &[Entry] = &[
     entry(Page::Displays, "Saved desks", "Rename or forget a desk", "layouts"),
     entry(Page::Displays, "Remap pointer at borders", "Cross where the screens physically meet", "pause mouse"),
     entry(Page::Displays, "Also align Windows arrangement", "Move screens in Display settings to match", ""),
-    entry(
-        Page::Displays,
-        "Keep window size in centimetres between screens",
-        "Moves by key, by other apps and by workspaces to a screen of another density",
-        "physical size dpi scaling density edid mm",
-    ),
-    entry(
-        Page::Displays,
-        "Keep size in centimetres when I drag between screens",
-        "Resizes a window after you drop it on another screen",
-        "physical size dpi scaling density mouse drag",
-    ),
     entry(Page::Zones, "Zones on", "Hold a key while you drag a window to drop it into a zone", "snap enable"),
     entry(Page::Zones, "Layout", "Columns, rows, grid or priority for each screen", "template tiles"),
     entry(Page::Zones, "Edit layout", "Split, merge and resize the zones of a screen", "editor custom divider"),
@@ -83,6 +71,18 @@ const ENTRIES: &[Entry] = &[
         "Pinned windows stay when I switch workspaces",
         "A window pinned on top isn't moved, minimized or closed",
         "pin topmost workspace switch sticky",
+    ),
+    entry(
+        Page::Zones,
+        "When a window moves to another screen",
+        "Let Windows scale it, keep its pixel size or keep its real size",
+        "size pixels scale scaling dpi real move screen",
+    ),
+    entry(
+        Page::Zones,
+        "Also when I drag a window to another screen",
+        "The same size after you drop a window on another screen",
+        "size pixels scale dpi drag mouse",
     ),
     entry(
         Page::Zones,

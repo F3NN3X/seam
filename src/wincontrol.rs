@@ -7,6 +7,7 @@ use crate::hook::SEAM_INPUT_TAG;
 use crate::log;
 use crate::snap::{self, Placement};
 use seam::api::{self, Reply, RpcError, WindowVerb};
+use seam::config::WindowSize;
 use seam::desk::{self, Mon};
 use seam::direction::{self, Dir, Found, Screen};
 use seam::layout::Link;
@@ -44,8 +45,8 @@ pub struct Job {
     pub gap: u32,
     /// Lower-case exe names the zones leave alone.
     pub exclude: Vec<String>,
-    /// "Keep window size in centimetres between screens".
-    pub physical: bool,
+    /// "When a window moves to another screen".
+    pub size_mode: WindowSize,
     /// From the API, which has no right to take focus until it sends input.
     pub from_api: bool,
     pub reply: Option<Sender<Reply>>,
@@ -252,35 +253,26 @@ fn relative(rect: Rect, from: &Geo, to: &Geo) -> Rect {
     Rect { x, y, w, h }
 }
 
-/// With "Keep window size in centimetres between screens" on, a window whose frame
-/// was `size` on `from` keeps its size in millimetres on `to`, centred where the
-/// move put it (§11.4). A screen that doesn't report its size keeps pixels.
-fn physical(job: &Job, h: HWND, size: Rect, from: &Geo, to: &Geo, placed: Rect) -> Rect {
-    if !job.physical || from.id == to.id {
+/// "When a window moves to another screen": a window whose frame was `size` on
+/// `from` keeps its pixel size or its real size on `to`, centred where the move put
+/// it (§11.4). With Windows' scaling, or a real size where a screen doesn't report
+/// its size, it keeps the place the move worked out.
+fn resized(job: &Job, h: HWND, size: Rect, from: &Geo, to: &Geo, placed: Rect) -> Rect {
+    if job.size_mode == WindowSize::Windows || from.id == to.id {
         return placed;
     }
     let app = winutil::exe_name(h).unwrap_or_default();
     let px = (size.w as f64, size.h as f64);
-    let Some(r) = desk::physical_rect(px, from.raw_dpi, to.raw_dpi, placed, to.work) else {
+    let Some(r) = desk::moved_rect(job.size_mode, px, (from.raw_dpi, to.raw_dpi), placed, to.work) else {
         log::info!(
-            "physical size: {app} keeps its pixel size, screen {} or {} doesn't report its size",
+            "window size: {app} scaled by Windows, screen {} or {} doesn't report its size",
             from.number,
             to.number
         );
         return placed;
     };
-    let mm = desk::size_mm(size.w, size.h, from.raw_dpi).unwrap_or_default();
-    log::info!(
-        "physical size: {app} screen {} → {}, {}×{} px → {}×{} px (mm {:.0}×{:.0})",
-        from.number,
-        to.number,
-        size.w,
-        size.h,
-        r.w,
-        r.h,
-        mm[0],
-        mm[1]
-    );
+    let (a, b, mode) = (from.number, to.number, job.size_mode);
+    log::info!("window size ({mode:?}): {app} screen {a} → {b}, {}×{} px → {}×{} px", size.w, size.h, r.w, r.h);
     r
 }
 
@@ -349,7 +341,7 @@ fn run(job: &Job) -> Result<Outcome, &'static str> {
                         None => {
                             let to = &geo[direction::screen_at(&screens, there_rect)?];
                             let target = match direction::screen_at(&screens, own) {
-                                Some(here) => physical(job, h, own, &geo[here], to, there_rect),
+                                Some(here) => resized(job, h, own, &geo[here], to, there_rect),
                                 None => there_rect,
                             };
                             Some(free(h, to, target))
@@ -392,5 +384,5 @@ fn move_one(job: &Job, screens: &[Screen], geo: &[Geo], h: HWND, rect: Rect) -> 
     }
     let here = direction::screen_at(screens, from).ok_or("Nothing in that direction")?;
     let placed = relative(from, &geo[here], to);
-    Ok(free(h, to, physical(job, h, from, &geo[here], to, placed)))
+    Ok(free(h, to, resized(job, h, from, &geo[here], to, placed)))
 }

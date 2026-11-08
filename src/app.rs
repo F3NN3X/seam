@@ -593,8 +593,8 @@ fn start_switch_job(app: &mut App, workspace: Workspace, arrange_for: Option<Dur
     // A hotkey gives the tray the right to take focus. For anyone else this is all it can do.
     let _ = unsafe { AllowSetForegroundWindow(std::process::id()) };
     let (owner, screens, gap) = (app.hwnd.0 as isize, job_screens(app), app.cfg.zones.gap);
-    let (pins_stay, physical) = (app.cfg.windows.pins_stay_on_switch, app.cfg.keep_physical_size);
-    let job = SwitchJob { owner, workspace, screens, gap, arrange_for, pins_stay, physical };
+    let (pins_stay, size_mode) = (app.cfg.windows.pins_stay_on_switch, app.cfg.window_size_on_move);
+    let job = SwitchJob { owner, workspace, screens, gap, arrange_for, pins_stay, size_mode };
     if switcher::switch(job) {
         Ok(json!({ "ok": true }))
     } else {
@@ -646,7 +646,7 @@ fn start_window(app: &App, verb: WindowVerb, dir: Dir, reply: Option<Sender<Repl
         layouts: app.mons.iter().map(layout).collect(),
         gap: app.cfg.zones.gap,
         exclude: app.cfg.zones.exclude.iter().map(|x| x.to_lowercase()).collect(),
-        physical: app.cfg.keep_physical_size,
+        size_mode: app.cfg.window_size_on_move,
         // A hotkey gives the tray the right to take focus. The API has to earn it.
         from_api: reply.is_some(),
         reply,
@@ -690,7 +690,7 @@ fn active_workspace(app: &App) -> Option<Workspace> {
 fn live_of(app: &App, workspace: Workspace) -> LiveWorkspace {
     let exclude = app.cfg.zones.exclude.iter().map(|x| x.to_lowercase()).collect();
     let (screens, gap, pins_stay) = (job_screens(app), app.cfg.zones.gap, app.cfg.windows.pins_stay_on_switch);
-    LiveWorkspace { workspace, screens, gap, pins_stay, exclude, physical: app.cfg.keep_physical_size }
+    LiveWorkspace { workspace, screens, gap, pins_stay, exclude, size_mode: app.cfg.window_size_on_move }
 }
 
 /// Hand the workspace in use to the live worker, and tell the seam-wm thread what to

@@ -217,6 +217,19 @@ impl Default for UpdateSettings {
     }
 }
 
+/// The size a window gets when Seam moves it to another screen (§11.4).
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum WindowSize {
+    /// "Let Windows scale it": Windows' own DPI scaling, and nothing more.
+    #[default]
+    Windows,
+    /// "Keep its pixel size": the same width and height in pixels as before the move.
+    Pixels,
+    /// "Keep its real size": the same size on the desk, from each screen's EDID size.
+    Real,
+}
+
 /// Who reopens the apps of a restored last session (D128).
 #[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -266,12 +279,12 @@ pub struct Config {
     pub align_arrangement: bool,
     /// Offer to line up a set of screens we haven't seen before.
     pub ask_new_desks: bool,
-    /// "Keep window size in centimetres between screens": a key, API or workspace move
-    /// to a screen of another density keeps the window's size in millimetres (§11.4).
-    pub keep_physical_size: bool,
-    /// "Keep size in centimetres when I drag between screens": the same after a free
-    /// drag with the mouse. Only counts while `keep_physical_size` is on.
-    pub keep_physical_size_drag: bool,
+    /// "When a window moves to another screen": what size a key, API or workspace move
+    /// to another screen gives it, outside zones (§11.4).
+    pub window_size_on_move: WindowSize,
+    /// "Also when I drag a window to another screen": the same after a free drag with
+    /// the mouse that didn't snap. Does nothing while the size is Windows'.
+    pub window_size_on_drag: bool,
     pub tray_click: TrayClick,
     pub debug_log: bool,
     pub hotkeys: Hotkeys,
@@ -306,8 +319,8 @@ impl Default for Config {
             enabled: true,
             align_arrangement: true,
             ask_new_desks: true,
-            keep_physical_size: true,
-            keep_physical_size_drag: false,
+            window_size_on_move: WindowSize::Windows,
+            window_size_on_drag: false,
             tray_click: TrayClick::Open,
             debug_log: false,
             hotkeys: Hotkeys::default(),

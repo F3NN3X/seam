@@ -334,21 +334,6 @@ fn ease_alert(p: Palette, cx: &mut Context<Panel>) -> Div {
         }))
 }
 
-/// What the physical size row says: which screens keep pixels, if any don't report a size.
-fn physical_about(panel: &Panel) -> SharedString {
-    let no_size: Vec<String> =
-        panel.mons.iter().enumerate().filter(|(_, m)| m.raw_dpi <= 0.).map(|(i, _)| (i + 1).to_string()).collect();
-    match no_size.as_slice() {
-        [] => "Moves by key, by other apps and by workspaces to a screen of another density".into(),
-        [n] => format!("Screen {n} doesn't report its size, so windows keep their pixel size there").into(),
-        [first @ .., last] => format!(
-            "Screens {} and {last} don't report their size, so windows keep their pixel size there",
-            first.join(", ")
-        )
-        .into(),
-    }
-}
-
 pub fn render(panel: &mut Panel, window: &mut Window, cx: &mut Context<Panel>) -> impl IntoElement {
     let p = palette(cx);
     let screens = panel.mons.len();
@@ -403,27 +388,9 @@ pub fn render(panel: &mut Panel, window: &mut Window, cx: &mut Context<Panel>) -
         let view = view.clone();
         move |on, window, cx| view.update(cx, |panel, cx| panel.patch(json!({ "enabled": on }), window, cx))
     });
-    let also_align = switch("align-arrangement", panel.config.align_arrangement, window, cx, {
-        let view = view.clone();
-        move |on, window, cx| view.update(cx, |panel, cx| panel.patch(json!({ "align_arrangement": on }), window, cx))
+    let also_align = switch("align-arrangement", panel.config.align_arrangement, window, cx, move |on, window, cx| {
+        view.update(cx, |panel, cx| panel.patch(json!({ "align_arrangement": on }), window, cx));
     });
-    let physical_on = panel.config.keep_physical_size;
-    let physical = switch("keep-physical-size", physical_on, window, cx, {
-        let view = view.clone();
-        move |on, window, cx| view.update(cx, |panel, cx| panel.patch(json!({ "keep_physical_size": on }), window, cx))
-    });
-    // Only counts while the first is on, so it can't be used until then.
-    let drag = div().opacity(if physical_on { 1. } else { 0.5 }).child(switch(
-        "keep-physical-size-drag",
-        panel.config.keep_physical_size_drag,
-        window,
-        cx,
-        move |on, window, cx| {
-            if physical_on {
-                view.update(cx, |panel, cx| panel.patch(json!({ "keep_physical_size_drag": on }), window, cx));
-            }
-        },
-    ));
     let pointer = card(
         vec![
             row("Remap pointer at borders", Some("Cross where the screens physically meet".into()), remap, p),
@@ -431,13 +398,6 @@ pub fn render(panel: &mut Panel, window: &mut Window, cx: &mut Context<Panel>) -
                 "Also align Windows arrangement",
                 Some("Move screens in Display settings to match".into()),
                 also_align,
-                p,
-            ),
-            row("Keep window size in centimetres between screens", Some(physical_about(panel)), physical, p),
-            row(
-                "Keep size in centimetres when I drag between screens",
-                Some("Resizes a window after you drop it on another screen".into()),
-                drag,
                 p,
             ),
         ],

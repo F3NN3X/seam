@@ -9,6 +9,7 @@ use crate::wincontrol;
 use crate::wm::Pinned;
 use seam::api::PinKind;
 use seam::classify::{classify, Verdict, WindowFacts};
+use seam::config::WindowSize;
 use seam::desk;
 use seam::winutil;
 use seam::workspace::{
@@ -50,8 +51,8 @@ const ARRANGE_POLL: Duration = Duration::from_millis(500);
 const SETTLE: Duration = Duration::from_millis(120);
 /// A window this close to where it was put counts as there.
 const CLOSE_ENOUGH: i32 = 4;
-/// A free place whose saved fractions come within this share of its size in
-/// millimetres at capture is on the screen it was captured on.
+/// A free place whose saved fractions come within this share of its size at
+/// capture is on the screen it was captured on.
 const SAME_SIZE: f32 = 0.1;
 /// The gap slider's end, as in the snapping.
 const MAX_GAP: u32 = 32;
@@ -308,10 +309,10 @@ fn capture_rules(job: &CaptureJob, session: bool) -> Vec<Rule> {
             _ => workspace::target_of(visible, &geo.zones)
                 .unwrap_or_else(|| Target::Rect { rect: workspace::to_fractions(visible, geo.work) }),
         };
-        // Its size in millimetres, for a restore on a screen of another density.
-        let size_mm = matches!(shown, Shown::Normal | Shown::Minimized)
-            .then(|| desk::size_mm(visible.w, visible.h, geo.raw_dpi))
-            .flatten();
+        // Its size in pixels and millimetres, for a restore on another screen.
+        let free = matches!(shown, Shown::Normal | Shown::Minimized);
+        let size_px = free.then_some([visible.w, visible.h]);
+        let size_mm = free.then(|| desk::size_mm(visible.w, visible.h, geo.raw_dpi)).flatten();
         let c = seen.cand;
         rules.push(Rule {
             exe: c.exe,
@@ -326,6 +327,7 @@ fn capture_rules(job: &CaptureJob, session: bool) -> Vec<Rule> {
             shown,
             z: rules.len() as u32,
             focused: c.hwnd == foreground,
+            size_px,
             size_mm,
             ..Rule::default()
         });
@@ -348,8 +350,8 @@ pub struct SwitchJob {
     pub arrange_for: Option<Duration>,
     /// "Pinned windows stay when I switch workspaces".
     pub pins_stay: bool,
-    /// "Keep window size in centimetres between screens".
-    pub physical: bool,
+    /// "When a window moves to another screen".
+    pub size_mode: WindowSize,
 }
 
 /// How a switch went: what the event says.
@@ -548,16 +550,23 @@ fn plan(rule: &Rule, geo: &Geo) -> Option<Kind> {
     })
 }
 
-/// Where a rule puts its window, and on which screen. A free place restored on a
-/// screen other than the one it was captured on keeps its size in millimetres
-/// (§11.4): on its own screen when the saved fractions no longer give that size, or,
-/// with that screen gone, on the one the window is on now. Then it comes with the
-/// line to log once it's moved. `tell` logs a window left alone because its screen
-/// doesn't report its size. `None` leaves the window where it is.
-fn destination<'g>(rule: &Rule, geos: &'g [Geo], h: HWND, physical: bool, tell: bool) -> Option<Planned<'g>> {
+/// Where a rule puts its window, and on which screen. With "Keep its pixel size" or
+/// "Keep its real size", a free place restored on a screen other than the one it was
+/// captured on keeps the pixels or the millimetres it had at capture (§11.4): on its
+/// own screen when the saved fractions no longer give that size, or, with that screen
+/// gone, on the one the window is on now. Then it comes with the line to log once
+/// it's moved. `tell` logs a window Windows scales because a screen doesn't report
+/// its size. `None` leaves the window where it is.
+fn destination<'g>(rule: &Rule, geos: &'g [Geo], h: HWND, mode: WindowSize, tell: bool) -> Option<Planned<'g>> {
     let saved = geos.iter().find(|g| g.id == rule.monitor);
-    let mm = rule.size_mm.filter(|_| physical && matches!(rule.target, Target::Rect { .. }));
-    let Some(mm) = mm else { return saved.and_then(|geo| Some((geo, plan(rule, geo)?, None))) };
+    let px = rule.size_px.map(|p| [p[0] as f32, p[1] as f32]);
+    let kept = match mode {
+        WindowSize::Windows => None,
+        WindowSize::Pixels => px,
+        WindowSize::Real => rule.size_mm,
+    };
+    let kept = kept.filter(|_| matches!(rule.target, Target::Rect { .. }));
+    let Some(kept) = kept else { return saved.and_then(|geo| Some((geo, plan(rule, geo)?, None))) };
     let geo = match saved {
         Some(geo) => geo,
         None => {
@@ -567,22 +576,35 @@ fn destination<'g>(rule: &Rule, geos: &'g [Geo], h: HWND, physical: bool, tell: 
     };
     let kind = plan(rule, geo)?;
     let (Kind::Rect(at) | Kind::Min(at)) = kind else { return Some((geo, kind, None)) };
-    let near = |now: [f32; 2]| (0..2).all(|i| (now[i] - mm[i]).abs() <= mm[i] * SAME_SIZE);
-    if saved.is_some() && desk::size_mm(at.w, at.h, geo.raw_dpi).is_none_or(near) {
+    // The screen it was captured on, if the fractions still give the size it had:
+    // in millimetres where both screens report one, else in pixels.
+    let near = |now: [f32; 2], then: [f32; 2]| (0..2).all(|i| (now[i] - then[i]).abs() <= then[i] * SAME_SIZE);
+    let same = match (rule.size_mm, desk::size_mm(at.w, at.h, geo.raw_dpi)) {
+        (Some(then), Some(now)) => near(now, then),
+        _ => px.is_none_or(|then| near([at.w as f32, at.h as f32], then)),
+    };
+    if saved.is_some() && same {
         return Some((geo, kind, None));
     }
-    let size = (f64::from(mm[0]), f64::from(mm[1]));
-    let Some(r) = desk::physical_rect(size, desk::MM_PER_INCH, geo.raw_dpi, at, geo.work) else {
+    let size = (f64::from(kept[0]), f64::from(kept[1]));
+    let resized = match mode {
+        WindowSize::Pixels => Some(desk::centred(size, at, geo.work)),
+        _ => desk::physical_rect(size, desk::MM_PER_INCH, geo.raw_dpi, at, geo.work),
+    };
+    let Some(r) = resized else {
         if tell {
-            log::info!("physical size: {} left alone, screen {} doesn't report its size", app_name(rule), geo.number);
+            log::info!(
+                "window size: {} scaled by Windows, screen {} doesn't report its size",
+                app_name(rule),
+                geo.number
+            );
         }
-        return None;
+        // On its own screen it keeps the saved fractions. A screen that's gone leaves it where it is.
+        return saved.map(|geo| (geo, kind, None));
     };
     let (app, to) = (app_name(rule), geo.number);
-    let note = format!(
-        "physical size: {app} screen at capture → {to}, {}×{} px → {}×{} px (mm {:.0}×{:.0})",
-        at.w, at.h, r.w, r.h, mm[0], mm[1]
-    );
+    let note =
+        format!("window size ({mode:?}): {app} screen at capture → {to}, {}×{} px → {}×{} px", at.w, at.h, r.w, r.h);
     Some((geo, if matches!(kind, Kind::Min(_)) { Kind::Min(r) } else { Kind::Rect(r) }, Some(note)))
 }
 
@@ -758,7 +780,7 @@ struct Run<'a> {
     ws: &'a Workspace,
     geos: Vec<Geo>,
     pins_stay: bool,
-    physical: bool,
+    size_mode: WindowSize,
     cancelled: &'a dyn Fn() -> bool,
     /// The `Seam_ws` key the matched windows are stamped with. The last session stamps none.
     stamp: Option<u32>,
@@ -781,7 +803,7 @@ fn place_rules(run: &Run, found: &[Option<isize>], which: &[usize], seen: &[Seen
             continue;
         }
         // A screen that isn't connected, or a window to keep where it is, isn't moved.
-        let Some((geo, kind, note)) = destination(rule, &run.geos, h, run.physical, true) else { continue };
+        let Some((geo, kind, note)) = destination(rule, &run.geos, h, run.size_mode, true) else { continue };
         let app = app_name(rule);
         let pin = winutil::pin_bits(h);
         if stays(pin, run.pins_stay) {
@@ -1017,7 +1039,7 @@ fn run_switch(job: &SwitchJob, mine: u64) -> Option<Switched> {
     let ws = &job.workspace;
     let stamp = (ws.id != SESSION_ID).then(|| workspace::stamp_key(&ws.id));
     let geos = geometry(&job.screens, job.gap);
-    let run = Run { ws, geos, pins_stay: job.pins_stay, physical: job.physical, cancelled: &cancelled, stamp };
+    let run = Run { ws, geos, pins_stay: job.pins_stay, size_mode: job.size_mode, cancelled: &cancelled, stamp };
     let mut tally = Tally::default();
     let mut procs = Procs::new();
 
@@ -1184,8 +1206,8 @@ pub struct LiveWorkspace {
     pub pins_stay: bool,
     /// Lower-case exe names Seam never manages: auto-apply leaves them alone.
     pub exclude: Vec<String>,
-    /// "Keep window size in centimetres between screens".
-    pub physical: bool,
+    /// "When a window moves to another screen".
+    pub size_mode: WindowSize,
 }
 
 /// How each row's app is doing, the way a switch would see it. Runs on a worker.
@@ -1212,7 +1234,7 @@ fn row_state(rule: &Rule, hit: Option<isize>, seen: &[Seen], geos: &[Geo], live:
         return RowState::InPlace;
     }
     let h = hwnd_of(hwnd);
-    let Some((geo, kind, _)) = destination(rule, geos, h, live.physical, false) else { return RowState::InPlace };
+    let Some((geo, kind, _)) = destination(rule, geos, h, live.size_mode, false) else { return RowState::InPlace };
     let Some(now) = now_of(h, geo.dpi) else { return RowState::InPlace };
     if now.shown == Shown::Minimized && !matches!(kind, Kind::Min(_)) {
         RowState::Minimized
@@ -1252,7 +1274,7 @@ pub fn place_opened(live: &LiveWorkspace, hwnd: isize) -> Option<String> {
     let (row, rule) = (free[hit], &ws.windows[free[hit]]);
     let app = app_name(rule);
     let geos = geometry(&live.screens, live.gap);
-    let target = destination(rule, &geos, h, live.physical, true);
+    let target = destination(rule, &geos, h, live.size_mode, true);
     let now = target.as_ref().and_then(|(geo, ..)| now_of(h, geo.dpi));
     let moved = match (target, now) {
         (Some((geo, kind, note)), Some(now)) if !in_place(&kind, &now, geo.bounds) => {

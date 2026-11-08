@@ -10,6 +10,7 @@ use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::component::ThemeStyled;
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
+use seam::config::WindowSize;
 use seam::desk::Mon;
 use seam::palette as colours;
 use seam::state;
@@ -26,6 +27,30 @@ const TILE_GAP: f32 = 8.;
 const TILE_ART: (f32, f32) = (80., 44.);
 /// Three tile rows: the preview card is as tall.
 const PREVIEW_HEIGHT: f32 = 268.;
+/// "When a window moves to another screen", in the order the control shows them.
+const SIZE_MODES: [WindowSize; 3] = [WindowSize::Windows, WindowSize::Pixels, WindowSize::Real];
+const SIZE_LABELS: [&str; 3] = ["Let Windows scale it", "Keep its pixel size", "Keep its real size"];
+
+/// Under "When a window moves to another screen", only for a real size: the screens
+/// that don't report their size, where Windows scales windows instead.
+fn size_caption(panel: &Panel, mode: WindowSize) -> Option<SharedString> {
+    if mode != WindowSize::Real {
+        return None;
+    }
+    let no_size: Vec<String> =
+        panel.mons.iter().enumerate().filter(|(_, m)| m.raw_dpi <= 0.).map(|(i, _)| (i + 1).to_string()).collect();
+    match no_size.as_slice() {
+        [] => None,
+        [n] => Some(format!("Screen {n} doesn't report its size, so windows there are scaled by Windows").into()),
+        [first @ .., last] => Some(
+            format!(
+                "Screens {} and {last} don't report their size, so windows there are scaled by Windows",
+                first.join(", ")
+            )
+            .into(),
+        ),
+    }
+}
 
 fn key_label(key: &str) -> &'static str {
     KEYS.iter().find(|(k, _)| *k == key).map_or("Shift", |(_, label)| label)
@@ -572,6 +597,25 @@ pub fn render(panel: &mut Panel, window: &mut Window, cx: &mut Context<Panel>) -
             view.update(cx, |panel, cx| panel.patch(json!({ "windows": { "pins_stay_on_switch": on } }), window, cx))
         }
     });
+    let size_mode = panel.config.window_size_on_move;
+    let size_at = SIZE_MODES.iter().position(|m| *m == size_mode).unwrap_or(0);
+    let size_choice = ui::segmented("window-size-on-move", &SIZE_LABELS, size_at, window, cx, {
+        let view = view.clone();
+        move |i, window, cx| {
+            let mode = SIZE_MODES.get(i).copied().unwrap_or_default();
+            view.update(cx, |panel, cx| panel.patch(json!({ "window_size_on_move": mode }), window, cx))
+        }
+    });
+    // Only Seam's own sizes apply to a drag, so with Windows' scaling it can't be used.
+    let scaled = size_mode == WindowSize::Windows;
+    let on_drag = switch("window-size-on-drag", panel.config.window_size_on_drag, window, cx, {
+        let view = view.clone();
+        move |on, window, cx| {
+            if !scaled {
+                view.update(cx, |panel, cx| panel.patch(json!({ "window_size_on_drag": on }), window, cx));
+            }
+        }
+    });
     let other_about = match &detected {
         Some(name) => format!("{} found running", state::other_wm_title(name)),
         None => "Snapping and window moves step aside. The pointer remap keeps working.".to_string(),
@@ -618,6 +662,11 @@ pub fn render(panel: &mut Panel, window: &mut Window, cx: &mut Context<Panel>) -
                 pins_stay,
                 p,
             ),
+            row("When a window moves to another screen", size_caption(panel, size_mode), size_choice, p),
+            div()
+                .when(scaled, |d| d.opacity(0.4))
+                .child(row("Also when I drag a window to another screen", None, on_drag, p))
+                .into_any_element(),
             row("Another window manager handles my windows", Some(other_about.into()), manual, p),
         ],
         p,

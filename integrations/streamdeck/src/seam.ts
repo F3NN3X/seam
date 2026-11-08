@@ -7,7 +7,8 @@ export type SeamState = {
 	remap: "on" | "paused" | "off_no_borders";
 	zones: "on" | "off";
 	desk: { sig: string; name: string };
-	workspace: { id: string; name: string } | null;
+	/** `drifted`: a window of it was moved or minimized since, so Snap back has work to do. */
+	workspace: { id: string; name: string; drifted?: boolean } | null;
 };
 
 export type Workspace = { id: string; name: string; active: boolean };

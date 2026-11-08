@@ -87,6 +87,18 @@ const ENTRIES: &[Entry] = &[
     entry(Page::Workspaces, "Add an app", "Add an open window or an installed app", "picker store start menu"),
     entry(
         Page::Workspaces,
+        "Put apps in place when they open",
+        "A window that opens goes where the workspace in use puts it, once",
+        "auto apply rules automatic open",
+    ),
+    entry(
+        Page::Workspaces,
+        "Put windows back",
+        "Moved or minimized windows go back where the workspace puts them",
+        "snap back drift status moved",
+    ),
+    entry(
+        Page::Workspaces,
         "Delay before opening",
         "Start order, a delay and waiting for an app's window",
         "launch stage order wait minimized",
@@ -111,6 +123,12 @@ const ENTRIES: &[Entry] = &[
     entry(Page::Shortcuts, "Move window to next zone", "Global shortcut", "hotkey keyboard snap"),
     entry(Page::Shortcuts, "Move window to previous zone", "Global shortcut", "hotkey keyboard snap"),
     entry(Page::Shortcuts, "Capture current windows", "Global shortcut", "hotkey keyboard workspace"),
+    entry(
+        Page::Shortcuts,
+        "Snap back to this workspace",
+        "Global shortcut",
+        "hotkey keyboard workspace drift put back",
+    ),
     entry(Page::General, "Start with Windows", "Seam waits in the tray after you sign in", "login autostart"),
     entry(Page::General, "Offer to line up new screens", "Asks once when screens Seam hasn't seen connect", ""),
     entry(

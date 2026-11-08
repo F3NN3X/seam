@@ -37,6 +37,14 @@ export class PinOnTop extends Plain {
 	}
 }
 
+/** Switches to the workspace in use again, so windows that were moved or minimized go back. */
+@action({ UUID: "co.f3nn3x.seam.snap-back" })
+export class SnapBack extends Plain {
+	protected async press(): Promise<void> {
+		await seam.call("workspace.snap_back");
+	}
+}
+
 @action({ UUID: "co.f3nn3x.seam.release" })
 export class ReleasePinned extends Plain {
 	protected async press(): Promise<void> {

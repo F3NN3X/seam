@@ -355,6 +355,42 @@ Turn the debug log on. Close every app of a test workspace, with **Start missing
 - [ ] **On.** Turn it on and do the same. Notepad isn't moved, `skipped` lists it as `pinned`, and Minimize and Close leave it alone. Capture: Notepad is in the new workspace. A sticky window is still left out of the capture.
 - [ ] **API.** `config.get` has `windows.pins_stay_on_switch`.
 
+### Live status and Snap back
+
+Turn the debug log on. Use a workspace with four apps on two screens, switch to it, and leave the Workspaces page open on it.
+
+- [ ] **In place.** After the switch every running app's row shows a filled green dot and "In place" in the **Now** column, a closed app a filled grey dot and "Not running", and no **Put windows back** button shows.
+- [ ] **Will open.** For the closed app with Launch ticked and **Start missing apps** on, "Will open" shows under Goes to. Untick Launch: it goes. Turn Start missing apps off: it goes too.
+- [ ] **Moved.** Drag one window to another zone. Within a second, with no click in the panel, its row shows a hollow ring and "Moved", and **Put windows back** appears under the table. The log has `workspace <id>: drifted`.
+- [ ] **Minimized.** Minimize a window the workspace shows normally: "Minimized" with a hollow ring. A window set to Show as Minimized that is minimized shows "In place".
+- [ ] **Administrator.** Start an app of the workspace as administrator: its row shows a red ring and "Can't move: runs as administrator", and a switch skips it.
+- [ ] **Snap back from the panel.** Press **Put windows back**. The moved and minimized windows go back, the rows show "In place", the button goes, and the log has `workspace <id>: in place`.
+- [ ] **Another workspace.** Select a workspace that isn't in use, move one of its running apps' windows: the rows follow it too, and its **Put windows back** switches to it.
+- [ ] **Hotkey.** Set **Snap back to this workspace** on Shortcuts (it has no key until you set one). Move a window, press it: the window goes back. With no workspace in use (just after plugging a screen in or out), the log says `snap back hotkey: No workspace is in use on this desk`.
+- [ ] **API.** `workspace.status {id}` answers `[{rule_index, state}]` with `in_place`, `moved`, `minimized`, `not_running` or `cant_move`, and error 1 for an id that isn't on this desk. `workspace.snap_back` answers `{ok: true}` and does what the button does, or error 1 with no workspace in use. `state.get` has `workspace.drifted`, true while a window is moved or minimized and false after Snap back. A subscriber to `workspace` gets `workspace.moved {id}` about half a second after a drag of that workspace's window ends.
+- [ ] **No polling.** With the page open and nothing moving for a minute, the panel asks nothing: the log has no `drifted` or `in place` lines, and the wm stats lines show no events beyond the focus border's.
+- [ ] **Only while shown.** On another page, drag a window: the Workspaces rows are right as soon as you come back.
+
+### Auto-apply (Gate B)
+
+Turn the debug log on, and **Put apps in place when they open** on, at the bottom of the Workspaces page (it's off on a new install; `autoapply.set {on}` does the same and answers `{on}`). Switch to a workspace whose apps are closed, with Start missing apps off, so the switch starts nothing.
+
+- [ ] **Gate B, three apps by hand.** Open three of the workspace's apps from the Start menu. Each lands in its zone once, about 150 ms after its window shows, and the log has `auto-apply <workspace>: <app> for row N: placed in X ms` for each. Their rows show "In place".
+- [ ] **Gate B, drag it away.** Drag one of them elsewhere. It stays where you put it, and its row shows "Moved".
+- [ ] **Gate B, second window.** Open a second window of one of those apps (a new Firefox or Explorer window). It's left alone and the log has no auto-apply line for it.
+- [ ] **Gate B, an app not in the workspace.** Open an app the workspace doesn't have. Nothing moves it and nothing is logged.
+- [ ] **Gate B, during a switch.** Close the apps, turn Start missing apps on, switch, and open two of its apps by hand while the switch is still starting the others. Every window moves at most once: no window jumps twice, and the log has no auto-apply line for a window the switch placed.
+- [ ] **Gate B, hook timings.** With auto-apply on, open and close apps and drag windows for 60 s while crossing the borders. `hook stats` `own max` and `avg` match a run with auto-apply off, and the `wm stats` lines every 30 s have `max` well under 1000 µs.
+- [ ] **Drag while it settles.** Open an app and start dragging its window at once. Auto-apply leaves it where you drop it.
+- [ ] **Restore isn't an open.** Minimize a window you dragged away and restore it. It isn't put back in its zone. Close an app to the tray and show it again: it isn't moved either.
+- [ ] **Reopened.** Close one of the three apps and open it again. It goes back into its zone, because its row is free again.
+- [ ] **Never manage.** Add an app of the workspace to **Never manage these apps** on General, then open it: it's left where it opens.
+- [ ] **Administrator.** Open an app of the workspace as administrator: it's left alone without a notice.
+- [ ] **Off.** Turn the switch off and open an app of the workspace. It stays where it opens, and the log's `wm: workspace in use true, auto-apply false` line shows the hooks changed.
+- [ ] **No workspace.** Plug a screen in or out, so no workspace is in use, and open an app: nothing happens.
+- [ ] **Another window manager.** With komorebi running, auto-apply does nothing.
+- [ ] **Release all and quit.** Release pinned windows, then open an already placed app's second window: it's still left alone. Quit Seam and start it again: the windows placed before keep their stamp, so opening the workspace's apps again only places the ones with a free row.
+
 ## Settings panel
 
 - [ ] **Open.** Choose **Open Seam…** in the tray menu. The panel opens in your Windows theme on the last page you used, and the sidebar shows the current remap state.
@@ -510,8 +546,10 @@ Quit any GitHub copy first, unless the step says otherwise.
 
 Build the plugin with `pnpm install`, `pnpm build` and `pnpm run pack` in `integrations/streamdeck`. Run these with Seam running and **Let other apps control Seam** on, and the Stream Deck app open.
 
-- [ ] **Install the packed file.** Double-click `dist\co.f3nn3x.seam.streamDeckPlugin`. Stream Deck installs it, and a Seam group with nine actions appears in the action list. General in Seam lists "streamdeck" among the connected apps.
+- [ ] **Install the packed file.** Double-click `dist\co.f3nn3x.seam.streamDeckPlugin`. Stream Deck installs it, and a Seam group with twelve actions appears in the action list. General in Seam lists "streamdeck" among the connected apps.
 - [ ] **Switch workspace.** Drag the action to a key and pick a workspace in the dropdown, which lists the current desk's workspaces. The key shows its name. Press it: the workspace is applied, and the key lights once it's in use. Switch to another workspace by hotkey. The key goes dark.
+- [ ] **Drift dot.** With the key's workspace in use, drag one of its windows away. Within a second a small amber dot shows in the key's top-right corner. Press the key: the window goes back and the dot goes. Switch to another workspace: the key goes dark with no dot. Quit Seam while the dot shows: the key says "Seam isn't running" with no dot.
+- [ ] **Snap back.** Drag the action to a key. Move a window of the workspace in use and press it: the window goes back. With no workspace in use the key shows an alert.
 - [ ] **Renamed workspace.** Rename the workspace in Seam, then switch to it. The key's title shows the new name. Delete it and capture one with the same name. The key still switches to it.
 - [ ] **Line up screens.** Press the key. Line Up opens. Press it while Line Up is open. The key shows an alert and Line Up stays as it is.
 - [ ] **Pause or resume remap.** The key reads "Remap on" and is lit. Press it. Crossings stop remapping, and the key reads "Remap paused". Press it again to resume. Pause from the tray menu instead. The key follows. With no borders lined up, the key shows paused.

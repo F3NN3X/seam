@@ -285,6 +285,34 @@ pub fn set_pin_bits(h: HWND, bits: usize) {
     }
 }
 
+/// Which workspace placed the window, and for which of its rows, so Seam knows it's
+/// already placed. The high bits are `workspace::stamp_key`, the low 16 the row plus one.
+const WS_STAMP: PCWSTR = w!("Seam_ws");
+
+/// The workspace key and row of the `Seam_ws` stamp, if the window has one.
+pub fn ws_stamp(h: HWND) -> Option<(u32, usize)> {
+    let bits = unsafe { GetPropW(h, WS_STAMP).0 as usize as u64 };
+    let row = (bits & 0xffff) as usize;
+    (row != 0).then_some(((bits >> 16) as u32, row - 1))
+}
+
+/// Stamp the window as placed for this row. Rows past 65534 aren't stamped.
+pub fn set_ws_stamp(h: HWND, key: u32, row: usize) {
+    if row >= 0xffff {
+        return;
+    }
+    let bits = ((key as u64) << 16) | (row as u64 + 1);
+    unsafe {
+        let _ = SetPropW(h, WS_STAMP, Some(HANDLE(bits as usize as *mut _)));
+    }
+}
+
+pub fn clear_ws_stamp(h: HWND) {
+    unsafe {
+        let _ = RemovePropW(h, WS_STAMP);
+    }
+}
+
 /// Workspace switches and capture leave this window alone (D106).
 pub fn is_sticky(h: HWND) -> bool {
     pin_bits(h) & PIN_STICKY != 0

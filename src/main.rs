@@ -18,6 +18,8 @@ mod hook;
 #[cfg(windows)]
 mod identify;
 #[cfg(windows)]
+mod live;
+#[cfg(windows)]
 mod overlay;
 #[cfg(windows)]
 mod snap;

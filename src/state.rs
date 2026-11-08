@@ -67,6 +67,9 @@ pub struct Border {
 pub struct WorkspaceRef {
     pub id: String,
     pub name: String,
+    /// A window of it was moved or minimized since, so Snap back has work to do.
+    #[serde(default)]
+    pub drifted: bool,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]

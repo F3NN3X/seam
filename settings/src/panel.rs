@@ -20,6 +20,7 @@ use seam::monitors;
 use seam::package::{self, Startup};
 use seam::state::{Remap, State};
 use seam::updates::{self, UpdateFile};
+use seam::workspace::RowStatus;
 use serde_json::{json, Value};
 use std::path::PathBuf;
 use std::sync::mpsc::Receiver;
@@ -108,6 +109,10 @@ pub struct Panel {
     pub name_input: Entity<InputState>,
     /// The workspace editor's open row, delay slider and app picker.
     pub editing: pages::workspace_editor::Editing,
+    /// How the shown workspace's apps are doing, by workspace id, and the id being asked about.
+    pub status: Option<(String, Vec<RowStatus>)>,
+    pub asking_status: Option<String>,
+    status_again: bool,
     /// The pickers behind the Custom swatch of the focus and pin colour rows, and a
     /// counter so only the last colour picked in a burst is sent.
     pub focus_picker: Entity<ColorPickerState>,
@@ -220,6 +225,9 @@ impl Panel {
             focus_name: false,
             name_input,
             editing,
+            status: None,
+            asking_status: None,
+            status_again: false,
             focus_picker,
             pin_picker,
             colour_generation: 0,
@@ -332,10 +340,17 @@ impl Panel {
                         .await
                 };
                 let updated = this.update(cx, |this, cx| {
+                    // A moved window of another workspace changes nothing on show.
+                    let moved_here = event.kind == "workspace.moved"
+                        && this.status.as_ref().is_some_and(|(id, _)| event.data["id"].as_str() == Some(id));
+                    let restatus = moved_here || matches!(event.kind.as_str(), "state.changed" | "workspace.switched");
                     if event.kind == "state.changed" {
                         if let (Ok(state), Some(config)) = (serde_json::from_value(event.data), fresh) {
                             this.apply(state, config);
                         }
+                    }
+                    if restatus {
+                        this.ask_status(cx);
                     }
                     cx.notify();
                 });
@@ -449,6 +464,36 @@ impl Panel {
         });
     }
 
+    /// Ask the tray how the shown workspace's apps are doing. Only while the
+    /// Workspaces page is on screen, and one question at a time.
+    pub fn ask_status(&mut self, cx: &mut Context<Self>) {
+        let Some(id) = pages::workspaces::shown_id(self).filter(|_| self.page == Page::Workspaces) else { return };
+        let Some(client) = self.client.clone() else { return };
+        // Something changed while the last answer was on its way, so ask again once it's in.
+        if self.asking_status.is_some() {
+            self.status_again = true;
+            return;
+        }
+        self.asking_status = Some(id.clone());
+        let params = json!({ "id": id });
+        let answer = cx.background_executor().spawn(async move {
+            let mut client = client.lock().ok()?;
+            client.call("workspace.status", params).ok().and_then(|rows| serde_json::from_value(rows).ok())
+        });
+        cx.spawn(async move |this, cx| {
+            let rows: Option<Vec<RowStatus>> = answer.await;
+            let _ = this.update(cx, |this, cx| {
+                this.asking_status = None;
+                this.status = Some((id, rows.unwrap_or_default()));
+                if std::mem::take(&mut this.status_again) {
+                    this.ask_status(cx);
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
     /// Say what just happened, with Undo for 8 s. A newer one replaces it.
     pub fn offer_undo(
         &mut self,
@@ -503,6 +548,7 @@ impl Panel {
     fn show_now(&mut self, page: Page, reveal: Option<&'static str>, window: &mut Window, cx: &mut Context<Self>) {
         self.page = page;
         let _ = std::fs::write(last_page_file(), page.title());
+        self.ask_status(cx);
         if let Some(title) = reveal {
             // From the top, so a result that isn't a row of its own lands at the page's start.
             self.page_scroll.set_offset(Point::default());

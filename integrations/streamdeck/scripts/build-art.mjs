@@ -105,6 +105,15 @@ const release = (p) => {
   return { ...base, h: 28, svg: base.svg + windows + arrow };
 };
 
+/** A dashed window where it drifted to, the filled one back in its place, and the way back. */
+const snapBack = (p) => {
+  const base = mark(p);
+  const thin = Math.min(p.width, 1);
+  const drifted = `<rect x="3.5" y="6.5" width="5" height="7" rx="1" fill="none" stroke="${p.line}" stroke-width="${thin}" stroke-dasharray="1.5 1.5"/>`;
+  const placed = `<rect x="22" y="5" width="6" height="10" rx="1" fill="${p.line}"/>`;
+  return { ...base, h: 28, svg: base.svg + drifted + placed + arrowBelow(p) };
+};
+
 const place = (glyph, scale, cx, cy) =>
   `<g transform="translate(${cx - (glyph.w * scale) / 2} ${cy - (glyph.h * scale) / 2}) scale(${scale})">${glyph.svg}</g>`;
 
@@ -112,10 +121,13 @@ const wrap = (size, body) =>
   `<svg xmlns="http://www.w3.org/2000/svg" width="${size}" height="${size}" viewBox="0 0 ${size} ${size}">${body}</svg>\n`;
 
 /** A key image: the glyph high on a page-grey square, leaving the lower part for the title. */
-const key = (draw, p) => {
+const key = (draw, p, extra = "") => {
   const glyph = draw(p);
-  return wrap(144, `<rect width="144" height="144" fill="${color.page}"/>${place(glyph, 3.2, 72, 50)}`);
+  return wrap(144, `<rect width="144" height="144" fill="${color.page}"/>${place(glyph, 3.2, 72, 50)}${extra}`);
 };
+
+/** The small amber dot in a key's top-right corner: its workspace is in use but drifted. */
+const driftDot = `<circle cx="124" cy="20" r="10" fill="${color.seam}"/>`;
 
 /** A 20 px action list icon. */
 const icon = (draw) => {
@@ -141,6 +153,7 @@ const actions = {
   "window-focus": { draw: windowFocus, states: ["lit"] },
   "pin-top": { draw: pinTop, states: ["lit"] },
   release: { draw: release, states: ["lit"] },
+  "snap-back": { draw: snapBack, states: ["lit"] },
 };
 
 for (const [name, { draw, states }] of Object.entries(actions)) {
@@ -150,6 +163,9 @@ for (const [name, { draw, states }] of Object.entries(actions)) {
     write(`actions/${name}/${file}`, key(draw, state === "lit" ? lit : idle));
   }
 }
+
+// The workspace key the plugin shows while its workspace has drifted.
+write("actions/workspace/key-drift.svg", key(mark, lit, driftDot));
 
 // The plugin icon is a PNG: the mark on a rounded square, like the app icon.
 const pluginIcon = wrap(

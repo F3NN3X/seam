@@ -1,5 +1,6 @@
-//! The `seam-wm` thread: pins, the focus border, Release all, and the check for
-//! another window manager (D106, D108, D110, §3.5). It has its own message loop,
+//! The `seam-wm` thread: pins, the focus border, Release all, the check for
+//! another window manager (D106, D108, D110, §3.5), and the window events behind
+//! workspace drift and auto-apply (§5, §11.1). It has its own message loop,
 //! like `seam-hook`, so WinEvent callbacks never run on the tray's thread. The
 //! tray only posts commands. Answers go straight back to the API client, as
 //! window control's do, and news for the tray comes as `WM_APP_WM`.
@@ -14,7 +15,7 @@ use seam::palette::{self, Colour, FOCUS_DEFAULT, PIN_DEFAULT};
 use seam::state::OTHER_WMS;
 use seam::{winutil, winver};
 use serde_json::json;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
@@ -32,6 +33,8 @@ use windows::Win32::UI::WindowsAndMessaging::*;
 pub const WM_APP_WM: u32 = WM_APP + 19;
 /// A pinned window closed and the user asked to hear about it. Read it with `take_closed`.
 pub const WM_APP_PIN_CLOSED: u32 = WM_APP + 24;
+/// A window stamped for a workspace was moved or minimized: the stamp's workspace key in wParam.
+pub const WM_APP_WS_MOVED: u32 = WM_APP + 26;
 /// A command for the thread, boxed in lParam.
 const WM_APP_COMMAND: u32 = WM_APP + 21;
 /// A window event a callback queued: the event in wParam, the window in lParam.
@@ -48,6 +51,9 @@ const REFRESH_EVERY_MS: u32 = 2_000;
 const BORDER_BUILD: u32 = 22000;
 /// A pinned window that closes this soon after a workspace switch asked it to was closed by Seam.
 const ASKED_TO_CLOSE: Duration = Duration::from_secs(30);
+/// Chromium, Electron and Office resize themselves right after they show, so
+/// auto-apply waits this long before it places a window that opened (§11.1).
+const SETTLE: Duration = Duration::from_millis(150);
 
 /// Who a pinned window was, kept from when it was pinned, because a window that
 /// is gone can't be asked (D119).
@@ -110,6 +116,12 @@ pub enum Command {
     },
     UnwatchShown {
         switch: u64,
+    },
+    /// Whether a workspace is in use on this desk, so moves of its windows count as
+    /// drift, and whether windows that open are put in place (auto-apply).
+    Workspace {
+        active: bool,
+        auto_apply: bool,
     },
 }
 
@@ -175,6 +187,11 @@ pub fn watch_shown(switch: u64) -> Receiver<isize> {
 
 pub fn unwatch_shown(switch: u64) {
     send(Command::UnwatchShown { switch });
+}
+
+/// The hooks for drift and auto-apply exist only while a workspace is in use.
+pub fn workspace(active: bool, auto_apply: bool) {
+    send(Command::Workspace { active, auto_apply });
 }
 
 /// Release all on a clean exit. Waits for it, but not for long.
@@ -324,8 +341,20 @@ struct Wm {
     foreground_hook: Option<HWINEVENTHOOK>,
     destroy_hook: Option<HWINEVENTHOOK>,
     show_hook: Option<HWINEVENTHOOK>,
+    name_hook: Option<HWINEVENTHOOK>,
+    movesize_hook: Option<HWINEVENTHOOK>,
+    minimize_hook: Option<HWINEVENTHOOK>,
     /// The switch waiting for windows to show, and where to send them.
     shown_to: Option<(u64, Sender<isize>)>,
+    /// A workspace is in use, and windows that open are put in place.
+    workspace_active: bool,
+    auto_apply: bool,
+    /// Windows that were there before, or were already looked at, so showing or
+    /// renaming one isn't an open. Kept while auto-apply runs.
+    seen_before: HashSet<isize>,
+    /// Windows that opened, and when they have settled enough to be placed.
+    settling: Vec<(isize, Instant)>,
+    settle_timer: usize,
     /// The window that had focus at the last foreground event.
     foreground: Option<isize>,
     /// Windows to paint again after a focus change, and which of the two repaints is next.
@@ -338,14 +367,14 @@ struct Wm {
     stats: Stats,
 }
 
-/// Install or remove one narrow hook.
-fn sync_hook(slot: &mut Option<HWINEVENTHOOK>, event: u32, wanted: bool) {
+/// Install or remove one narrow hook, for the events `first` to `last`.
+fn sync_hook(slot: &mut Option<HWINEVENTHOOK>, first: u32, last: u32, wanted: bool) {
     match (wanted, *slot) {
         (true, None) => unsafe {
             let flags = WINEVENT_OUTOFCONTEXT | WINEVENT_SKIPOWNPROCESS;
-            let hook = SetWinEventHook(event, event, None, Some(on_event), 0, 0, flags);
+            let hook = SetWinEventHook(first, last, None, Some(on_event), 0, 0, flags);
             if hook.0.is_null() {
-                log::info!("wm hook {event:#x} not installed");
+                log::info!("wm hook {first:#x} not installed");
             } else {
                 *slot = Some(hook);
             }
@@ -361,15 +390,30 @@ fn sync_hook(slot: &mut Option<HWINEVENTHOOK>, event: u32, wanted: bool) {
 impl Wm {
     /// Only what a feature that is on needs: focus changes for the border and for
     /// pins that apps may paint over, closed windows while anything is pinned,
-    /// shown windows while a switch waits for them, and the refresh timer while
-    /// the first applies.
+    /// shown windows while a switch waits for them, moves and minimizes while a
+    /// workspace is in use, opened windows while auto-apply runs, and the refresh
+    /// timer while the first applies.
     fn sync_hooks(&mut self) {
         let wanted = (self.focus_border && self.focus_colour.is_some())
             || (!self.pinned.is_empty() && self.pin_colour.is_some());
         let painting = wanted && borders_supported();
-        sync_hook(&mut self.foreground_hook, EVENT_SYSTEM_FOREGROUND, painting);
-        sync_hook(&mut self.destroy_hook, EVENT_OBJECT_DESTROY, !self.pinned.is_empty());
-        sync_hook(&mut self.show_hook, EVENT_OBJECT_SHOW, self.shown_to.is_some());
+        let auto = self.auto_applying();
+        if auto && self.name_hook.is_none() {
+            // What is there already never counts as opening.
+            self.seen_before = winutil::top_level_windows().into_iter().map(|h| h.0 as isize).collect();
+        } else if !auto {
+            self.seen_before.clear();
+            self.settling.clear();
+            self.stop_settle_timer();
+        }
+        let (show, destroy) = (EVENT_OBJECT_SHOW, EVENT_OBJECT_DESTROY);
+        sync_hook(&mut self.foreground_hook, EVENT_SYSTEM_FOREGROUND, EVENT_SYSTEM_FOREGROUND, painting);
+        sync_hook(&mut self.destroy_hook, destroy, destroy, !self.pinned.is_empty() || auto);
+        sync_hook(&mut self.show_hook, show, show, self.shown_to.is_some() || auto);
+        sync_hook(&mut self.name_hook, EVENT_OBJECT_NAMECHANGE, EVENT_OBJECT_NAMECHANGE, auto);
+        let active = self.workspace_active;
+        sync_hook(&mut self.movesize_hook, EVENT_SYSTEM_MOVESIZESTART, EVENT_SYSTEM_MOVESIZEEND, active);
+        sync_hook(&mut self.minimize_hook, EVENT_SYSTEM_MINIMIZESTART, EVENT_SYSTEM_MINIMIZEEND, active);
         match (painting, self.refresh_timer) {
             (true, 0) => self.refresh_timer = unsafe { SetTimer(None, 0, REFRESH_EVERY_MS, None) },
             (false, id) if id != 0 => {
@@ -378,6 +422,64 @@ impl Wm {
                 self.stop_repaint();
             }
             _ => {}
+        }
+    }
+
+    fn auto_applying(&self) -> bool {
+        self.workspace_active && self.auto_apply
+    }
+
+    fn stop_settle_timer(&mut self) {
+        if self.settle_timer != 0 {
+            let _ = unsafe { KillTimer(None, self.settle_timer) };
+            self.settle_timer = 0;
+        }
+    }
+
+    /// Wake when the next opened window has settled.
+    fn arm_settle_timer(&mut self) {
+        let Some(next) = self.settling.iter().map(|(_, at)| *at).min() else { return self.stop_settle_timer() };
+        let ms = next.saturating_duration_since(Instant::now()).as_millis().max(1) as u32;
+        self.settle_timer = unsafe { SetTimer(None, self.settle_timer, ms, None) };
+    }
+
+    /// A window showed or got its title. If it's new, it's placed once it has
+    /// settled. A window that was there, a minimized one, one already stamped and
+    /// one a running switch waits for aren't opens.
+    fn opened(&mut self, h: HWND) {
+        let key = h.0 as isize;
+        if self.seen_before.contains(&key) {
+            return;
+        }
+        // A window still hidden gets its title first. It counts once it shows.
+        if !unsafe { IsWindowVisible(h) }.as_bool() {
+            return;
+        }
+        self.seen_before.insert(key);
+        if self.shown_to.is_some() || winutil::is_minimized(h) || winutil::ws_stamp(h).is_some() {
+            return;
+        }
+        self.settling.push((key, Instant::now() + SETTLE));
+        self.arm_settle_timer();
+    }
+
+    /// Hand the windows that have settled to the worker that places them.
+    fn settled(&mut self) {
+        let now = Instant::now();
+        let (due, waiting): (Vec<_>, Vec<_>) = self.settling.drain(..).partition(|(_, at)| *at <= now);
+        self.settling = waiting;
+        for (key, _) in due {
+            crate::live::opened(key);
+        }
+        self.arm_settle_timer();
+    }
+
+    /// A move or minimize of a window a workspace placed: tell the tray which workspace.
+    fn moved(&self, h: HWND) {
+        if let (Some((key, _)), true) = (winutil::ws_stamp(h), self.owner != 0) {
+            unsafe {
+                let _ = PostMessageW(Some(hwnd_of(self.owner)), WM_APP_WS_MOVED, WPARAM(key as usize), LPARAM(0));
+            }
         }
     }
 
@@ -496,6 +598,13 @@ impl Wm {
                     self.sync_hooks();
                 }
             }
+            Command::Workspace { active, auto_apply } => {
+                if (active, auto_apply) != (self.workspace_active, self.auto_apply) {
+                    (self.workspace_active, self.auto_apply) = (active, auto_apply);
+                    self.sync_hooks();
+                    log::info!("wm: workspace in use {active}, auto-apply {}", self.auto_applying());
+                }
+            }
         }
     }
 
@@ -528,6 +637,8 @@ impl Wm {
                 wm.paint_again(&wm.pinned);
                 wm.paint_again(&wm.bordered.into_iter().collect::<Vec<_>>());
             });
+        } else if id == self.settle_timer && id != 0 {
+            self.timed(Self::settled);
         }
     }
 
@@ -567,6 +678,8 @@ impl Wm {
             }
             EVENT_OBJECT_DESTROY => {
                 let key = h.0 as isize;
+                self.seen_before.remove(&key);
+                self.settling.retain(|(k, _)| *k != key);
                 self.pinned.retain(|p| *p != key);
                 if self.bordered == Some(key) {
                     self.bordered = None;
@@ -585,7 +698,20 @@ impl Wm {
                     self.shown_to = None;
                     self.sync_hooks();
                 }
+                if self.auto_applying() {
+                    self.opened(h);
+                }
             }
+            // Some apps never send a show for their window, only its title (§11.1).
+            EVENT_OBJECT_NAMECHANGE if self.auto_applying() && unsafe { GetAncestor(h, GA_ROOT) } == h => {
+                self.opened(h);
+            }
+            // Dragging a window that hasn't been placed yet: the user is placing it.
+            EVENT_SYSTEM_MOVESIZESTART => {
+                let key = h.0 as isize;
+                self.settling.retain(|(k, _)| *k != key);
+            }
+            EVENT_SYSTEM_MOVESIZEEND | EVENT_SYSTEM_MINIMIZESTART | EVENT_SYSTEM_MINIMIZEEND => self.moved(h),
             _ => {}
         }
         if let Some(started) = started {

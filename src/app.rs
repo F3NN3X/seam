@@ -8,15 +8,17 @@ use crate::config::{signature, Config};
 use crate::desk::{self, has_neighbours, resolve};
 use crate::hook;
 use crate::layout::{Link, Live};
+use crate::live::WM_APP_DRIFT;
 use crate::log;
 use crate::monitors::{self, Mon};
 use crate::snap::{self, WM_APP_REFIT, WM_APP_SNAP_BLOCKED};
 use crate::switcher::{
-    self, CaptureJob, Screen as SwitchScreen, SwitchJob, WM_APP_CAPTURED, WM_APP_SESSION, WM_APP_SWITCHED,
+    self, CaptureJob, LiveWorkspace, Screen as SwitchScreen, SwitchJob, WM_APP_CAPTURED, WM_APP_SESSION,
+    WM_APP_SWITCHED,
 };
 use crate::tray::{self, CLASS, WM_APP_API, WM_APP_LINEUP, WM_APP_WINDOWS_CHANGED};
-use crate::wm::Pinned;
-use crate::{arrange, ease, hotkey, identify, overlay, wincontrol, wm};
+use crate::wm::{Pinned, WM_APP_WS_MOVED};
+use crate::{arrange, ease, hotkey, identify, live, overlay, wincontrol, wm};
 use seam::api::{self, Client, Command, PinKind, Reply, RpcError, WindowVerb};
 use seam::config::{RestoreApps, TrayClick};
 use seam::direction::Dir;
@@ -84,6 +86,10 @@ const TIMER_SESSION_OFFER: usize = 10;
 const SESSION_OFFER_AFTER_MS: u32 = 5_000;
 /// Tries to show the offer while the shell isn't ready for notifications yet.
 const SESSION_OFFER_TRIES: u8 = 12;
+/// Looks whether the active workspace drifted, a moment after its windows last moved
+/// or it was switched to, so a drag or a switch is checked once.
+const TIMER_DRIFT: usize = 11;
+const DRIFT_AFTER_MS: u32 = 400;
 /// How long the end of a Windows session waits for the last session's capture.
 const SESSION_END_WAIT: Duration = Duration::from_secs(2);
 /// How long a restore whose apps Windows reopens waits for their windows (D128).
@@ -103,6 +109,7 @@ const HOTKEY_CAPTURE: i32 = 5;
 const HOTKEY_PIN_TOP: i32 = 6;
 const HOTKEY_PIN_STICKY: i32 = 7;
 const HOTKEY_RELEASE: i32 = 8;
+const HOTKEY_SNAP_BACK: i32 = 9;
 /// The twelve directional shortcuts, in `Hotkeys::directional` order, from here up.
 const HOTKEY_WINDOW: i32 = 10;
 const WINDOW_KEYS: i32 = 12;
@@ -197,6 +204,12 @@ struct App {
     bound: Vec<(i32, String, Option<String>)>,
     /// The workspace last switched to, if it's still on this desk.
     workspace: Option<String>,
+    /// A window of that workspace is moved or minimized, so Snap back has work to do.
+    drifted: bool,
+    /// Keys of workspaces whose stamped windows moved, waiting for the drift timer.
+    moved: Vec<u32>,
+    /// A switch finished, so the drift timer looks again whatever moved.
+    recheck: bool,
     capturing: Option<Capturing>,
     clients: Vec<String>,
     last_state_event: Option<Instant>,
@@ -358,6 +371,7 @@ fn relink(app: &mut App) {
     let windows = &app.cfg.windows;
     let owner = app.hwnd.0 as isize;
     wm::configure(owner, windows.focus_border, &windows.focus_color, &windows.pin_color, windows.notify_pinned_close);
+    sync_live(app);
     arm_hook(app);
     update_tip(app);
 }
@@ -412,7 +426,7 @@ fn snapshot(app: &App) -> Snapshot {
     });
     let session = saved_session(app).map(|s| SessionRef { saved_at: s.saved_at, windows: s.windows.len() });
     let state = State {
-        workspace: workspace.map(|w| WorkspaceRef { id: w.id, name: w.name }),
+        workspace: workspace.map(|w| WorkspaceRef { id: w.id, name: w.name, drifted: app.drifted }),
         session,
         seam_version: env!("CARGO_PKG_VERSION").into(),
         packaged: app.packaged,
@@ -485,6 +499,7 @@ fn apply_hotkeys(app: &mut App) {
         (HOTKEY_PIN_TOP, "pin_top".to_string(), keys.pin_top.clone()),
         (HOTKEY_PIN_STICKY, "pin_sticky".to_string(), keys.pin_sticky.clone()),
         (HOTKEY_RELEASE, "release_all".to_string(), keys.release_all.clone()),
+        (HOTKEY_SNAP_BACK, "snap_back".to_string(), keys.snap_back.clone()),
     ];
     for (id, (verb, dir, combo)) in (HOTKEY_WINDOW..).zip(keys.directional()) {
         wanted.push((id, format!("{verb}_{dir}"), combo.cloned()));
@@ -578,6 +593,7 @@ fn other_wm_changed(app: &mut App) {
     app.other_wm = wm::detected();
     log::info!("other window manager: {}", app.other_wm.unwrap_or("none"));
     snap::update(app.hwnd, &app.cfg, &app.sig, &app.mons, aside(app).as_deref());
+    sync_live(app);
     publish(app);
 }
 
@@ -624,6 +640,9 @@ fn switched(app: &mut App) {
     // The last session isn't a workspace anyone can pick, so it never shows as the one in use.
     if done.id != SESSION_ID {
         app.workspace = Some(done.id.clone());
+        sync_live(app);
+        app.recheck = true;
+        unsafe { SetTimer(Some(app.hwnd), TIMER_DRIFT, DRIFT_AFTER_MS, None) };
     }
     windows_changed(app);
     publish(app);
@@ -633,6 +652,74 @@ fn switched(app: &mut App) {
         "id": done.id, "name": done.name, "launched": done.launched, "placed": done.placed, "skipped": skipped
     });
     api_server::broadcast("workspace.switched", &data);
+}
+
+/// The workspace in use on this desk, if there is one.
+fn active_workspace(app: &App) -> Option<Workspace> {
+    let id = app.workspace.as_deref()?;
+    desk_workspaces(app).into_iter().find(|w| w.id == id)
+}
+
+/// A workspace with what a status check or auto-apply needs to place its windows.
+fn live_of(app: &App, workspace: Workspace) -> LiveWorkspace {
+    let exclude = app.cfg.zones.exclude.iter().map(|x| x.to_lowercase()).collect();
+    let (screens, gap, pins_stay) = (job_screens(app), app.cfg.zones.gap, app.cfg.windows.pins_stay_on_switch);
+    LiveWorkspace { workspace, screens, gap, pins_stay, exclude }
+}
+
+/// Hand the workspace in use to the live worker, and tell the seam-wm thread what to
+/// watch. Auto-apply steps aside for another window manager, as snapping does (D110).
+fn sync_live(app: &mut App) {
+    let active = active_workspace(app);
+    if active.is_none() {
+        app.drifted = false;
+    }
+    let auto_apply = app.cfg.auto_apply && aside(app).is_none();
+    let live = active.map(|ws| live_of(app, ws));
+    live::set_active(app.hwnd.0 as isize, live, auto_apply);
+}
+
+/// Snap back: switch to the workspace in use again, so what drifted goes back.
+fn snap_back(app: &mut App) -> Reply {
+    match app.workspace.clone() {
+        Some(id) => start_switch(app, Some(&id), None),
+        None => Err(RpcError::new(api::NOT_FOUND, "No workspace is in use on this desk")),
+    }
+}
+
+/// The seam-wm thread saw a window a workspace placed move or minimize.
+fn ws_moved(app: &mut App, key: u32) {
+    if !app.moved.contains(&key) {
+        app.moved.push(key);
+    }
+    unsafe { SetTimer(Some(app.hwnd), TIMER_DRIFT, DRIFT_AFTER_MS, None) };
+}
+
+/// Things have been still for a moment: tell the panel which workspaces' windows
+/// moved, and have the worker look whether the one in use drifted.
+fn drift_due(app: &mut App) {
+    let moved = std::mem::take(&mut app.moved);
+    for ws in desk_workspaces(app).into_iter().filter(|w| moved.contains(&workspace::stamp_key(&w.id))) {
+        api_server::broadcast("workspace.moved", &json!({ "id": ws.id }));
+    }
+    let active = app.workspace.as_deref().map(workspace::stamp_key);
+    if std::mem::take(&mut app.recheck) || active.is_some_and(|key| moved.contains(&key)) {
+        live::check_drift();
+    }
+}
+
+/// The worker looked at the workspace in use.
+fn drift_checked(app: &mut App) {
+    let Some(drift) = live::take_drift() else { return };
+    if drift.placed {
+        api_server::broadcast("workspace.moved", &json!({ "id": drift.id }));
+        windows_changed(app);
+    }
+    if app.workspace.as_deref() == Some(drift.id.as_str()) && drift.drifted != app.drifted {
+        log::info!("workspace {}: {}", drift.id, if drift.drifted { "drifted" } else { "in place" });
+        app.drifted = drift.drifted;
+        publish(app);
+    }
 }
 
 /// Start capturing the windows on screen. Returns an answer only if it can't start.
@@ -967,6 +1054,21 @@ fn run_command(app: &mut App, queued: Queued) {
         },
         Command::WorkspaceSwitch { id, name } => start_switch(app, id.as_deref(), name.as_deref()),
         Command::WorkspaceUpdate { id, workspace } => update_workspace(app, &id, workspace),
+        Command::WorkspaceStatus { id } => match desk_workspaces(app).into_iter().find(|w| w.id == id) {
+            Some(ws) => {
+                live::answer_status(live_of(app, ws), reply);
+                return;
+            }
+            None => Err(RpcError::new(api::NOT_FOUND, "no such workspace on this desk")),
+        },
+        Command::WorkspaceSnapBack => snap_back(app),
+        Command::AutoApplySet(on) => {
+            app.cfg.auto_apply = on;
+            persist(app);
+            sync_live(app);
+            publish(app);
+            Ok(json!({ "on": on }))
+        }
         Command::WorkspaceCapture { name, into, row } => {
             if let Some(refusal) = start_capture(app, name, into, row, Some(reply.clone())) {
                 let _ = reply.send(refusal);
@@ -1163,6 +1265,11 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                     wm::pin(kind, None, GetForegroundWindow().0 as isize, None);
                 }
                 HOTKEY_RELEASE => wm::release(None),
+                HOTKEY_SNAP_BACK => {
+                    if let Some(Err(e)) = with_app(snap_back) {
+                        log::info!("snap back hotkey: {}", e.message);
+                    }
+                }
                 id if (HOTKEY_WINDOW..HOTKEY_WINDOW + WINDOW_KEYS).contains(&id) => {
                     with_app(|a| {
                         let (verb, dir, _) = a.cfg.hotkeys.directional()[(id - HOTKEY_WINDOW) as usize];
@@ -1190,6 +1297,20 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
         }
         WM_APP_CAPTURED => {
             with_app(captured);
+            LRESULT(0)
+        }
+        WM_APP_WS_MOVED => {
+            with_app(|a| ws_moved(a, wparam.0 as u32));
+            LRESULT(0)
+        }
+        WM_TIMER if wparam.0 == TIMER_DRIFT => {
+            if with_app(drift_due).is_some() {
+                let _ = KillTimer(Some(hwnd), TIMER_DRIFT);
+            }
+            LRESULT(0)
+        }
+        WM_APP_DRIFT => {
+            with_app(drift_checked);
             LRESULT(0)
         }
         WM_APP_SESSION => {
@@ -1493,6 +1614,9 @@ pub fn run() {
             hotkey_errors: Vec::new(),
             bound: Vec::new(),
             workspace: None,
+            drifted: false,
+            moved: Vec::new(),
+            recheck: false,
             capturing: None,
             clients: Vec::new(),
             last_state_event: None,

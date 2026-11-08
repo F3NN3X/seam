@@ -10,11 +10,13 @@ use crate::wm::Pinned;
 use seam::api::PinKind;
 use seam::classify::{classify, Verdict, WindowFacts};
 use seam::winutil;
-use seam::workspace::{self, Candidate, OtherWindows, Pin, Rule, Shown, Target, WinState, Workspace};
+use seam::workspace::{
+    self, Candidate, OtherWindows, Pin, RowState, RowStatus, Rule, Shown, Target, WinState, Workspace, SESSION_ID,
+};
 use seam::zones::{self, Rect, ZoneLayout};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::Path;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::mpsc::RecvTimeoutError;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
@@ -346,6 +348,29 @@ pub struct Switched {
 /// Bumped by every switch, so a running one can see a newer one has replaced it.
 static SWITCH_GEN: AtomicU64 = AtomicU64::new(0);
 static SWITCHED: Mutex<Option<Switched>> = Mutex::new(None);
+/// Switches running now. A replaced one counts until its thread has stopped.
+static RUNNING: AtomicUsize = AtomicUsize::new(0);
+
+/// Counts a switch as running for as long as it lives.
+struct Running;
+
+impl Running {
+    fn enter() -> Running {
+        RUNNING.fetch_add(1, Ordering::SeqCst);
+        Running
+    }
+}
+
+impl Drop for Running {
+    fn drop(&mut self) {
+        RUNNING.fetch_sub(1, Ordering::SeqCst);
+    }
+}
+
+/// A switch is placing windows, so auto-apply keeps out of its way.
+pub fn switching() -> bool {
+    RUNNING.load(Ordering::SeqCst) > 0
+}
 
 /// Start a switch, replacing one that is still running. The main thread gets
 /// `WM_APP_SWITCHED` when it's done, and nothing if a newer switch took over.
@@ -354,6 +379,7 @@ pub fn switch(job: SwitchJob) -> bool {
     let spawned = std::thread::Builder::new().name("seam-switch".into()).spawn(move || {
         // Waits until the thread really exists, so a failed spawn replaces nothing.
         let Ok(mine) = started.recv() else { return };
+        let _running = Running::enter();
         let _com = Com::enter();
         let Some(result) = run_switch(&job, mine) else { return };
         if SWITCH_GEN.load(Ordering::SeqCst) != mine {
@@ -675,6 +701,8 @@ struct Run<'a> {
     geos: Vec<Geo>,
     pins_stay: bool,
     cancelled: &'a dyn Fn() -> bool,
+    /// The `Seam_ws` key the matched windows are stamped with. The last session stamps none.
+    stamp: Option<u32>,
 }
 
 /// Place the windows of the rules `which` that have one, then pin again what the
@@ -686,6 +714,10 @@ fn place_rules(run: &Run, found: &[Option<isize>], which: &[usize], seen: &[Seen
     for i in which {
         let (rule, Some(hwnd)) = (&ws.windows[*i], found[*i]) else { continue };
         let h = hwnd_of(hwnd);
+        // The window has its row now, so auto-apply leaves it alone and its moves count as drift.
+        if let Some(key) = run.stamp {
+            winutil::set_ws_stamp(h, key, *i);
+        }
         // A screen that isn't connected, or a window to keep where it is, isn't moved.
         let Some(geo) = run.geos.iter().find(|g| g.id == rule.monitor) else { continue };
         let Some(kind) = plan(rule, geo) else { continue };
@@ -922,7 +954,9 @@ fn run_switch(job: &SwitchJob, mine: u64) -> Option<Switched> {
     let begun = Instant::now();
     let cancelled = || SWITCH_GEN.load(Ordering::SeqCst) != mine;
     let ws = &job.workspace;
-    let run = Run { ws, geos: geometry(&job.screens, job.gap), pins_stay: job.pins_stay, cancelled: &cancelled };
+    let stamp = (ws.id != SESSION_ID).then(|| workspace::stamp_key(&ws.id));
+    let geos = geometry(&job.screens, job.gap);
+    let run = Run { ws, geos, pins_stay: job.pins_stay, cancelled: &cancelled, stamp };
     let mut tally = Tally::default();
     let mut procs = Procs::new();
 
@@ -930,6 +964,16 @@ fn run_switch(job: &SwitchJob, mine: u64) -> Option<Switched> {
     let seen = snapshot(&mut procs);
     let mut known: Vec<Candidate> = seen.iter().map(|s| s.cand.clone()).collect();
     let mut found = workspace::assign(&ws.windows, &known);
+    // This workspace's stamps on windows it didn't match this time are out of date.
+    if let Some(key) = stamp {
+        let matched: HashSet<isize> = found.iter().flatten().copied().collect();
+        for s in seen.iter().filter(|s| !matched.contains(&s.cand.hwnd)) {
+            let h = hwnd_of(s.cand.hwnd);
+            if winutil::ws_stamp(h).is_some_and(|(k, _)| k == key) {
+                winutil::clear_ws_stamp(h);
+            }
+        }
+    }
     let mut starts = Starts::default();
 
     if let Some(wait) = job.arrange_for {
@@ -1067,6 +1111,100 @@ fn pin_again(hwnd: isize, pin: Pin) {
     if pin.bits() & winutil::PIN_STICKY != 0 {
         crate::wm::pin(PinKind::Sticky, Some(true), hwnd, None);
     }
+}
+
+// ---- Live status (§5) and auto-apply (§11.1)
+
+/// A workspace of this desk, with what checking or placing its windows needs.
+pub struct LiveWorkspace {
+    pub workspace: Workspace,
+    pub screens: Vec<Screen>,
+    pub gap: u32,
+    pub pins_stay: bool,
+    /// Lower-case exe names Seam never manages: auto-apply leaves them alone.
+    pub exclude: Vec<String>,
+}
+
+/// How each row's app is doing, the way a switch would see it. Runs on a worker.
+pub fn status(live: &LiveWorkspace) -> Vec<RowStatus> {
+    let _com = Com::enter();
+    let geos = geometry(&live.screens, live.gap);
+    let seen = snapshot(&mut Procs::new());
+    let cands: Vec<Candidate> = seen.iter().map(|s| s.cand.clone()).collect();
+    let found = workspace::assign(&live.workspace.windows, &cands);
+    let rows = live.workspace.windows.iter().zip(found).enumerate();
+    let row = |(i, (rule, hit))| RowStatus { rule_index: i, state: row_state(rule, hit, &seen, &geos, live.pins_stay) };
+    rows.map(row).collect()
+}
+
+/// One row's state. What a switch would leave where it is counts as in place,
+/// so Snap back only shows when it has something to do.
+fn row_state(rule: &Rule, hit: Option<isize>, seen: &[Seen], geos: &[Geo], pins_stay: bool) -> RowState {
+    let Some(hwnd) = hit else { return RowState::NotRunning };
+    let known = seen.iter().find(|s| s.cand.hwnd == hwnd);
+    if known.is_some_and(|s| s.elevated) {
+        return RowState::CantMove;
+    }
+    if known.is_some_and(|s| stays(s.pin, pins_stay)) {
+        return RowState::InPlace;
+    }
+    let Some(geo) = geos.iter().find(|g| g.id == rule.monitor) else { return RowState::InPlace };
+    let Some(kind) = plan(rule, geo) else { return RowState::InPlace };
+    let Some(now) = now_of(hwnd_of(hwnd), geo.dpi) else { return RowState::InPlace };
+    if now.shown == Shown::Minimized && !matches!(kind, Kind::Min(_)) {
+        RowState::Minimized
+    } else if in_place(&kind, &now, geo.bounds) {
+        RowState::InPlace
+    } else {
+        RowState::Moved
+    }
+}
+
+/// Put a window that just opened where the active workspace puts it, once: the
+/// best free row for it, the same way a switch matches. A row is free when no
+/// window carries its stamp. The window is stamped either way, so it's never
+/// placed again. Returns what happened, for the log, or `None` for a window the
+/// workspace doesn't have a free row for.
+pub fn place_opened(live: &LiveWorkspace, hwnd: isize) -> Option<String> {
+    let started = Instant::now();
+    let h = hwnd_of(hwnd);
+    let valid = unsafe { IsWindow(Some(h)) }.as_bool();
+    if !valid || winutil::ws_stamp(h).is_some() || winutil::is_minimized(h) || switching() {
+        return None;
+    }
+    let _com = Com::enter();
+    let seen = seen_of(h, 0, &live.exclude, &mut Procs::new(), &mut |_, _| {})?;
+    // Administrator windows are left alone without a word, as a switch's are.
+    if seen.elevated || stays(seen.pin, live.pins_stay) {
+        return None;
+    }
+    let ws = &live.workspace;
+    let key = workspace::stamp_key(&ws.id);
+    let others = winutil::top_level_windows().into_iter().filter(|w| *w != h);
+    let taken: HashSet<usize> =
+        others.filter_map(winutil::ws_stamp).filter(|(k, _)| *k == key).map(|(_, r)| r).collect();
+    let free: Vec<usize> = (0..ws.windows.len()).filter(|i| !taken.contains(i)).collect();
+    let rules: Vec<Rule> = free.iter().map(|i| ws.windows[*i].clone()).collect();
+    let hit = workspace::assign(&rules, std::slice::from_ref(&seen.cand)).iter().position(Option::is_some)?;
+    let (row, rule) = (free[hit], &ws.windows[free[hit]]);
+    let app = app_name(rule);
+    let geos = geometry(&live.screens, live.gap);
+    let target = geos.iter().find(|g| g.id == rule.monitor).and_then(|geo| Some((geo, plan(rule, geo)?)));
+    let now = target.as_ref().and_then(|(geo, _)| now_of(h, geo.dpi));
+    let moved = match (target, now) {
+        (Some((geo, kind)), Some(now)) if !in_place(&kind, &now, geo.bounds) => {
+            let on_screen = geo.bounds.contains(centre(now.window).0, centre(now.window).1);
+            let crosses = winutil::monitor_dpi(h) != geo.dpi;
+            let (was, before, dpi) = (now.shown, now.window, geo.dpi);
+            let m = Move { hwnd, app: app.clone(), kind, was, on_screen, crosses, dpi, before };
+            // A switch that starts meanwhile has the last word.
+            place_all(std::slice::from_ref(&m), &mut Vec::new(), &switching) > 0
+        }
+        _ => false,
+    };
+    winutil::set_ws_stamp(h, key, row);
+    let what = if moved { "placed" } else { "already in place" };
+    Some(format!("{app} for row {}: {what} in {} ms", row + 1, started.elapsed().as_millis()))
 }
 
 // ---- Reopen (D119)

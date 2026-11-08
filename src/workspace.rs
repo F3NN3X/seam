@@ -278,6 +278,39 @@ impl Session {
     }
 }
 
+/// What the `Seam_ws` stamp keeps of a workspace's id: the same number for the
+/// same id in every run, so a stamp outlives a tray restart. FNV-1a, never 0.
+pub fn stamp_key(id: &str) -> u32 {
+    let hash = id.bytes().fold(0x811c_9dc5u32, |h, b| (h ^ b as u32).wrapping_mul(0x0100_0193));
+    hash.max(1)
+}
+
+/// How a workspace's app is doing right now, as the editor shows it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RowState {
+    InPlace,
+    /// Running, but not where the workspace puts it.
+    Moved,
+    /// Minimized, and the workspace wants it shown.
+    Minimized,
+    NotRunning,
+    /// Runs as administrator, so Seam can't move it.
+    CantMove,
+}
+
+/// One row of `workspace.status`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RowStatus {
+    pub rule_index: usize,
+    pub state: RowState,
+}
+
+/// Something a switch would put back: Snap back has work to do.
+pub fn drifted(rows: &[RowStatus]) -> bool {
+    rows.iter().any(|r| matches!(r.state, RowState::Moved | RowState::Minimized))
+}
+
 /// A random id that isn't in `taken`.
 pub fn new_id(taken: &[String]) -> String {
     loop {

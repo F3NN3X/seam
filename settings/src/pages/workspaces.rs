@@ -5,7 +5,7 @@ use crate::pages::{app_picker, workspace_editor};
 use crate::panel::{error_text, refusal, Panel};
 use crate::theme::{palette, Palette};
 use crate::ui::{self, card, keycaps, row, segmented, switch};
-use gpui_kit::component::button::ButtonVariants;
+use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::input::Input;
 use gpui_kit::component::menu::{DropdownMenu, PopupMenuItem};
 use gpui_kit::component::notification::Notification;
@@ -14,7 +14,7 @@ use gpui_kit::component::{Icon, WindowExt};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 use seam::state::Screen;
-use seam::workspace::{self, Export, OtherWindows, Rule, ScreenInfo, Target, Workspace};
+use seam::workspace::{self, Export, OtherWindows, RowState, Rule, ScreenInfo, Target, Workspace};
 use seam::zones;
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
@@ -42,6 +42,11 @@ fn selected(panel: &Panel) -> Option<Workspace> {
     let all = all(panel);
     let picked = panel.workspace.as_ref().and_then(|id| all.iter().find(|w| w.id == *id));
     picked.or(all.first()).cloned()
+}
+
+/// The id of the workspace on show, for its live status.
+pub fn shown_id(panel: &Panel) -> Option<String> {
+    selected(panel).map(|w| w.id)
 }
 
 fn save(panel: &mut Panel, list: Vec<Value>, window: &mut Window, cx: &mut Context<Panel>) {
@@ -350,6 +355,40 @@ fn list_card(
         .into_any_element()
 }
 
+/// "Put windows back": Snap back for the workspace in use, a switch for any other.
+fn snap_back_button(panel: &Panel, ws: &Workspace, cx: &mut Context<Panel>) -> Button {
+    let active = panel.state.as_ref().and_then(|s| s.workspace.as_ref()).is_some_and(|w| w.id == ws.id);
+    let id = ws.id.clone();
+    ui::primary("snap-back", "Put windows back").on_click(cx.listener(move |panel, _, window, cx| {
+        if active {
+            panel.command("workspace.snap_back", json!({}), window, cx);
+        } else {
+            panel.command("workspace.switch", json!({ "id": id }), window, cx);
+        }
+    }))
+}
+
+/// The one switch for every workspace: put apps in place when they open (§11.1).
+fn auto_apply_row(panel: &Panel, window: &mut Window, cx: &mut Context<Panel>) -> AnyElement {
+    let p = palette(cx);
+    let view = cx.entity();
+    let on = panel.config.auto_apply;
+    let toggle = switch("auto-apply", on, window, cx, move |on, window, cx| {
+        view.update(cx, |panel, cx| {
+            panel.config.auto_apply = on;
+            cx.notify();
+            panel.call("autoapply.set", json!({ "on": on }), window, cx, |panel, result, window, cx| {
+                if let Err(e) = result {
+                    window.push_notification(refusal("Setting left as it was", &error_text(&e)), cx);
+                }
+                panel.reload_config(window, cx);
+            });
+        });
+    });
+    let about = "A window that opens goes where the workspace in use puts it, once";
+    row("Put apps in place when they open", Some(about.into()), toggle, p)
+}
+
 fn detail(panel: &mut Panel, ws: Workspace, window: &mut Window, cx: &mut Context<Panel>) -> Div {
     let p = palette(cx);
     let summary = summary(panel, &ws);
@@ -414,6 +453,10 @@ fn detail(panel: &mut Panel, ws: Workspace, window: &mut Window, cx: &mut Contex
 
     let mut rows = vec![header];
     rows.extend(workspace_editor::rows(panel, &ws, window, cx));
+    let mut states = (0..ws.windows.len()).filter_map(|i| workspace_editor::row_state(panel, &ws, i));
+    if states.any(|s| matches!(s, RowState::Moved | RowState::Minimized)) {
+        rows.push(div().flex().px(px(16.)).py(px(12.)).child(snap_back_button(panel, &ws, cx)).into_any_element());
+    }
     let add = app_picker::button(panel, &ws, cx);
     rows.push(div().flex().px(px(16.)).py(px(12.)).child(add).into_any_element());
 
@@ -479,6 +522,11 @@ pub fn render(panel: &mut Panel, window: &mut Window, cx: &mut Context<Panel>) -
     icons::request(panel, &rules, cx);
     let active = panel.state.as_ref().and_then(|s| s.workspace.as_ref()).map(|w| w.id.clone());
     let current = selected(panel);
+    // A workspace on show for the first time asks how its apps are doing.
+    let known = panel.status.as_ref().map(|(id, _)| id.as_str());
+    if current.as_ref().is_some_and(|c| known != Some(c.id.as_str())) && panel.asking_status.is_none() {
+        panel.ask_status(cx);
+    }
     let cards: Vec<AnyElement> = list
         .iter()
         .enumerate()
@@ -509,5 +557,6 @@ pub fn render(panel: &mut Panel, window: &mut Window, cx: &mut Context<Panel>) -
         Some(ws) => body.child(detail(panel, ws, window, cx)),
         None => body,
     };
-    div().flex().flex_col().gap(px(ui::SECTION_GAP)).child(header.child(capture)).child(body)
+    let auto_apply = card(vec![auto_apply_row(panel, window, cx)], p);
+    div().flex().flex_col().gap(px(ui::SECTION_GAP)).child(header.child(capture)).child(body).child(auto_apply)
 }

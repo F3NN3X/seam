@@ -296,9 +296,13 @@ const WS_STAMP: PCWSTR = w!("Seam_ws");
 
 /// The workspace key and row of the `Seam_ws` stamp, if the window has one.
 pub fn ws_stamp(h: HWND) -> Option<(u32, usize)> {
-    let bits = unsafe { GetPropW(h, WS_STAMP).0 as usize as u64 };
+    decode_ws_stamp(unsafe { GetPropW(h, WS_STAMP).0 as usize as u64 })
+}
+
+/// A row of 0 means no stamp. Lazy, so an unstamped window never computes `0 - 1`.
+fn decode_ws_stamp(bits: u64) -> Option<(u32, usize)> {
     let row = (bits & 0xffff) as usize;
-    (row != 0).then_some(((bits >> 16) as u32, row - 1))
+    (row != 0).then(|| ((bits >> 16) as u32, row - 1))
 }
 
 /// Stamp the window as placed for this row. Rows past 65534 aren't stamped.
@@ -650,4 +654,23 @@ fn shrink(r: Rect, m: i32) -> Rect {
 /// The inverse of what `place_minimized` sets, so a capture and a switch agree.
 pub fn normal_frame(h: HWND, dpi: u32) -> Option<Rect> {
     normal_rect(h).map(|n| shrink(n, frame_margin(h, dpi)))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::decode_ws_stamp;
+
+    #[test]
+    fn an_unstamped_window_has_no_stamp() {
+        assert_eq!(decode_ws_stamp(0), None);
+        // A key without a row is no stamp either, and must not compute row 0 - 1.
+        assert_eq!(decode_ws_stamp(0xABCD_0000), None);
+    }
+
+    #[test]
+    fn a_stamp_round_trips_key_and_row() {
+        let bits = (0x1234_5678u64 << 16) | (6 + 1);
+        assert_eq!(decode_ws_stamp(bits), Some((0x1234_5678, 6)));
+        assert_eq!(decode_ws_stamp((7u64 << 16) | 0xffff), Some((7, 0xfffe)));
+    }
 }

@@ -10,11 +10,13 @@ use crate::monitors::{self, Mon};
 use crate::snap::{self, WM_APP_REFIT, WM_APP_SNAP_BLOCKED};
 use crate::switcher::{self, CaptureJob, Screen as SwitchScreen, SwitchJob, WM_APP_CAPTURED, WM_APP_SWITCHED};
 use crate::tray::{self, CLASS, WM_APP_API, WM_APP_LINEUP};
-use crate::{arrange, ease, hotkey, identify, overlay, wincontrol};
-use seam::api::{self, Client, Command, Reply, RpcError, WindowVerb};
+use crate::{arrange, ease, hotkey, identify, overlay, wincontrol, wm};
+use seam::api::{self, Client, Command, PinKind, Reply, RpcError, WindowVerb};
 use seam::config::TrayClick;
 use seam::direction::Dir;
-use seam::state::{self, AlignResult, DeskRef, HotkeyError, Remap, Screen, Snapshot, State, UpdateState, WorkspaceRef};
+use seam::state::{
+    self, AlignResult, DeskRef, HotkeyError, Remap, Screen, Snapshot, State, UpdateState, WmState, WorkspaceRef,
+};
 use seam::workspace::{self, Workspace};
 use seam::zones;
 use seam::{autostart, package, process, updates};
@@ -58,6 +60,8 @@ const STATE_EVENT_GAP: Duration = Duration::from_millis(100);
 const TIMER_UPDATE: usize = 6;
 /// Retries an automatic install until the PC is idle.
 const TIMER_AUTO_INSTALL: usize = 7;
+/// Retries taking in another window manager's news the app was too busy for (menu open).
+const TIMER_OTHER_WM: usize = 8;
 const FIRST_UPDATE_CHECK_MS: u32 = 2 * 60 * 1000;
 const UPDATE_CHECK_EVERY_MS: u32 = 24 * 60 * 60 * 1000;
 const AUTO_INSTALL_RETRY_MS: u32 = 60 * 1000;
@@ -70,6 +74,9 @@ const HOTKEY_PAUSE: i32 = 2;
 const HOTKEY_NEXT_ZONE: i32 = 3;
 const HOTKEY_PREV_ZONE: i32 = 4;
 const HOTKEY_CAPTURE: i32 = 5;
+const HOTKEY_PIN_TOP: i32 = 6;
+const HOTKEY_PIN_STICKY: i32 = 7;
+const HOTKEY_RELEASE: i32 = 8;
 /// The twelve directional shortcuts, in `Hotkeys::directional` order, from here up.
 const HOTKEY_WINDOW: i32 = 10;
 const WINDOW_KEYS: i32 = 12;
@@ -79,6 +86,7 @@ const NIN_KEYSELECT: u32 = NIN_SELECT | NINF_KEY;
 
 const ID_LINEUP: usize = 1;
 const ID_ENABLED: usize = 2;
+const ID_RELEASE: usize = 3;
 const ID_OPEN: usize = 6;
 const ID_QUIT: usize = 9;
 /// Menu ids of the workspaces in the submenu, from here up.
@@ -168,6 +176,8 @@ struct App {
     install_started: Option<String>,
     /// The updater's last attempt ended in an error, so nothing installs by itself.
     update_failed: bool,
+    /// Another window manager the seam-wm thread found running.
+    other_wm: Option<&'static str>,
 }
 
 /// What a worker found in the updater's state file.
@@ -309,7 +319,8 @@ fn persist(app: &App) {
 fn relink(app: &mut App) {
     app.links = resolve(&app.mons, app.cfg.desks.get(&app.sig).map(|d| d.borders.as_slice()));
     hook::set_live(Live { rects: app.mons.iter().map(|m| m.rect).collect(), links: app.links.clone() });
-    snap::update(app.hwnd, &app.cfg, &app.sig, &app.mons);
+    snap::update(app.hwnd, &app.cfg, &app.sig, &app.mons, aside(app).as_deref());
+    wm::configure(app.hwnd.0 as isize, app.cfg.windows.focus_border);
     arm_hook(app);
     update_tip(app);
 }
@@ -369,6 +380,11 @@ fn snapshot(app: &App) -> Snapshot {
         update: app.update.clone(),
         remap: Remap::of(app.cfg.enabled, app.links.len()),
         zones: if app.cfg.zones.enabled { state::Zones::On } else { state::Zones::Off },
+        wm: WmState {
+            other_wm: app.other_wm.map(String::from),
+            manual_other_wm: app.cfg.windows.other_wm,
+            focus_border: app.cfg.windows.focus_border,
+        },
         desk: DeskRef { sig: app.sig.clone(), name: saved_name.unwrap_or_else(|| desk::default_name(&app.mons)) },
         screens: screens.collect(),
         borders: desk::border_states(&app.mons, &app.links),
@@ -424,6 +440,9 @@ fn apply_hotkeys(app: &mut App) {
         (HOTKEY_NEXT_ZONE, "next_zone".to_string(), keys.next_zone.clone()),
         (HOTKEY_PREV_ZONE, "prev_zone".to_string(), keys.prev_zone.clone()),
         (HOTKEY_CAPTURE, "capture_workspace".to_string(), keys.capture_workspace.clone()),
+        (HOTKEY_PIN_TOP, "pin_top".to_string(), keys.pin_top.clone()),
+        (HOTKEY_PIN_STICKY, "pin_sticky".to_string(), keys.pin_sticky.clone()),
+        (HOTKEY_RELEASE, "release_all".to_string(), keys.release_all.clone()),
     ];
     for (id, (verb, dir, combo)) in (HOTKEY_WINDOW..).zip(keys.directional()) {
         wanted.push((id, format!("{verb}_{dir}"), combo.cloned()));
@@ -484,8 +503,35 @@ fn start_switch(app: &mut App, id: Option<&str>, name: Option<&str>) -> Reply {
     }
 }
 
+/// Why window placement steps aside for another window manager (D110), if it does.
+fn aside(app: &App) -> Option<String> {
+    match (app.other_wm, app.cfg.windows.other_wm) {
+        (Some(name), _) => {
+            Some(format!("{} is running, so Seam leaves placing windows to it", state::other_wm_title(name)))
+        }
+        (None, true) => Some("Another window manager handles the windows, so Seam leaves placing them to it".into()),
+        (None, false) => None,
+    }
+}
+
+/// The seam-wm thread found another window manager start or stop.
+fn other_wm_changed(app: &mut App) {
+    app.other_wm = wm::detected();
+    log::info!("other window manager: {}", app.other_wm.unwrap_or("none"));
+    snap::update(app.hwnd, &app.cfg, &app.sig, &app.mons, aside(app).as_deref());
+    publish(app);
+}
+
 /// Queue a window command for the focused window. The worker answers.
 fn start_window(app: &App, verb: WindowVerb, dir: Dir, reply: Option<Sender<Reply>>) {
+    // Focus doesn't place anything, so it works next to another window manager.
+    if let Some(why) = aside(app).filter(|_| verb != WindowVerb::Focus) {
+        log::info!("window {verb:?} {}: {why}", dir.name());
+        if let Some(tx) = reply {
+            let _ = tx.send(refused(why));
+        }
+        return;
+    }
     let hwnd = unsafe { GetForegroundWindow() };
     let desk = app.cfg.desks.get(&app.sig).filter(|_| app.cfg.zones.enabled);
     let layout = |m: &Mon| desk.and_then(|d| d.zones.get(&m.id)).and_then(zones::layout_of);
@@ -864,7 +910,7 @@ fn run_command(app: &mut App, queued: Queued) {
         Command::ZonesSet(on) => {
             app.cfg.zones.enabled = on;
             persist(app);
-            snap::update(app.hwnd, &app.cfg, &app.sig, &app.mons);
+            snap::update(app.hwnd, &app.cfg, &app.sig, &app.mons, aside(app).as_deref());
             publish(app);
             Ok(json!({ "on": on }))
         }
@@ -905,6 +951,14 @@ fn run_command(app: &mut App, queued: Queued) {
         },
         Command::Window(verb, dir) => {
             start_window(app, verb, dir, Some(reply));
+            return;
+        }
+        Command::WindowPin { kind, on } => {
+            wm::pin(kind, on, unsafe { GetForegroundWindow() }.0 as isize, Some(reply));
+            return;
+        }
+        Command::WmRelease => {
+            wm::release(Some(reply));
             return;
         }
         Command::WorkspaceSwitch { id, name } => start_switch(app, id.as_deref(), name.as_deref()),
@@ -1003,6 +1057,7 @@ fn show_menu(app: &mut App) {
         }
         let _ = AppendMenuW(menu, MF_SEPARATOR, 0, None);
         let _ = AppendMenuW(menu, flag(app.cfg.enabled), ID_ENABLED, w!("Remap pointer at borders"));
+        let _ = AppendMenuW(menu, MF_STRING, ID_RELEASE, w!("Release pinned windows"));
         let _ = AppendMenuW(menu, MF_SEPARATOR, 0, None);
         let _ = AppendMenuW(menu, MF_STRING, ID_QUIT, w!("Quit Seam"));
         let mut pt = POINT::default();
@@ -1018,6 +1073,7 @@ fn show_menu(app: &mut App) {
                 open_panel(app, None);
             }
             ID_ENABLED => set_remap(app, !app.cfg.enabled),
+            ID_RELEASE => wm::release(None),
             id if id >= ID_WORKSPACE => {
                 let chosen = workspaces.get(id - ID_WORKSPACE).map(|w| w.id.clone());
                 if let Some(Err(e)) = chosen.map(|id| start_switch(app, Some(&id), None)) {
@@ -1086,6 +1142,11 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                 HOTKEY_CAPTURE => {
                     with_app(|a| start_capture(a, None, None, None));
                 }
+                id @ (HOTKEY_PIN_TOP | HOTKEY_PIN_STICKY) => {
+                    let kind = if id == HOTKEY_PIN_TOP { PinKind::Top } else { PinKind::Sticky };
+                    wm::pin(kind, None, GetForegroundWindow().0 as isize, None);
+                }
+                HOTKEY_RELEASE => wm::release(None),
                 id if (HOTKEY_WINDOW..HOTKEY_WINDOW + WINDOW_KEYS).contains(&id) => {
                     with_app(|a| {
                         let (verb, dir, _) = a.cfg.hotkeys.directional()[(id - HOTKEY_WINDOW) as usize];
@@ -1146,6 +1207,18 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
         }
         wincontrol::WM_APP_WINDOW => {
             wincontrol::planned();
+            LRESULT(0)
+        }
+        wm::WM_APP_WM => {
+            if with_app(other_wm_changed).is_none() {
+                SetTimer(Some(hwnd), TIMER_OTHER_WM, 250, None);
+            }
+            LRESULT(0)
+        }
+        WM_TIMER if wparam.0 == TIMER_OTHER_WM => {
+            if with_app(other_wm_changed).is_some() {
+                let _ = KillTimer(Some(hwnd), TIMER_OTHER_WM);
+            }
             LRESULT(0)
         }
         // The work area changed, which is what a scaling change or a moved taskbar does.
@@ -1231,6 +1304,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
         }
         WM_DESTROY => {
             hook::enable(false);
+            wm::release_before_exit();
             snap::shutdown();
             with_app(|a| {
                 let nid = tray_data(a);
@@ -1366,6 +1440,7 @@ pub fn run() {
             update: None,
             install_started: None,
             update_failed: false,
+            other_wm: None,
         };
         APP.with(|a| *a.borrow_mut() = Some(app));
         with_app(|a| {

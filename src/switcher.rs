@@ -92,6 +92,8 @@ impl Drop for Com {
 struct Seen {
     cand: Candidate,
     elevated: bool,
+    /// Pinned as sticky, so a switch never moves, minimizes or closes it (D106).
+    sticky: bool,
 }
 
 fn is_seam(exe: &str) -> bool {
@@ -114,7 +116,7 @@ fn snapshot() -> Vec<Seen> {
             title: winutil::title(h),
             z: seen.len(),
         };
-        seen.push(Seen { cand, elevated: winutil::is_elevated_over_us(h) });
+        seen.push(Seen { cand, elevated: winutil::is_elevated_over_us(h), sticky: winutil::is_sticky(h) });
     }
     seen
 }
@@ -156,7 +158,8 @@ pub fn take_captured() -> Option<Vec<Rule>> {
 fn capture_rules(job: &CaptureJob) -> Vec<Rule> {
     let geos = geometry(&job.screens, job.gap);
     let mut rules = Vec::new();
-    for seen in snapshot() {
+    // A sticky window belongs to no workspace.
+    for seen in snapshot().into_iter().filter(|s| !s.sticky) {
         let h = hwnd_of(seen.cand.hwnd);
         let normal = winutil::normal_rect(h);
         // A minimized window has no place on screen, so it counts where it would restore to.
@@ -493,6 +496,10 @@ fn run_switch(job: &SwitchJob, mine: u64) -> Option<Switched> {
             continue;
         }
         let app = app_name(rule);
+        if winutil::is_sticky(h) {
+            skipped.push((app, "sticky".into()));
+            continue;
+        }
         if winutil::is_elevated_over_us(h) {
             skipped.push((app, "elevated".into()));
             continue;
@@ -534,7 +541,7 @@ fn run_switch(job: &SwitchJob, mine: u64) -> Option<Switched> {
             exes.insert(c.exe.to_lowercase());
             aumids.extend(c.aumid.clone());
         }
-        let others = seen.iter().filter(|s| !s.elevated && !claimed.contains(&s.cand.hwnd));
+        let others = seen.iter().filter(|s| !s.elevated && !s.sticky && !claimed.contains(&s.cand.hwnd));
         for s in others.filter(|s| !exes.contains(&s.cand.exe.to_lowercase())) {
             if s.cand.aumid.as_ref().is_some_and(|a| aumids.contains(a)) {
                 continue;

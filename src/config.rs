@@ -8,6 +8,9 @@ use std::path::{Path, PathBuf};
 
 const CURRENT_VERSION: u32 = 2;
 
+/// The panel's accent colour as 0xRRGGBB. The focus border uses it too (D108).
+pub const ACCENT_RGB: u32 = 0xFFB020;
+
 /// One calibrated border, keyed by stable monitor device paths.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct SavedBorder {
@@ -50,6 +53,9 @@ pub struct Hotkeys {
     pub swap_right: Option<String>,
     pub swap_up: Option<String>,
     pub swap_down: Option<String>,
+    pub pin_top: Option<String>,
+    pub pin_sticky: Option<String>,
+    pub release_all: Option<String>,
 }
 
 impl Default for Hotkeys {
@@ -74,6 +80,9 @@ impl Default for Hotkeys {
             swap_right: None,
             swap_up: None,
             swap_down: None,
+            pin_top: None,
+            pin_sticky: None,
+            release_all: None,
         }
     }
 }
@@ -145,6 +154,16 @@ impl Default for ZoneSettings {
     }
 }
 
+/// Pins, the focus border and other window managers.
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default)]
+pub struct WindowSettings {
+    /// Colour the focused window's border in the accent colour (D108).
+    pub focus_border: bool,
+    /// "Another window manager handles my windows" (D110).
+    pub other_wm: bool,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(default)]
 pub struct ApiSettings {
@@ -210,6 +229,7 @@ pub struct Config {
     pub debug_log: bool,
     pub hotkeys: Hotkeys,
     pub zones: ZoneSettings,
+    pub windows: WindowSettings,
     pub updates: UpdateSettings,
     pub api: ApiSettings,
     /// Layout signature (sorted device paths) -> desk.
@@ -232,6 +252,7 @@ impl Default for Config {
             debug_log: false,
             hotkeys: Hotkeys::default(),
             zones: ZoneSettings::default(),
+            windows: WindowSettings::default(),
             updates: UpdateSettings::default(),
             api: ApiSettings::default(),
             desks: BTreeMap::new(),

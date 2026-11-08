@@ -9,6 +9,7 @@ use gpui_kit::component::ThemeStyled;
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 use seam::desk::Mon;
+use seam::state;
 use seam::zones::{self, Dir, LeafTag, Node, Rect, Template, ZoneLayout};
 use serde_json::{json, Value};
 use std::rc::Rc;
@@ -325,7 +326,51 @@ pub fn render(panel: &mut Panel, window: &mut Window, cx: &mut Context<Panel>) -
                 ),
         );
 
-    let mut body = div().flex().flex_col().gap(px(ui::SECTION_GAP)).child(header);
+    // Another window manager places the windows, so snapping steps aside (D110).
+    let detected = panel.state.as_ref().and_then(|s| s.wm.other_wm.clone());
+    let other_wm = panel.config.windows.other_wm;
+    let notice = match (&detected, other_wm) {
+        (Some(name), _) => Some(format!(
+            "{} is running, so snapping, zone keys and window moves are off. The pointer remap, workspaces and focus keys still work.",
+            state::other_wm_title(name)
+        )),
+        (None, true) => Some(
+            "Another window manager handles your windows, so snapping, zone keys and window moves are off. The pointer remap, workspaces and focus keys still work."
+                .to_string(),
+        ),
+        (None, false) => None,
+    };
+    let windows_cfg = panel.config.windows.clone();
+    let border = switch("focus-border", windows_cfg.focus_border, window, cx, {
+        let view = view.clone();
+        move |on, window, cx| {
+            view.update(cx, |panel, cx| panel.patch(json!({ "windows": { "focus_border": on } }), window, cx))
+        }
+    });
+    let manual = switch("other-wm", other_wm, window, cx, {
+        let view = view.clone();
+        move |on, window, cx| {
+            view.update(cx, |panel, cx| panel.patch(json!({ "windows": { "other_wm": on } }), window, cx))
+        }
+    });
+    let other_about = match &detected {
+        Some(name) => format!("{} found running", state::other_wm_title(name)),
+        None => "Snapping and window moves step aside. The pointer remap keeps working.".to_string(),
+    };
+    let windows_card = card(
+        vec![
+            row("Focus border", Some("Colour the border of the window that has focus".into()), border, p),
+            row("Another window manager handles my windows", Some(other_about.into()), manual, p),
+        ],
+        p,
+    );
+
+    let mut body = div()
+        .flex()
+        .flex_col()
+        .gap(px(ui::SECTION_GAP))
+        .child(header)
+        .children(notice.map(|text| ui::note(text, None, p)));
     let Some((mon, saved)) = chosen(panel).map(|(m, l)| (m.clone(), l)) else {
         let note = ui::description("Start Seam to set up zones", p);
         return body.child(note);
@@ -393,6 +438,7 @@ pub fn render(panel: &mut Panel, window: &mut Window, cx: &mut Context<Panel>) -
             "Snapping",
             div().flex().flex_col().gap(px(12.)).child(snapping).child(card(vec![on_screen_row, refit_row], p)),
             p,
-        ));
+        ))
+        .child(section("Windows", windows_card, p));
     body
 }

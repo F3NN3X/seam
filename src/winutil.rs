@@ -246,6 +246,54 @@ pub fn clear_zone_stamp(h: HWND) {
     }
 }
 
+/// Pins and the focus border, kept on the window like the zone stamp, so a
+/// tray that starts again finds them (§3.5).
+const PIN: PCWSTR = w!("Seam_pin");
+const BORDER: PCWSTR = w!("Seam_border");
+/// `Seam_pin` bits: Seam made the window topmost, and workspaces leave it alone.
+pub const PIN_TOP: usize = 1;
+pub const PIN_STICKY: usize = 2;
+
+pub fn pin_bits(h: HWND) -> usize {
+    unsafe { GetPropW(h, PIN).0 as usize }
+}
+
+/// Replace the pin bits. None at all removes the prop.
+pub fn set_pin_bits(h: HWND, bits: usize) {
+    unsafe {
+        if bits == 0 {
+            let _ = RemovePropW(h, PIN);
+        } else {
+            let _ = SetPropW(h, PIN, Some(HANDLE(bits as *mut _)));
+        }
+    }
+}
+
+/// Workspace switches and capture leave this window alone (D106).
+pub fn is_sticky(h: HWND) -> bool {
+    pin_bits(h) & PIN_STICKY != 0
+}
+
+/// Seam coloured this window's border.
+pub fn has_border_mark(h: HWND) -> bool {
+    unsafe { !GetPropW(h, BORDER).is_invalid() }
+}
+
+/// Keep the colour Seam gave the border on the window, or None to forget it.
+pub fn mark_border(h: HWND, colour: Option<u32>) {
+    unsafe {
+        match colour {
+            Some(colour) => {
+                // The prop's value is the colour plus one, so black still counts.
+                let _ = SetPropW(h, BORDER, Some(HANDLE((colour as usize + 1) as *mut _)));
+            }
+            None => {
+                let _ = RemovePropW(h, BORDER);
+            }
+        }
+    }
+}
+
 /// The work area (taskbar excluded) and effective DPI of the screen at `bounds`.
 pub fn work_area(bounds: Rect) -> Option<(Rect, u32)> {
     let r = RECT { left: bounds.x, top: bounds.y, right: bounds.x + bounds.w, bottom: bounds.y + bounds.h };

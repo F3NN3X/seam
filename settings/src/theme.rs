@@ -2,6 +2,7 @@
 
 use gpui_kit::component::{ActiveTheme, Theme, ThemeRegistry};
 use gpui_kit::*;
+use seam::config::ACCENT_RGB;
 
 const THEMES: &str = r##"{"name":"Seam","themes":[
  {"name":"Seam Light","mode":"light","font.family":"Segoe UI Variable Text","font.size":14,
@@ -83,7 +84,7 @@ pub fn palette(cx: &App) -> Palette {
             text: c(0xF3F3F3),
             secondary: c(0xB0B0B0),
             muted: c(0x949494),
-            accent: c(0xFFB020),
+            accent: c(ACCENT_RGB),
             positive: c(0x4CC38A),
             negative: c(0xF07A7D),
         }
@@ -100,7 +101,7 @@ pub fn palette(cx: &App) -> Palette {
             text: c(0x1A1A1A),
             secondary: c(0x5C5C5C),
             muted: c(0x707070),
-            accent: c(0xFFB020),
+            accent: c(ACCENT_RGB),
             positive: c(0x16A34A),
             negative: c(0xDC2626),
         }

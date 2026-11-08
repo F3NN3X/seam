@@ -125,6 +125,8 @@ struct Pending {
 struct Engine {
     owner: isize,
     enabled: bool,
+    /// Another window manager has the windows, and why Seam steps aside (D110).
+    aside: Option<String>,
     settings: ZoneSettings,
     /// Lower case.
     exclude: Vec<String>,
@@ -196,8 +198,9 @@ fn main_button() -> VIRTUAL_KEY {
     }
 }
 
-/// Tell the engine what the settings, this desk's layouts and the screens are now.
-pub fn update(owner: HWND, cfg: &Config, sig: &str, mons: &[Mon]) {
+/// Tell the engine what the settings, this desk's layouts and the screens are
+/// now, and why it steps aside if another window manager has the windows.
+pub fn update(owner: HWND, cfg: &Config, sig: &str, mons: &[Mon], aside: Option<&str>) {
     let desk = cfg.desks.get(sig);
     let screens = mons.iter().map(|m| Screen {
         id: m.id.clone(),
@@ -210,6 +213,7 @@ pub fn update(owner: HWND, cfg: &Config, sig: &str, mons: &[Mon]) {
         // A change that isn't about zones mustn't cut a drag short.
         let same = e.owner == owner.0 as isize
             && e.enabled == cfg.zones.enabled
+            && e.aside.as_deref() == aside
             && e.settings == cfg.zones
             && e.exclude == exclude
             && e.screens == screens;
@@ -219,10 +223,11 @@ pub fn update(owner: HWND, cfg: &Config, sig: &str, mons: &[Mon]) {
         e.cancel_drag();
         e.owner = owner.0 as isize;
         e.enabled = cfg.zones.enabled;
+        e.aside = aside.map(String::from);
         e.settings = cfg.zones.clone();
         e.exclude = exclude;
         e.screens = screens;
-        if !e.settings.refit {
+        if !e.settings.refit || e.aside.is_some() {
             e.refit_stop();
         }
         e.sync_hook();
@@ -305,9 +310,14 @@ unsafe extern "system" fn on_settle(_: HWND, _: u32, id: usize, _: u32) {
 }
 
 impl Engine {
+    /// Zones are on, and no other window manager has the windows.
+    fn active(&self) -> bool {
+        self.enabled && self.aside.is_none()
+    }
+
     /// Have the overlay thread draw ahead of time what a drag will show, or free it all.
     fn sync_overlay(&mut self) {
-        let wanted = self.enabled && self.screens.iter().any(|s| s.layout.is_some());
+        let wanted = self.active() && self.screens.iter().any(|s| s.layout.is_some());
         if wanted {
             zone_paint::build(specs(&self.geometry()));
         } else {
@@ -316,7 +326,7 @@ impl Engine {
     }
 
     fn sync_hook(&mut self) {
-        let wanted = self.enabled && self.screens.iter().any(|s| s.layout.is_some());
+        let wanted = self.active() && self.screens.iter().any(|s| s.layout.is_some());
         match (wanted, self.hook) {
             (true, None) => unsafe {
                 let flags = WINEVENT_OUTOFCONTEXT | WINEVENT_SKIPOWNPROCESS;
@@ -380,7 +390,7 @@ impl Engine {
                 }
             }
         }
-        if !self.enabled || !winutil::is_snappable(hwnd, std::process::id(), &self.exclude) {
+        if !self.active() || !winutil::is_snappable(hwnd, std::process::id(), &self.exclude) {
             return;
         }
         // Windows keeps a lower process from moving this one, so don't offer zones for it (D12).
@@ -724,6 +734,9 @@ impl Engine {
     }
 
     fn move_foreground(&mut self, next: bool) -> Result<(), String> {
+        if let Some(why) = &self.aside {
+            return Err(why.clone());
+        }
         if !self.enabled {
             return Err("Zones are off".into());
         }

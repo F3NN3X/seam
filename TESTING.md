@@ -40,13 +40,13 @@ Start with a v0.1 `config.json` that has saved borders.
 
 ## Tray and shortcuts
 
-- [ ] **Menu.** Right-click the tray icon: status line, **Open Seam…**, **Line Up Screens…**, **Remap pointer at borders**, **Quit Seam**.
+- [ ] **Menu.** Right-click the tray icon: status line, **Open Seam…**, **Line Up Screens…**, **Remap pointer at borders**, **Release pinned windows**, **Quit Seam**.
 - [ ] **Left-click, migrated.** With `"tray_click": "line_up"`, left-click opens Line Up. Press Esc.
 - [ ] **Left-click, new install.** With `"tray_click": "open"`, left-click opens the Seam window.
 - [ ] **Line up shortcut.** Press Ctrl+Shift+Alt+L. Line Up opens. Press Esc.
 - [ ] **Pause shortcut.** Press Ctrl+Shift+Alt+P. Crossings stop remapping and the tooltip says paused. Press it again and they work.
 - [ ] **Shortcut taken.** Have another app hold Ctrl+Shift+Alt+L, then start Seam. Seam runs, and `state.get` lists it in `hotkey_errors`.
-- [ ] **Window shortcuts.** Shift+Win+Alt+arrows and Ctrl+Shift+Alt+arrows are registered by default, and next zone, previous zone and the swaps aren't. If another app holds one, `state.get` lists it in `hotkey_errors` (for example `move_up`).
+- [ ] **Window shortcuts.** Shift+Win+Alt+arrows and Ctrl+Shift+Alt+arrows are registered by default, and next zone, previous zone, the swaps and the three pin keys aren't. If another app holds one, `state.get` lists it in `hotkey_errors` (for example `move_up`).
 - [ ] **Ease balloon.** With Ease cursor movement off, click the balloon. The Seam window opens.
 
 ## Local API
@@ -139,6 +139,31 @@ Set up first: Priority zones on screen 1, Grid on screen 2, none on the U3477. O
 - [ ] **API.** `window.move`, `window.focus` and `window.swap` with `{"dir":"left"}` act on the focused window and answer `{"ok":true}`. With nothing that way, on an administrator window, or on a hung one they answer error 3 with the reason. `{"dir":"next"}` answers error -32602.
 - [ ] **API focus.** From a test client run from a terminal, send `window.focus` with `{"dir":"right"}` while another app is focused. The window to the right takes focus, its taskbar button doesn't just flash, and the pointer doesn't move.
 - [ ] **Hook timings unchanged.** Note `hook stats`, then use every move, focus and swap key and the API calls for 30 s while moving the pointer across the borders. `own max` and `avg` match a run without them, crossings still remap, and `SPI_SETFOREGROUNDLOCKTIMEOUT` is unchanged (`SystemParametersInfo` reads the same before and after).
+
+## Pin, border and Release all
+
+Set up first: record keys for **Pin window on top**, **Keep window out of workspace switches** and **Release pinned windows** on Shortcuts. Turn on the debug log.
+
+- [ ] **Pin on top.** Focus Notepad and press the pin-on-top key. Click another window over it: Notepad stays on top. Press the key again with Notepad focused. It goes back to normal and other windows cover it again.
+- [ ] **Already on top.** Keep a window on top with another tool (PowerToys Always On Top, or a video player's own setting), then press the pin key on it. The log says it's already on top, and Release all leaves it on top.
+- [ ] **Left alone.** Run Task Manager as administrator and press the pin key on it. Nothing changes and the log says it runs as administrator. With the Seam window or the desktop focused, nothing is pinned either.
+- [ ] **Sticky.** Make a browser window sticky. Switch to a workspace whose rule matches that browser: it isn't moved, and `workspace.switched` lists it as skipped with reason `sticky`. Switch to a workspace with **Other windows** on Minimize and then Close: the sticky window stays open where it was, and isn't listed. Capture: the sticky window isn't in the new workspace.
+- [ ] **Focus border.** Turn on **Focus border** on the Zones page. The focused window's border turns the accent colour. Click another window: the colour moves to it, and the first one is back to the Windows default. Focus an administrator window or the Seam window: no window has the colour. Turn the switch off: the coloured border goes back to default at once.
+- [ ] **Windows 10.** On a Windows 10 PC, the switch turns on and nothing happens, and the log has no errors.
+- [ ] **Release all.** Pin two windows on top, make one sticky, and leave the focus border on. Click **Release pinned windows** in the tray menu. Both pinned windows can be covered again, the sticky one moves with workspaces again, and the border goes back to default until focus changes. The log says `released 2 pinned windows`. The release key does the same.
+- [ ] **Quit.** Pin a window and quit Seam from the tray. The window can be covered again and its border is the default.
+- [ ] **Crash.** Pin a window on top, make another sticky, and leave the focus border on. Kill the tray with Task Manager, then start it again. The log says `wm start: 2 pinned windows kept, 1 borders reset`. The pinned window is still on top and the sticky one is still skipped by a switch. Release all then takes both back.
+- [ ] **Closed pinned window.** Pin a window and close it. Release all says `released 0 pinned windows`.
+- [ ] **API.** `window.pin` with `{"kind":"top"}` toggles the focused window and answers `{"on":true}`, then `{"on":false}`. `{"kind":"sticky","on":true}` answers `{"on":true}` twice in a row. `{"kind":"side"}` answers error -32602. On an administrator window it answers error 3. `wm.release` answers `{"ok":true,"released":n}`. `state.get` shows `wm.focus_border` following the switch.
+- [ ] **Hook timings.** With the focus border on and a pinned window, move focus around for 60 s while moving the pointer across the borders. A `wm stats` line appears every 30 s with `max` well under 1000 µs, `hook stats` `own max` and `avg` match a run with the border off, and crossings still remap. Turn the border off and unpin everything: no more `wm stats` lines come, because the hooks are gone.
+
+## Other window managers
+
+- [ ] **komorebi.** Start komorebi. Within 30 s the log says `other window manager: komorebi`, the Zones page shows a note at the top naming it, and the Windows card says it was found. Drag a window with Shift held: no zones show. Press next zone and Shift+Win+Alt+Right: nothing moves and the log gives the reason. `zone.move`, `window.move` and `window.swap` answer error 3 with it. `state.get` shows `wm.other_wm` as `komorebi`.
+- [ ] **Still working.** With komorebi running, crossings still remap, Line Up opens, a workspace switch runs, Ctrl+Shift+Alt+arrows still move focus, and pins still work.
+- [ ] **Refit steps aside.** With **Keep windows in their zones** on and komorebi running, change the scaling of a screen. No `zone refit` line appears.
+- [ ] **Stop it.** Quit komorebi. Within 30 s the note goes away and snapping works again. Repeat with GlazeWM.
+- [ ] **Manual switch.** With no other window manager running, turn on **Another window manager handles my windows**. Snapping and window moves stop at once and the note shows. `state.get` shows `wm.manual_other_wm` true. Turn it off and they come back.
 
 ## Zone editor
 

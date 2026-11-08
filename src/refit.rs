@@ -88,7 +88,7 @@ fn stamped_windows() -> Vec<isize> {
 
 impl Engine {
     fn refit_schedule(&mut self) {
-        if !self.settings.refit || !self.enabled {
+        if !self.settings.refit || !self.active() {
             return;
         }
         if self.refit.timer != 0 {
@@ -110,7 +110,7 @@ impl Engine {
     }
 
     fn refit_begin(&mut self) {
-        if !self.settings.refit || !self.enabled {
+        if !self.settings.refit || !self.active() {
             return;
         }
         if self.drag.is_some() || overlay::is_active() || self.refit.busy || self.refit.run.is_some() {
@@ -134,7 +134,7 @@ impl Engine {
 
     fn refit_found(&mut self, list: Vec<isize>) {
         self.refit.busy = false;
-        if !self.settings.refit || !self.enabled {
+        if !self.settings.refit || !self.active() {
             return;
         }
         let geometry = self.geometry();

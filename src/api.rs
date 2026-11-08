@@ -72,21 +72,46 @@ impl WindowVerb {
     }
 }
 
+/// Which pin `window.pin` sets (D106).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PinKind {
+    Top,
+    Sticky,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub enum Command {
-    Hello { client: String, version: String, token: Option<String> },
+    Hello {
+        client: String,
+        version: String,
+        token: Option<String>,
+    },
     AppInfo,
     StateGet,
     ConfigGet,
     ConfigPatch(Value),
     DesksList,
-    WorkspacesList { desk: Option<String> },
-    WorkspaceSwitch { id: Option<String>, name: Option<String> },
-    WorkspaceCapture { name: Option<String>, into: Option<String> },
+    WorkspacesList {
+        desk: Option<String>,
+    },
+    WorkspaceSwitch {
+        id: Option<String>,
+        name: Option<String>,
+    },
+    WorkspaceCapture {
+        name: Option<String>,
+        into: Option<String>,
+    },
     RemapSet(bool),
     ZonesSet(bool),
     ZoneMove(Dir),
     Window(WindowVerb, direction::Dir),
+    /// `on` is None to toggle.
+    WindowPin {
+        kind: PinKind,
+        on: Option<bool>,
+    },
+    WmRelease,
     LineupStart,
     ArrangementAlign,
     ScreenIdentify(u32),
@@ -162,6 +187,19 @@ fn command(method: &str, p: &Value) -> Result<Command, RpcError> {
                 _ => return Err(RpcError::new(INVALID_PARAMS, "dir must be left, right, up or down")),
             }
         }
+        "window.pin" => {
+            let kind = match p.get("kind").and_then(Value::as_str) {
+                Some("top") => PinKind::Top,
+                Some("sticky") => PinKind::Sticky,
+                _ => return Err(RpcError::new(INVALID_PARAMS, "kind must be top or sticky")),
+            };
+            let on = match p.get("on") {
+                None | Some(Value::Null) => None,
+                Some(_) => Some(on_param(p)?),
+            };
+            Command::WindowPin { kind, on }
+        }
+        "wm.release" => Command::WmRelease,
         "lineup.start" => Command::LineupStart,
         "arrangement.align" => Command::ArrangementAlign,
         "screen.identify" => Command::ScreenIdentify(

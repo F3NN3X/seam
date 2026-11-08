@@ -5,7 +5,7 @@
 
 use crate::config::SavedBorder;
 use crate::desk::{glue_candidates, resolve};
-use crate::geom::{anchor_points, overlap_in_a, predict, touching, EdgeMap, Side};
+use crate::geom::{anchor_points, overlap_in_a, predict, predict_centred, touching, EdgeMap, Side};
 use crate::hook;
 use crate::layout::{Link, Live};
 use crate::monitors::Mon;
@@ -143,7 +143,7 @@ fn build_steps(mons: &[Mon], saved: &[SavedBorder]) -> Vec<Step> {
     for l in links.iter().filter(|l| l.glued && touching(&mons[l.a].rect, &mons[l.b].rect).is_none()) {
         let (a, b, side) = oriented(l.a, l.b, l.side);
         if !pairs.iter().any(|p| (p.0, p.1) == (a, b)) {
-            let guess = predict(&mons[a].rect, &mons[b].rect, side, mons[a].raw_dpi, mons[b].raw_dpi);
+            let guess = predict_centred(&mons[a].rect, &mons[b].rect, side, mons[a].raw_dpi, mons[b].raw_dpi);
             pairs.push((a, b, side, guess, Some(true)));
         }
     }
@@ -693,10 +693,14 @@ unsafe fn paint(hwnd: HWND, idx: usize) {
             let next = if last { "done" } else { "next border" };
             let msg = match (role_b, step.glue) {
                 (true, Some(false)) => format!(
-                    "Do screens {a} and {b} touch on your desk?\n\n\
-                     Windows has a gap between them, so the pointer stops at the edge. Glue them and it crosses the gap.\n\n\
-                     G glues them, Enter skips\n\
-                     Backspace goes back, Esc cancels"
+                    "Glue screen {b} to screen {a}?\n\n\
+                     Do this if the two screens touch on your desk. Windows has a gap between them, \
+                     so today the pointer stops at the edge.\n\n\
+                     1. Press G to glue them.\n\
+                     2. Line them up like any other border: drag the lines here until each one \
+                     continues the matching line on screen {a}, straight across the bezel.\n\
+                     3. Press Enter.\n\n\
+                     Enter: skip   ·   Backspace: back   ·   Esc: cancel"
                 ),
                 (true, glue) => format!(
                     "{title}\n\n\
@@ -712,7 +716,9 @@ unsafe fn paint(hwnd: HWND, idx: usize) {
                     },
                     unglue = if glue.is_some() { "\nG unglues them" } else { "" },
                 ),
-                (false, Some(false)) => format!("Reference screen\n\nG glues screen {b} to this one, Enter skips"),
+                (false, Some(false)) => {
+                    format!("Reference screen\n\nScreen {b} may touch this one on your desk. Look at screen {b} to glue them.")
+                }
                 (false, _) => format!("Reference screen\n\nThe lines here stay put. Adjust the matching lines on screen {b}."),
             };
             text(mem, &msg, center, (20.0 * s) as i32, false, (226, 230, 238), DT_CENTER | DT_WORDBREAK, true);

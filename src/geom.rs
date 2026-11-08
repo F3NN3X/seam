@@ -199,6 +199,15 @@ pub fn predict(a: &Rect, b: &Rect, side: Side, dpi_a: f64, dpi_b: f64) -> EdgeMa
     EdgeMap { s, o: b_mid - s * a_mid }
 }
 
+/// First guess for screens with a gap between them in Windows: the few pixels
+/// they share there say nothing about the desk, so centre B's edge on A's,
+/// scaled as `predict` does. Both calibration lines then start well apart.
+pub fn predict_centred(a: &Rect, b: &Rect, side: Side, dpi_a: f64, dpi_b: f64) -> EdgeMap {
+    let EdgeMap { s, .. } = predict(a, b, side, dpi_a, dpi_b);
+    let (al, bl) = (a.along_len(side) as f64, b.along_len(side) as f64);
+    EdgeMap { s, o: bl / 2.0 - s * al / 2.0 }
+}
+
 /// Where the two edges physically overlap, in A-relative coordinates.
 pub fn overlap_in_a(m: &EdgeMap, len_a: i32, len_b: i32) -> Option<(f64, f64)> {
     let inv = m.inverse();

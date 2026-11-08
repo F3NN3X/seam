@@ -2,7 +2,7 @@
 //! it from here, so they always agree on what's lined up.
 
 use crate::config::{Config, Desk, SavedBorder, WindowSize};
-use crate::geom::{corridor, facing, facing_gap, predict, touching, EdgeMap, Rect, Side};
+use crate::geom::{corridor, facing, facing_gap, predict_centred, touching, EdgeMap, Rect, Side};
 use crate::layout::Link;
 use crate::log;
 use crate::state::{Border, BorderState};
@@ -347,7 +347,7 @@ pub fn glue_candidates(mons: &[Mon], links: &[Link]) -> Vec<Candidate> {
             if mons.iter().enumerate().any(|(k, m)| k != a && k != b && m.rect.intersects(&gap)) {
                 continue;
             }
-            let guess = predict(&mons[a].rect, &mons[b].rect, side, mons[a].raw_dpi, mons[b].raw_dpi);
+            let guess = predict_centred(&mons[a].rect, &mons[b].rect, side, mons[a].raw_dpi, mons[b].raw_dpi);
             out.push(Candidate { a, b, side, guess, apart: false });
         }
     }

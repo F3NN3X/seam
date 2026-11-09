@@ -236,7 +236,7 @@ pub const TOPICS: &[Topic] = &[
                 "**Install updates on their own** installs only while you're away from the computer",
                 "**Include pre-releases** gets new features early. They may have rough edges.",
             ]),
-            Text("The updater only installs releases signed with Seam's key, and no release is signed yet, so for now download a new version from GitHub. The Store copy is updated by the Microsoft Store."),
+            Text("The updater only installs releases signed with Seam's key. The Store copy is updated by the Microsoft Store."),
         ],
         opens: Some(Page::About),
     },

@@ -54,17 +54,17 @@ Seam makes the pointer cross exactly where your screens physically meet, snaps w
 
 ### Pointer and borders
 
-Windows arranges screens in **raw pixels**. When two monitors have different pixel densities (a 27" 4K next to a 27" 1440p, a laptop under an external), no arrangement can be right along the whole edge. Windows keeps the same pixel row when the pointer crosses, so the pointer jumps. Seam fixes this with a small low-level mouse hook. Whenever the pointer crosses a border you've lined up, the hook puts it where the screens physically meet.
+Windows arranges screens in **raw pixels**. When two screens have different pixel densities (a 27" 4K next to a 27" 1440p, a laptop under an external), no arrangement can be right along the whole edge. Windows keeps the same pixel row when the pointer crosses, so the pointer jumps. Seam fixes this with a small low-level mouse hook. Whenever the pointer crosses a border you've lined up, the hook puts it where the screens physically meet.
 
 ![The Displays page](docs/images/displays.png)
 
-- **Line Up** opens a full-screen overlay on every monitor, with big numbers so you know which screen is which. For each border you drag two lines until they run straight across the bezel. No measuring.
+- **Line Up** opens a full-screen overlay on every screen, with big numbers so you know which screen is which. For each border you drag two lines until they run straight across the bezel. No measuring.
 - The **Physical layout** card on Displays has two views. **Seam** is the map of your desk, with each border drawn by kind: a solid amber line when it's lined up, a dashed one when it's glued, and a muted dotted one with "Not on your desk" when Windows has the screens touching but your desk doesn't. **Windows** is the arrangement exactly as Windows has it, in pixels, with a note such as "18 px gap" where two screens face each other across a gap. Clicking a screen in either view flashes its number on it. **Show on screens** draws the chosen view on every real screen for a few seconds, with each screen's number and model and a band along each edge that has a neighbour. Esc, a click or 8 seconds closes it.
 - **Glue** is for screens that touch on your desk but have a gap between them in Windows. Line Up offers each such pair after the touching borders, and G glues it. The pointer then crosses the gap where the screens physically meet, and rests at the edge until you push about 60 px past it, so an auto-hide taskbar there still shows. Past the end of a glue, the edge is a dead edge that Seam holds. A pair found from the screens' sizes starts glued, and a pair found only from the pixel layout starts off. Displays calls such a border "Glued to the right edge of 1".
 - **Not on my desk** is for screens that touch in Windows but not on your desk. Press N in Line Up, or use **Not on my desk** (and **On my desk**, to undo it) in the border's **...** menu on Displays. The pointer stops at that edge both ways, or crosses to a glued screen past it, and Displays calls it "Not on your desk".
 - Line Up's aids: each step names both screens with their model and says which way to move each line, a band of stripes shows whether the edge runs straight across, and **Type measurements in Line Up** (off by default, on Displays) adds a field to type the offset in cm. See [First run](#first-run).
 - **Remap pointer at borders** pauses and resumes the hook, from the tray or with Ctrl+Shift+Alt+P.
-- **Also align Windows arrangement** (on by default) moves your monitors in the Windows arrangement so each border lines up at the middle of its physical overlap. Dragging a window between screens then looks right even with Seam closed. You can undo it anytime in Display settings.
+- **Also align Windows arrangement** (on by default) moves your screens in the Windows arrangement so each border lines up at the middle of its physical overlap. Dragging a window between screens then looks right even with Seam closed. You can undo it anytime in Display settings.
 - Each set of screens is a **desk**, with its own borders, zones and workspaces. **Saved desks** lists them, and each desk's menu has **Rename** and **Forget**. Dates show in your local time, as "Lined up today", "yesterday" or "3 days ago". Reconnect the same screens and the layout comes back.
 - Seam relies on Windows' **Ease cursor movement between displays**, so the pointer can always leave a screen toward its neighbour. It warns you when that's off, and **Turn it on** (on the Displays page, or when the Seam window asks once) turns it on and checks that Windows kept it. Seam never turns it off.
 
@@ -75,6 +75,7 @@ Pick a layout for each screen (Columns, Rows, Grid or Priority), hold **Shift** 
 ![The Zones page](docs/images/zones.png)
 
 - Hold **Ctrl** as well to cover several zones with one window.
+- **Zones on** turns drag snapping on or off.
 - Both keys, the **gap** between zones, and whether a window gets its old size back when you drop it outside a zone are on the Zones page.
 - **Edit layout** (or the **Custom** tile) makes your own layout: split a zone side by side or top and bottom, drag a divider (it snaps to quarters and thirds), merge two neighbours, then press **Done**. Esc throws the changes away and Ctrl+Z undoes the last one. A layout can have up to 128 zones.
 - The editor opens on the screen itself, over its work area. If you'd rather edit in the preview, turn off **Edit layouts on the screen**.
@@ -105,7 +106,7 @@ Windows 11 shows its own snap layouts when you drag a window to the top of the s
 - **Pin window on top** keeps the focused window above the others until you press it again.
 - **Keep window out of workspace switches** makes the focused window sticky: a workspace switch never moves, minimizes or closes it, and capture leaves it out.
 - **Focus border**, on the Zones page, colours the border of the window that has focus in your Windows accent colour. It's off until you turn it on, needs Windows 11, and skips windows from apps running as administrator.
-- **Pin border**: a window pinned on top or sticky gets a Seam amber border, which wins over the focus border until you unpin it. Both colours are picked from swatches under the Windows card on the Zones page: Windows accent, Seam amber, blue, teal, green, red, pink or white. **None** leaves that border to the app and Windows, and **Custom** opens a colour picker with a palette, sliders and a hex field.
+- **Pin border**: a window pinned on top or sticky gets a Seam amber border, which wins over the focus border until you unpin it. Both colours are picked from swatches under the Windows card on the Zones page: Windows accent, Seam amber, blue, teal, green, red, pink or white. **None** leaves that border to the app and Windows, and **Custom colour** opens a colour picker with a palette, sliders and a hex field.
 - **Release pinned windows**, in the tray menu, takes back every pin and border Seam set. Seam does the same when you quit. An update or a restart that you didn't ask for keeps the pins: the next start keeps the pins it finds and resets the borders.
 - **Tell me when a pinned window closes** is off until you turn it on. Seam can't stop an app closing, so it tells you afterwards: "Notepad was pinned and has closed. Click to reopen". A click starts the app again and pins its first new window within 15 seconds. Release all, quitting Seam and a workspace's **Close** don't count.
 - **Pinned windows stay when I switch workspaces**, on the Zones page, makes a switch leave a window pinned on top alone, like a sticky one, though capture still saves it. It's off until you turn it on.
@@ -118,7 +119,7 @@ A workspace saves which app is on which screen and in which zone (or at its own 
 
 ![The Workspaces page](docs/images/workspaces.png)
 
-- **Capture current windows** saves the windows open now. Only app windows with a taskbar button are saved, so overlays, helper windows, apps closed to the tray, and the apps the zones leave alone aren't.
+- **Capture current windows** saves the windows open now. Only app windows with a taskbar button are saved, so overlays, helper windows, apps closed to the tray, and the apps the zones leave alone aren't. **New empty workspace**, under the list, makes one with no apps, ready for **Add an app**.
 - **Switch now**, the workspace's shortcut, or **Workspaces** in the tray menu puts each app back the same way. A minimized window stays minimized and restores into its zone later, and windows already in place aren't touched.
 - **Start missing apps** starts the apps that are ticked under Launch and aren't running, and waits up to 15 seconds for each window.
 - **Other windows** says what a switch does with everything else on the desk's screens: leave it, minimize it, or close it. Close only asks. Each app gets a normal close request, so one with unsaved work shows its own prompt and stays open. Seam never ends a process.
@@ -157,13 +158,15 @@ Shortcuts work anywhere in Windows, even with the Seam window closed. Each has i
 
 ### Tray menu
 
+- A greyed line at the top says how many screens there are and how many borders are lined up.
 - **Open Seam...** opens the Seam window, which holds the other settings.
 - **Line Up Screens...** calibrates.
 - **Workspaces** switches to a workspace on this desk. It's only shown when the desk has some.
 - **Remap pointer at borders** pauses or resumes the hook.
 - **Release pinned windows** takes back every pin and focus border Seam set.
+- **Quit Seam** closes Seam.
 
-Left-clicking the icon opens Seam on a new install. If you're upgrading from v0.1 it keeps opening Line Up. `tray_click` in `config.json` sets which. Running `seam.exe` again while it's already running opens the Seam window, and `seam.exe --line-up` opens Line Up, or starts with it open. The Seam window opens centred on the screen the pointer is on. `seam-settings.exe --page help` opens it on a page (`displays`, `zones`, `workspaces`, `shortcuts`, `general`, `help` or `about`), and switches a window that is already open to it.
+Left-clicking the icon opens Seam on a new install. If you're upgrading from v0.1 it keeps opening Line Up. **Left-click** under Tray icon on General sets which. Running `seam.exe` again while it's already running opens the Seam window, and `seam.exe --line-up` opens Line Up, or starts with it open. The Seam window opens centred on the screen the pointer is on. `seam-settings.exe --page help` opens it on a page (`displays`, `zones`, `workspaces`, `shortcuts`, `general`, `help` or `about`), and switches a window that is already open to it.
 
 ### Help
 
@@ -213,11 +216,11 @@ Seam has a built-in updater that only installs releases signed with Seam's key. 
 ### First run
 
 1. In **Settings > System > Display > Multiple displays**, turn on **Ease cursor movement between displays**. Seam relies on it, and its Displays page has **Turn it on** while it's off.
-2. Run `seam.exe`. It lives in the tray, and opens the Seam window when you start it yourself. At sign-in it starts in the tray only. On a new set of screens it asks once.
+2. Run `seam.exe`. It lives in the tray, and opens the Seam window when you start it yourself. At sign-in it starts in the tray only. On a new set of screens it asks once, unless you turn off **Offer to line up new screens** on General.
 3. **Line up your screens.** Choose **Line Up Screens...** in the tray menu, or press Ctrl+Shift+Alt+L. For each border, the reference screen shows two coloured lines. On the neighbouring screen, drag the matching lines until each one runs straight across the bezel:
    - **Grab a line** to move just that line. This sets the scale.
    - **Drag anywhere else** to move both lines. This sets the height.
-   - Arrow keys nudge the selected line (Shift moves 10 px, Ctrl moves both). Tab switches lines. R resets to the guess from your monitors' EDID.
+   - Arrow keys nudge the selected line (Shift moves 10 px, Ctrl moves both). Tab switches lines. R resets to the guess from your screens' EDID.
    - The pointer already follows your lines while you adjust, so move it across the border to check.
    - **G** glues a pair that touches on your desk but has a gap in Windows. Line Up asks about each such pair after the touching borders. Pairs whose sizes put them side by side start glued, and the rest start off and are skipped unless you press G. Glued screens get the same two lines, and you line them up as they stand on your desk.
    - **N** marks two screens that touch in Windows but not on your desk. The lines dim, and Seam stops the pointer at that border instead of letting it cross. Press N again to undo it.
@@ -258,7 +261,7 @@ They behave the same, apart from how they update and install. The Store build is
 The updater, which runs in `seam-settings.exe` and never in the tray, downloads a `latest.json` manifest from Seam's GitHub releases and checks its minisign signature against the public key built into Seam. It only follows download links on Seam's own releases, and checks each file's size and SHA-256 against the manifest before it installs. A release that fails any of these checks isn't installed, and About says why.
 
 **Where do the config and the log live?**
-In `%APPDATA%\Seam`: `config.json` holds your settings, desks, layouts and workspaces, and `seam.log` is the debug log, which exists only if you turn logging on (see [Debug log](#debug-log)). The updater keeps what it found in `%LOCALAPPDATA%\Seam\updates`. The Store build's settings are kept in its own package folder, because Windows redirects its writes.
+In `%APPDATA%\Seam`: `config.json` holds your settings, desks, layouts and workspaces, and `seam.log` is the debug log, which exists only if you turn logging on (see [Debug log](#debug-log)). The updater keeps what it found in `%LOCALAPPDATA%\Seam\updates`. The Store build's settings are kept in its own package folder, because Windows redirects its writes. **Open**, on General, shows the folder. **Export...** saves your settings to a file, and **Import...** replaces them with one, after asking, and keeps a copy of the current ones in the settings folder.
 
 **What happens to apps that close to the tray, like Stream Deck, Spotify, Discord or Steam?**
 They have no window to save, so a capture leaves them out. If one is in a workspace, the editor shows "Running in background" instead of "Not running", and it doesn't count as moved. A switch reports it as running in the background rather than missing.
@@ -296,7 +299,7 @@ Set these on the Shortcuts page. Ctrl+Shift+Alt plus a number is a good choice f
 - **"Windows protected your PC".** The GitHub build isn't signed, so SmartScreen warns about it. Choose **More info**, then **Run anyway**.
 - **Smart App Control blocks it.** Smart App Control can refuse unsigned apps outright, with no way to run them.
 - **The zip won't run.** Windows marks a downloaded zip as untrusted. Unblock it before unzipping: right-click it, choose **Properties**, tick **Unblock**. Or run `Unblock-File seam-X.Y.Z-windows-x64.zip` in PowerShell.
-- **A shortcut doesn't work.** NVIDIA, AMD and Intel overlays hold some combinations. General and Shortcuts show a conflict in red. Choose another one in Shortcuts.
+- **A shortcut doesn't work.** NVIDIA, AMD and Intel overlays hold some combinations. Shortcuts shows a conflict in red. Choose another one there.
 - **The pointer still jumps.** Check that Ease cursor movement is on, that the remap isn't paused, and that Displays shows the border as lined up. Run Line Up again if you moved a screen.
 - **The pointer jumps to the wrong screen at a gap.** Windows has the screens touching or apart differently from your desk. Glue the pair in Line Up if they touch on your desk with a gap in Windows, or mark the border **Not on my desk** if they touch in Windows but not on your desk.
 - **No update arrives.** About says why when a check fails. The most common cause is a network that blocks `api.github.com`. Check by hand with **Check now**.
@@ -304,13 +307,13 @@ Set these on the Shortcuts page. Ctrl+Shift+Alt plus a number is a good choice f
 
 ## How it works
 
-For each shared border, Seam stores a linear map between the two edges, relative to each monitor's own origin:
+For each shared border, Seam stores a linear map between the two edges, relative to each screen's own origin:
 
 ```
 b = s * a + o
 ```
 
-`s` is the physical scale (pixels on B per pixel on A), and `o` is the offset. Two line pairs lined up by eye solve both, so you never measure anything. Because the map is relative to each monitor, it survives rearranging monitors in Windows. Monitors are identified by their device path, so layouts survive reboots and come back when you reconnect the same screens (home desk, office desk, and so on).
+`s` is the physical scale (pixels on B per pixel on A), and `o` is the offset. Two line pairs lined up by eye solve both, so you never measure anything. Because the map is relative to each screen, it survives rearranging screens in Windows. Screens are identified by their device path, so layouts survive reboots and come back when you reconnect the same screens (home desk, office desk, and so on).
 
 The hook runs on its own high-priority thread, so UI work can never delay mouse input. It only acts when the pointer leaves a screen across a calibrated border, and only if a physical screen is on the other side. Everywhere else it leaves Windows' behaviour untouched. It also stays out of the way when:
 
@@ -320,7 +323,7 @@ The hook runs on its own high-priority thread, so UI work can never delay mouse 
 
 ## Debug log
 
-Run `seam.exe --log`, or set `SEAM_LOG=1`, to append to `%APPDATA%\Seam\seam.log`: monitors, resolved borders, every remap with its time in the hook, a once-a-minute line timing all hook events (with histograms of Seam's own time and of other apps' hooks, and counts over 1 ms), hook install and removal, display changes, and arrangement results. Quit any running Seam first, because a second launch only opens the window of the first one. Logging is off by default, and then adds only an atomic load to the hook.
+Turn on **Debug log** on General, run `seam.exe --log`, or set `SEAM_LOG=1`, to append to `%APPDATA%\Seam\seam.log`: monitors, resolved borders, every remap with its time in the hook, a once-a-minute line timing all hook events (with histograms of Seam's own time and of other apps' hooks, and counts over 1 ms), hook install and removal, display changes, and arrangement results. Quit any running Seam first, because a second launch only opens the window of the first one. Logging is off by default, and then adds only an atomic load to the hook.
 
 ## Building from source
 

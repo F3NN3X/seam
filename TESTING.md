@@ -321,10 +321,10 @@ Set up first: turn on **Tell me when a pinned window closes** in the Zones page'
 
 Start with no `custom_layouts` in `config.json`, and screens 1 and 4 set to Columns.
 
-- [ ] **Old Custom layouts.** With a config from before this change where a screen has `"template": "custom"`, open Zones on that screen. The tiles are the templates, a selected **Changed** tile showing its zones, and **New layout**. **Save as layout** is under the tiles, and `custom_layouts` is still empty.
+- [ ] **Old Custom layouts.** With a config from before this change where a screen has `"template": "custom"`, open Zones on that screen. The tiles are the templates, a selected **Changed** tile showing its zones, and **New layout**. **Save as layout** is beside **Save from windows**, and `custom_layouts` is still empty.
 - [ ] **Create two.** Press **New layout**, split the zone side by side, press **Done**. A "Custom 1" tile appears, selected, and screen 1 uses it. Do the same with a top and bottom split: "Custom 2". `custom_layouts` has both.
 - [ ] **Edit layout on a template.** On screen 4 with Columns, press **Edit layout**, drag a divider and press **Done**. A new "Custom 3" tile appears and screen 4 uses it. Pick Columns again: it is still the plain three columns.
-- [ ] **Apply each to two screens.** Click Custom 1 on screen 1 and on screen 4, then Custom 2 on screen 2 and screen 3. Each screen's tile is highlighted, and Shift-dragging a window snaps to that layout on every one of them.
+- [ ] **Apply each to two screens.** Use **Used on...** to set Custom 1 to any screen and Custom 2 to any screen. Click Custom 1 on screen 1 and on screen 4, then Custom 2 on screen 2 and screen 3. Each screen's tile is highlighted, and Shift-dragging a window snaps to that layout on every one of them.
 - [ ] **Picking moves the screen's windows.** On screen 1 with Grid, snap two terminal windows into the two left zones and leave Notepad loose on the right. Pick Columns: the two terminals each get a zone of their own (one goes to the first column, the other to the free column nearest it), Notepad takes the remaining column, no two windows share a zone, and a notification "Screen 1 has a new layout" says 3 windows moved. Click it within 8 seconds: Grid is back on the Zones page, both terminals are in their old zones and Notepad is back where it was. After 8 seconds a click does nothing.
 - [ ] **All snapped, crowded.** On screen 2 with Grid, snap the two terminals into the top-left and bottom-left zones and Notepad into the top-right zone. Pick Columns, then Rows, then Main + stack: each time the log says "3 moved" (or 2 moved and 1 left for Rows), and no two windows ever end up in the same zone.
 - [ ] **More windows than zones.** With four windows on screen 1, pick Rows: two windows get the two zones, snapped ones first, the other two stay where they are, and the notification says 2 left where they were.
@@ -335,11 +335,24 @@ Start with no `custom_layouts` in `config.json`, and screens 1 and 4 set to Colu
 - [ ] **Delete one.** **Delete** "Desk work". The dialog says "Delete Desk work?" and "Screens using it keep their zones". Delete: the tile goes, screens 2 and 3 keep their zones and show **Changed**, and their entries have no `custom`.
 - [ ] **Changed after a divider drag.** On screen 1 with Custom 1, drag the edge of a snapped window so its neighbour follows. The page shows **Changed** for screen 1, selected, with **Save as layout**, and screen 4 still has Custom 1's zones. **Save as layout** adds a new tile, which screen 1 then uses.
 - [ ] **Edit layout on Changed.** On a Changed screen, **Edit layout** and **Done** change that screen alone: no new tile, and still Changed.
-- [ ] **Many layouts.** Add layouts until there are a dozen. The tiles wrap two to a row and push the page down, with the preview still beside them.
+- [ ] **Many layouts.** Add layouts until there are a dozen. Under **Your layouts** the tiles wrap across the full width and push the page down, ending with **New layout**, and the preview above stays full width.
 - [ ] **Save from windows, two columns.** On screen 1, put Notepad on the left half and Calculator on the right half with Win+Left and Win+Right. Press **Save from windows**. A new tile appears with two side-by-side zones split at the half, screen 1 uses it, and both windows snap into their zones. The API's `zones.from_windows` with `{"number":1}` does the same and answers `{ok, id}` with the new layout's id.
 - [ ] **Save from windows, main and stack.** One window on the left two thirds, two stacked on the right third: the new layout is a main zone of two thirds and two stacked zones.
 - [ ] **Save from windows, unsplittable.** Arrange four windows in a pinwheel around the middle of the screen, or let two overlap. **Save from windows** says "These windows don't line up into zones", and nothing changes.
 - [ ] **Older Seam.** Open the config in an older build: screens with a library layout read as Custom with the same zones.
+
+## Zones page arrangement and Used on
+
+- [ ] **At 1160x780.** Open Zones at the default size. Screen tabs, then the preview across the full width, its caption with **Save from windows** and **Edit layout** on the right, then **Built in** with the seven templates in one row, then **Your layouts**. The preview is no taller than about 320 px, and zone numbers and px labels still show.
+- [ ] **At the minimum size.** Shrink the window to 900x640. Nothing overlaps or is cut off: the preview narrows, the caption wraps beside the buttons, and the built-in tiles may wrap to a second row. Long names such as "Main + stack" are not cut short.
+- [ ] **No layouts of my own.** With `custom_layouts` empty, **Your layouts** has only **New layout** and "Make your own with New layout, or Save from windows". No **Show all screens** link.
+- [ ] **Keyboard.** Tab moves through the built-in tiles, then Your layouts, with a focus ring. Enter or Space picks one. The **...** on a tile opens its menu without picking the tile.
+- [ ] **New layouts are for their screen.** On screen 1, **New layout**, split, **Done**. Its entry in `config.json` has `"screens"` with screen 1's device path. Screen 2's tab doesn't show it. Do the same with **Save from windows**, **Save as layout** and **Edit layout** on a template: each entry lists the screen it was made on.
+- [ ] **Used on with two screens.** Open the **...** of that layout, **Used on...**. The dialog lists "Any screen" and a checkbox per screen, named as the tabs are, with screen 1 ticked. Tick screen 2 and **Save**: screens 1 and 2 show it, and 3 and 4 don't. Open it again and tick **Any screen**, **Save**: every tab shows it and the entry has no `screens`. **Cancel** changes nothing.
+- [ ] **Not connected.** Tie a layout to screens 1 and 4, unplug screen 4, set it to screens 1 and 2 with **Used on...**. Plug screen 4 back in: the layout still shows on screen 4, because its device path was kept.
+- [ ] **Show all screens.** On screen 2, press **Show all screens**: every layout shows, and those not for screen 2 say "For screen 1" under their name. The link now reads "Only screen 2". Switch tabs: it stays on. Close and reopen the panel: it is off again, and `config.json` has nothing new.
+- [ ] **In use elsewhere still shows.** Give screen 3 a layout tied to screen 1 (pick it from Show all screens on screen 3), then turn Show all screens off. Screen 3's tab still shows that tile, selected, with "For screen 1" under it.
+- [ ] **Old entries.** A `custom_layouts` entry from before this change, with no `screens`, shows on every tab.
 
 ## On-screen editor
 

@@ -260,11 +260,14 @@ pub(super) fn done(panel: &mut Panel, window: &mut Window, cx: &mut Context<Pane
             // A library layout deleted while it was being edited from its tile comes
             // back as a new one, given to no screen.
             (Target::Library(_), None) if opened != Opened::Screen => {
-                list.push(library::Entry { id: library::new_id(&list), name: library::next_name(&list), tree }.value());
+                let (id, name) = (library::new_id(&list), library::next_name(&list));
+                list.push(library::Entry { id, name, tree, screens: Vec::new() }.value());
                 json!({ "custom_layouts": list })
             }
+            // A new one is for the screen it was made on.
             (Target::Library(_) | Target::New, _) => {
-                let entry = library::Entry { id: library::new_id(&list), name: library::next_name(&list), tree };
+                let (id, name) = (library::new_id(&list), library::next_name(&list));
+                let entry = library::Entry { id, name, tree, screens: vec![screen.clone()] };
                 list.push(entry.value());
                 let Some(layout) = library::screen_patch(&entry.layout()) else { return };
                 json!({ "custom_layouts": list, "desks": { sig: { "zones": { screen: layout } } } })

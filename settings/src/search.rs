@@ -79,6 +79,12 @@ const ENTRIES: &[Entry] = &[
     ),
     entry(
         Page::Zones,
+        "Used on",
+        "The screens a layout of your own is offered on",
+        "screen tie filter show all screens your layouts",
+    ),
+    entry(
+        Page::Zones,
         "Save from windows",
         "Make a layout from where the windows on a screen are now",
         "custom layout library save windows arrangement",

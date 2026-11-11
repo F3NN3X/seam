@@ -241,7 +241,7 @@ pub(super) fn set_screen_layout(app: &mut App, screen: &str, layout: Option<zone
     }
     let value = match layout {
         Some(mut layout) => {
-            seam::library::link(&mut app.cfg.custom_layouts, &mut layout, fresh);
+            seam::library::link(&mut app.cfg.custom_layouts, &mut layout, fresh.then_some(screen));
             let Ok(value) = serde_json::to_value(&layout) else { return false };
             Some(value)
         }

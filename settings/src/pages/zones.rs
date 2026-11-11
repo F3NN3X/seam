@@ -6,6 +6,7 @@ use crate::panel::{error_text, refusal, Panel};
 use crate::theme::{palette, Palette};
 use crate::ui::{self, card, row, section, switch};
 use gpui_kit::component::button::ButtonVariants;
+use gpui_kit::component::checkbox::Checkbox;
 use gpui_kit::component::color_picker::{ColorPicker, ColorPickerState};
 use gpui_kit::component::dialog::{DialogAction, DialogClose, DialogFooter};
 use gpui_kit::component::input::{Input, InputState};
@@ -28,11 +29,14 @@ use std::time::Duration;
 /// Config value and label of each key a drag can use.
 const KEYS: [(&str, &str); 3] = [("shift", "Shift"), ("ctrl", "Ctrl"), ("alt", "Alt")];
 const SPAN_ORDER: [usize; 3] = [1, 0, 2];
-const TILE_WIDTH: f32 = 96.;
+/// A tile's width and the size of its drawing: your layouts, and the smaller built-in ones.
+const TILE: (f32, (f32, f32)) = (96., (80., 44.));
+const BUILT_IN_TILE: (f32, (f32, f32)) = (76., (68., 38.));
 const TILE_GAP: f32 = 8.;
-const TILE_ART: (f32, f32) = (80., 44.);
-/// Three tile rows: the preview card is as tall.
-const PREVIEW_HEIGHT: f32 = 268.;
+/// The preview is as tall as the screen's shape asks, up to this.
+const PREVIEW_MAX_HEIGHT: f32 = 320.;
+/// The preview card's padding and border around the drawn screen.
+const PREVIEW_INSET: f64 = 34.;
 /// "When a window moves to another screen", in the order the control shows them.
 const SIZE_MODES: [WindowSize; 3] = [WindowSize::Windows, WindowSize::Pixels, WindowSize::Real];
 const SIZE_LABELS: [&str; 3] = ["Let Windows scale it", "Keep its pixel size", "Keep its real size"];
@@ -101,6 +105,10 @@ impl Pick {
         }
     }
 
+    fn built_in(&self) -> bool {
+        matches!(self, Pick::Template(_))
+    }
+
     /// Whether this is the layout the screen has now.
     fn selected(&self, saved: Option<&ZoneLayout>) -> bool {
         match self {
@@ -127,14 +135,25 @@ fn pick(panel: &mut Panel, choice: &Pick, window: &mut Window, cx: &mut Context<
     zone_editor::guard(panel, window, cx, then);
 }
 
-fn tile(i: usize, choice: Pick, selected: bool, window: &mut Window, cx: &mut Context<Panel>) -> AnyElement {
+/// A tile in the picker. `note` is a muted line under the name.
+fn tile(
+    i: usize,
+    choice: Pick,
+    selected: bool,
+    note: Option<SharedString>,
+    window: &mut Window,
+    cx: &mut Context<Panel>,
+) -> AnyElement {
     let p = palette(cx);
     let id = ElementId::Name(choice.key().into());
     let focus = window.use_keyed_state(id.clone(), cx, |_, cx| cx.focus_handle()).read(cx).clone();
-    let mut art = div().relative().w(px(TILE_ART.0)).h(px(TILE_ART.1));
+    // The built-in tiles are smaller, so their names are a size down to fit.
+    let (width, (art_w, art_h), padding_x, text) =
+        if choice.built_in() { (BUILT_IN_TILE.0, BUILT_IN_TILE.1, 4., 12.) } else { (TILE.0, TILE.1, 8., 13.) };
+    let mut art = div().relative().w(px(art_w)).h(px(art_h));
     match choice.art() {
         Some(tree) => {
-            for r in pieces(&tree, TILE_ART.0, TILE_ART.1, 2) {
+            for r in pieces(&tree, art_w, art_h, 2) {
                 art = art.child(
                     div()
                         .absolute()
@@ -167,8 +186,9 @@ fn tile(i: usize, choice: Pick, selected: bool, window: &mut Window, cx: &mut Co
         .flex()
         .flex_col()
         .gap(px(8.))
-        .p(px(8.))
-        .w(px(TILE_WIDTH))
+        .px(px(padding_x))
+        .py(px(8.))
+        .w(px(width))
         .rounded(px(10.))
         .bg(p.card)
         .border_1()
@@ -177,11 +197,18 @@ fn tile(i: usize, choice: Pick, selected: bool, window: &mut Window, cx: &mut Co
         .child(art)
         .child(
             div()
+                .flex()
+                .flex_col()
+                .gap(px(2.))
                 .min_w_0()
-                .truncate()
-                .text_size(px(13.))
-                .text_color(if selected { p.text } else { p.secondary })
-                .child(title),
+                .child(
+                    div()
+                        .truncate()
+                        .text_size(px(text))
+                        .text_color(if selected { p.text } else { p.secondary })
+                        .child(title),
+                )
+                .children(note.map(|note| div().truncate().text_size(px(12.)).text_color(p.muted).child(note))),
         );
     let face = face
         .cursor_pointer()
@@ -205,7 +232,7 @@ fn tile(i: usize, choice: Pick, selected: bool, window: &mut Window, cx: &mut Co
         .into_any_element()
 }
 
-/// The "..." of a library layout's tile: Edit, Rename, Duplicate and Delete.
+/// The "..." of a library layout's tile: Edit, Rename, Used on, Duplicate and Delete.
 fn library_menu(i: usize, entry: &library::Entry, cx: &mut Context<Panel>) -> AnyElement {
     let view = cx.entity().downgrade();
     let entry = entry.clone();
@@ -217,6 +244,7 @@ fn library_menu(i: usize, entry: &library::Entry, cx: &mut Context<Panel>) -> An
         .dropdown_menu(move |menu, _, _| {
             let (editing, renaming, copying, deleting) = (view.clone(), view.clone(), view.clone(), view.clone());
             let (edit, rename, copy, delete) = (entry.clone(), entry.clone(), entry.clone(), entry.clone());
+            let (tying, tie) = (view.clone(), entry.clone());
             menu.item(PopupMenuItem::new("Edit").on_click(move |_, window, cx| {
                 let id = edit.id.clone();
                 let _ = editing.update(cx, |panel, cx| {
@@ -229,6 +257,10 @@ fn library_menu(i: usize, entry: &library::Entry, cx: &mut Context<Panel>) -> An
             .item(PopupMenuItem::new("Rename").on_click(move |_, window, cx| {
                 let entry = rename.clone();
                 let _ = renaming.update(cx, |_, cx| rename_layout(entry, window, cx));
+            }))
+            .item(PopupMenuItem::new("Used on...").on_click(move |_, window, cx| {
+                let entry = tie.clone();
+                let _ = tying.update(cx, |panel, cx| used_on(panel, entry, window, cx));
             }))
             .item(PopupMenuItem::new("Duplicate").on_click(move |_, window, cx| {
                 let entry = copy.clone();
@@ -299,11 +331,88 @@ fn rename_layout(entry: library::Entry, window: &mut Window, cx: &mut Context<Pa
     });
 }
 
-/// A copy of a library layout, as a new one beside it.
+/// Each connected screen's device path and name, as the tabs show it.
+fn screen_names(panel: &Panel) -> Vec<(String, SharedString)> {
+    panel.mons.iter().enumerate().map(|(i, m)| (m.id.clone(), format!("{}  {}", i + 1, m.name).into())).collect()
+}
+
+/// Under the tile of a layout for other screens: which, by number.
+fn for_screens(entry: &library::Entry, panel: &Panel) -> SharedString {
+    let numbers: Vec<String> = panel
+        .mons
+        .iter()
+        .enumerate()
+        .filter(|(_, m)| entry.screens.contains(&m.id))
+        .map(|(i, _)| (i + 1).to_string())
+        .collect();
+    match numbers.as_slice() {
+        [] => "For a screen not connected".into(),
+        [n] => format!("For screen {n}").into(),
+        [first @ .., last] => format!("For screens {} and {last}", first.join(", ")).into(),
+    }
+}
+
+/// Used on: the screens whose tabs offer a library layout, or any screen. Screens
+/// it's for that aren't connected now stay in the list, unshown.
+fn used_on(panel: &Panel, entry: library::Entry, window: &mut Window, cx: &mut Context<Panel>) {
+    let screens = screen_names(panel);
+    let chosen = Rc::new(std::cell::RefCell::new(entry.screens.clone()));
+    let view = cx.entity().downgrade();
+    window.open_dialog(cx, move |dialog, _, _| {
+        let now = chosen.borrow().clone();
+        let any = {
+            let chosen = chosen.clone();
+            Checkbox::new("used-on-any").label("Any screen").checked(now.is_empty()).on_click(move |_, window, _| {
+                chosen.borrow_mut().clear();
+                window.refresh();
+            })
+        };
+        let mut list = div().flex().flex_col().gap(px(12.)).child(any);
+        for (i, (id, name)) in screens.iter().enumerate() {
+            let (chosen, id) = (chosen.clone(), id.clone());
+            let check = Checkbox::new(("used-on", i)).label(name.clone()).checked(now.contains(&id)).on_click(
+                move |on, window, _| {
+                    let mut list = chosen.borrow_mut();
+                    list.retain(|s| *s != id);
+                    if *on {
+                        list.push(id.clone());
+                    }
+                    window.refresh();
+                },
+            );
+            list = list.child(check);
+        }
+        let (view, id, chosen) = (view.clone(), entry.id.clone(), chosen.clone());
+        dialog
+            .title(format!("Use {} on", entry.name))
+            .child(list)
+            .footer(
+                DialogFooter::new()
+                    .child(DialogClose::new().trigger(|b| b.label("Cancel")))
+                    .child(DialogAction::new().child(ui::primary("used-on-ok", "Save"))),
+            )
+            .on_ok(move |_, window, cx| {
+                let (id, screens) = (id.clone(), chosen.borrow().clone());
+                let _ = view.update(cx, |panel, cx| {
+                    edit_library(panel, window, cx, move |list| {
+                        let Some(at) = position(list, &id) else { return };
+                        if !screens.is_empty() {
+                            list[at]["screens"] = json!(screens);
+                        } else if let Some(fields) = list[at].as_object_mut() {
+                            fields.remove("screens");
+                        }
+                    })
+                });
+                true
+            })
+    });
+}
+
+/// A copy of a library layout, as a new one beside it, for the same screens.
 fn duplicate(panel: &mut Panel, entry: library::Entry, window: &mut Window, cx: &mut Context<Panel>) {
     edit_library(panel, window, cx, move |list| {
         let name = format!("{} copy", entry.name);
-        list.push(library::Entry { id: library::new_id(list), name, tree: entry.tree }.value());
+        list.push(library::Entry { id: library::new_id(list), name, tree: entry.tree, screens: entry.screens }.value());
     });
 }
 
@@ -328,13 +437,15 @@ fn delete_layout(entry: library::Entry, window: &mut Window, cx: &mut Context<Pa
     });
 }
 
-/// Save as layout: the screen's own layout becomes a new library layout, which the screen then follows.
+/// Save as layout: the screen's own layout becomes a new library layout for it,
+/// which the screen then follows.
 fn save_as_layout(panel: &mut Panel, tree: Node, window: &mut Window, cx: &mut Context<Panel>) {
     let Some(sig) = panel.state.as_ref().map(|s| s.desk.sig.clone()) else { return };
     let Some(screen) = chosen(panel).map(|(m, _)| m.id.clone()) else { return };
     zone_editor::with_latest(panel, window, cx, move |panel, window, cx| {
         let mut list = panel.config.custom_layouts.clone();
-        let entry = library::Entry { id: library::new_id(&list), name: library::next_name(&list), tree };
+        let (id, name) = (library::new_id(&list), library::next_name(&list));
+        let entry = library::Entry { id, name, tree, screens: vec![screen.clone()] };
         list.push(entry.value());
         let Some(layout) = library::screen_patch(&entry.layout()) else { return };
         panel.patch(json!({ "custom_layouts": list, "desks": { sig: { "zones": { screen: layout } } } }), window, cx);
@@ -573,21 +684,27 @@ fn set_layout(panel: &mut Panel, layout: Option<ZoneLayout>, window: &mut Window
     });
 }
 
-fn preview(mon: &Mon, layout: Option<&ZoneLayout>, gap: u32, room: f64, p: Palette) -> Div {
+/// How tall the preview card is for a screen in `room`: the screen's shape, up to the most.
+fn preview_height(mon: &Mon, room: f64) -> f32 {
+    let (w, h) = (mon.rect.width().max(1) as f64, mon.rect.height() as f64);
+    (((room - PREVIEW_INSET) * h / w + PREVIEW_INSET) as f32).min(PREVIEW_MAX_HEIGHT)
+}
+
+fn preview(mon: &Mon, layout: Option<&ZoneLayout>, gap: u32, room: f64, height: f32, p: Palette) -> Div {
     let card = div()
         .flex()
         .items_center()
         .justify_center()
         .flex_1()
         .min_w_0()
-        .h(px(PREVIEW_HEIGHT))
+        .h(px(height))
         .p(px(16.))
         .bg(p.card)
         .border_1()
         .border_color(p.hairline)
         .rounded(px(12.));
     let (w, h) = (mon.rect.width() as f64, mon.rect.height() as f64);
-    let scale = ((room - 34.) / w).min((PREVIEW_HEIGHT as f64 - 34.) / h).max(0.01);
+    let scale = ((room - PREVIEW_INSET) / w).min((height as f64 - PREVIEW_INSET) / h).max(0.01);
     let mut surface = div().relative().w(px((w * scale) as f32)).h(px((h * scale) as f32));
     let Some(layout) = layout else {
         let empty = div()
@@ -937,8 +1054,7 @@ pub fn render(panel: &mut Panel, window: &mut Window, cx: &mut Context<Panel>) -
     if panel.editor.as_ref().is_some_and(|e| Some(&e.sig) != sig.as_ref() || e.screen != mon.id) {
         panel.editor = None;
     }
-    let labels: Vec<SharedString> =
-        panel.mons.iter().enumerate().map(|(i, m)| format!("{}  {}", i + 1, m.name).into()).collect();
+    let labels: Vec<SharedString> = screen_names(panel).into_iter().map(|(_, name)| name).collect();
     let tabs =
         ui::choice("zone-screen", "Screen", labels, None, panel.zone_screen.min(panel.mons.len() - 1), window, cx, {
             let view = view.clone();
@@ -958,35 +1074,80 @@ pub fn render(panel: &mut Panel, window: &mut Window, cx: &mut Context<Panel>) -
             }
         });
 
-    // The templates, the library, then New layout. A layout that is none of them
-    // shows as Changed, selected, before New layout.
+    let number = panel.zone_screen.min(panel.mons.len() - 1) + 1;
+    // Built in: the templates. Your layouts: the library layouts for this screen, or
+    // all of them, then New layout. A layout that is none of them shows as Changed,
+    // selected, before New layout.
     let library = library::entries(&panel.config.custom_layouts);
     let own = saved.as_ref().filter(|l| {
         l.template == Template::Custom && !l.custom.as_ref().is_some_and(|id| library.iter().any(|e| e.id == *id))
     });
     let own = own.map(|l| l.tree.clone());
-    let picks = Template::ALL
-        .into_iter()
-        .filter(|t| *t != Template::Custom)
-        .map(Pick::Template)
-        .chain(library.into_iter().map(Pick::Library))
-        .chain(own.clone().map(Pick::Changed))
-        .chain([Pick::New]);
-    let mut tiles =
-        div().flex().flex_wrap().content_start().w(px(TILE_WIDTH * 2. + TILE_GAP * 2. + 4.)).gap(px(TILE_GAP));
-    for (i, choice) in picks.enumerate() {
+    let mut built_in = div().flex().flex_wrap().gap(px(TILE_GAP));
+    let templates = Template::ALL.into_iter().filter(|t| *t != Template::Custom).map(Pick::Template);
+    let mut at = 0;
+    for choice in templates {
         let selected = choice.selected(saved.as_ref());
-        tiles = tiles.child(tile(i, choice, selected, window, cx));
+        built_in = built_in.child(tile(at, choice, selected, None, window, cx));
+        at += 1;
     }
+    // The layout the screen uses always shows, so the picker never hides what's in use.
+    let in_use = saved.as_ref().and_then(|l| l.custom.clone());
+    let fits: Vec<&str> = library::for_screen(&library, &mon.id).map(|e| e.id.as_str()).collect();
+    let all = panel.all_layouts;
+    let shown: Vec<(library::Entry, Option<SharedString>)> = library
+        .iter()
+        .filter(|e| all || fits.contains(&e.id.as_str()) || in_use.as_ref() == Some(&e.id))
+        .map(|e| (e.clone(), (!fits.contains(&e.id.as_str())).then(|| for_screens(e, panel))))
+        .collect();
+    let mut yours = div().flex().flex_wrap().items_center().gap(px(TILE_GAP));
+    let picks = shown
+        .into_iter()
+        .map(|(e, note)| (Pick::Library(e), note))
+        .chain(own.clone().map(|tree| (Pick::Changed(tree), None)))
+        .chain([(Pick::New, None)]);
+    for (choice, note) in picks {
+        let selected = choice.selected(saved.as_ref());
+        yours = yours.child(tile(at, choice, selected, note, window, cx));
+        at += 1;
+    }
+    if library.is_empty() && own.is_none() {
+        yours = yours.child(ui::description("Make your own with New layout, or Save from windows", p).ml(px(8.)));
+    }
+    // Only offered when it would show more, or to go back.
+    let toggle = (all || library.len() > fits.len()).then(|| {
+        let label = if all { format!("Only screen {number}") } else { "Show all screens".to_string() };
+        ui::secondary("zone-all-screens", label, cx).ghost().small().on_click(cx.listener(|panel, _, _, cx| {
+            panel.all_layouts = !panel.all_layouts;
+            cx.notify();
+        }))
+    });
+    let label = |text: &'static str| div().text_size(px(13.)).text_color(p.secondary).child(text);
+    let picker = div()
+        .flex()
+        .flex_col()
+        .gap(px(8.))
+        .child(label("Built in"))
+        .child(built_in)
+        .child(
+            div()
+                .flex()
+                .items_center()
+                .justify_between()
+                .gap(px(16.))
+                .mt(px(16.))
+                .child(label("Your layouts"))
+                .children(toggle),
+        )
+        .child(yours);
     let save_as = own.map(|tree| {
         ui::secondary("save-as-layout", "Save as layout", cx)
             .on_click(cx.listener(move |panel, _, window, cx| save_as_layout(panel, tree.clone(), window, cx)))
     });
-    let picker = div().flex().flex_col().gap(px(12.)).child(tiles).children(save_as);
-    let room = f64::from(window.viewport_size().width) - 240. - 64. - TILE_WIDTH as f64 * 2. - 24. - 20.;
+    let room = f64::from(window.viewport_size().width) - 240. - 64. - 20.;
+    let height = preview_height(&mon, room);
     let caption =
         ui::description("Stored as parts of the screen, so a new resolution keeps the layout", p).flex_1().min_w_0();
-    let number = panel.zone_screen.min(panel.mons.len() - 1) + 1;
     let from_windows = ui::secondary("save-from-windows", "Save from windows", cx)
         .tooltip("Make a layout from where the windows on this screen are now")
         .on_click(cx.listener(move |panel, _, window, cx| {
@@ -994,31 +1155,26 @@ pub fn render(panel: &mut Panel, window: &mut Window, cx: &mut Context<Panel>) -
         }));
     let edit_layout = ui::secondary("edit-layout", "Edit layout", cx)
         .on_click(cx.listener(|panel, _, window, cx| zone_editor::open(panel, Opened::Screen, window, cx)));
-    let buttons = div().flex().flex_none().items_center().gap(px(8.)).child(from_windows).child(edit_layout);
+    let buttons =
+        div().flex().flex_none().items_center().gap(px(8.)).children(save_as).child(from_windows).child(edit_layout);
     let below = div().flex().items_center().justify_between().gap(px(16.)).child(caption).child(buttons);
     let gap_px = zones_cfg.gap.min(32);
     let stage = if panel.editor.is_some() {
-        zone_editor::view(panel, &mon, gap_px, room, PREVIEW_HEIGHT, window, cx)
+        zone_editor::view(panel, &mon, gap_px, room, height, window, cx)
     } else {
         div()
             .flex()
             .flex_col()
             .gap(px(12.))
-            .child(preview(&mon, saved.as_ref(), gap_px, room, p))
+            .child(preview(&mon, saved.as_ref(), gap_px, room, height, p))
             .child(below)
             .into_any_element()
     };
 
     body = body
         .child(div().flex().child(tabs))
-        .child(
-            div()
-                .flex()
-                .items_start()
-                .gap(px(24.))
-                .child(picker)
-                .child(div().flex().flex_col().flex_1().min_w_0().child(stage)),
-        )
+        .child(div().flex().flex_col().min_w_0().child(stage))
+        .child(picker)
         .child(section(
             "Snapping",
             div()

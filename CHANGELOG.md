@@ -24,6 +24,7 @@ All notable changes to Seam. The format follows [Keep a Changelog](https://keepa
 
 ### Changed
 
+- The Zones page shows the preview across the page, the built-in layouts in one row of smaller tiles under it, then **Your layouts**. A layout you make is for the screen you made it on, and **Used on...** in its **...** menu ties it to other screens or any screen. **Show all screens** lists every layout. `screens` on a `custom_layouts` entry, and one without it is for any screen.
 - The **Custom** tile on the Zones page is gone. Clicking it only opened the editor for the screen's layout. **Edit layout** on a template now saves the result as a new library layout instead of changing the screen alone, and a screen whose layout is none of the tiles shows **Changed**, with **Save as layout**. Screens with a Custom layout from before show as Changed, and nothing is added to the library until you save one.
 
 - **Never manage these apps** moved from General to the Zones page, where it is the **Left alone** list under **Where apps open**. It is still `zones.exclude`.

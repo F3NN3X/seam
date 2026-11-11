@@ -28,9 +28,10 @@ impl Entry {
         value
     }
 
-    /// Whether it's offered on the screen with this device path.
+    /// Whether it's offered on the screen with this device path. Paths are compared
+    /// ignoring case, as Windows may report them in either.
     pub fn fits(&self, device: &str) -> bool {
-        self.screens.is_empty() || self.screens.iter().any(|s| s == device)
+        self.screens.is_empty() || self.screens.iter().any(|s| s.eq_ignore_ascii_case(device))
     }
 
     /// A screen's layout that follows this one.

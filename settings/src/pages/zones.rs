@@ -342,7 +342,7 @@ fn for_screens(entry: &library::Entry, panel: &Panel) -> SharedString {
         .mons
         .iter()
         .enumerate()
-        .filter(|(_, m)| entry.screens.contains(&m.id))
+        .filter(|(_, m)| entry.screens.iter().any(|s| s.eq_ignore_ascii_case(&m.id)))
         .map(|(i, _)| (i + 1).to_string())
         .collect();
     match numbers.as_slice() {
@@ -370,16 +370,16 @@ fn used_on(panel: &Panel, entry: library::Entry, window: &mut Window, cx: &mut C
         let mut list = div().flex().flex_col().gap(px(12.)).child(any);
         for (i, (id, name)) in screens.iter().enumerate() {
             let (chosen, id) = (chosen.clone(), id.clone());
-            let check = Checkbox::new(("used-on", i)).label(name.clone()).checked(now.contains(&id)).on_click(
-                move |on, window, _| {
+            let ticked = now.iter().any(|s| s.eq_ignore_ascii_case(&id));
+            let check =
+                Checkbox::new(("used-on", i)).label(name.clone()).checked(ticked).on_click(move |on, window, _| {
                     let mut list = chosen.borrow_mut();
-                    list.retain(|s| *s != id);
+                    list.retain(|s| !s.eq_ignore_ascii_case(&id));
                     if *on {
                         list.push(id.clone());
                     }
                     window.refresh();
-                },
-            );
+                });
             list = list.child(check);
         }
         let (view, id, chosen) = (view.clone(), entry.id.clone(), chosen.clone());
@@ -394,12 +394,21 @@ fn used_on(panel: &Panel, entry: library::Entry, window: &mut Window, cx: &mut C
             .on_ok(move |_, window, cx| {
                 let (id, screens) = (id.clone(), chosen.borrow().clone());
                 let _ = view.update(cx, |panel, cx| {
-                    edit_library(panel, window, cx, move |list| {
-                        let Some(at) = position(list, &id) else { return };
+                    zone_editor::with_latest(panel, window, cx, move |panel, window, cx| {
+                        let mut list = panel.config.custom_layouts.clone();
+                        let Some(at) = position(&list, &id) else {
+                            let note = gpui_kit::component::notification::Notification::new()
+                                .message("That layout was deleted, so nothing changed");
+                            window.push_notification(note, cx);
+                            return;
+                        };
                         if !screens.is_empty() {
                             list[at]["screens"] = json!(screens);
                         } else if let Some(fields) = list[at].as_object_mut() {
                             fields.remove("screens");
+                        }
+                        if list != panel.config.custom_layouts {
+                            panel.patch(json!({ "custom_layouts": list }), window, cx);
                         }
                     })
                 });

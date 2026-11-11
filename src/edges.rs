@@ -71,7 +71,7 @@ impl Member {
         if !landed && self.at.is_some_and(|at| at.elapsed() < PACE) {
             return;
         }
-        if winutil::is_hung(h) {
+        if !unsafe { IsWindow(Some(h)) }.as_bool() || winutil::is_hung(h) {
             self.dropped = true;
             return;
         }
@@ -221,16 +221,27 @@ impl Ask {
 
 impl Engine {
     /// A drag began on a window in its zones, with "Resize neighbours with a window"
-    /// on: ask a worker for its group. Only the window's own record is read here.
-    pub(super) fn edges_start(&self, hwnd: HWND, geometry: &[Placed], was_maximized: bool) -> Option<Edges> {
-        if !self.settings.resize_neighbours || was_maximized || !winutil::is_resizable(hwnd) {
+    /// on: ask a worker for its group. `zone` is the window's own record when it is
+    /// still where it was put, and `stamped` whether it carries a stamp; the drag
+    /// read both already, so a plain move costs little more here than the worker.
+    pub(super) fn edges_start(
+        &self,
+        hwnd: HWND,
+        geometry: &[Placed],
+        (zone, stamped): (Option<(String, usize, usize)>, bool),
+        was_maximized: bool,
+    ) -> Option<Edges> {
+        if !self.settings.resize_neighbours || was_maximized || (zone.is_none() && !stamped) {
             return None;
         }
-        let (s, from, to) = match self.current(hwnd) {
-            Some(snapped) => (geometry.iter().position(|g| g.id == snapped.screen)?, snapped.from, snapped.to),
+        if !winutil::is_resizable(hwnd) {
+            return None;
+        }
+        let (s, from, to) = match zone {
+            Some((screen, from, to)) => (geometry.iter().position(|g| g.id == screen)?, from, to),
             None => {
                 // After a restart of the tray only the stamp on the window says.
-                let r = winutil::visible_rect(hwnd).filter(|_| winutil::has_zone_stamp(hwnd))?;
+                let r = winutil::visible_rect(hwnd)?;
                 let s = geometry.iter().position(|g| g.bounds.contains(r.x + r.w / 2, r.y + r.h / 2))?;
                 let (from, to, _) = wincontrol::stamped_in(hwnd, r, &geometry[s].zones)?;
                 (s, from, to)
@@ -288,26 +299,42 @@ impl Engine {
 
     /// The resize is over, or `ended` is false because it was cut short while Windows
     /// still has the window. Esc or cut short: the neighbours go back and nothing is
-    /// saved. Otherwise the window is fitted to its zones in the solved layout, the
-    /// neighbours get their last places, and the layout is saved once. Returns false
-    /// for a drag that is a hand resize as before.
+    /// saved, and a window cut short is resized by hand from then on. Otherwise the
+    /// window is fitted to its zones in the solved layout, the neighbours get their
+    /// last places, and the layout is saved once. Returns false for a drag that is a
+    /// hand resize as before.
     pub(super) fn edges_end(&mut self, drag: &Drag, hwnd: HWND, ended: bool) -> bool {
         let Some(edges) = drag.edges.as_ref() else { return false };
-        let Some(group) = edges.group.as_ref() else { return false };
+        let Some(group) = edges.group.as_ref() else {
+            log::info!("zone edges: the resize ended before its group was found, so it's a hand resize");
+            return false;
+        };
         if edges.ticks > 0 {
             let us = edges.longest.as_secs_f64() * 1e6;
             log::info!("zone edges: {} neighbours, {} ticks, main max {us:.0}us", group.members.len(), edges.ticks);
         }
+        if !ended {
+            group.restore();
+            self.unsnap(hwnd, drag.stamped);
+            return true;
+        }
         let now = winutil::window_rect(hwnd);
-        let tree = now.filter(|r| ended && *r != drag.start).and_then(|r| edges.solve(drag.start, r, &group.mins));
+        let tree = now.filter(|r| *r != drag.start).and_then(|r| edges.solve(drag.start, r, &group.mins));
         let Some(tree) = tree else {
             group.restore();
             // Esc puts the window back, and it stays snapped. A side along the screen's
             // edge has no divider, so that's a hand resize.
-            return !ended || now == Some(drag.start);
+            return now == Some(drag.start);
         };
         let placed = zones::rects(&tree, edges.area, edges.gap);
-        for m in group.members.iter().filter(|m| !m.dropped) {
+        let own = std::process::id();
+        // A neighbour closed or minimized since the drag began is left out.
+        let here = |m: &&Member| {
+            let h = hwnd_of(m.hwnd);
+            !m.dropped && unsafe { IsWindow(Some(h)) }.as_bool() && winutil::is_snappable(h, own, &self.exclude)
+        };
+        let members: Vec<&Member> = group.members.iter().filter(here).collect();
+        for m in members {
             let at = zones::span(placed[m.from], placed[m.to]);
             let r = m.rect_for(at);
             if r != m.window || m.sent != m.window {

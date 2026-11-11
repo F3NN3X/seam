@@ -77,6 +77,8 @@ struct Planned {
 static SLOT: Mutex<Option<Job>> = Mutex::new(None);
 static WAKE: Condvar = Condvar::new();
 static PLANNED: Mutex<Option<Planned>> = Mutex::new(None);
+/// Layouts edge drags changed, waiting to be saved in order.
+static DRAGGED: Mutex<Vec<(String, ZoneLayout)>> = Mutex::new(Vec::new());
 
 fn answer(reply: Option<Sender<Reply>>, result: Reply) {
     if let Some(tx) = reply {
@@ -105,9 +107,22 @@ pub fn start(job: Job) {
 
 /// The worker's moves are ready: start them on the snapping's steps. A changed
 /// layout goes to `save` first, so the windows' stamps follow the new zones. When
-/// it can't be saved nothing moves.
-pub fn planned(save: impl FnOnce(&str, ZoneLayout) -> bool) {
-    let Some(plan) = PLANNED.lock().unwrap_or_else(|e| e.into_inner()).take() else { return };
+/// it can't be saved nothing moves. Layouts from edge drags are saved after it.
+pub fn planned(mut save: impl FnMut(&str, ZoneLayout) -> bool) {
+    if let Some(plan) = PLANNED.lock().unwrap_or_else(|e| e.into_inner()).take() {
+        run_plan(plan, &mut save);
+    }
+    let dragged = std::mem::take(&mut *DRAGGED.lock().unwrap_or_else(|e| e.into_inner()));
+    for (screen, layout) in dragged {
+        if save(&screen, layout) {
+            regroup::saved(&screen, None);
+        } else {
+            log::info!("zone edges: Seam was busy, so the new layout wasn't saved");
+        }
+    }
+}
+
+fn run_plan(plan: Planned, save: &mut impl FnMut(&str, ZoneLayout) -> bool) {
     if let Some((screen, layout, keep)) = plan.layout {
         if !save(&screen, layout) {
             answer(plan.reply, Err(RpcError::new(api::BUSY, "Seam is busy, try again")));
@@ -115,18 +130,19 @@ pub fn planned(save: impl FnOnce(&str, ZoneLayout) -> bool) {
         }
         regroup::saved(&screen, keep);
     }
-    snap::place_all(plan.list);
+    // An empty list would clear window control's moves still waiting.
+    if !plan.list.is_empty() {
+        snap::place_all(plan.list);
+    }
     answer(plan.reply, Ok(json!({ "ok": true })));
 }
 
 /// A drag of a window's edge changed a screen's layout: save it the way a group
-/// command's is, which also drops what Priority kept for the screen. Nothing moves
-/// here, as the drag has put the windows already.
+/// command's is, which also drops what Priority kept for the screen. It waits
+/// behind a group command's plan rather than replacing it. Nothing moves here, as
+/// the drag has put the windows already.
 pub fn save_layout(owner: isize, screen: String, layout: ZoneLayout) {
-    let plan = Planned { list: Vec::new(), layout: Some((screen, layout, None)), reply: None };
-    if let Some(earlier) = PLANNED.lock().unwrap_or_else(|e| e.into_inner()).replace(plan) {
-        replaced(earlier.reply);
-    }
+    DRAGGED.lock().unwrap_or_else(|e| e.into_inner()).push((screen, layout));
     unsafe {
         let _ = PostMessageW(Some(hwnd_of(owner)), WM_APP_WINDOW, WPARAM(0), LPARAM(0));
     }

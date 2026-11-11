@@ -97,18 +97,24 @@ fn take_seen(known: &mut Known) {
 /// wait up to 100 ms on the app. A hung window, or one that doesn't answer, gets
 /// the system's floor this time and is asked again next time.
 pub fn of(h: HWND, dpi: u32) -> (i32, i32) {
-    let mut guard = KNOWN.lock().unwrap_or_else(|e| e.into_inner());
-    let known = guard.get_or_insert_with(Known::default);
-    take_seen(known);
     let margins = margins(h);
     let floor = floor(margins);
     let key = key(h);
-    let asked = match key.as_ref().and_then(|k| known.asked.get(k)) {
-        Some(asked) => Some(*asked),
+    let cached = {
+        let mut guard = KNOWN.lock().unwrap_or_else(|e| e.into_inner());
+        let known = guard.get_or_insert_with(Known::default);
+        key.as_ref().and_then(|k| known.asked.get(k)).copied()
+    };
+    // Asked with the cache free, so a slow app holds up no other worker.
+    let asked = match cached {
+        Some(asked) => Some(asked),
         None if winutil::is_hung(h) => None,
         None => ask(h, margins).map(|a| (a.0.max(floor.0), a.1.max(floor.1))),
     };
-    if let (Some(key), Some(asked)) = (key.clone(), asked) {
+    let mut guard = KNOWN.lock().unwrap_or_else(|e| e.into_inner());
+    let known = guard.get_or_insert_with(Known::default);
+    take_seen(known);
+    if let (Some(key), Some(asked), None) = (key.clone(), asked, cached) {
         known.asked.insert(key, asked);
     }
     let seen = key.and_then(|k| known.seen.get(&k).map(|(size, _)| *size)).unwrap_or_default();

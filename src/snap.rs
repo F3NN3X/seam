@@ -473,12 +473,14 @@ impl Engine {
             zone_paint::build(specs(&geometry));
         }
         let frame = if self.drags_sized() { winutil::visible_rect(hwnd) } else { None };
-        let was_snapped = self.current(hwnd).map(|s| s.old);
+        let current = self.current(hwnd).map(|s| (s.old, (s.screen.clone(), s.from, s.to)));
+        let was_snapped = current.as_ref().map(|(old, _)| *old);
         let stamped = winutil::has_zone_stamp(hwnd);
         let button = Some(main_button()).filter(|b| held(*b));
         let timer = unsafe { SetTimer(None, 0, TICK_MS, Some(on_tick)) };
         let was_maximized = winutil::is_maximized(hwnd);
-        let edges = self.edges_start(hwnd, &geometry, was_maximized);
+        let zone = current.map(|(_, zone)| zone);
+        let edges = self.edges_start(hwnd, &geometry, (zone, stamped), was_maximized);
         self.drag = Some(Drag {
             hwnd: key,
             phase: Phase::Waiting,

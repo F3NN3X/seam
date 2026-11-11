@@ -13,7 +13,7 @@ use gpui_kit::component::{ActiveTheme, Icon, Theme, ThemeStyled, WindowExt};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 use seam::api::{CallError, Client, Event};
-use seam::config::{diff_patch, Config};
+use seam::config::{diff_patch, Config, MAX_EDGE_RESISTANCE_PX, MAX_GLUE_PUSH_PX};
 use seam::desk::{self, Mon, Placed};
 use seam::layout::Link;
 use seam::monitors;
@@ -129,6 +129,9 @@ pub struct Panel {
     pub colour_generation: u64,
     /// The Gap slider. It sends the new gap when it's let go.
     pub gap: Entity<SliderState>,
+    /// The Edge resistance and Glued edge push sliders, sent the same way.
+    pub edge_resistance: Entity<SliderState>,
+    pub glue_push: Entity<SliderState>,
     pub search: Entity<InputState>,
     /// The page's scroll, which opening a search result moves to the row it found.
     page_scroll: ScrollHandle,
@@ -166,7 +169,36 @@ impl Panel {
         let pin_picker = cx.new(|cx| ColorPickerState::new(window, cx));
         let gap =
             cx.new(|_| SliderState::new().min(0.).max(32.).step(2.).default_value(Config::default().zones.gap as f32));
+        let pointer = Config::default().pointer;
+        let edge_resistance = cx.new(|_| {
+            SliderState::new()
+                .min(0.)
+                .max(MAX_EDGE_RESISTANCE_PX as f32)
+                .step(2.)
+                .default_value(pointer.edge_resistance_px as f32)
+        });
+        let glue_push = cx.new(|_| {
+            SliderState::new().min(0.).max(MAX_GLUE_PUSH_PX as f32).step(10.).default_value(pointer.glue_push_px as f32)
+        });
         let subscriptions = vec![
+            cx.subscribe_in(&edge_resistance, window, |this, _, event: &SliderEvent, window, cx| match event {
+                SliderEvent::Change(value) => {
+                    this.config.pointer.edge_resistance_px = value.end() as u32;
+                    cx.notify();
+                }
+                SliderEvent::Release(value) => {
+                    this.patch(json!({ "pointer": { "edge_resistance_px": value.end() as u32 } }), window, cx);
+                }
+            }),
+            cx.subscribe_in(&glue_push, window, |this, _, event: &SliderEvent, window, cx| match event {
+                SliderEvent::Change(value) => {
+                    this.config.pointer.glue_push_px = value.end() as u32;
+                    cx.notify();
+                }
+                SliderEvent::Release(value) => {
+                    this.patch(json!({ "pointer": { "glue_push_px": value.end() as u32 } }), window, cx);
+                }
+            }),
             cx.subscribe_in(&gap, window, |this, _, event: &SliderEvent, window, cx| match event {
                 SliderEvent::Change(value) => {
                     this.config.zones.gap = value.end() as u32;
@@ -243,6 +275,8 @@ impl Panel {
             pin_picker,
             colour_generation: 0,
             gap,
+            edge_resistance,
+            glue_push,
             search,
             page_scroll: ScrollHandle::new(),
             focus,

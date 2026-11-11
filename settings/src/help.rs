@@ -73,6 +73,7 @@ pub const TOPICS: &[Topic] = &[
             ]),
             Text("When you finish, Seam saves the borders and turns on **Remap pointer at borders**. Ctrl+Shift+Alt+P pauses and resumes it. With **Also align Windows arrangement** on, Seam also moves your screens in Display settings to match."),
             Text("Each set of screens is a desk, with its own borders, zones and workspaces. **Saved desks** lists them, with when each was lined up, in your local time. Each desk's menu has **Rename** and **Forget**."),
+            Text("**Edge resistance**, on Displays, holds the pointer at the edge to another screen until you push that many pixels past it, so you can grab a window's edge or corner there. It's off at 0, works at every border, and gives way while a mouse button is down, so dragging a window across is never slowed."),
             Text("Seam relies on Windows' **Ease cursor movement between displays**, so the pointer can always leave a screen toward its neighbour. When it's off, the Displays page says so, and **Turn it on** turns it on for you and checks that Windows kept it. Seam never turns it off."),
         ],
         opens: Some(Page::Displays),
@@ -96,7 +97,7 @@ pub const TOPICS: &[Topic] = &[
             Text("Windows doesn't always have your screens as they stand on your desk. Line Up handles two cases."),
             Text("**Glue** is for screens that touch on your desk but have a gap in Windows. Line Up offers each pair after the touching borders. Press G to glue it, then line the two up as they stand on your desk. The gap doesn't matter. A pair found from the screens' sizes starts glued, and a pair found only from the pixel layout starts off, so Enter skips it."),
             List(&[
-                "The pointer rests at a glued edge until you push about 60 px past it, so an auto-hide taskbar there still shows. A quick flick crosses at once.",
+                "The pointer rests at a glued edge until you push past it, 60 px unless you change **Glued edge push** on Displays, so an auto-hide taskbar there still shows. A quick flick crosses at once.",
                 "Past the end of a glue, the edge is a dead edge, and Seam holds the pointer there",
                 "**Align arrangement** keeps glued screens apart, and refuses a move that would break a glue",
             ]),

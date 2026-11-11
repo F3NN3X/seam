@@ -7,7 +7,7 @@ use crate::config::SavedBorder;
 use crate::desk::{glue_candidates, resolve};
 use crate::geom::{anchor_points, map_from_offset, overlap_in_a, predict, predict_centred, touching, EdgeMap, Side};
 use crate::hook;
-use crate::layout::{Link, Live};
+use crate::layout::Link;
 use crate::monitors::Mon;
 use std::cell::RefCell;
 use windows::core::{w, PCWSTR};
@@ -199,7 +199,7 @@ fn push_live(c: &Calib) {
             s.map().map(|map| Link { a: s.a, b: s.b, side: s.side, map, glued: s.glued(), not_on_desk: s.not_on_desk })
         })
         .collect();
-    hook::set_live(Live { rects: c.mons.iter().map(|m| m.rect).collect(), links });
+    hook::set_borders(c.mons.iter().map(|m| m.rect).collect(), links);
 }
 
 /// Start the overlay. Returns false if there's nothing to line up.

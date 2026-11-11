@@ -8,11 +8,12 @@ use gpui_kit::component::dialog::{DialogAction, DialogClose, DialogFooter};
 use gpui_kit::component::input::{Input, InputState};
 use gpui_kit::component::menu::{DropdownMenu, PopupMenuItem};
 use gpui_kit::component::notification::Notification;
+use gpui_kit::component::slider::{Slider, SliderState};
 use gpui_kit::component::{Disableable, Icon, WindowExt};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 use seam::api::LayoutView;
-use seam::config::{Desk, SavedBorder};
+use seam::config::{Desk, SavedBorder, MAX_EDGE_RESISTANCE_PX, MAX_GLUE_PUSH_PX};
 use seam::desk::{month_day, relative_day, Placed};
 use seam::geom::{corridor, facing_gap, touching, EdgeMap, Rect, Side};
 use seam::state::{Border, BorderState, State};
@@ -699,9 +700,52 @@ pub fn render(panel: &mut Panel, window: &mut Window, cx: &mut Context<Panel>) -
             view.update(cx, |panel, cx| panel.patch(json!({ "align_arrangement": on }), window, cx));
         },
     );
+    // The sliders follow the settings when something else changed them.
+    let pointer_cfg = &panel.config.pointer;
+    let resistance = pointer_cfg.edge_resistance_px.min(MAX_EDGE_RESISTANCE_PX);
+    let push = pointer_cfg.glue_push_px.min(MAX_GLUE_PUSH_PX);
+    for (slider, value) in [(&panel.edge_resistance, resistance), (&panel.glue_push, push)] {
+        if slider.read(cx).value().end() != value as f32 {
+            slider.update(cx, |slider, cx| slider.set_value(value as f32, window, cx));
+        }
+    }
+    let ends = |low: &'static str, high: &'static str, slider: &Entity<SliderState>| {
+        let end = |text| div().text_size(px(12.)).text_color(p.muted).child(text);
+        div()
+            .flex()
+            .flex_none()
+            .items_center()
+            .gap(px(12.))
+            .child(end(low))
+            .child(Slider::new(slider).horizontal().w(px(120.)))
+            .child(end(high))
+    };
+    // The value sits under the title, as on the Gap slider, above the caption.
+    let about = |value: String, caption: &'static str| {
+        div().flex().flex_col().child(ui::description(value, p)).child(ui::description(caption, p)).into_any_element()
+    };
+    let resistance_value = if resistance == 0 { "Off".into() } else { format!("{resistance} px") };
     let pointer = card(
         vec![
             row("Remap pointer at borders", Some("Cross where the screens physically meet".into()), remap, p),
+            ui::row_with(
+                "Edge resistance",
+                Some(about(
+                    resistance_value,
+                    "Push this many pixels past a screen's edge before the pointer crosses, so you can grab a \
+                     window's edge there. 0 is off",
+                )),
+                ends("0", "100", &panel.edge_resistance),
+            ),
+            ui::row_with(
+                "Glued edge push",
+                Some(about(
+                    format!("{push} px"),
+                    "How far to push past a glued edge before the pointer crosses. An auto-hide taskbar there \
+                     shows while you push",
+                )),
+                ends("0", "200", &panel.glue_push),
+            ),
             row(
                 "Also align Windows arrangement",
                 Some("Move screens in Display settings to match".into()),

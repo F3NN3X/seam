@@ -35,15 +35,30 @@ impl Link {
     }
 }
 
-/// How far the pointer must push past a glued edge, in pixels of the screen it
-/// leaves, before it crosses. Until then it rests at the edge, so an auto-hide
-/// taskbar there can still show.
-pub const GLUE_RESISTANCE_PX: i32 = 60;
-
 #[derive(Default)]
 pub struct Live {
     pub rects: Vec<Rect>,
     pub links: Vec<Link>,
+    /// How far the pointer must push past any edge to another screen, in pixels
+    /// of the screen it leaves, before it crosses. 0 is off.
+    pub edge_resistance: i32,
+    /// The same for a glued edge. Until then the pointer rests at the edge, so
+    /// an auto-hide taskbar there can still show.
+    pub glue_push: i32,
+}
+
+impl Live {
+    /// How far a crossing must push past the edge. Edge resistance gives way
+    /// while a mouse button is down, so drags are never slowed; `buttons` is
+    /// only asked when it's on. A glued edge takes the larger of the two.
+    pub fn push_needed(&self, glued: bool, buttons: impl FnOnce() -> bool) -> i32 {
+        let edge = if self.edge_resistance > 0 && !buttons() { self.edge_resistance } else { 0 };
+        if glued {
+            edge.max(self.glue_push)
+        } else {
+            edge
+        }
+    }
 }
 
 /// A remapped move: where it lands, and the border it crossed.
@@ -58,8 +73,8 @@ pub struct Crossing {
     /// The glued link it crosses, as an index into `Live::links`. `None` for a
     /// border that touches in Windows.
     pub glue: Option<usize>,
-    /// Where the pointer rests while a glued crossing is held back. Always set for
-    /// a glued link, `None` otherwise.
+    /// Where the pointer rests while the crossing is held back. Always set for a
+    /// glued link, and for every crossing while edge resistance is on.
     pub hold: Option<(i32, i32)>,
 }
 
@@ -96,6 +111,8 @@ pub fn decide(live: &Live, prev: (i32, i32), pt: (i32, i32)) -> Option<Move> {
                 // put it on the screen under the point, or with Ease cursor movement
                 // on, jump it from a dead edge to the nearest screen.
                 hold = Some(inside(&a, pt));
+            } else if live.edge_resistance > 0 {
+                hold = Some(inside(&a, pt));
             }
             if let Some(to) = remap_crossing(&a, &live.rects[dst], side, &map, along, over) {
                 return Some(Move::Cross(Crossing { to, src, dst, side, over, glue: l.glued.then_some(i), hold }));
@@ -121,6 +138,17 @@ pub fn decide(live: &Live, prev: (i32, i32), pt: (i32, i32)) -> Option<Move> {
     if glued_edge && under.get_or_insert_with(|| live.rects.iter().position(|r| r.contains(pt.0, pt.1))).is_none() {
         return Some(Move::Block(inside(&a, pt)));
     }
+    // With edge resistance on, a move onto any other screen is held at the edge
+    // too, and then goes where Windows puts it.
+    if live.edge_resistance > 0 {
+        if let Some((side, _, over)) = exits[0] {
+            let on = *under.get_or_insert_with(|| live.rects.iter().position(|r| r.contains(pt.0, pt.1)));
+            if let Some(dst) = on.filter(|&j| j != src) {
+                let hold = Some(inside(&a, pt));
+                return Some(Move::Cross(Crossing { to: pt, src, dst, side, over, glue: None, hold }));
+            }
+        }
+    }
     None
 }
 
@@ -129,27 +157,30 @@ fn inside(a: &Rect, pt: (i32, i32)) -> (i32, i32) {
     (pt.0.clamp(a.left, a.right - 1), pt.1.clamp(a.top, a.bottom - 1))
 }
 
-/// How far the pointer has pushed past a glued edge, kept by the hook between
-/// moves.
+/// How far the pointer has pushed past an edge, kept by the hook between moves.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Push {
-    /// The glued link and the screen the push is leaving.
-    edge: Option<(usize, usize)>,
+    /// The screen the push is leaving, the one it's heading for and the glued
+    /// link, if any.
+    edge: Option<(usize, usize, Option<usize>)>,
     px: i32,
 }
 
 impl Push {
-    /// The push after this move, and whether the move crosses now. A glued
-    /// crossing adds its pixels past the edge and crosses once they reach
-    /// `GLUE_RESISTANCE_PX`. Anything else, such as a move that stays on the
-    /// screen or slides along the edge, starts the count again.
-    pub fn after(self, c: Option<&Crossing>) -> (Push, bool) {
+    /// The push after this move, and whether the move crosses now. A crossing
+    /// adds its pixels past the edge and crosses once they reach `need`, from
+    /// `Live::push_needed`. Anything else, such as a move that stays on the
+    /// screen, slides along the edge or crosses somewhere else, starts the count
+    /// again.
+    pub fn after(self, c: Option<&Crossing>, need: i32) -> (Push, bool) {
         let Some(c) = c else { return (Push::default(), false) };
-        let Some(link) = c.glue else { return (Push::default(), true) };
-        let edge = Some((link, c.src));
+        if need <= 0 {
+            return (Push::default(), true);
+        }
+        let edge = Some((c.src, c.dst, c.glue));
         // `over` counts the first pixel out as 0.
         let px = if self.edge == edge { self.px } else { 0 } + c.over + 1;
-        if px >= GLUE_RESISTANCE_PX {
+        if px >= need {
             (Push::default(), true)
         } else {
             (Push { edge, px }, false)
@@ -265,7 +296,7 @@ mod tests {
     }
 
     fn live(rects: &[Rect], links: &[Link]) -> Live {
-        Live { rects: rects.to_vec(), links: links.to_vec() }
+        Live { rects: rects.to_vec(), links: links.to_vec(), ..Live::default() }
     }
 
     /// `decide` for a move that must cross, stop at the edge, or be left to Windows.
@@ -502,8 +533,9 @@ mod tests {
             glue: Some(link),
             hold: None,
         };
-        let push =
-            |moves: &[Option<Crossing>]| moves.iter().fold((Push::default(), false), |(p, _), c| p.after(c.as_ref())).1;
+        let push = |moves: &[Option<Crossing>]| {
+            moves.iter().fold((Push::default(), false), |(p, _), c| p.after(c.as_ref(), 60)).1
+        };
         // A slow push of 5 px a move crosses on the twelfth, at 60.
         assert!(!push(&[Some(glued(0, 4)); 11]));
         assert!(push(&[Some(glued(0, 4)); 12]));
@@ -512,6 +544,44 @@ mod tests {
         assert!(!push(&[Some(glued(0, 39)), Some(glued(1, 39))]));
         // A flick crosses at once.
         assert!(push(&[Some(glued(0, 59))]));
+    }
+
+    #[test]
+    fn edge_resistance_holds_the_pointer_at_any_border_until_the_push_adds_up() {
+        let a = Rect::new(0, 0, 1000, 1000);
+        let b = Rect::new(1000, 0, 1000, 1000);
+        let below = Rect::new(0, 1000, 1000, 1000);
+        // No border is lined up, so only the resistance acts.
+        let mut l = Live { edge_resistance: 10, glue_push: 60, ..live(&[a, b, below], &[]) };
+        let right = |over| match decide(&l, (999, 500), (1000 + over, 500)) {
+            Some(Move::Cross(c)) => c,
+            m => panic!("{m:?}"),
+        };
+        let c = right(3);
+        assert_eq!((c.src, c.dst, c.to, c.glue, c.hold), (0, 1, (1003, 500), None, Some((999, 500))));
+        let need = l.push_needed(false, || false);
+        let push = |moves: &[Crossing]| moves.iter().fold((Push::default(), false), |(p, _), c| p.after(Some(c), need));
+        // 3 px a move holds for three moves and crosses on the fourth, at 10.
+        assert!(!push(&[right(2); 3]).1);
+        assert!(push(&[right(2); 4]).1);
+        // Crossing somewhere else, or a move that crosses nothing, starts again.
+        let down = match decide(&l, (500, 999), (500, 1004)) {
+            Some(Move::Cross(c)) => c,
+            m => panic!("{m:?}"),
+        };
+        assert_eq!(down.dst, 2);
+        assert!(!push(&[right(4), down, right(4)]).1);
+        let (p, _) = Push::default().after(Some(&right(4)), need);
+        assert!(!p.after(None, need).0.after(Some(&right(4)), need).1);
+        // A held button, or resistance at 0, crosses at once; glue keeps its own push.
+        assert_eq!(l.push_needed(false, || true), 0);
+        assert_eq!(l.push_needed(true, || true), 60);
+        assert_eq!(l.push_needed(true, || false), 60);
+        assert_eq!(Live { edge_resistance: 90, ..live(&[], &[]) }.push_needed(true, || false), 90);
+        assert!(Push::default().after(Some(&right(0)), 0).1);
+        l.edge_resistance = 0;
+        assert_eq!(decide(&l, (999, 500), (1003, 500)), None);
+        assert_eq!(l.push_needed(false, || panic!("buttons asked while off")), 0);
     }
 
     #[test]

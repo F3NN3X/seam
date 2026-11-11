@@ -109,7 +109,7 @@ Two steps move a screen in Display settings. Ask before moving a screen, and not
 - [ ] **Make a gap (ask before moving a screen).** In Display settings, drag screen 4 about 100 px right of screen 1 and press Apply. The log shows `display change`, and the 1 to 4 border is either kept or dropped with `dropped`.
 - [ ] **Line Up offers it.** Open Line Up. A pair found only from the pixel layout starts off, as under **G turns it off**, and a pair the screens' sizes put side by side starts glued. After the touching borders comes "Glue screen 4 to screen 1". Both facing edges are dashed amber with "Gap in Windows, 100 px" beside them, and the lines are bright, because the screens' sizes put them side by side. The step says which way to move each line, such as "straight below" or "level with".
 - [ ] **G turns it off.** Press G. Screen 4 reads "Glue screen 4 to screen 1?" with "Press G, then line them up as they stand on your desk" and "Enter: skip", and screen 1 reads "Screen 4, to the right, may touch this one on your desk. Look at screen 4 to glue them". The lines and edges dim. Dragging, arrows, Tab and R do nothing, and the pointer is a plain arrow on screen 4. Press G again and it's back as it was, with "G unglues them" under the tips.
-- [ ] **Crossing the gap.** While it's glued, move right off screen 1 at the height of the lines. The pointer rests at the edge, then enters screen 4 where the lines meet once you've pushed about 60 px. Move left off screen 4 and it comes back the same way. A quick flick crosses at once. The log shows `remap` lines for `border 0->3`.
+- [ ] **Crossing the gap.** While it's glued, move right off screen 1 at the height of the lines. The pointer rests at the edge, then enters screen 4 where the lines meet once you've pushed about 60 px (the **Glued edge push** default). Move left off screen 4 and it comes back the same way. A quick flick crosses at once. The log shows `remap` lines for `border 0->3`.
 - [ ] **Resting resets.** Push a little way past the edge, move back onto screen 1 or slide along the edge, then push again. It takes the full push again to cross.
 - [ ] **Auto-hide taskbar on a glued edge.** On my desk, with the 4K to panel glue saved and the 4K's taskbar set to hide on its bottom edge, push slowly down off the 4K. The taskbar slides up and the pointer stays on it. Keep pushing and the pointer crosses to the panel. Pull back up before that and nothing crosses.
 - [ ] **Off means Windows.** Turn it off with G and cross again. The pointer stops at the edge of screen 1, as it does without Seam.
@@ -147,6 +147,20 @@ On my desk the panel (screen 3) touches the U3477 (screen 4) in Windows, 18 px b
 - [ ] **Displays.** With it on, the 4 to 3 row reads "Not on your desk" and "The pointer stops at this edge". On the map the panel sits under the 4K, not under the U3477.
 - [ ] **Align.** With it on, Align arrangement doesn't move the panel to match the 4 to 3 border.
 - [ ] **Games and remote input.** In a game that confines the pointer, or over Remote Desktop, the pointer moves between screen 4 and the panel as Windows has it.
+
+## Edge resistance
+
+Both rows are in the Pointer card on Displays.
+
+- [ ] **Off is as before.** With **Edge resistance** at 0 (Off), cross every border slowly and quickly. Lined-up borders remap as before, borders that aren't lined up cross where Windows puts the pointer, and the log shows no `hold` lines except at glued edges and borders not on your desk.
+- [ ] **Grab an edge at a border.** Set **Edge resistance** to 10. Put a window's right edge on the right edge of screen 1, next to screen 4. Move slowly onto that edge: the pointer stops on the last pixel of screen 1, the resize arrow shows, and dragging resizes the window. The log shows `hold` lines while it waits.
+- [ ] **Then it crosses.** Keep pushing: after about 10 px the pointer crosses, where the lines meet on a lined-up border and where Windows puts it on one that isn't. Pushing, moving back and pushing again takes the full 10 px again. A quick flick crosses at once.
+- [ ] **Corners.** Do the same at a window's corner on a border with a screen above or below.
+- [ ] **Drags aren't slowed.** With **Edge resistance** at 100, drag a window by its title bar from screen 1 to screen 4, and drag a file between Explorer windows on two screens. Neither stops at the border. Right- and middle-button drags cross at once too.
+- [ ] **Glued edge push.** On my desk, with the 4K's taskbar set to hide on its bottom edge and the 4K to panel glue saved, set **Glued edge push** to 0, 60 and 150 in turn and push slowly down off the 4K. At 0 the pointer crosses at once and the taskbar may not show. At 60 and 150 the taskbar slides up while you push and the pointer crosses after about that many pixels. With **Edge resistance** at 100 and the push at 60, it takes about 100.
+- [ ] **Saving.** The sliders send their value when you let go. `config.json` shows `"pointer": { "edge_resistance_px": 10, "glue_push_px": 60 }`, and both rows show their value under the title.
+- [ ] **Paused.** With **Remap pointer at borders** paused and **Edge resistance** above 0, the pointer still waits at every border, then crosses where Windows puts it.
+- [ ] **Search.** Search for "grab", "corner" and "taskbar" in the Seam window: they find these two rows.
 
 ## Zones
 

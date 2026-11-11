@@ -4,7 +4,8 @@
 //! The hook lives on its own high-priority thread with its own message loop, so
 //! UI work like painting the overlay can never delay mouse input.
 
-use crate::layout::{decide, Crossing, Live, Move, Push};
+use crate::geom::Rect;
+use crate::layout::{decide, Crossing, Link, Live, Move, Push};
 use crate::log;
 use std::cell::Cell;
 use std::sync::mpsc::{channel, Sender};
@@ -14,6 +15,7 @@ use windows::Win32::Foundation::{LPARAM, LRESULT, POINT, RECT, WPARAM};
 use windows::Win32::System::Threading::{
     GetCurrentThread, GetCurrentThreadId, SetThreadPriority, THREAD_PRIORITY_HIGHEST,
 };
+use windows::Win32::UI::Input::KeyboardAndMouse::{GetAsyncKeyState, VK_LBUTTON, VK_MBUTTON, VK_RBUTTON};
 use windows::Win32::UI::WindowsAndMessaging::*;
 
 /// Hook timing in ns since the last `log_stats`. Only updated while logging.
@@ -41,13 +43,14 @@ fn bucket(ns: u64) -> usize {
 
 /// Written by the UI thread, read by the hook. The hook only ever tries the
 /// lock, so at worst one move falls through to Windows during a swap.
-static LIVE: RwLock<Live> = RwLock::new(Live { rects: Vec::new(), links: Vec::new() });
+static LIVE: RwLock<Live> =
+    RwLock::new(Live { rects: Vec::new(), links: Vec::new(), edge_resistance: 0, glue_push: 0 });
 
 thread_local! {
     // These four belong to the hook thread.
     static HOOK: Cell<Option<HHOOK>> = const { Cell::new(None) };
     static STATS: Cell<Stats> = Cell::new(Stats::default());
-    /// How far the pointer has pushed past a glued edge.
+    /// How far the pointer has pushed past an edge.
     static PUSH: Cell<Push> = Cell::new(Push::default());
     /// Time the current event spent in hooks after ours.
     static NEXT_NS: Cell<u64> = const { Cell::new(0) };
@@ -63,6 +66,14 @@ const STATS_LINE: usize = 2;
 pub fn set_live(live: Live) {
     let mut guard = LIVE.write().unwrap_or_else(|e| e.into_inner());
     let old = std::mem::replace(&mut *guard, live);
+    drop(guard);
+    drop(old); // freed outside the lock
+}
+
+/// Swap in new screens and borders, keeping how far the pointer must push.
+pub fn set_borders(rects: Vec<Rect>, links: Vec<Link>) {
+    let mut guard = LIVE.write().unwrap_or_else(|e| e.into_inner());
+    let old = (std::mem::replace(&mut guard.rects, rects), std::mem::replace(&mut guard.links, links));
     drop(guard);
     drop(old); // freed outside the lock
 }
@@ -132,26 +143,39 @@ fn run_command(cmd: usize) {
     });
 }
 
-/// What to do with this move, unless the pointer is confined.
-fn crossing(from: (i32, i32), pt: (i32, i32)) -> Option<Move> {
+/// What to do with this move, unless the pointer is confined, and how far a
+/// crossing must push past the edge first.
+fn crossing(from: (i32, i32), pt: (i32, i32)) -> Option<(Move, i32)> {
     let live = LIVE.try_read().ok()?;
-    // Most moves cross nothing, so only then pay for the system call.
+    // Most moves cross nothing, so only then pay for the system calls.
     let m = decide(&live, from, pt)?;
-    (!cursor_is_confined(&live)).then_some(m)
+    if cursor_is_confined(&live) {
+        return None;
+    }
+    let need = match m {
+        Move::Cross(c) => live.push_needed(c.glue.is_some(), buttons_down),
+        Move::Block(_) => 0,
+    };
+    Some((m, need))
+}
+
+/// Any mouse button is down, as in a window drag or a drag and drop.
+fn buttons_down() -> bool {
+    [VK_LBUTTON, VK_RBUTTON, VK_MBUTTON].iter().any(|vk| unsafe { GetAsyncKeyState(i32::from(vk.0)) } < 0)
 }
 
 /// Where this move should put the pointer, with the crossing if it crosses. A
-/// glued crossing waits at the edge until the push past it adds up, and a
-/// border that isn't on the desk keeps the pointer at the edge.
+/// crossing waits at the edge until the push past it adds up, and a border
+/// that isn't on the desk keeps the pointer at the edge.
 fn target(from: (i32, i32), pt: (i32, i32)) -> Option<((i32, i32), Option<Crossing>)> {
     let m = crossing(from, pt);
-    let c = match m {
-        Some(Move::Cross(c)) => Some(c),
-        _ => None,
+    let (c, need) = match m {
+        Some((Move::Cross(c), need)) => (Some(c), need),
+        _ => (None, 0),
     };
-    let (push, go) = PUSH.get().after(c.as_ref());
+    let (push, go) = PUSH.get().after(c.as_ref(), need);
     PUSH.set(push);
-    match m? {
+    match m?.0 {
         Move::Block(at) => Some((at, None)),
         Move::Cross(c) if go => Some((c.to, Some(c))),
         Move::Cross(c) => c.hold.map(|at| (at, None)),

@@ -103,7 +103,7 @@ pub(super) fn tile_finished(app: &mut App, result: Option<Result<wincontrol::til
 /// opens and says so, since a pick is saved either way.
 pub(super) fn open_quick_layout(app: &mut App, number: Option<u32>, from_api: bool) -> Result<(), String> {
     // The key opens it and closes it again.
-    if !from_api && quicklayout::close() {
+    if !from_api && quicklayout::close_for_key() {
         return Ok(());
     }
     let at = match number {
@@ -147,15 +147,15 @@ pub(super) fn apply_quick(app: &mut App) {
         let (reply, answer) = channel();
         let focused = Some(quicklayout::focus_before()).filter(|h| *h != 0);
         pick_layout(app, at as u32 + 1, pick.layout, focused, reply);
-        let screen = pick.screen;
+        let (screen, stamp) = (pick.screen, pick.stamp);
         std::thread::spawn(move || {
             let _ = answer.recv_timeout(Duration::from_secs(10));
-            quicklayout::done(screen, tray);
+            quicklayout::done(screen, stamp, tray);
         });
     }
-    for screen in quicklayout::take_done() {
+    for (screen, stamp) in quicklayout::take_done() {
         let actual = app.cfg.desks.get(&app.sig).and_then(|d| d.zones.get(&screen)).and_then(zones::layout_of);
-        quicklayout::settled(&screen, actual);
+        quicklayout::settled(&screen, stamp, actual);
     }
 }
 

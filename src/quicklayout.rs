@@ -12,7 +12,7 @@ use seam::library::Entry;
 use seam::zones::{self, Node, Template, ZoneLayout};
 use serde_json::Value;
 use std::cell::RefCell;
-use std::sync::atomic::{AtomicIsize, AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicIsize, AtomicU32, Ordering};
 use std::sync::mpsc::channel;
 use std::sync::{Mutex, MutexGuard};
 use std::time::Duration;
@@ -35,6 +35,9 @@ const SETTLE_MS: u32 = 3000;
 /// Closes the overlay if Windows kept the focus elsewhere.
 const TIMER_FOCUS: usize = 2;
 const FOCUS_GRACE_MS: u32 = 300;
+/// One more try at the focus, then the last look.
+const TIMER_FOCUS_LAST: usize = 3;
+const FOCUS_LAST_MS: u32 = 500;
 
 const CLASS: PCWSTR = w!("SeamQuickLayout");
 /// Thumbnails shown at once, three to a row.
@@ -103,6 +106,10 @@ struct Overlay {
     active: bool,
     /// The screen's device path.
     screen: String,
+    /// Which overlay this is, so a reply meant for an earlier one is ignored.
+    generation: u32,
+    /// The number of the last request sent to the tray.
+    seq: u32,
     /// A request is with the tray, which hasn't said what it came to.
     pending: bool,
     /// The layout to keep for Ctrl+Z if the pending request changed the screen.
@@ -133,20 +140,30 @@ static LAUNCH: Mutex<()> = Mutex::new(());
 /// The window that had focus before the overlay opened, which a pick treats as the focused one.
 static BEFORE: AtomicIsize = AtomicIsize::new(0);
 
+/// Which overlay and which of its requests: the generation and the sequence number.
+pub type Stamp = (u32, u32);
+
 /// A pick for the tray: the screen's device path and the layout, None for no zones.
 pub struct Pick {
     pub screen: String,
     pub layout: Option<Value>,
+    pub stamp: Stamp,
 }
+
+/// Counts the overlays opened.
+static GENERATION: AtomicU32 = AtomicU32::new(0);
+
+/// The overlay is on its way out, but its thread hasn't ended yet.
+static CLOSING: AtomicBool = AtomicBool::new(false);
 
 /// Picks for the tray, in order.
 static PICKS: Mutex<Vec<Pick>> = Mutex::new(Vec::new());
 
 /// Screens whose last pick the tray has finished with, one way or another.
-static DONE: Mutex<Vec<String>> = Mutex::new(Vec::new());
+static DONE: Mutex<Vec<(String, Stamp)>> = Mutex::new(Vec::new());
 
 /// What the tray found on a screen once its pick was finished: the screen's device path and its layout.
-static SETTLED: Mutex<Vec<(String, Option<ZoneLayout>)>> = Mutex::new(Vec::new());
+static SETTLED: Mutex<Vec<(String, Stamp, Option<ZoneLayout>)>> = Mutex::new(Vec::new());
 
 fn locked<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
     m.lock().unwrap_or_else(|e| e.into_inner())
@@ -168,6 +185,30 @@ pub fn close() -> bool {
     open != 0
 }
 
+/// For the key: close the overlay if it's up, and say so. One already on its way
+/// out is waited for a moment, and then the key opens a new one.
+pub fn close_for_key() -> bool {
+    if !is_open() {
+        return false;
+    }
+    if CLOSING.load(Ordering::SeqCst) {
+        for _ in 0..20 {
+            if !is_open() {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        return false;
+    }
+    close()
+}
+
+/// End the overlay's message loop.
+fn quit() {
+    CLOSING.store(true, Ordering::SeqCst);
+    unsafe { PostQuitMessage(0) };
+}
+
 pub fn remember_focus(h: HWND) {
     BEFORE.store(h.0 as isize, Ordering::SeqCst);
 }
@@ -182,22 +223,22 @@ pub fn take_picks() -> Vec<Pick> {
 }
 
 /// The tray finished with a pick on this screen. It tells the overlay what the screen has.
-pub fn done(screen: String, tray: isize) {
-    locked(&DONE).push(screen);
+pub fn done(screen: String, stamp: Stamp, tray: isize) {
+    locked(&DONE).push((screen, stamp));
     unsafe {
         let _ = PostMessageW(Some(HWND(tray as *mut _)), WM_APP_QUICK_LAYOUT, WPARAM(0), LPARAM(0));
     }
 }
 
-pub fn take_done() -> Vec<String> {
+pub fn take_done() -> Vec<(String, Stamp)> {
     std::mem::take(&mut *locked(&DONE))
 }
 
 /// Tell the overlay what a screen's layout is now.
-pub fn settled(screen: &str, actual: Option<ZoneLayout>) {
+pub fn settled(screen: &str, stamp: Stamp, actual: Option<ZoneLayout>) {
     let open = OPEN.load(Ordering::SeqCst);
     if open != 0 {
-        locked(&SETTLED).push((screen.to_string(), actual));
+        locked(&SETTLED).push((screen.to_string(), stamp, actual));
         unsafe {
             let _ = PostThreadMessageW(open, WM_APP_SETTLED, WPARAM(0), LPARAM(0));
         }
@@ -300,17 +341,44 @@ impl Overlay {
             }
         };
         self.pending = true;
+        self.seq += 1;
         let value = layout.and_then(|l| serde_json::to_value(l).ok());
-        locked(&PICKS).push(Pick { screen: self.screen.clone(), layout: value });
+        let stamp = (self.generation, self.seq);
+        locked(&PICKS).push(Pick { screen: self.screen.clone(), layout: value, stamp });
         unsafe {
             let _ = PostMessageW(Some(HWND(self.tray as *mut _)), WM_APP_QUICK_LAYOUT, WPARAM(0), LPARAM(0));
             let _ = SetTimer(Some(WINDOW.with(|w| *w.borrow())), TIMER_SETTLE, SETTLE_MS, None);
         }
     }
 
+    /// The tray never answered: stop waiting for it. Its answer, if it comes,
+    /// is then too late to count.
+    fn give_up(&mut self) {
+        unsafe {
+            let _ = KillTimer(Some(WINDOW.with(|w| *w.borrow())), TIMER_SETTLE);
+        }
+        self.pending = false;
+        self.record = None;
+        self.undoing = false;
+        if let Some(next) = self.queued.take() {
+            self.dispatch(next);
+        }
+    }
+
     /// The tray finished with the last request and says what the screen has. That
     /// is what the marker and Ctrl+Z go by, whatever the request came to.
-    fn settle(&mut self, actual: Option<ZoneLayout>) {
+    fn settle(&mut self, (generation, seq): Stamp, actual: Option<ZoneLayout>) {
+        if generation != self.generation {
+            return;
+        }
+        if !self.pending {
+            // A late answer with nothing newer waiting: the marker may follow it, the history doesn't.
+            self.now = actual;
+            return;
+        }
+        if seq != self.seq {
+            return;
+        }
         unsafe {
             let _ = KillTimer(Some(WINDOW.with(|w| *w.borrow())), TIMER_SETTLE);
         }
@@ -474,7 +542,7 @@ fn key(o: &mut Overlay, vk: u32) -> bool {
         _ => None,
     };
     match vk {
-        v if v == VK_ESCAPE.0 as u32 => unsafe { PostQuitMessage(0) },
+        v if v == VK_ESCAPE.0 as u32 => quit(),
         v if v == VK_LEFT.0 as u32 => o.step(-1),
         v if v == VK_RIGHT.0 as u32 => o.step(1),
         v if v == VK_UP.0 as u32 => o.step(-(COLUMNS as isize)),
@@ -556,22 +624,29 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
             LRESULT(0)
         }
         WM_DISPLAYCHANGE => {
-            PostQuitMessage(0);
+            quit();
             LRESULT(0)
         }
         WM_TIMER if wparam.0 == TIMER_FOCUS => {
             let _ = KillTimer(Some(hwnd), TIMER_FOCUS);
             if GetForegroundWindow() != hwnd {
+                let _ = SetForegroundWindow(hwnd);
+                let _ = SetTimer(Some(hwnd), TIMER_FOCUS_LAST, FOCUS_LAST_MS, None);
+            }
+            LRESULT(0)
+        }
+        WM_TIMER if wparam.0 == TIMER_FOCUS_LAST => {
+            let _ = KillTimer(Some(hwnd), TIMER_FOCUS_LAST);
+            if GetForegroundWindow() != hwnd {
                 log::info!("quick layout: Windows kept the focus elsewhere, so it closes");
-                PostQuitMessage(0);
+                quit();
             }
             LRESULT(0)
         }
         WM_TIMER if wparam.0 == TIMER_SETTLE => {
-            // The tray never said what the request came to: go by what the overlay last knew.
             STATE.with(|s| {
                 if let Some(o) = s.borrow_mut().as_mut() {
-                    o.settle(o.now.clone());
+                    o.give_up();
                 }
             });
             redraw(true);
@@ -587,7 +662,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                 was
             });
             if inactive && was_active {
-                PostQuitMessage(0);
+                quit();
             }
             LRESULT(0)
         }
@@ -604,7 +679,7 @@ unsafe extern "system" fn mouse_proc(code: i32, wparam: WPARAM, lparam: LPARAM) 
         if GetWindowRect(hwnd, &mut r).is_ok()
             && !(at.x >= r.left && at.x < r.right && at.y >= r.top && at.y < r.bottom)
         {
-            PostQuitMessage(0);
+            quit();
         }
     }
     CallNextHookEx(None, code, wparam, lparam)
@@ -621,10 +696,10 @@ impl Drop for Closing {
 
 /// What the tray found: take it into the overlay.
 fn take_settled() {
-    for (screen, actual) in std::mem::take(&mut *locked(&SETTLED)) {
+    for (screen, stamp, actual) in std::mem::take(&mut *locked(&SETTLED)) {
         STATE.with(|s| {
             if let Some(o) = s.borrow_mut().as_mut().filter(|o| o.screen == screen) {
-                o.settle(actual);
+                o.settle(stamp, actual);
             }
         });
     }
@@ -634,7 +709,10 @@ fn take_settled() {
     }
 }
 
-fn run(spec: Spec, ready: std::sync::mpsc::Sender<()>) {
+fn run(spec: Spec, generation: u32, ready: std::sync::mpsc::Sender<()>) {
+    // Whatever an earlier overlay was left with isn't this one's.
+    locked(&SETTLED).clear();
+    locked(&DONE).clear();
     unsafe {
         let id = GetCurrentThreadId();
         let _closing = Closing(id);
@@ -680,6 +758,8 @@ fn run(spec: Spec, ready: std::sync::mpsc::Sender<()>) {
             tray: spec.tray,
             active: false,
             screen: spec.screen,
+            generation,
+            seq: 0,
             pending: false,
             record: None,
             undoing: false,
@@ -696,6 +776,7 @@ fn run(spec: Spec, ready: std::sync::mpsc::Sender<()>) {
         WINDOW.with(|w| *w.borrow_mut() = hwnd);
         let _ = SetWindowPos(hwnd, Some(HWND_TOPMOST), x, y, width, height, SWP_SHOWWINDOW);
         // The tray can use the overlay now, so it hears of it before focus is asked for.
+        CLOSING.store(false, Ordering::SeqCst);
         OPEN.store(id, Ordering::SeqCst);
         let _ = ready.send(());
         wincontrol::focus(hwnd, spec.from_api);
@@ -723,7 +804,9 @@ pub fn show(spec: Spec) {
     let _launching = locked(&LAUNCH);
     close();
     let (ready, opened) = channel();
-    let spawned = std::thread::Builder::new().name("seam-quicklayout".into()).spawn(move || run(spec, ready));
+    let generation = GENERATION.fetch_add(1, Ordering::SeqCst) + 1;
+    let spawned =
+        std::thread::Builder::new().name("seam-quicklayout".into()).spawn(move || run(spec, generation, ready));
     if let Err(e) = spawned {
         log::info!("quick layout: couldn't start: {e}");
         return;

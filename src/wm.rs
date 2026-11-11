@@ -510,12 +510,12 @@ impl Wm {
             return;
         }
         self.seen_before.insert(key);
+        if winutil::is_minimized(h) || winutil::ws_stamp(h).is_some() {
+            return;
+        }
         // A window that shows while a switch runs is the switch's, even if it settles after.
         if crate::switcher::switching() {
             crate::live::owned_by_switch(key);
-        }
-        if winutil::is_minimized(h) || winutil::ws_stamp(h).is_some() {
-            return;
         }
         self.settling.push((key, Instant::now() + SETTLE));
         self.arm_settle_timer();

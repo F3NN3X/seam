@@ -106,7 +106,15 @@ pub fn check_drift() {
 
 /// A window showed while a switch was running. Called from the seam-wm thread.
 pub fn owned_by_switch(hwnd: isize) {
-    SWITCH_OWNED.lock().unwrap_or_else(|e| e.into_inner()).push(hwnd);
+    let mut list = SWITCH_OWNED.lock().unwrap_or_else(|e| e.into_inner());
+    // Windows that closed or never settled would otherwise stay here for good.
+    list.retain(|h| {
+        unsafe {
+            windows::Win32::UI::WindowsAndMessaging::IsWindow(Some(windows::Win32::Foundation::HWND(*h as *mut _)))
+        }
+        .as_bool()
+    });
+    list.push(hwnd);
 }
 
 /// A window opened and has settled. Called from the seam-wm thread, which never waits.

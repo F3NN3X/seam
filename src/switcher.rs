@@ -1119,6 +1119,11 @@ fn run_stages(
         for (i, _) in starts.waiting.iter().filter(|(_, since)| since.elapsed() >= LAUNCH_WAIT) {
             tally.skipped.push((app_name(&ws.windows[*i]), TOOK_TOO_LONG.into()));
             late.push(*i);
+            // Nothing catches its window after this, so the next switch matches the
+            // row by app and binds the window that showed late (D336).
+            if run.bound[*i].is_some() {
+                unbind(&ws.id, *i);
+            }
         }
         starts.waiting.retain(|(_, since)| since.elapsed() < LAUNCH_WAIT);
         let holds = |i: &usize| ws.windows[*i].wait_for_window && starts.is_waiting(*i);
@@ -1213,6 +1218,32 @@ pub fn bind_rows(ws: &Workspace, windows: &[(isize, usize)]) {
             bind(&ws.id, *row, *hwnd);
         }
     }
+}
+
+/// The bindings of `ws` with each window as its index in a capture's `hwnds`, for
+/// pairing the capture with the rows as a switch would (D336). A row bound to a window
+/// the capture didn't take pairs with none. Empty with the setting off.
+pub fn capture_bindings(ws: &Workspace, hwnds: &[isize], remember: bool) -> (Vec<Option<Bound>>, HashSet<isize>) {
+    let (bound, elsewhere) = bindings(ws, remember);
+    let index = |h: isize| hwnds.iter().position(|w| *w == h).map(|i| i as isize);
+    let bound = bound
+        .into_iter()
+        .map(|b| match b {
+            Some(Bound::Alive(h)) => Some(Bound::Alive(index(h).unwrap_or(-1))),
+            other => other,
+        })
+        .collect();
+    (bound, elsewhere.into_iter().filter_map(index).collect())
+}
+
+/// Workspace `id`'s row `row` remembers no window, so the next switch matches it by app.
+fn unbind(id: &str, row: usize) {
+    BOUND.lock().unwrap_or_else(|e| e.into_inner()).retain(|(w, r, _)| !(w == id && *r == row));
+}
+
+/// Workspaces were deleted: only those in `ids` keep their bindings.
+pub fn keep_bindings(ids: &[String]) {
+    BOUND.lock().unwrap_or_else(|e| e.into_inner()).retain(|(w, _, _)| ids.contains(w));
 }
 
 /// An edit reordered, removed or added rows of workspace `id`: its bindings follow.
@@ -1404,8 +1435,13 @@ fn run_switch(job: &SwitchJob, mine: u64) -> Option<Switched> {
     } else if other_windows != OtherWindows::Leave {
         let claimed: HashSet<isize> = found.iter().flatten().copied().collect();
         let (mut exes, mut aumids): (HashSet<String>, HashSet<String>) = (HashSet::new(), HashSet::new());
-        let mine_rules =
-            ws.windows.iter().enumerate().filter(|(i, _)| found[*i].is_some() || starts.started.contains(i));
+        // A place row whose window is open but out of reach (on another desktop) still has its app here.
+        let open = |i: usize| matches!(run.bound[i], Some(Bound::Alive(_)));
+        let mine_rules = ws
+            .windows
+            .iter()
+            .enumerate()
+            .filter(|(i, _)| found[*i].is_some() || starts.started.contains(i) || open(*i));
         for (_, rule) in mine_rules {
             exes.insert(rule.exe.to_lowercase());
             aumids.extend(rule.aumid.clone());

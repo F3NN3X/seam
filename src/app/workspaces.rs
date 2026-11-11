@@ -395,6 +395,10 @@ pub(super) fn set_in_use(app: &mut App, id: Option<String>) {
 /// whether the config changed.
 pub(super) fn forget_deleted(app: &mut App) -> bool {
     let ids: Vec<String> = desk_workspaces(app).into_iter().map(|w| w.id).collect();
+    // A deleted workspace's rows remember no windows (D336). Other desks' keep theirs.
+    let everywhere: Vec<String> =
+        app.cfg.desks.values().flat_map(|d| workspace::list(&d.workspaces)).map(|w| w.id).collect();
+    switcher::keep_bindings(&everywhere);
     let gone = |id: &Option<String>| id.as_ref().is_some_and(|id| !ids.contains(id));
     if gone(&app.workspace) {
         app.workspace = None;
@@ -622,6 +626,7 @@ pub(super) fn captured(app: &mut App) {
             let _ = tx.send(r);
         }
     };
+    let remember = app.cfg.workspaces_remember_places;
     let Some(desk) = app.cfg.desks.get_mut(&job.sig) else { return answer(refused("That desk is gone")) };
     // Every screen of the desk, with the layout it has now.
     let layouts: Vec<(String, Option<zones::ZoneLayout>)> =
@@ -638,6 +643,8 @@ pub(super) fn captured(app: &mut App) {
             let Some(old) = existing.iter().find(|w| w.id == *into) else {
                 return answer(Err(RpcError::new(api::NOT_FOUND, "no such workspace on this desk")));
             };
+            // A place row pairs with the window it remembers, as in a switch (D336).
+            let (bound, elsewhere) = switcher::capture_bindings(old, &hwnds, remember);
             let updated = match (job.row, &job.pick) {
                 // "Add an app": only the picked window's folder or page, read here.
                 (Some(row), Some(pick)) => match workspace::take_window_place(old, row, &pick.exe, &pick.class, &rules)
@@ -645,7 +652,7 @@ pub(super) fn captured(app: &mut App) {
                     Some(updated) => updated,
                     None => return answer(refused("That window has no folder or page to remember")),
                 },
-                (Some(row), None) => match workspace::recapture_row(old, row, &rules) {
+                (Some(row), None) => match workspace::recapture_row(old, row, &rules, &bound, &elsewhere) {
                     Some((updated, hit)) => {
                         stamps = Some(vec![(hwnds[hit], row)]);
                         updated
@@ -653,9 +660,10 @@ pub(super) fn captured(app: &mut App) {
                     None => return answer(refused("That app isn't open, so where it goes stays as it was")),
                 },
                 (None, _) => {
-                    rows = Some(workspace::capture_rows(old, &rules));
+                    rows = Some(workspace::capture_rows(old, &rules, &bound, &elsewhere));
                     let zones = workspace::capture_zones(&old.zones, &layouts);
-                    Workspace { windows: workspace::merge_capture(old, rules), zones, ..old.clone() }
+                    let windows = workspace::merge_capture(old, rules, &bound, &elsewhere);
+                    Workspace { windows, zones, ..old.clone() }
                 }
             };
             let same = |v: &&mut Value| workspace::parse(v).is_some_and(|w| w.id == *into);

@@ -602,12 +602,24 @@ fn as_candidates(fresh: &[Rule]) -> Vec<Candidate> {
     fresh.iter().enumerate().map(cand).collect()
 }
 
+/// The capture's window, by index, for each row of `old`, paired as a switch matches.
+/// `bound` and `elsewhere` are the tray's bindings (D336) with windows as capture
+/// indices, so a place row pairs with its own window. Empty for plain matching.
+fn pair(old: &[Rule], fresh: &[Rule], bound: &[Option<Bound>], elsewhere: &HashSet<isize>) -> Vec<Option<isize>> {
+    assign_bound(old, &as_candidates(fresh), bound, elsewhere)
+}
+
 /// "Update from screen": each row the capture has a window for takes where and how
 /// that window is now, and keeps its launch details and its place in the start
 /// order. A row with no window right now stays, so a recapture never deletes an
-/// app. New windows go at the end, topmost first.
-pub fn merge_capture(old: &Workspace, fresh: Vec<Rule>) -> Vec<Rule> {
-    let found = assign(&old.windows, &as_candidates(&fresh));
+/// app. New windows go at the end, topmost first. `bound` and `elsewhere` as `pair`.
+pub fn merge_capture(
+    old: &Workspace,
+    fresh: Vec<Rule>,
+    bound: &[Option<Bound>],
+    elsewhere: &HashSet<isize>,
+) -> Vec<Rule> {
+    let found = pair(&old.windows, &fresh, bound, elsewhere);
     let mut taken = vec![false; fresh.len()];
     let mut merged = old.windows.clone();
     for (row, hit) in merged.iter_mut().zip(&found) {
@@ -628,9 +640,14 @@ pub fn merge_capture(old: &Workspace, fresh: Vec<Rule>) -> Vec<Rule> {
 }
 
 /// For each window of a capture, the row `merge_capture` gives it.
-pub fn capture_rows(old: &Workspace, fresh: &[Rule]) -> Vec<usize> {
+pub fn capture_rows(
+    old: &Workspace,
+    fresh: &[Rule],
+    bound: &[Option<Bound>],
+    elsewhere: &HashSet<isize>,
+) -> Vec<usize> {
     let mut rows = vec![None; fresh.len()];
-    for (row, hit) in assign(&old.windows, &as_candidates(fresh)).into_iter().enumerate() {
+    for (row, hit) in pair(&old.windows, fresh, bound, elsewhere).into_iter().enumerate() {
         if let Some(i) = hit {
             rows[i as usize] = Some(row);
         }
@@ -664,9 +681,17 @@ pub fn moved_rows(old: &[Rule], new: &[Rule]) -> Vec<Option<usize>> {
 
 /// "Where it is now" for one row: the place of the window a capture has for it,
 /// and which of the capture's windows that is, or `None` when the app has no window open.
-pub fn recapture_row(old: &Workspace, row: usize, fresh: &[Rule]) -> Option<(Workspace, usize)> {
+/// `bound` and `elsewhere` as `pair`, for every row of `old`.
+pub fn recapture_row(
+    old: &Workspace,
+    row: usize,
+    fresh: &[Rule],
+    bound: &[Option<Bound>],
+    elsewhere: &HashSet<isize>,
+) -> Option<(Workspace, usize)> {
     let rule = old.windows.get(row)?;
-    let hit = assign(std::slice::from_ref(rule), &as_candidates(fresh)).into_iter().next().flatten()?;
+    let bound = [bound.get(row).copied().flatten()];
+    let hit = pair(std::slice::from_ref(rule), fresh, &bound, elsewhere).into_iter().next().flatten()?;
     let from = &fresh[hit as usize];
     let mut updated = old.clone();
     if from.focused {
@@ -1060,7 +1085,7 @@ mod tests {
         let mut moved = rule(ff, None, "MozillaWindowClass", "Docs — Mozilla Firefox");
         moved.target = Target::Zone { zone: 2, span_to: None };
         let fresh = vec![rule("notepad.exe", None, "", ""), moved];
-        let merged = merge_capture(&old, fresh);
+        let merged = merge_capture(&old, fresh, &[], &HashSet::new());
         let rows: Vec<(&str, bool, u32, bool)> =
             merged.iter().map(|r| (r.exe.as_str(), r.launch, r.delay_ms, r.wait_for_window)).collect();
         assert_eq!(rows, [(ff, false, 1500, true), (spotify, true, 0, false), ("notepad.exe", true, 0, false)]);

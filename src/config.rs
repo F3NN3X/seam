@@ -66,6 +66,11 @@ pub struct Hotkeys {
     pub snap_back: Option<String>,
     /// "Save windows to the active workspace": capture into the workspace in use (§7).
     pub quick_save: Option<String>,
+    /// "Grow window into its neighbour", within its group of zones.
+    pub grow: Option<String>,
+    pub shrink: Option<String>,
+    /// "Give window two thirds of its group", or back as it was on a second press.
+    pub priority: Option<String>,
     /// "Switch back to the previous workspace" on this desk.
     pub switch_back: Option<String>,
     /// "Focus on this window": minimize the others on its screen, and bring them back.
@@ -101,6 +106,9 @@ impl Default for Hotkeys {
             release_all: None,
             snap_back: None,
             quick_save: None,
+            grow: None,
+            shrink: None,
+            priority: None,
             switch_back: None,
             focus_only: None,
             spotlight: None,

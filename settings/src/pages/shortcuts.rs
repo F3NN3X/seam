@@ -163,6 +163,9 @@ pub fn render(panel: &mut Panel, _: &mut Window, cx: &mut Context<Panel>) -> imp
     window_rows.extend([
         row("Focus on this window", "focus_only", keys.focus_only.as_ref(), 910),
         row("Spotlight", "spotlight", keys.spotlight.as_ref(), 911),
+        row("Grow window into its neighbour", "grow", keys.grow.as_ref(), 900),
+        row("Shrink window", "shrink", keys.shrink.as_ref(), 901),
+        row("Give window two thirds of its group", "priority", keys.priority.as_ref(), 902),
     ]);
     window_rows.extend([
         row("Pin window on top", "pin_top", keys.pin_top.as_ref(), 17),

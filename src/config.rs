@@ -75,6 +75,8 @@ pub struct Hotkeys {
     pub switch_back: Option<String>,
     /// "Tile this screen's windows", on the screen under the pointer.
     pub tile_screen: Option<String>,
+    /// "Quick layout": pick the layout of the screen under the pointer from the keyboard.
+    pub quick_layout: Option<String>,
     /// "Focus on this window": minimize the others on its screen, and bring them back.
     pub focus_only: Option<String>,
     /// "Spotlight": dim everything but the window in use.
@@ -113,6 +115,7 @@ impl Default for Hotkeys {
             priority: None,
             switch_back: None,
             tile_screen: None,
+            quick_layout: None,
             focus_only: None,
             spotlight: None,
         }

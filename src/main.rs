@@ -28,6 +28,8 @@ mod overlay;
 #[cfg(windows)]
 mod places;
 #[cfg(windows)]
+mod quicklayout;
+#[cfg(windows)]
 mod showlayout;
 mod snap;
 #[cfg(windows)]

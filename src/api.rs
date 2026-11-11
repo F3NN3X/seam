@@ -174,6 +174,8 @@ pub enum Command {
     ScreenTile(Option<u32>),
     /// Save the windows on a screen as a new custom layout: its Line Up number, or the one under the pointer.
     ZonesFromWindows(Option<u32>),
+    /// Open the quick layout overlay on a screen: its Line Up number, or the one under the pointer.
+    ZonesQuick(Option<u32>),
     /// The panel picking a screen's layout (None for no zones): the screen's snapped
     /// windows follow it, with Undo.
     ZonesPick {
@@ -350,6 +352,7 @@ fn command(method: &str, p: &Value) -> Result<Command, RpcError> {
         ),
         "screen.tile" => Command::ScreenTile(screen_param(p)?),
         "zones.from_windows" => Command::ZonesFromWindows(screen_param(p)?),
+        "zones.quick" => Command::ZonesQuick(screen_param(p)?),
         "zones.pick" => Command::ZonesPick {
             number: screen_param(p)?.ok_or_else(|| RpcError::new(INVALID_PARAMS, "number is required"))?,
             layout: match p.get("layout") {

@@ -231,6 +231,12 @@ const ENTRIES: &[Entry] = &[
         "Global shortcut",
         "hotkey keyboard tile arrange organise layout zones screen",
     ),
+    entry(
+        Page::Shortcuts,
+        "Quick layout",
+        "Pick this screen's layout from the keyboard",
+        "hotkey keyboard layout zones overlay switch screen",
+    ),
     entry(Page::Shortcuts, "Pin window on top", "Global shortcut", "hotkey keyboard topmost always"),
     entry(Page::Shortcuts, "Keep window out of workspace switches", "Global shortcut", "hotkey keyboard sticky pin"),
     entry(Page::Shortcuts, "Release pinned windows", "Global shortcut", "hotkey keyboard unpin reset border"),

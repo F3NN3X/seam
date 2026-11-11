@@ -287,7 +287,7 @@ fn apply_zones(app: &mut App, workspace: &Workspace) {
         }
         let Some(mut layout) = workspace::screen_layout(saved) else { continue };
         if let Some(layout) = layout.as_mut() {
-            seam::library::link(&mut app.cfg.custom_layouts, layout, false);
+            seam::library::link(&mut app.cfg.custom_layouts, layout, None);
         }
         changed.push((m.id.clone(), layout));
     }

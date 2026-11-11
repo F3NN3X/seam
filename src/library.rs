@@ -44,11 +44,13 @@ fn id_of(saved: &Value) -> Option<&str> {
     saved.get("id").and_then(Value::as_str)
 }
 
-/// An entry Seam can read, with its ratios clamped as a screen's are.
+/// An entry Seam can read, with its ratios clamped as a screen's are. One past
+/// the zone limits is never read, so it can't reach a screen through `follow`.
 pub fn entry(saved: &Value) -> Option<Entry> {
     let id = id_of(saved)?.to_string();
     let name = saved.get("name")?.as_str()?.to_string();
-    let layout = zones::layout_of(&json!({ "template": "custom", "tree": saved.get("tree")? }))?;
+    let layout = zones::layout_of(&json!({ "template": "custom", "tree": saved.get("tree")? }))
+        .filter(|l| zones::within_limits(&l.tree))?;
     let screens = saved
         .get("screens")
         .and_then(Value::as_array)

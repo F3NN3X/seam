@@ -290,6 +290,18 @@ pub(super) fn sync_live(app: &mut App) {
     let auto_apply = app.cfg.auto_apply && aside(app).is_none();
     let live = active.map(|ws| live_of(app, ws));
     live::set_active(app.hwnd.0 as isize, live, auto_apply);
+    live::set_rules(app_rules_of(app));
+}
+
+/// The app rules this build can use, unless another window manager has the windows.
+fn app_rules_of(app: &App) -> Option<AppRules> {
+    let rules = workspace::app_rules(&app.cfg.app_rules);
+    if rules.is_empty() || aside(app).is_some() {
+        return None;
+    }
+    let exclude = app.cfg.zones.exclude.iter().map(|x| x.to_lowercase()).collect();
+    let (screens, gap, pins_stay) = (job_screens(app), app.cfg.zones.gap, app.cfg.windows.pins_stay_on_switch);
+    Some(AppRules { rules, screens, gap, pins_stay, exclude, size_mode: app.cfg.window_size_on_move })
 }
 
 /// The workspace in use changed: remember it for this desk, so a restart shows it again.

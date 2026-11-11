@@ -2,7 +2,8 @@
 //! the desk (D105, D107). The main thread only queues a command. A worker
 //! finds the windows and works out where they go in desk millimetres, takes
 //! focus itself, and hands moves back to the zone snapping's placement steps.
-//! Grow, shrink and Priority resize a window's group of zones on the same worker.
+//! Grow, shrink and Priority resize a window's group of zones on the same worker,
+//! and so does tiling a screen's windows.
 
 use crate::hook::SEAM_INPUT_TAG;
 use crate::log;
@@ -25,6 +26,8 @@ use windows::Win32::UI::WindowsAndMessaging::*;
 
 #[path = "regroup.rs"]
 mod regroup;
+#[path = "tile.rs"]
+pub mod tile;
 
 pub use regroup::{group_members, group_mins};
 
@@ -40,6 +43,7 @@ const CLOSE_ENOUGH: i32 = 4;
 pub enum Task {
     Window(WindowVerb, Dir),
     Group(GroupVerb),
+    Tile(tile::At),
 }
 
 /// One window command, with what the worker needs to know about the desk.
@@ -71,6 +75,8 @@ struct Planned {
     list: Vec<Placement>,
     /// A screen's layout a group command changed, saved before anything moves.
     layout: Option<(String, ZoneLayout, Option<regroup::Given>)>,
+    /// What a tile did.
+    tile: Option<tile::Done>,
     reply: Option<Sender<Reply>>,
 }
 
@@ -79,6 +85,8 @@ static WAKE: Condvar = Condvar::new();
 static PLANNED: Mutex<Option<Planned>> = Mutex::new(None);
 /// Layouts edge drags changed, waiting to be saved in order.
 static DRAGGED: Mutex<Vec<(String, ZoneLayout)>> = Mutex::new(Vec::new());
+/// Why a tile with no API client waiting did nothing. It has its own place, so it can't cancel a move waiting in PLANNED.
+static NOTE: Mutex<Option<String>> = Mutex::new(None);
 
 fn answer(reply: Option<Sender<Reply>>, result: Reply) {
     if let Some(tx) = reply {
@@ -109,7 +117,9 @@ pub fn start(job: Job) {
 /// layout goes to `save` first, so the windows' stamps follow the new zones. When
 /// it can't be saved nothing moves. Layouts from edge drags are saved before it, so
 /// a group command's layout, which is what its windows move to, is the one that stays.
-pub fn planned(mut save: impl FnMut(&str, ZoneLayout) -> bool) {
+/// A tile answers with what it did, or with why it did nothing when no API client is
+/// waiting to be told.
+pub fn planned(mut save: impl FnMut(&str, ZoneLayout) -> bool) -> Option<Result<tile::Done, String>> {
     let dragged = std::mem::take(&mut *DRAGGED.lock().unwrap_or_else(|e| e.into_inner()));
     for (screen, layout) in dragged {
         if save(&screen, layout) {
@@ -118,16 +128,12 @@ pub fn planned(mut save: impl FnMut(&str, ZoneLayout) -> bool) {
             log::info!("zone edges: Seam was busy, so the new layout wasn't saved");
         }
     }
-    if let Some(plan) = PLANNED.lock().unwrap_or_else(|e| e.into_inner()).take() {
-        run_plan(plan, &mut save);
-    }
-}
-
-fn run_plan(plan: Planned, save: &mut impl FnMut(&str, ZoneLayout) -> bool) {
+    let note = NOTE.lock().unwrap_or_else(|e| e.into_inner()).take();
+    let Some(plan) = PLANNED.lock().unwrap_or_else(|e| e.into_inner()).take() else { return note.map(Err) };
     if let Some((screen, layout, keep)) = plan.layout {
         if !save(&screen, layout) {
             answer(plan.reply, Err(RpcError::new(api::BUSY, "Seam is busy, try again")));
-            return;
+            return None;
         }
         regroup::saved(&screen, keep);
     }
@@ -135,7 +141,10 @@ fn run_plan(plan: Planned, save: &mut impl FnMut(&str, ZoneLayout) -> bool) {
     if !plan.list.is_empty() {
         snap::place_all(plan.list);
     }
-    answer(plan.reply, Ok(json!({ "ok": true })));
+    let done = plan.tile;
+    let counts = done.as_ref().map(|d| json!({ "ok": true, "tiled": d.tiled, "left": d.left }));
+    answer(plan.reply, Ok(counts.unwrap_or_else(|| json!({ "ok": true }))));
+    done.map(Ok)
 }
 
 /// A drag of a window's edge changed a screen's layout: save it the way a group
@@ -155,6 +164,8 @@ enum Outcome {
     Place(Vec<Placement>),
     /// The moves of a group command, the screen's new layout, and what Priority keeps for that screen once the layout is saved, if anything.
     Regroup(Vec<Placement>, String, ZoneLayout, Option<regroup::Given>),
+    /// A tile: the moves, the layout it gave the screen, and what it did.
+    Tile(Box<tile::Plan>),
 }
 
 fn work() {
@@ -169,17 +180,22 @@ fn work() {
         let outcome = match job.task {
             Task::Window(verb, dir) => run(&job, verb, dir),
             Task::Group(verb) => regroup::run(&job, verb),
+            Task::Tile(at) => tile::run(&job, at),
         };
         let planned = match outcome {
-            Ok(Outcome::Place(list)) => Ok(Some((list, None))),
-            Ok(Outcome::Regroup(list, screen, layout, keep)) => Ok(Some((list, Some((screen, layout, keep))))),
+            Ok(Outcome::Place(list)) => Ok(Some((list, None, None))),
+            Ok(Outcome::Regroup(list, screen, layout, keep)) => Ok(Some((list, Some((screen, layout, keep)), None))),
+            Ok(Outcome::Tile(plan)) => {
+                let plan = *plan;
+                Ok(Some((plan.list, plan.layout.map(|(screen, layout)| (screen, layout, None)), Some(plan.done))))
+            }
             Ok(Outcome::Done) => Ok(None),
             Err(why) => Err(why),
         };
         match planned {
             Ok(None) => answer(reply, Ok(json!({ "ok": true }))),
-            Ok(Some((list, layout))) => {
-                let plan = Planned { list, layout, reply };
+            Ok(Some((list, layout, tile))) => {
+                let plan = Planned { list, layout, tile, reply };
                 let earlier = PLANNED.lock().unwrap_or_else(|e| e.into_inner()).replace(plan);
                 if let Some(earlier) = earlier {
                     replaced(earlier.reply);
@@ -192,8 +208,17 @@ fn work() {
                 match job.task {
                     Task::Window(verb, dir) => log::info!("window {verb:?} {}: {why}", dir.name()),
                     Task::Group(verb) => log::info!("window {verb:?}: {why}"),
+                    Task::Tile(_) => log::info!("tile screen: {why}"),
                 }
-                answer(reply, Err(RpcError::new(api::REFUSED, why)));
+                // A tile from a key or the tray has nobody to answer, so the screen is told.
+                if matches!(job.task, Task::Tile(_)) && reply.is_none() {
+                    *NOTE.lock().unwrap_or_else(|e| e.into_inner()) = Some(why);
+                    unsafe {
+                        let _ = PostMessageW(Some(hwnd_of(job.owner)), WM_APP_WINDOW, WPARAM(0), LPARAM(0));
+                    }
+                } else {
+                    answer(reply, Err(RpcError::new(api::REFUSED, why)));
+                }
             }
         }
     }

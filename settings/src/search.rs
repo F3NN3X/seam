@@ -52,7 +52,12 @@ const ENTRIES: &[Entry] = &[
         "ease cursor easing deadzone jump pointer stuck",
     ),
     entry(Page::Zones, "Zones on", "Hold a key while you drag a window to drop it into a zone", "snap enable"),
-    entry(Page::Zones, "Layout", "Columns, rows, grid or priority for each screen", "template tiles"),
+    entry(
+        Page::Zones,
+        "Layout",
+        "Columns, rows, grid, priority, main + stack or stack + main for each screen",
+        "template tiles arrange organise",
+    ),
     entry(Page::Zones, "Edit layout", "Split, merge and resize the zones of a screen", "editor custom divider"),
     entry(
         Page::Zones,
@@ -189,6 +194,12 @@ const ENTRIES: &[Entry] = &[
         "Give window two thirds of its group",
         "Global shortcut",
         "hotkey keyboard priority main focus zone resize",
+    ),
+    entry(
+        Page::Shortcuts,
+        "Tile this screen's windows",
+        "Global shortcut",
+        "hotkey keyboard tile arrange organise layout zones screen",
     ),
     entry(Page::Shortcuts, "Pin window on top", "Global shortcut", "hotkey keyboard topmost always"),
     entry(Page::Shortcuts, "Keep window out of workspace switches", "Global shortcut", "hotkey keyboard sticky pin"),

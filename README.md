@@ -70,12 +70,13 @@ Windows arranges screens in **raw pixels**. When two screens have different pixe
 
 ### Zones
 
-Pick a layout for each screen (Columns, Rows, Grid or Priority), hold **Shift** while you drag a window, and let go over a zone to snap it in. The zones show on the screen under the pointer, and the one under it turns amber.
+Pick a layout for each screen (Columns, Rows, Grid, Priority, Main + stack or Stack + main), hold **Shift** while you drag a window, and let go over a zone to snap it in. The zones show on the screen under the pointer, and the one under it turns amber.
 
 ![The Zones page](docs/images/zones.png)
 
 - Hold **Ctrl** as well to cover several zones with one window.
 - **Zones on** turns drag snapping on or off.
+- **Tile this screen's windows** (a shortcut with no key until you set one, **Tile windows** in the tray menu, or `screen.tile` in the API) puts the loose windows on a screen into its zones at once. The focused window, or the one you used last, takes the biggest zone, and each of the others takes the nearest free one. A screen with no layout is given one for the number of windows: two columns, Main + stack, the 2x2 grid, then 3x2 and 3x3. It takes up to nine windows, keeps windows that are already in a zone where they are, and leaves alone pinned and sticky windows, minimized ones, and those of apps running as administrator. A notification offers **Undo** for 8 seconds, which puts each window back and takes away a layout the tile picked.
 - Both keys, the **gap** between zones, and whether a window gets its old size back when you drop it outside a zone are on the Zones page.
 - **Edit layout** (or the **Custom** tile) makes your own layout: split a zone side by side or top and bottom, drag a divider (it snaps to quarters and thirds), merge two neighbours, then press **Done**. Esc throws the changes away and Ctrl+Z undoes the last one. A layout can have up to 128 zones.
 - The editor opens on the screen itself, over its work area. If you'd rather edit in the preview, turn off **Edit layouts on the screen**.
@@ -194,6 +195,7 @@ A Stream Deck plugin in `integrations/streamdeck` puts Seam on keys. It talks to
 | Snap back | Puts the windows of the workspace in use back. |
 | Switch back | Switches to the workspace that was in use before this one. |
 | Save windows | Saves the windows into the workspace in use, as **Save windows to the active workspace** does. |
+| Tile screen | Puts the loose windows on the screen under the pointer into its zones. |
 | Line up screens | Opens Line Up. |
 | Pause or resume remap, Zones on or off | Two-state keys that follow Seam, so they stay right when you change a setting elsewhere. |
 | Next zone, Previous zone | Move the focused window. |
@@ -301,7 +303,7 @@ Yes, through the [local API](docs/api.md), which is what the Stream Deck plugin 
 | Shift+Win+Alt+arrows | Move the focused window that way on the desk |
 | Ctrl+Shift+Alt+arrows | Focus the window that way |
 | Shift (while dragging) | Show the zones. Add Ctrl to cover several zones |
-| None until you set one | Swap, grow, shrink, two thirds, next and previous zone, the three pin keys, one capture key, **Snap back to this workspace**, **Switch back to the previous workspace**, **Save windows to the active workspace**, **Focus on this window**, **Spotlight**, and one key per workspace |
+| None until you set one | Swap, grow, shrink, two thirds, tile, next and previous zone, the three pin keys, one capture key, **Snap back to this workspace**, **Switch back to the previous workspace**, **Save windows to the active workspace**, **Focus on this window**, **Spotlight**, and one key per workspace |
 
 Set these on the Shortcuts page. Ctrl+Shift+Alt plus a number is a good choice for workspaces, since Ctrl+Alt alone types characters on many keyboards.
 

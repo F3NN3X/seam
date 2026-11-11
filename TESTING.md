@@ -38,9 +38,26 @@ Start with a v0.1 `config.json` that has saved borders.
 - [ ] **New screens.** Unplug a screen and replug it. The smaller set gets its own desk, named after its first screen, and the full desk is untouched.
 - [ ] **Going back.** Quit Seam. To return to v0.1, replace `config.json` with `config.v1.json.bak`. A v0.1 build can't read the borders in a v2 file.
 
+## Tile this screen's windows
+
+Set a key for **Tile this screen's windows** on Shortcuts (it has no key until you set one). Start with screen 1 set to None and the other windows closed.
+
+- [ ] **Two windows, no layout.** Open Notepad and Calculator on screen 1 and press the key with the pointer on screen 1. They go side by side in two columns, the focused one in the first. A notification says "Tiled 2 windows on screen 1" and offers Undo. The Zones page shows Custom for screen 1.
+- [ ] **One window.** Close one: the key shows "Nothing to tile" and no layout is saved.
+- [ ] **Three windows.** With a third window and screen 1 set to None again, the key picks Main + stack: the focused window takes the large zone on the left, the others the stacked zones.
+- [ ] **Five windows.** With five windows and None, the key picks 3x2, and with ten windows nine are tiled and the notification says one was left where it was.
+- [ ] **Existing layout.** Pick Grid for screen 1. Snap one window into the top-left zone, then open three more and press the key. The snapped window stays, the others take the free zones nearest to them, and the layout is still Grid. With more windows than zones, the notification says how many were left.
+- [ ] **Left alone.** Pin one window on top, make another sticky, minimize a third, and run Task Manager as administrator. None of them moves. A window on another screen doesn't move either.
+- [ ] **Undo.** Click the notification within 8 seconds: every window goes back to where it was, and a layout the tile picked is gone from the Zones page. After 8 seconds a click does nothing, and the log says it was too late.
+- [ ] **Tray, one screen.** With one screen connected, the tray menu has **Tile windows** and it tiles that screen.
+- [ ] **Tray, two screens.** With two screens, **Tile windows** is a submenu with Screen 1 and Screen 2, numbered as in Line Up. Each tiles its own screen whatever screen the pointer was on.
+- [ ] **API.** `screen.tile` with no params tiles the screen under the pointer and answers `{ok, tiled, left}`. With `{"number":2}` it tiles screen 2, and `{"number":9}` answers error 1. With zones off it answers error 3.
+- [ ] **Other window manager.** While komorebi runs, the key does nothing and the notification says why.
+- [ ] **Stream Deck.** The **Tile screen** action does what the key does.
+
 ## Tray and shortcuts
 
-- [ ] **Menu.** Right-click the tray icon: status line, **Open Seam…**, **Line Up Screens…**, **Remap pointer at borders**, **Release pinned windows**, **Quit Seam**.
+- [ ] **Menu.** Right-click the tray icon: status line, **Open Seam…**, **Line Up Screens…**, the **Workspaces** menu when there are workspaces, **Tile windows**, **Remap pointer at borders**, **Release pinned windows**, **Quit Seam**.
 - [ ] **Left-click, migrated.** With `"tray_click": "line_up"`, left-click opens Line Up. Press Esc.
 - [ ] **Left-click, new install.** With `"tray_click": "open"`, left-click opens the Seam window.
 - [ ] **Line up shortcut.** Press Ctrl+Shift+Alt+L. Line Up opens. Press Esc.
@@ -136,7 +153,7 @@ On my desk the panel (screen 3) touches the U3477 (screen 4) in Windows, 18 px b
 Set up first: on Zones, pick **Priority** for screen 1 and **Grid** for screen 2, with **Shift** to show and **Ctrl** to span.
 
 - [ ] **Page.** Zones is in the sidebar with no preview note. The header says "Hold Shift while you drag a window to drop it into a zone", the tabs list the 4 screens, and the preview shows each zone's number and width in px. The chosen tile has an amber ring.
-- [ ] **Layouts.** Pick each of None, Columns, Rows, Grid and Priority. The preview changes, and `config.json` holds the layout under `desks[...].zones` for that screen's device path. **None** removes the entry. **Custom** opens the editor.
+- [ ] **Layouts.** Pick each of None, Columns, Rows, Grid, Priority, Main + stack and Stack + main. The tiles sit in two columns, and Main + stack has one zone on the left taking two thirds with two stacked zones beside it, Stack + main the other way round. The preview changes, and `config.json` holds the layout under `desks[...].zones` for that screen's device path. **None** removes the entry. **Custom** opens the editor.
 - [ ] **Shift-drag, each screen.** Drag a window with Shift held on every screen of the test desk, including the portrait U3477. The zones show with their numbers, the zone under the pointer turns amber, and letting go snaps the window with its visible edges on the zone.
 - [ ] **Release Shift.** Hold Shift, move over a zone, release Shift, then let go of the window. The overlay goes away and the window stays where you dropped it.
 - [ ] **Span.** Hold Shift and Ctrl together and drag across two zones. The amber box covers both, and the window fills it.
@@ -704,7 +721,7 @@ Set **Switch back to the previous workspace** on Shortcuts (it has no key until 
 
 Build the plugin with `pnpm install`, `pnpm build` and `pnpm run pack` in `integrations/streamdeck`. Run these with Seam running and **Let other apps control Seam** on, and the Stream Deck app open.
 
-- [ ] **Install the packed file.** Double-click `dist\co.f3nn3x.seam.streamDeckPlugin`. Stream Deck installs it, and a Seam group with fourteen actions appears in the action list. General in Seam lists "streamdeck" among the connected apps.
+- [ ] **Install the packed file.** Double-click `dist\co.f3nn3x.seam.streamDeckPlugin`. Stream Deck installs it, and a Seam group with fifteen actions appears in the action list. General in Seam lists "streamdeck" among the connected apps.
 - [ ] **Switch workspace.** Drag the action to a key and pick a workspace in the dropdown, which lists the current desk's workspaces. The key shows its name. Press it: the workspace is applied, and the key lights once it's in use. Switch to another workspace by hotkey. The key goes dark.
 - [ ] **Drift dot.** With the key's workspace in use, drag one of its windows away. Within a second a small amber dot shows in the key's top-right corner. Press the key: the window goes back and the dot goes. Switch to another workspace: the key goes dark with no dot. Quit Seam while the dot shows: the key says "Seam isn't running" with no dot.
 - [ ] **Snap back.** Drag the action to a key. Move a window of the workspace in use and press it: the window goes back. With no workspace in use the key shows an alert.

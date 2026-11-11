@@ -38,7 +38,7 @@ pub(super) fn saved(screen: &str, keep: Option<Given>) {
 }
 
 /// The zones a window covers when it spans `from` to `to`, as the snapping counts them.
-fn covered(cells: &[Rect], from: usize, to: usize) -> Vec<usize> {
+pub(super) fn covered(cells: &[Rect], from: usize, to: usize) -> Vec<usize> {
     let (Some(a), Some(b)) = (cells.get(from), cells.get(to)) else { return Vec::new() };
     let r = zones::span(*a, *b);
     let inside = |c: &Rect| c.x >= r.x && c.y >= r.y && c.x + c.w <= r.x + r.w && c.y + c.h <= r.y + r.h;

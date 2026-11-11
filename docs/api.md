@@ -134,8 +134,11 @@ These act on the window in the foreground, using the screens as they stand on yo
 | `window.swap` | `dir`, as above | `{ok: true}` | Any | 2, 3 | `{"method":"window.swap","params":{"dir":"right"}}` |
 | `window.resize` | `by`: `"grow"` or `"shrink"`; `step`: optional, 1 to 10000 pixels, default 5% of the screen and at least 32 | `{ok: true}` | Any | 2, 3 | `{"method":"window.resize","params":{"by":"grow"}}` |
 | `window.priority` | none | `{ok: true}` | Any | 2, 3 | `{"method":"window.priority","params":{}}` |
+| `screen.tile` | `number?`: Line Up number, from 1; the screen under the pointer when left out | `{ok: true, tiled, left}` | Any | 1, 2, 3 | `{"method":"screen.tile","params":{"number":2}}` |
 
 Error `3` carries the reason in `message`: no window has focus, nothing in that direction, the window can't be moved, runs as administrator or isn't responding. `window.resize` and `window.priority` act on the zones of the focused window's screen and every window in them, and also answer `3` when the window isn't in a zone, when no divider beside it can move, or when one of the windows that would move can't be. A second `window.priority` on the same layout puts it back as it was. A changed layout is saved, as Custom unless it is back to its template. `window.move`, `window.swap`, `window.resize` and `window.priority` also answer `3` while komorebi, GlazeWM, LeopardWM or "Another window manager handles my windows" has Seam leaving placement alone. `window.focus` still works then. Error `2` means a newer window command replaced this one before it ran.
+
+`screen.tile` puts the loose windows of one screen into its zones, up to nine, and answers how many it placed (`tiled`) and how many found no zone or were past the ninth (`left`). A window already in a zone keeps it. A screen with no layout is given one for the number of windows and keeps it. It answers `3` with "Nothing to tile" when there is nothing to place, and while zones are off or another window manager has the windows, and `1` for a number that isn't a screen. Pinned, sticky, minimized and administrator windows are left alone.
 
 ### Focus and spotlight
 

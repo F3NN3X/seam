@@ -94,6 +94,22 @@
 			]
 		},
 		{
+			"UUID": "co.f3nn3x.seam.tile-screen",
+			"Name": "Tile screen",
+			"Tooltip": "Put the loose windows on the screen under the pointer into its zones.",
+			"Icon": "imgs/actions/tile-screen/icon",
+			"Controllers": [
+				"Keypad"
+			],
+			"States": [
+				{
+					"Image": "imgs/actions/tile-screen/key",
+					"Title": "Tile screen",
+					"TitleAlignment": "bottom"
+				}
+			]
+		},
+		{
 			"UUID": "co.f3nn3x.seam.lineup",
 			"Name": "Line up screens",
 			"Tooltip": "Open Line Up to match the screen edges to your desk.",

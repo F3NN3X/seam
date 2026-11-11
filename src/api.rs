@@ -170,6 +170,8 @@ pub enum Command {
     LineupStart,
     ArrangementAlign,
     ScreenIdentify(u32),
+    /// Tile the loose windows of a screen: its Line Up number, or the one under the pointer.
+    ScreenTile(Option<u32>),
     LayoutShow(LayoutView),
     PanelOpen(Option<String>),
     EventsSubscribe(Vec<String>),
@@ -326,6 +328,14 @@ fn command(method: &str, p: &Value) -> Result<Command, RpcError> {
                 .and_then(|n| u32::try_from(n).ok())
                 .ok_or_else(|| RpcError::new(INVALID_PARAMS, "number must be a screen number"))?,
         ),
+        "screen.tile" => Command::ScreenTile(match p.get("number") {
+            None | Some(Value::Null) => None,
+            Some(v) => Some(
+                v.as_u64()
+                    .and_then(|n| u32::try_from(n).ok())
+                    .ok_or_else(|| RpcError::new(INVALID_PARAMS, "number must be a screen number"))?,
+            ),
+        }),
         "layout.show" => match p.get("view").and_then(Value::as_str) {
             Some("seam") => Command::LayoutShow(LayoutView::Seam),
             Some("windows") => Command::LayoutShow(LayoutView::Windows),

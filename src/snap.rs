@@ -328,6 +328,14 @@ pub fn place_all(list: Vec<Placement>) {
     });
 }
 
+/// Add moves to the ones still waiting, which `place_all` would replace.
+pub fn place_more(list: Vec<Placement>) {
+    with_engine(|e| {
+        e.queued.extend(list);
+        e.window_pump();
+    });
+}
+
 unsafe extern "system" fn on_event(_: HWINEVENTHOOK, event: u32, hwnd: HWND, object: i32, _: i32, _: u32, _: u32) {
     if object != OBJID_WINDOW.0 {
         return;

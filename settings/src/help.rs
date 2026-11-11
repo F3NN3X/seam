@@ -149,6 +149,17 @@ pub const TOPICS: &[Topic] = &[
         opens: Some(Page::Shortcuts),
     },
     Topic {
+        title: "Apps running as administrator",
+        blocks: &[
+            Text("Windows doesn't let an app move the windows of an app that runs with more rights. That's why an elevated app's window can't move with Seam."),
+            List(&[
+                "To manage them, quit Seam and start it with Run as administrator. Seam then manages both, but its Start with Windows entry still starts it normally.",
+                "Or leave those windows alone. The pointer remap and Line Up work either way.",
+            ]),
+        ],
+        opens: None,
+    },
+    Topic {
         title: "Pins and borders",
         blocks: &[
             List(&[

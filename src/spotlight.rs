@@ -181,7 +181,7 @@ impl Dims {
                     }
                     // Above everything except topmost windows.
                     Some(_) => {
-                        let _ = SetWindowPos(dim.hwnd, Some(HWND_TOP), 0, 0, 0, 0, flags | SWP_SHOWWINDOW);
+                        let _ = SetWindowPos(dim.hwnd, Some(HWND_NOTOPMOST), 0, 0, 0, 0, flags | SWP_SHOWWINDOW);
                     }
                     None => {
                         let _ = SetWindowPos(dim.hwnd, None, 0, 0, 0, 0, flags | SWP_NOZORDER | SWP_HIDEWINDOW);

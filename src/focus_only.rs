@@ -10,6 +10,7 @@ use seam::geom::Rect;
 use seam::winutil;
 use seam::workspace::Workspace;
 use serde_json::{json, Value};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::Sender;
 use std::sync::{Condvar, Mutex, OnceLock};
 use std::time::{Duration, Instant};
@@ -41,6 +42,17 @@ pub struct Job {
 struct Held {
     windows: Vec<isize>,
     focused: isize,
+    /// What the press was for, so only the same kind of press puts it back.
+    scope: Option<FocusScope>,
+    screen: Option<Rect>,
+}
+
+/// A workspace switch finished: what was held belongs to the old context.
+static FORGET: AtomicBool = AtomicBool::new(false);
+
+/// Drop what the last press minimized, so the next press starts fresh.
+pub fn forget() {
+    FORGET.store(true, Ordering::SeqCst);
 }
 
 static SLOT: Mutex<Option<Job>> = Mutex::new(None);
@@ -106,10 +118,25 @@ fn on_screens(h: HWND, screens: &[Rect]) -> bool {
     })
 }
 
+/// The screen the focused window is on, if it is on one.
+fn screen_of(h: HWND, screens: &[Rect]) -> Option<Rect> {
+    let (x, y) = centre(winutil::visible_rect(h)?);
+    screens.iter().find(|s| s.contains(x, y)).copied()
+}
+
 fn run(job: &Job, held: &mut Held) -> Result<Value, String> {
-    // Pressing again puts back what the last press minimized. If the user restored
-    // all of it meanwhile, there is nothing to put back and this press minimizes.
-    if held.windows.iter().any(|k| exists(*k)) {
+    if FORGET.swap(false, Ordering::SeqCst) {
+        *held = Held::default();
+    }
+    let screen = match job.scope {
+        FocusScope::Screen => screen_of(hwnd_of(job.hwnd), &job.screens),
+        FocusScope::Workspace => None,
+    };
+    // Pressing again puts back what the last press minimized, if it was the same kind
+    // of press. If the user restored all of it meanwhile, there is nothing to put back
+    // and this press minimizes.
+    let same = held.scope == Some(job.scope) && held.screen == screen;
+    if same && held.windows.iter().any(|k| exists(*k)) {
         let restored = bring_back(held, job.from_api);
         if restored > 0 {
             return Ok(json!({ "ok": true, "restored": restored }));
@@ -126,10 +153,7 @@ fn run(job: &Job, held: &mut Held) -> Result<Value, String> {
             if !winutil::is_capturable(focused, std::process::id()) {
                 return Err("Focus on this window needs an app window in front".into());
             }
-            let rect = winutil::visible_rect(focused).ok_or("That window isn't on a screen")?;
-            let (x, y) = centre(rect);
-            let screen = job.screens.iter().find(|s| s.contains(x, y)).ok_or("That window isn't on a screen")?;
-            vec![*screen]
+            vec![screen.ok_or("That window isn't on a screen")?]
         }
         FocusScope::Workspace => job.screens.clone(),
     };
@@ -147,9 +171,19 @@ fn run(job: &Job, held: &mut Held) -> Result<Value, String> {
                 .collect()
         }
     };
+    // The window that owns the focused one, or that it belongs to, stays with it.
+    let owner = unsafe { GetWindow(focused, GW_OWNER) }.ok();
+    let root = unsafe { GetAncestor(focused, GA_ROOTOWNER) };
     let minimize: Vec<isize> = candidates
         .into_iter()
-        .filter(|h| *h != focused && !winutil::is_minimized(*h) && !winutil::is_hung(*h) && on_screens(*h, &screens))
+        .filter(|h| {
+            *h != focused
+                && *h != root
+                && Some(*h) != owner
+                && !winutil::is_minimized(*h)
+                && !winutil::is_hung(*h)
+                && on_screens(*h, &screens)
+        })
         .map(|h| h.0 as isize)
         .collect();
     if minimize.is_empty() {
@@ -161,14 +195,19 @@ fn run(job: &Job, held: &mut Held) -> Result<Value, String> {
         }
     }
     let minimized = minimize.len();
-    *held = Held { windows: minimize, focused: job.hwnd };
+    // Minimizing is asynchronous. Wait for it, so a quick second press finds them minimized.
+    let until = Instant::now() + RESTORE_WAIT;
+    while Instant::now() < until && minimize.iter().any(|k| !winutil::is_minimized(hwnd_of(*k))) {
+        std::thread::sleep(RESTORE_POLL);
+    }
+    *held = Held { windows: minimize, focused: job.hwnd, scope: Some(job.scope), screen };
     Ok(json!({ "ok": true, "minimized": minimized }))
 }
 
 /// Restore what is still minimized, bottom of the stack first so the order comes
 /// back, then give focus to the window that had it. Returns how many it restored.
 fn bring_back(held: &mut Held, nudge: bool) -> usize {
-    let Held { windows, focused } = std::mem::take(held);
+    let Held { windows, focused, .. } = std::mem::take(held);
     let minimized: Vec<HWND> = windows
         .iter()
         .rev()

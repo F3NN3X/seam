@@ -256,6 +256,7 @@ pub(super) fn switched(app: &mut App) {
     }
     // Apps opened by hand during the switch go to their places now.
     live::switch_ended();
+    focus_only::forget();
     windows_changed(app);
     publish(app);
     let skipped: Vec<Value> =

@@ -159,7 +159,7 @@ Both rows are in the Pointer card on Displays.
 - [ ] **Drags aren't slowed.** With **Edge resistance** at 100, drag a window by its title bar from screen 1 to screen 4, and drag a file between Explorer windows on two screens. Neither stops at the border. Right- and middle-button drags cross at once too.
 - [ ] **Glued edge push.** On my desk, with the 4K's taskbar set to hide on its bottom edge and the 4K to panel glue saved, set **Glued edge push** to 0, 60 and 150 in turn and push slowly down off the 4K. At 0 the pointer crosses at once and the taskbar may not show. At 60 and 150 the taskbar slides up while you push and the pointer crosses after about that many pixels. With **Edge resistance** at 100 and the push at 60, it takes about 100.
 - [ ] **Saving.** The sliders send their value when you let go. `config.json` shows `"pointer": { "edge_resistance_px": 10, "glue_push_px": 60 }`, and both rows show their value under the title.
-- [ ] **Paused.** With **Remap pointer at borders** paused and **Edge resistance** above 0, the pointer still waits at every border, then crosses where Windows puts it.
+- [ ] **Paused.** With **Remap pointer at borders** paused and **Edge resistance** above 0, the pointer crosses every border at once, as in Windows.
 - [ ] **Search.** Search for "grab", "corner" and "taskbar" in the Seam window: they find these two rows.
 
 ## Zones

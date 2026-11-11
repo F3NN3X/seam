@@ -326,11 +326,11 @@ fn wide<const N: usize>(s: &str) -> [u16; N] {
 
 /// (Re)install the hook if it should be running. Unhooking first guarantees a
 /// hook Windows dropped behind our back comes back. Edge resistance needs it at
-/// every border, lined up or not, and whether or not the remap is paused.
+/// every border, lined up or not. Paused, the pointer is left to Windows entirely.
 fn arm_hook(app: &App) {
     hook::enable(false);
     let resist = app.cfg.pointer.edge_resistance_px > 0 && app.mons.len() > 1;
-    hook::enable(app.cfg.enabled && !app.links.is_empty() || resist);
+    hook::enable(app.cfg.enabled && (!app.links.is_empty() || resist));
 }
 
 fn unix_now() -> u64 {
@@ -350,9 +350,13 @@ fn relink(app: &mut App) {
     let pointer = &app.cfg.pointer;
     hook::set_live(Live {
         rects: app.mons.iter().map(|m| m.rect).collect(),
-        // Paused, the hook may still run for edge resistance, but remaps nothing.
+        // Paused, the hook remaps nothing and holds nothing.
         links: if app.cfg.enabled { app.links.clone() } else { Vec::new() },
-        edge_resistance: pointer.edge_resistance_px.min(MAX_EDGE_RESISTANCE_PX) as i32,
+        edge_resistance: if app.cfg.enabled {
+            pointer.edge_resistance_px.min(MAX_EDGE_RESISTANCE_PX) as i32
+        } else {
+            0
+        },
         glue_push: pointer.glue_push_px.min(MAX_GLUE_PUSH_PX) as i32,
     });
     snap::update(app.hwnd, &app.cfg, &app.sig, &app.mons, aside(app).as_deref());

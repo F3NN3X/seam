@@ -159,6 +159,12 @@ pub fn render(panel: &mut Panel, _: &mut Window, cx: &mut Context<Panel>) -> imp
         .enumerate()
         .map(|(i, ((verb, dir, combo), title))| row(title, &format!("{verb}_{dir}"), combo, 5 + i))
         .collect();
+    // Slots far past the workspace rows, which count up from 20.
+    window_rows.extend([
+        row("Grow window into its neighbour", "grow", keys.grow.as_ref(), 900),
+        row("Shrink window", "shrink", keys.shrink.as_ref(), 901),
+        row("Give window two thirds of its group", "priority", keys.priority.as_ref(), 902),
+    ]);
     window_rows.extend([
         row("Pin window on top", "pin_top", keys.pin_top.as_ref(), 17),
         row("Keep window out of workspace switches", "pin_sticky", keys.pin_sticky.as_ref(), 18),

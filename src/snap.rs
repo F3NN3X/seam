@@ -4,7 +4,7 @@
 //! mouse hook (D7).
 
 use crate::tray::WM_APP_WINDOWS_CHANGED;
-use crate::{log, overlay, zone_paint};
+use crate::{log, minsize, overlay, zone_paint};
 use seam::config::{Config, WindowSize, ZoneSettings};
 use seam::desk::{self, Mon};
 use seam::geom;
@@ -295,6 +295,33 @@ pub fn zone_of(hwnd: HWND) -> Option<(String, usize, usize)> {
         s.map(|s| (s.screen.clone(), s.from, s.to))
     })
     .flatten()
+}
+
+/// A window the snapping put in zones, as it recorded it.
+pub struct Zoned {
+    pub hwnd: isize,
+    /// The screen and zones.
+    pub zone: (String, usize, usize),
+    /// Where its visible frame was put.
+    pub at: Rect,
+    /// Still on its way there.
+    pub moving: bool,
+}
+
+/// Every snapped window as recorded, for finding a group's members. Whether each
+/// is still there is for the worker to check: that reads every window's rect.
+pub fn zoned() -> Vec<Zoned> {
+    with_engine(|e| {
+        let moving = |key: isize| e.pending.as_ref().is_some_and(|p| p.hwnd == key);
+        let entry = |(key, s): (&isize, &Snapped)| Zoned {
+            hwnd: *key,
+            zone: (s.screen.clone(), s.from, s.to),
+            at: s.at,
+            moving: moving(*key),
+        };
+        e.snapped.iter().map(entry).collect()
+    })
+    .unwrap_or_default()
 }
 
 /// Put windows where window control worked out, one after another. A newer
@@ -774,9 +801,13 @@ impl Engine {
                     return;
                 }
                 // It moved, but an app that answered a DPI change late can leave it off by its margins.
-                let landed =
-                    winutil::visible_rect(hwnd).is_some_and(|v| close(v, p.target, winutil::is_resizable(hwnd)));
+                let (visible, sized) = (winutil::visible_rect(hwnd), winutil::is_resizable(hwnd));
+                let landed = visible.is_some_and(|v| close(v, p.target, sized));
                 if landed || p.retries >= MAX_RETRIES {
+                    // Still bigger than its place after the retries: that's as small as the app goes.
+                    if let (false, true, Some(v)) = (landed, sized, visible) {
+                        minsize::observed(hwnd, v, p.target, CLOSE_ENOUGH);
+                    }
                     return;
                 }
                 p.retries += 1;

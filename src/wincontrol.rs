@@ -2,11 +2,12 @@
 //! the desk (D105, D107). The main thread only queues a command. A worker
 //! finds the windows and works out where they go in desk millimetres, takes
 //! focus itself, and hands moves back to the zone snapping's placement steps.
+//! Grow, shrink and Priority resize a window's group of zones on the same worker.
 
 use crate::hook::SEAM_INPUT_TAG;
 use crate::log;
 use crate::snap::{self, Placement};
-use seam::api::{self, Reply, RpcError, WindowVerb};
+use seam::api::{self, GroupVerb, Reply, RpcError, WindowVerb};
 use seam::config::WindowSize;
 use seam::desk::{self, Mon};
 use seam::direction::{self, Dir, Found, Screen};
@@ -22,6 +23,9 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{
 };
 use windows::Win32::UI::WindowsAndMessaging::*;
 
+#[path = "regroup.rs"]
+mod regroup;
+
 /// The worker has moves for the main thread to start.
 pub const WM_APP_WINDOW: u32 = WM_APP + 18;
 /// The gap slider's end, as in the snapping.
@@ -29,15 +33,23 @@ const MAX_GAP: u32 = 32;
 /// A window this close to its zones is still in them.
 const CLOSE_ENOUGH: i32 = 4;
 
+/// What a window command does.
+#[derive(Clone, Copy, Debug)]
+pub enum Task {
+    Window(WindowVerb, Dir),
+    Group(GroupVerb),
+}
+
 /// One window command, with what the worker needs to know about the desk.
 pub struct Job {
     pub owner: isize,
-    pub verb: WindowVerb,
-    pub dir: Dir,
+    pub task: Task,
     /// The focused window when the command came.
     pub hwnd: isize,
     /// Where the snapping last put that window, if it's still there.
     pub snapped: Option<(String, usize, usize)>,
+    /// Every snapped window still in its zones, for a group command. Empty otherwise.
+    pub members: Vec<snap::Zoned>,
     pub mons: Vec<Mon>,
     pub links: Vec<Link>,
     /// Each screen's zones, or None for none or with zones off.
@@ -55,6 +67,8 @@ pub struct Job {
 /// Moves worked out, waiting for the main thread.
 struct Planned {
     list: Vec<Placement>,
+    /// A screen's layout a group command changed, saved before anything moves.
+    layout: Option<(String, ZoneLayout, Option<regroup::Given>)>,
     reply: Option<Sender<Reply>>,
 }
 
@@ -87,9 +101,18 @@ pub fn start(job: Job) {
     WAKE.notify_one();
 }
 
-/// The worker's moves are ready: start them on the snapping's steps.
-pub fn planned() {
+/// The worker's moves are ready: start them on the snapping's steps. A changed
+/// layout goes to `save` first, so the windows' stamps follow the new zones. When
+/// it can't be saved nothing moves.
+pub fn planned(save: impl FnOnce(&str, ZoneLayout) -> bool) {
     let Some(plan) = PLANNED.lock().unwrap_or_else(|e| e.into_inner()).take() else { return };
+    if let Some((screen, layout, keep)) = plan.layout {
+        if !save(&screen, layout) {
+            answer(plan.reply, Err(RpcError::new(api::BUSY, "Seam is busy, try again")));
+            return;
+        }
+        regroup::saved(&screen, keep);
+    }
     snap::place_all(plan.list);
     answer(plan.reply, Ok(json!({ "ok": true })));
 }
@@ -98,6 +121,8 @@ pub fn planned() {
 enum Outcome {
     Done,
     Place(Vec<Placement>),
+    /// The moves of a group command, the screen's new layout, and what Priority keeps for that screen once the layout is saved, if anything.
+    Regroup(Vec<Placement>, String, ZoneLayout, Option<regroup::Given>),
 }
 
 fn work() {
@@ -109,10 +134,21 @@ fn work() {
         let Some(mut job) = slot.take() else { continue };
         drop(slot);
         let reply = job.reply.take();
-        match run(&job) {
-            Ok(Outcome::Done) => answer(reply, Ok(json!({ "ok": true }))),
-            Ok(Outcome::Place(list)) => {
-                let earlier = PLANNED.lock().unwrap_or_else(|e| e.into_inner()).replace(Planned { list, reply });
+        let outcome = match job.task {
+            Task::Window(verb, dir) => run(&job, verb, dir),
+            Task::Group(verb) => regroup::run(&job, verb),
+        };
+        let planned = match outcome {
+            Ok(Outcome::Place(list)) => Ok(Some((list, None))),
+            Ok(Outcome::Regroup(list, screen, layout, keep)) => Ok(Some((list, Some((screen, layout, keep))))),
+            Ok(Outcome::Done) => Ok(None),
+            Err(why) => Err(why),
+        };
+        match planned {
+            Ok(None) => answer(reply, Ok(json!({ "ok": true }))),
+            Ok(Some((list, layout))) => {
+                let plan = Planned { list, layout, reply };
+                let earlier = PLANNED.lock().unwrap_or_else(|e| e.into_inner()).replace(plan);
                 if let Some(earlier) = earlier {
                     replaced(earlier.reply);
                 }
@@ -121,7 +157,10 @@ fn work() {
                 }
             }
             Err(why) => {
-                log::info!("window {:?} {}: {why}", job.verb, job.dir.name());
+                match job.task {
+                    Task::Window(verb, dir) => log::info!("window {verb:?} {}: {why}", dir.name()),
+                    Task::Group(verb) => log::info!("window {verb:?}: {why}"),
+                }
                 answer(reply, Err(RpcError::new(api::REFUSED, why)));
             }
         }
@@ -303,15 +342,15 @@ pub fn focus(h: HWND, nudge: bool) {
     }
 }
 
-fn run(job: &Job) -> Result<Outcome, String> {
+fn run(job: &Job, verb: WindowVerb, dir: Dir) -> Result<Outcome, String> {
     let screens = direction::desk_screens(&job.mons, &job.links);
     let source = hwnd_of(job.hwnd);
-    match job.verb {
+    match verb {
         WindowVerb::Focus => {
             let from = winutil::visible_rect(source).filter(|_| !source.is_invalid()).ok_or("No window has focus")?;
             let list = others(source, &screens);
             let rects: Vec<Rect> = list.iter().map(|(_, r)| *r).collect();
-            match direction::find(&screens, &rects, from, job.dir) {
+            match direction::find(&screens, &rects, from, dir) {
                 Found::Window(i) => {
                     focus(list[i].0, job.from_api);
                     Ok(Outcome::Done)
@@ -323,13 +362,13 @@ fn run(job: &Job) -> Result<Outcome, String> {
         WindowVerb::Move => {
             let rect = movable(source, &job.exclude)?;
             let geo = geometry(job, &screens);
-            move_one(job, &screens, &geo, source, rect).map(|p| Outcome::Place(vec![p])).map_err(String::from)
+            move_one(job, dir, &screens, &geo, source, rect).map(|p| Outcome::Place(vec![p])).map_err(String::from)
         }
         WindowVerb::Swap => {
             let rect = movable(source, &job.exclude)?;
             let list = others(source, &screens);
             let rects: Vec<Rect> = list.iter().map(|(_, r)| *r).collect();
-            let Found::Window(i) = direction::find(&screens, &rects, rect, job.dir) else {
+            let Found::Window(i) = direction::find(&screens, &rects, rect, dir) else {
                 return Err("No window in that direction".into());
             };
             let (other, other_rect) = list[i];
@@ -363,7 +402,14 @@ fn run(job: &Job) -> Result<Outcome, String> {
 
 /// The next zone that way, crossing onto the physically next screen at the
 /// edge. A window in no zone goes to the next screen, in the same place there.
-fn move_one(job: &Job, screens: &[Screen], geo: &[Geo], h: HWND, rect: Rect) -> Result<Placement, &'static str> {
+fn move_one(
+    job: &Job,
+    dir: Dir,
+    screens: &[Screen],
+    geo: &[Geo],
+    h: HWND,
+    rect: Rect,
+) -> Result<Placement, &'static str> {
     let zoned = zone_of(geo, h, rect, job.snapped.as_ref());
     let from = zoned.map_or(rect, |(_, _, _, span)| span);
     if let Some((s, _, _, span)) = zoned {
@@ -373,16 +419,16 @@ fn move_one(job: &Job, screens: &[Screen], geo: &[Geo], h: HWND, rect: Rect) -> 
             |z: &Rect| z.x >= span.x && z.y >= span.y && z.x + z.w <= span.x + span.w && z.y + z.h <= span.y + span.h;
         let steps: Vec<usize> = (0..g.zones.len()).filter(|i| !inside(&g.zones[*i])).collect();
         let rects: Vec<Rect> = steps.iter().map(|i| g.zones[*i]).collect();
-        if let Some(k) = direction::pick(screens, &rects, span, job.dir) {
+        if let Some(k) = direction::pick(screens, &rects, span, dir) {
             let zone = steps[k];
             return Ok(into_zone(h, g, zone, zone, g.zones[zone]));
         }
     }
-    let next = direction::next_screen(screens, from, job.dir).ok_or("Nothing in that direction")?;
+    let next = direction::next_screen(screens, from, dir).ok_or("Nothing in that direction")?;
     let to = &geo[next];
     if zoned.is_some() && !to.zones.is_empty() {
         // The zone of the next screen nearest to where the window was.
-        let zone = direction::pick(screens, &to.zones, from, job.dir).unwrap_or(0);
+        let zone = direction::pick(screens, &to.zones, from, dir).unwrap_or(0);
         return Ok(into_zone(h, to, zone, zone, to.zones[zone]));
     }
     let here = direction::screen_at(screens, from).ok_or("Nothing in that direction")?;

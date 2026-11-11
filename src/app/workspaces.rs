@@ -33,6 +33,9 @@ pub(super) fn apply_hotkeys(app: &mut App) {
         (HOTKEY_RELEASE, "release_all".to_string(), keys.release_all.clone()),
         (HOTKEY_SNAP_BACK, "snap_back".to_string(), keys.snap_back.clone()),
         (HOTKEY_QUICK_SAVE, "quick_save".to_string(), keys.quick_save.clone()),
+        (HOTKEY_GROW, "grow".to_string(), keys.grow.clone()),
+        (HOTKEY_SHRINK, "shrink".to_string(), keys.shrink.clone()),
+        (HOTKEY_PRIORITY, "priority".to_string(), keys.priority.clone()),
         (HOTKEY_SWITCH_BACK, "switch_back".to_string(), keys.switch_back.clone()),
     ];
     for (id, (verb, dir, combo)) in (HOTKEY_WINDOW..).zip(keys.directional()) {
@@ -144,15 +147,31 @@ pub(super) fn start_window(app: &App, verb: WindowVerb, dir: Dir, reply: Option<
         }
         return;
     }
+    queue_window(app, wincontrol::Task::Window(verb, dir), Vec::new(), reply);
+}
+
+/// Queue grow, shrink or Priority for the focused window's group of zones.
+pub(super) fn start_group(app: &App, verb: GroupVerb, reply: Option<Sender<Reply>>) {
+    if let Some(why) = aside(app) {
+        log::info!("window {verb:?}: {why}");
+        if let Some(tx) = reply {
+            let _ = tx.send(refused(why));
+        }
+        return;
+    }
+    queue_window(app, wincontrol::Task::Group(verb), snap::zoned(), reply);
+}
+
+fn queue_window(app: &App, task: wincontrol::Task, members: Vec<snap::Zoned>, reply: Option<Sender<Reply>>) {
     let hwnd = unsafe { GetForegroundWindow() };
     let desk = app.cfg.desks.get(&app.sig).filter(|_| app.cfg.zones.enabled);
     let layout = |m: &Mon| desk.and_then(|d| d.zones.get(&m.id)).and_then(zones::layout_of);
     wincontrol::start(wincontrol::Job {
         owner: app.hwnd.0 as isize,
-        verb,
-        dir,
+        task,
         hwnd: hwnd.0 as isize,
         snapped: snap::zone_of(hwnd),
+        members,
         mons: app.mons.clone(),
         links: app.links.clone(),
         layouts: app.mons.iter().map(layout).collect(),
@@ -162,6 +181,21 @@ pub(super) fn start_window(app: &App, verb: WindowVerb, dir: Dir, reply: Option<
         // A hotkey gives the tray the right to take focus. The API has to earn it.
         from_api: reply.is_some(),
         reply,
+    });
+}
+
+/// Window control's moves are ready. A group command changed a screen's layout,
+/// which is saved here once, before the windows move.
+pub(super) fn window_planned(app: &mut App) {
+    wincontrol::planned(|screen, layout| {
+        let (Ok(value), Some(desk)) = (serde_json::to_value(&layout), app.cfg.desks.get_mut(&app.sig)) else {
+            return false;
+        };
+        desk.zones.insert(screen.to_string(), value);
+        persist(app);
+        snap::update(app.hwnd, &app.cfg, &app.sig, &app.mons, aside(app).as_deref());
+        publish(app);
+        true
     });
 }
 

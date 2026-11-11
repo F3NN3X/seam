@@ -247,11 +247,13 @@ pub fn add_app(
 ) {
     let title = app_title(&rule);
     let Some(before) = by_id(panel, id) else { return };
+    let row = before.windows.len();
+    // The tray checks the row is still this app's before it takes the place.
+    let (exe, class) = (rule.exe.clone(), rule.class.clone());
     let mut after = before.clone();
     after.windows.push(rule);
-    let row = before.windows.len();
     let read = hwnd.filter(|_| panel.config.workspaces_remember_places).map(|hwnd| -> Then {
-        let params = json!({ "into": id, "row": row, "hwnd": hwnd });
+        let params = json!({ "into": id, "row": row, "hwnd": hwnd, "exe": exe, "class": class });
         // A window with no folder or page to remember is no news, so the answer only reloads.
         Box::new(move |panel, window, cx| {
             panel.call("workspace.capture", params, window, cx, |panel, _, window, cx| panel.reload_config(window, cx))

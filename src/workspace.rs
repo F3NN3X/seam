@@ -466,26 +466,69 @@ fn common_prefix(a: &str, b: &str) -> usize {
 /// prefix, then z-order. A window is claimed once.
 pub fn assign(rules: &[Rule], wins: &[Candidate]) -> Vec<Option<isize>> {
     let mut taken = vec![false; wins.len()];
-    rules
+    rules.iter().map(|r| pick(r, wins, &mut taken, |_| true)).collect()
+}
+
+/// Whether the window is one of the rule's app: by AUMID when the rule has one, else by exe.
+pub fn same_app(r: &Rule, w: &Candidate) -> bool {
+    match (&r.aumid, &w.aumid) {
+        (Some(a), Some(b)) => a == b,
+        (Some(_), None) => false,
+        (None, _) => r.exe.eq_ignore_ascii_case(&w.exe),
+    }
+}
+
+/// The best window not taken yet, among those `allowed`, for the rule, which then takes it.
+fn pick(r: &Rule, wins: &[Candidate], taken: &mut [bool], allowed: impl Fn(usize) -> bool) -> Option<isize> {
+    let (i, w) = wins
         .iter()
-        .map(|r| {
-            let best = wins
-                .iter()
-                .enumerate()
-                .filter(|(i, _)| !taken[*i])
-                .filter(|(_, w)| match (&r.aumid, &w.aumid) {
-                    (Some(a), Some(b)) => a == b,
-                    (Some(_), None) => false,
-                    (None, _) => r.exe.eq_ignore_ascii_case(&w.exe),
-                })
-                .max_by_key(|(_, w)| (w.class == r.class, common_prefix(&r.title_hint, &w.title), usize::MAX - w.z))
-                .map(|(i, w)| (i, w.hwnd));
-            best.map(|(i, h)| {
-                taken[i] = true;
-                h
-            })
-        })
-        .collect()
+        .enumerate()
+        .filter(|(i, w)| !taken[*i] && allowed(*i) && same_app(r, w))
+        .max_by_key(|(_, w)| (w.class == r.class, common_prefix(&r.title_hint, &w.title), usize::MAX - w.z))?;
+    taken[i] = true;
+    Some(w.hwnd)
+}
+
+/// `assign` with "Remember folders and pages" on (D336). `shown` is the folder or page
+/// each window shows now, `None` where it wasn't read or has none. A row with a place
+/// goes first and takes only a window showing that place, so with none it's started.
+/// Then the other rows match as `assign` does, but never take a window showing a
+/// place some row has.
+pub fn assign_by_place(rules: &[Rule], wins: &[Candidate], shown: &[Option<Place>]) -> Vec<Option<isize>> {
+    let shows = |w: usize, p: &Place| shown.get(w).and_then(Option::as_ref).is_some_and(|s| same_place(p, s));
+    let reserved = |w: usize| rules.iter().filter_map(|r| r.place.as_ref()).any(|p| shows(w, p));
+    let mut taken = vec![false; wins.len()];
+    let mut found = vec![None; rules.len()];
+    for (i, r) in rules.iter().enumerate() {
+        if let Some(p) = &r.place {
+            found[i] = pick(r, wins, &mut taken, |w| shows(w, p));
+        }
+    }
+    for (i, r) in rules.iter().enumerate().filter(|(_, r)| r.place.is_none()) {
+        found[i] = pick(r, wins, &mut taken, |w| !reserved(w));
+    }
+    found
+}
+
+/// Whether two places are the same folder or page: a folder ignoring case and a
+/// trailing `\`, a page by scheme, host and path, ignoring case on the scheme and
+/// host, a trailing `/`, the query and the fragment.
+pub fn same_place(a: &Place, b: &Place) -> bool {
+    match (a, b) {
+        (Place::Folder(a), Place::Folder(b)) => {
+            a.trim_end_matches('\\').to_lowercase() == b.trim_end_matches('\\').to_lowercase()
+        }
+        (Place::Url(a), Place::Url(b)) => page_key(a) == page_key(b),
+        _ => false,
+    }
+}
+
+/// A page's scheme and host in lower case, and its path without a trailing `/`.
+fn page_key(url: &str) -> (String, String, String) {
+    let (scheme, rest) = url.split_once("://").unwrap_or(("", url));
+    let rest = rest.split(['?', '#']).next().unwrap_or_default();
+    let (host, path) = rest.split_once('/').unwrap_or((rest, ""));
+    (scheme.to_ascii_lowercase(), host.to_lowercase(), path.trim_end_matches('/').to_string())
 }
 
 /// `r` as fractions of `work`.
@@ -625,11 +668,15 @@ pub fn recapture_row(old: &Workspace, row: usize, fresh: &[Rule]) -> Option<(Wor
 }
 
 /// "Add an app" from the windows open now: the row takes the folder or page the tray
-/// read from the one window picked, `picked`, if that window is the row's app. `None`
-/// when it isn't, or the window has none.
-pub fn take_window_place(old: &Workspace, row: usize, picked: &[Rule]) -> Option<Workspace> {
-    let rule = old.windows.get(row)?;
+/// read from the one window picked, `picked`. Only a row that is still the one the
+/// panel added (its `exe` and `class`), has no place yet, and is the picked window's
+/// app and class. `None` otherwise, or when the window has none.
+pub fn take_window_place(old: &Workspace, row: usize, exe: &str, class: &str, picked: &[Rule]) -> Option<Workspace> {
+    let rule = old.windows.get(row).filter(|r| r.exe == exe && r.class == class && r.place.is_none())?;
     let [from] = picked else { return None };
+    if from.class != rule.class {
+        return None;
+    }
     assign(std::slice::from_ref(rule), &as_candidates(picked)).into_iter().next().flatten()?;
     let mut updated = old.clone();
     updated.windows[row].place = Some(from.place.clone()?);

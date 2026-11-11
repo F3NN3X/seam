@@ -222,8 +222,8 @@ pub(super) fn run_command(app: &mut App, queued: Queued) {
             publish(app);
             Ok(json!({ "on": on }))
         }
-        Command::WorkspaceCapture { name, into, row, hwnd } => {
-            if let Some(refusal) = start_capture(app, name, into, row, hwnd, Some(reply.clone())) {
+        Command::WorkspaceCapture { name, into, row, pick } => {
+            if let Some(refusal) = start_capture(app, name, into, row, pick, Some(reply.clone())) {
                 let _ = reply.send(refusal);
             }
             return;

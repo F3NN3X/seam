@@ -105,6 +105,15 @@ pub enum LayoutView {
     Windows,
 }
 
+/// The window "Add an app" picked from the windows open now, and the row it added
+/// for it, as the panel saw that row.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Pick {
+    pub hwnd: isize,
+    pub exe: String,
+    pub class: String,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub enum Command {
     Hello {
@@ -126,13 +135,13 @@ pub enum Command {
         /// Leave the other windows alone for this one switch.
         alongside: bool,
     },
-    /// `row` with `into` takes only that row's window ("Where it is now"). With `hwnd`
+    /// `row` with `into` takes only that row's window ("Where it is now"). With `pick`
     /// too, the row only takes the folder or page of that one window ("Add an app").
     WorkspaceCapture {
         name: Option<String>,
         into: Option<String>,
         row: Option<usize>,
-        hwnd: Option<isize>,
+        pick: Option<Pick>,
     },
     /// The editor saving one workspace of the current desk.
     WorkspaceUpdate {
@@ -276,10 +285,17 @@ fn command(method: &str, p: &Value) -> Result<Command, RpcError> {
                         .ok_or_else(|| RpcError::new(INVALID_PARAMS, "hwnd must be a window handle"))?,
                 ),
             };
-            if hwnd.is_some() && row.is_none() {
-                return Err(RpcError::new(INVALID_PARAMS, "hwnd needs into and row"));
-            }
-            Command::WorkspaceCapture { name: str_param(p, "name")?, into, row, hwnd }
+            let pick = match (hwnd, row) {
+                (None, _) => None,
+                (Some(_), None) => return Err(RpcError::new(INVALID_PARAMS, "hwnd needs into and row")),
+                (Some(hwnd), Some(_)) => {
+                    let need = |key| {
+                        str_param(p, key)?.ok_or_else(|| RpcError::new(INVALID_PARAMS, "hwnd needs exe and class"))
+                    };
+                    Some(Pick { hwnd, exe: need("exe")?, class: need("class")? })
+                }
+            };
+            Command::WorkspaceCapture { name: str_param(p, "name")?, into, row, pick }
         }
         "workspace.update" => Command::WorkspaceUpdate {
             id: str_param(p, "id")?.ok_or_else(|| RpcError::new(INVALID_PARAMS, "id is required"))?,
@@ -691,7 +707,7 @@ mod tests {
             (
                 request("workspace.capture", r#"{"into":"ws_1","row":2}"#),
                 panel,
-                Command::WorkspaceCapture { name: None, into: Some("ws_1".into()), row: Some(2), hwnd: None },
+                Command::WorkspaceCapture { name: None, into: Some("ws_1".into()), row: Some(2), pick: None },
             ),
             (request("cursor_easing.set", r#"{"on":true}"#), panel, Command::CursorEasingSet(true)),
             (request("layout.show", r#"{"view":"windows"}"#), panel, Command::LayoutShow(LayoutView::Windows)),

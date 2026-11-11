@@ -589,32 +589,28 @@ fn place_kind(place: &Place) -> &'static str {
 /// of a fixed or removable drive that still exists, or a browser row on an http or
 /// https page, in a window of its own. Otherwise why not, and the app starts as usual.
 fn open_place(rule: &Rule, place: &Place, remember: bool) -> Result<(), &'static str> {
+    // In order, so nothing touches the disk once a cheaper check has said no.
+    let need = |ok: bool, why: &'static str| if ok { Ok(()) } else { Err(why) };
+    need(remember, "the setting is off")?;
     let kind = places::kind_of(rule);
-    let checks = match place {
-        Place::Folder(folder) => [
-            (remember, "the setting is off"),
-            (kind == Some(places::Kind::Explorer), "not an Explorer row"),
-            (workspace::safe_folder(folder), "not a folder Seam opens"),
-            (places::local_drive(folder) && Path::new(folder).is_dir(), "the folder is gone or not on this PC"),
-        ],
-        Place::Url(url) => [
-            (remember, "the setting is off"),
-            (kind == Some(places::Kind::Browser), "not a browser row"),
-            (workspace::safe_url(url), "not a page Seam opens"),
-            (workspace::safe_exe(&rule.exe) && !is_network_drive(&rule.exe), "the browser can't be started from there"),
-        ],
-    };
-    if let Some((_, why)) = checks.iter().find(|(ok, _)| !ok) {
-        return Err(why);
-    }
-    let started = match place {
-        Place::Folder(folder) => shell_open(&explorer_path(), Some(&workspace::explorer_arg(folder))),
-        // A browser that runs already would open the page as a tab of a window it has.
-        Place::Url(url) => {
-            Path::new(&rule.exe).is_file() && shell_open(&rule.exe, Some(&places::new_window_args(rule, url)))
+    match place {
+        Place::Folder(folder) => {
+            need(kind == Some(places::Kind::Explorer), "not an Explorer row")?;
+            need(workspace::safe_folder(folder), "not a folder Seam opens")?;
+            need(places::local_drive(folder), "the folder isn't on a drive of this PC")?;
+            need(Path::new(folder).is_dir(), "the folder is gone")?;
+            need(shell_open(&explorer_path(), Some(&workspace::explorer_arg(folder))), "it didn't start")
         }
-    };
-    started.then_some(()).ok_or("it didn't start")
+        Place::Url(url) => {
+            need(kind == Some(places::Kind::Browser), "not a browser row")?;
+            need(workspace::safe_url(url), "not a page Seam opens")?;
+            need(workspace::safe_exe(&rule.exe), "the browser can't be started from there")?;
+            need(!is_network_drive(&rule.exe), "the browser can't be started from there")?;
+            need(Path::new(&rule.exe).is_file(), "the browser isn't installed")?;
+            // A browser that runs already would open the page as a tab of a window it has.
+            need(shell_open(&rule.exe, Some(&places::new_window_args(rule, url))), "it didn't start")
+        }
+    }
 }
 
 /// `GetDriveTypeW` answer for a network drive (`DRIVE_REMOTE`).
@@ -1171,6 +1167,45 @@ fn run_stages(
     finished.then_some(())
 }
 
+/// The row's place, if it's one a switch can open: a folder on an Explorer row, a page
+/// on a browser row. Any other counts as none.
+fn usable_place(rule: &Rule) -> Option<&Place> {
+    let place = rule.place.as_ref()?;
+    let kind = match place {
+        Place::Folder(_) => places::Kind::Explorer,
+        Place::Url(_) => places::Kind::Browser,
+    };
+    (places::kind_of(rule) == Some(kind)).then_some(place)
+}
+
+/// A switch's first match of rows to windows. With "Remember folders and pages" on
+/// (`remember`) and a row with a place, the open windows of those rows' apps are read
+/// once, and a row with a place takes only a window showing it (D336). Otherwise as
+/// `workspace::assign`.
+fn first_match(ws: &Workspace, known: &[Candidate], remember: bool) -> Vec<Option<isize>> {
+    if !remember || !ws.windows.iter().any(|r| usable_place(r).is_some()) {
+        return workspace::assign(&ws.windows, known);
+    }
+    let rules: Vec<Rule> = ws.windows.iter().map(|r| Rule { place: usable_place(r).cloned(), ..r.clone() }).collect();
+    let with_place: Vec<&Rule> = rules.iter().filter(|r| r.place.is_some()).collect();
+    let wanted: Vec<usize> =
+        (0..known.len()).filter(|i| with_place.iter().any(|r| workspace::same_app(r, &known[*i]))).collect();
+    let as_rule = |c: &Candidate| Rule {
+        exe: c.exe.clone(),
+        aumid: c.aumid.clone(),
+        class: c.class.clone(),
+        title_hint: c.title.clone(),
+        ..Rule::default()
+    };
+    let read_rules: Vec<Rule> = wanted.iter().map(|i| as_rule(&known[*i])).collect();
+    let hwnds: Vec<isize> = wanted.iter().map(|i| known[*i].hwnd).collect();
+    let mut shown = vec![None; known.len()];
+    for (i, place) in wanted.into_iter().zip(places::read(&read_rules, &hwnds)) {
+        shown[i] = place;
+    }
+    workspace::assign_by_place(&rules, known, &shown)
+}
+
 /// Does the whole switch. Returns `None` if a newer one replaced it.
 fn run_switch(job: &SwitchJob, mine: u64) -> Option<Switched> {
     let begun = Instant::now();
@@ -1186,7 +1221,7 @@ fn run_switch(job: &SwitchJob, mine: u64) -> Option<Switched> {
     // Snapshot and match.
     let seen = snapshot(&mut procs);
     let mut known: Vec<Candidate> = seen.iter().map(|s| s.cand.clone()).collect();
-    let mut found = workspace::assign(&ws.windows, &known);
+    let mut found = first_match(ws, &known, run.places);
     // This workspace's stamps on windows it didn't match this time are out of date.
     if let Some(key) = stamp {
         let matched: HashSet<isize> = found.iter().flatten().copied().collect();
@@ -1237,18 +1272,21 @@ fn run_switch(job: &SwitchJob, mine: u64) -> Option<Switched> {
     } else {
         // What is running already goes in one pass, before anything starts.
         let running: Vec<usize> = (0..found.len()).filter(|i| found[*i].is_some()).collect();
-        // A window that's open is never sent to its row's folder or page.
-        for rule in running.iter().map(|i| &ws.windows[*i]).filter(|_| run.places) {
-            if let Some(place) = &rule.place {
-                log::info!("{}: saved {} not used, its window is open", app_name(rule), place_kind(place));
-            }
-        }
         place_rules(&run, &found, &running, &seen, &mut tally);
         if cancelled() {
             return None;
         }
         let wanted = |(i, r): (usize, &Rule)| (ws.launch_missing && found[i].is_none() && r.launch).then_some(i);
         let starting: Vec<usize> = ws.windows.iter().enumerate().filter_map(wanted).collect();
+        for (i, rule) in ws.windows.iter().enumerate().filter(|_| run.places) {
+            let (Some(place), app) = (usable_place(rule), app_name(rule)) else { continue };
+            let kind = place_kind(place);
+            if found[i].is_some() {
+                log::info!("{app}: saved {kind} open in a window");
+            } else if starting.contains(&i) {
+                log::info!("{app}: no window on its saved {kind}, starting one");
+            }
+        }
         if !starting.is_empty() {
             let mut waits = Waits { found: &mut found, known: &mut known, procs: &mut procs, seen: &seen };
             run_stages(&run, mine, &starting, &mut waits, &mut starts, &mut tally)?;

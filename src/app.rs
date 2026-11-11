@@ -211,7 +211,7 @@ struct Capturing {
     /// Only this row of `into` takes its window's place ("Where it is now").
     row: Option<usize>,
     /// The window "Add an app" picked: the row only takes its folder or page.
-    hwnd: Option<isize>,
+    pick: Option<api::Pick>,
     /// The desk it was started on.
     sig: String,
     /// A quick save (§7): it says so, can be undone, and a new workspace becomes the one in use.

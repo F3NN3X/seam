@@ -520,13 +520,13 @@ pub(super) fn start_capture(
     name: Option<String>,
     into: Option<String>,
     row: Option<usize>,
-    hwnd: Option<isize>,
+    pick: Option<api::Pick>,
     reply: Option<Sender<Reply>>,
 ) -> Option<Reply> {
     if app.capturing.is_some() {
         return Some(busy("Already capturing"));
     }
-    if hwnd.is_some() && !app.cfg.workspaces_remember_places {
+    if pick.is_some() && !app.cfg.workspaces_remember_places {
         return Some(refused("Remember folders and pages is off"));
     }
     let target = into.as_ref().map(|into| desk_workspaces(app).into_iter().find(|w| w.id == *into));
@@ -536,7 +536,8 @@ pub(super) fn start_capture(
     if row.is_some_and(|row| target.flatten().is_none_or(|w| row >= w.windows.len())) {
         return Some(Err(RpcError::new(api::NOT_FOUND, "no such row in that workspace")));
     }
-    app.capturing = Some(Capturing { reply, name, into, row, hwnd, sig: app.sig.clone(), quick: false });
+    let hwnd = pick.as_ref().map(|p| p.hwnd);
+    app.capturing = Some(Capturing { reply, name, into, row, pick, sig: app.sig.clone(), quick: false });
     let started = match hwnd {
         Some(hwnd) => switcher::capture_window(capture_job(app), hwnd),
         None => switcher::capture(capture_job(app)),
@@ -634,20 +635,21 @@ pub(super) fn captured(app: &mut App) {
             let Some(old) = existing.iter().find(|w| w.id == *into) else {
                 return answer(Err(RpcError::new(api::NOT_FOUND, "no such workspace on this desk")));
             };
-            let updated = match job.row {
+            let updated = match (job.row, &job.pick) {
                 // "Add an app": only the picked window's folder or page, read here.
-                Some(row) if job.hwnd.is_some() => match workspace::take_window_place(old, row, &rules) {
+                (Some(row), Some(pick)) => match workspace::take_window_place(old, row, &pick.exe, &pick.class, &rules)
+                {
                     Some(updated) => updated,
                     None => return answer(refused("That window has no folder or page to remember")),
                 },
-                Some(row) => match workspace::recapture_row(old, row, &rules) {
+                (Some(row), None) => match workspace::recapture_row(old, row, &rules) {
                     Some((updated, hit)) => {
                         stamps = Some(vec![(hwnds[hit], row)]);
                         updated
                     }
                     None => return answer(refused("That app isn't open, so where it goes stays as it was")),
                 },
-                None => {
+                (None, _) => {
                     rows = Some(workspace::capture_rows(old, &rules));
                     let zones = workspace::capture_zones(&old.zones, &layouts);
                     Workspace { windows: workspace::merge_capture(old, rules), zones, ..old.clone() }

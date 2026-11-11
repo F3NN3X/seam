@@ -3,9 +3,9 @@
 //!
 //! Zone numbers here count from 1, as the panel shows them.
 
-use crate::zones::{self, Rect};
+use crate::zones::{self, Rect, Template, ZoneLayout};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
-use serde_json::Value;
+use serde_json::{json, Value};
 use std::collections::{hash_map::RandomState, BTreeMap};
 use std::hash::{BuildHasher, Hasher};
 use std::path::{Component, Path, Prefix};
@@ -231,6 +231,11 @@ pub struct Workspace {
     pub launch_missing: bool,
     pub other_windows: OtherWindows,
     pub windows: Vec<Rule>,
+    /// Screen device path -> the layout a switch gives that screen, as a desk saves
+    /// one, or `no_zones()`. A screen with no entry is kept as it is. Raw, so an
+    /// entry this build can't read is kept and keeps its screen as it is.
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub zones: BTreeMap<String, Value>,
 }
 
 impl Default for Workspace {
@@ -242,8 +247,44 @@ impl Default for Workspace {
             launch_missing: true,
             other_windows: OtherWindows::Leave,
             windows: Vec::new(),
+            zones: BTreeMap::new(),
         }
     }
+}
+
+/// A workspace's entry for a screen that has no zones. A desk leaves such a screen
+/// out, but here no entry means "Keep as is".
+pub fn no_zones() -> Value {
+    json!({ "template": "none", "tree": "leaf" })
+}
+
+/// The layout a workspace's entry gives its screen: `Some(None)` for no zones, and
+/// `None` for an entry this build can't read, which keeps the screen as it is.
+pub fn screen_layout(saved: &Value) -> Option<Option<ZoneLayout>> {
+    let layout = zones::layout_of(saved)?;
+    Some((layout.template != Template::None).then_some(layout))
+}
+
+/// A screen's layout as a capture records it, with no layout recorded as no zones.
+pub fn zones_entry(layout: Option<&ZoneLayout>) -> Value {
+    layout.and_then(|l| serde_json::to_value(l).ok()).unwrap_or_else(no_zones)
+}
+
+/// Capture and Update from screen: every screen of the desk with its layout now, or
+/// no zones. Entries for screens not in `now` stay.
+pub fn capture_zones(old: &BTreeMap<String, Value>, now: &[(String, Option<ZoneLayout>)]) -> BTreeMap<String, Value> {
+    let mut zones = old.clone();
+    for (screen, layout) in now {
+        zones.insert(screen.clone(), zones_entry(layout.as_ref()));
+    }
+    zones
+}
+
+/// The screen already has the layout the workspace's entry gives it. The trees are
+/// compared, so a screen whose link to a library layout was dropped still matches.
+/// An entry this build can't read keeps the screen as it is, so it always matches.
+pub fn zones_match(saved: &Value, now: Option<&ZoneLayout>) -> bool {
+    screen_layout(saved).is_none_or(|want| want.map(|l| l.tree) == now.map(|l| l.tree.clone()))
 }
 
 /// A saved workspace, or `None` for an entry that isn't one. The config keeps
@@ -302,6 +343,8 @@ impl Session {
             launch_missing: true,
             other_windows: OtherWindows::Leave,
             windows: self.windows,
+            // A restore never changes a screen's layout.
+            zones: BTreeMap::new(),
         }
     }
 }
@@ -664,7 +707,9 @@ pub fn safe_aumid(aumid: &str) -> bool {
 
 /// Bring an exported workspace onto this desk. A window's screen is found by
 /// device path, then by number and model, then by number. A window with no
-/// screen here stays where it is. The shortcut is dropped, so it can't clash. A file
+/// screen here stays where it is. A screen's layout goes to the screen found the
+/// same way, without its link to a library layout on the other machine, and one
+/// with no screen here is dropped. The shortcut is dropped, so it can't clash. A file
 /// from someone else is untrusted: nothing launches until the user ticks it, other
 /// windows are left alone, and a
 /// program path or AUMID that isn't plainly safe is cleared.
@@ -685,6 +730,15 @@ pub fn import(file: Export, here: &BTreeMap<String, ScreenInfo>, names: &[String
             None => rule.target = Target::State { state: WinState::Keep },
         }
     }
+    let mut zones = BTreeMap::new();
+    for (screen, mut layout) in std::mem::take(&mut workspace.zones) {
+        let Some(id) = find(&screen) else { continue };
+        if let Some(fields) = layout.as_object_mut() {
+            fields.remove("custom");
+        }
+        zones.entry(id).or_insert(layout);
+    }
+    workspace.zones = zones;
     workspace.id = new_id(ids);
     workspace.name = unique_name(&workspace.name, names);
     for rule in &mut workspace.windows {
@@ -775,5 +829,22 @@ mod tests {
         assert_eq!(stages(&waits, &[0, 2]), vec![vec![0, 2]]);
         assert_eq!(stages(&waits, &[1, 4]), vec![vec![1], vec![4]]);
         assert_eq!((tame_delay(1200), tame_delay(99_000)), (1000, MAX_DELAY_MS));
+    }
+
+    // "No zones" and "Keep as is" must not be confused, or a switch takes a screen's zones away.
+    #[test]
+    fn a_capture_records_no_zones_and_keep_as_is_stays_apart() {
+        let rows = ZoneLayout::of(Template::Rows).unwrap();
+        let old = BTreeMap::from([("gone".to_string(), json!(rows)), ("a".to_string(), json!(rows))]);
+        let captured = capture_zones(&old, &[("a".into(), None), ("b".into(), Some(rows.clone()))]);
+        assert_eq!(screen_layout(&captured["a"]), Some(None));
+        assert_eq!(screen_layout(&captured["b"]), Some(Some(rows.clone())));
+        // A screen the capture didn't see keeps its entry.
+        assert_eq!(captured["gone"], json!(rows));
+        // An entry this build can't read keeps the screen as it is.
+        assert_eq!(screen_layout(&json!({ "template": "spiral" })), None);
+        assert!(zones_match(&json!("?"), None));
+        assert!(zones_match(&no_zones(), None) && !zones_match(&no_zones(), Some(&rows)));
+        assert!(!zones_match(&captured["b"], None));
     }
 }

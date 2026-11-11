@@ -60,8 +60,9 @@ pub fn new_id(saved: &[Value]) -> String {
 }
 
 /// The library changed from `before` to what `config` has now. Every screen, on
-/// every desk, that follows a library layout whose tree changed takes the new tree,
-/// and one whose library layout was deleted keeps its tree and drops the link.
+/// every desk and in every workspace, that follows a library layout whose tree
+/// changed takes the new tree, and one whose library layout was deleted keeps its
+/// tree and drops the link.
 pub fn follow(before: &[Value], config: &mut Config) {
     if before == config.custom_layouts.as_slice() {
         return;
@@ -75,7 +76,14 @@ pub fn follow(before: &[Value], config: &mut Config) {
         .collect();
     let changed: Vec<Entry> =
         entries(now).into_iter().filter(|e| find(before, &e.id).is_none_or(|was| was.tree != e.tree)).collect();
-    for saved in config.desks.values_mut().flat_map(|desk| desk.zones.values_mut()) {
+    fn workspace_zones(ws: &mut Value) -> Option<&mut serde_json::Map<String, Value>> {
+        ws.get_mut("zones").and_then(Value::as_object_mut)
+    }
+    let screens = config.desks.values_mut().flat_map(|desk| {
+        let in_workspaces = desk.workspaces.iter_mut().filter_map(workspace_zones).flat_map(|z| z.values_mut());
+        desk.zones.values_mut().chain(in_workspaces)
+    });
+    for saved in screens {
         let Some(id) = saved.get("custom").and_then(Value::as_str).map(String::from) else { continue };
         if gone.contains(&id) {
             if let Some(fields) = saved.as_object_mut() {

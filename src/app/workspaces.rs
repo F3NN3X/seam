@@ -112,12 +112,14 @@ pub(super) fn start_switch_job(
     let _ = unsafe { AllowSetForegroundWindow(std::process::id()) };
     // The last session has no layouts, so a restore leaves them alone.
     apply_zones(app, &workspace);
+    let name = workspace.name.clone();
     let (owner, screens, gap) = (app.hwnd.0 as isize, job_screens(app), app.cfg.zones.gap);
     let (pins_stay, size_mode) = (app.cfg.windows.pins_stay_on_switch, app.cfg.window_size_on_move);
     let job = SwitchJob { owner, workspace, screens, gap, arrange_for, pins_stay, size_mode, alongside };
     if switcher::switch(job) {
         Ok(json!({ "ok": true }))
     } else {
+        log::info!("workspace {}: the switch didn't start, its screen layouts stay set", name);
         refused("Couldn't start the switch")
     }
 }
@@ -272,19 +274,22 @@ fn store_screen_layout(app: &mut App, screen: &str, layout: Option<zones::ZoneLa
 /// Give each connected screen the layout the workspace has for it, before its switch
 /// is built, so the switch places apps into the new zones. Saved as a pick on the
 /// Zones page is, but the screen's snapped windows aren't moved: the switch places
-/// the workspace's apps. A screen kept as is, or not connected, stays. Saved with
-/// zones off or another window manager in charge too.
+/// the workspace's apps. A screen kept as is, not connected, or whose zones already
+/// match (`zones_match`, as the editor's status) stays. Saved with zones off or
+/// another window manager in charge too.
 fn apply_zones(app: &mut App, workspace: &Workspace) {
     let mut changed = Vec::new();
     for m in &app.mons {
-        let Some(mut layout) = workspace.zones.get(&m.id).and_then(workspace::screen_layout) else { continue };
+        let Some(saved) = workspace.zones.get(&m.id) else { continue };
+        let before = app.cfg.desks.get(&app.sig).and_then(|d| d.zones.get(&m.id)).and_then(zones::layout_of);
+        if workspace::zones_match(saved, before.as_ref()) {
+            continue;
+        }
+        let Some(mut layout) = workspace::screen_layout(saved) else { continue };
         if let Some(layout) = layout.as_mut() {
             seam::library::link(&mut app.cfg.custom_layouts, layout, false);
         }
-        let before = app.cfg.desks.get(&app.sig).and_then(|d| d.zones.get(&m.id)).and_then(zones::layout_of);
-        if layout != before {
-            changed.push((m.id.clone(), layout));
-        }
+        changed.push((m.id.clone(), layout));
     }
     let mut stored = 0;
     for (screen, layout) in changed {
@@ -689,10 +694,15 @@ pub(super) fn update_workspace(app: &mut App, id: &str, sent: Value) -> Reply {
     let Some(old) = workspace::list(&desk.workspaces).into_iter().find(|w| w.id == id) else {
         return Err(RpcError::new(api::NOT_FOUND, "no such workspace on this desk"));
     };
-    let sent: Workspace = match serde_json::from_value(sent) {
+    // A client that doesn't know `zones` leaves the screen layouts as they were.
+    let keeps_zones = sent.get("zones").is_none();
+    let mut sent: Workspace = match serde_json::from_value(sent) {
         Ok(ws) => ws,
         Err(e) => return refused(format!("That isn't a workspace: {e}")),
     };
+    if keeps_zones {
+        sent.zones = old.zones.clone();
+    }
     let zones = |monitor: &str| {
         let layout = desk.zones.get(monitor).and_then(zones::layout_of);
         layout.map_or(0, |l| zones::leaf_count(&l.tree))

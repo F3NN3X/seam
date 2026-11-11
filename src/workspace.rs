@@ -259,10 +259,17 @@ pub fn no_zones() -> Value {
 }
 
 /// The layout a workspace's entry gives its screen: `Some(None)` for no zones, and
-/// `None` for an entry this build can't read, which keeps the screen as it is.
+/// `None` for an entry this build can't read, or with a tree bigger than the editor
+/// can make, which keeps the screen as it is.
 pub fn screen_layout(saved: &Value) -> Option<Option<ZoneLayout>> {
-    let layout = zones::layout_of(saved)?;
+    let layout = zones::layout_of(saved).filter(|l| zones::within_limits(&l.tree))?;
     Some((layout.template != Template::None).then_some(layout))
+}
+
+/// An entry from outside the tray, as it is stored: read and written again, so
+/// fields this build doesn't know are gone. `None` for one `screen_layout` refuses.
+fn clean_entry(saved: &Value) -> Option<Value> {
+    Some(zones_entry(screen_layout(saved)?.as_ref()))
 }
 
 /// A screen's layout as a capture records it, with no layout recorded as no zones.
@@ -655,6 +662,15 @@ pub fn checked_update(old: &Workspace, mut new: Workspace, zones: &dyn Fn(&str) 
         rule.focused &= !focused;
         focused |= rule.focused;
     }
+    // A screen's entry the editor changed must be a layout within the editor's limits,
+    // and is stored as read. One it didn't change stays as it was.
+    let mut zones = BTreeMap::new();
+    for (screen, saved) in std::mem::take(&mut new.zones) {
+        let entry = if old.zones.get(&screen) == Some(&saved) { Some(saved) } else { clean_entry(&saved) };
+        let Some(entry) = entry else { return Err("That layout can't be used for a screen".into()) };
+        zones.insert(screen, entry);
+    }
+    new.zones = zones;
     Ok(new)
 }
 
@@ -731,8 +747,8 @@ pub fn import(file: Export, here: &BTreeMap<String, ScreenInfo>, names: &[String
         }
     }
     let mut zones = BTreeMap::new();
-    for (screen, mut layout) in std::mem::take(&mut workspace.zones) {
-        let Some(id) = find(&screen) else { continue };
+    for (screen, saved) in std::mem::take(&mut workspace.zones) {
+        let (Some(id), Some(mut layout)) = (find(&screen), clean_entry(&saved)) else { continue };
         if let Some(fields) = layout.as_object_mut() {
             fields.remove("custom");
         }
@@ -846,5 +862,20 @@ mod tests {
         assert!(zones_match(&json!("?"), None));
         assert!(zones_match(&no_zones(), None) && !zones_match(&no_zones(), Some(&rows)));
         assert!(!zones_match(&captured["b"], None));
+        // A tree deeper than the editor can make keeps the screen as it is, and an
+        // import leaves it out.
+        let deep = (0..=zones::MAX_DEPTH)
+            .fold(json!("leaf"), |a, _| json!({ "split": "vertical", "ratio": 0.5, "a": a, "b": "leaf" }));
+        let deep = json!({ "template": "custom", "tree": deep });
+        assert_eq!(screen_layout(&deep), None);
+        let mut ws = Workspace { id: "w".into(), ..Workspace::default() };
+        ws.zones = BTreeMap::from([("m".to_string(), deep), ("n".to_string(), json!(rows))]);
+        let here = BTreeMap::from(
+            [("m", 1), ("n", 2)]
+                .map(|(id, number)| (id.to_string(), ScreenInfo { number, name: String::new(), width: 0, height: 0 })),
+        );
+        let file = Export { seam_workspace: Export::VERSION, workspace: ws, screens: BTreeMap::new() };
+        let imported = import(file, &here, &[], &[]);
+        assert_eq!(imported.zones.keys().collect::<Vec<_>>(), ["n"]);
     }
 }

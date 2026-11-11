@@ -194,7 +194,7 @@ Workspaces belong to a desk, and these methods act on the desk that is connected
 - `workspace.snap_back` switches to the workspace in use again, so windows that moved or were minimized go back. Error `1` means no workspace is in use.
 - `workspace.switch_back` switches to the workspace that was in use on this desk before the current one, as `workspace.switch` does, and a second call goes back again. Error `1` ("No workspace to switch back to") when there is none, or it was deleted.
 - `workspace.status` gives each app's state, by its row number from 0: `in_place`, `moved`, `minimized`, `not_running`, `background` (the app runs with no window, as one closed to the tray does) or `cant_move` (it runs as administrator). Error `1` when the id isn't on this desk.
-- `workspace.update` saves one edited workspace of the current desk, the way the editor does. Its `zones` is saved as sent. It answers `3` when a new program isn't safe to launch or a chosen zone isn't on its screen.
+- `workspace.update` saves one edited workspace of the current desk, the way the editor does. Without a `zones` key the workspace keeps the layouts it has, and with one, `zones` replaces them. A new or changed entry must be a layout of at most 128 zones nested at most 12 deep, and is stored as read, without fields Seam doesn't know. It answers `3` when a new program isn't safe to launch, a chosen zone isn't on its screen, or a layout can't be used.
 - `session.restore` restores the desk's last session through the workspace switch, with other windows left alone. Its result arrives as `workspace.switched` with `id` `last_session`. Error `1` when no session is saved for the desk.
 
 ### Updates and the app window

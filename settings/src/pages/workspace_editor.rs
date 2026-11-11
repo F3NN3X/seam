@@ -139,7 +139,10 @@ type Then = Box<dyn FnOnce(&mut Panel, &mut Window, &mut Context<Panel>)>;
 fn send(panel: &mut Panel, ws: Workspace, then: Option<Then>, window: &mut Window, cx: &mut Context<Panel>) {
     show_locally(panel, &ws);
     cx.notify();
-    let params = json!({ "id": ws.id, "workspace": workspace::to_value(&ws) });
+    // `zones` is sent even when empty, or the tray keeps the layouts it has.
+    let mut sent = workspace::to_value(&ws);
+    sent["zones"] = json!(ws.zones);
+    let params = json!({ "id": ws.id, "workspace": sent });
     panel.call("workspace.update", params, window, cx, move |panel, result, window, cx| match (result, then) {
         (Err(e), _) => {
             window.push_notification(refusal("Workspace left as it was", &error_text(&e)), cx);

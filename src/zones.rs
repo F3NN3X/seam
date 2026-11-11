@@ -72,13 +72,17 @@ impl Template {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct ZoneLayout {
     pub template: Template,
+    /// The library layout this one came from, when it's Custom and still the same.
+    /// Left out when there is none, and an older Seam ignores it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub custom: Option<String>,
     pub tree: Node,
 }
 
 impl ZoneLayout {
     /// The layout a template stands for. `None` and `Custom` have no tree of their own.
     pub fn of(template: Template) -> Option<ZoneLayout> {
-        template_tree(template).map(|tree| ZoneLayout { template, tree })
+        template_tree(template).map(|tree| ZoneLayout { template, custom: None, tree })
     }
 }
 

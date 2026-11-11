@@ -118,6 +118,20 @@ pub(super) fn run_command(app: &mut App, queued: Queued) {
             start_tile(app, at, Some(reply));
             return;
         }
+        Command::ZonesFromWindows(Some(number))
+            if number.checked_sub(1).and_then(|i| app.mons.get(i as usize)).is_none() =>
+        {
+            Err(RpcError::new(api::NOT_FOUND, "no such screen"))
+        }
+        Command::ZonesPick { number, layout } => {
+            tile::pick_layout(app, number, layout, reply);
+            return;
+        }
+        Command::ZonesFromWindows(number) => {
+            let at = number.map_or_else(tile::pointer, |n| At::Screen(n as usize));
+            tile::start_from_windows(app, at, reply);
+            return;
+        }
         Command::ScreenIdentify(number) => match number.checked_sub(1).and_then(|i| app.mons.get(i as usize)) {
             Some(mon) => {
                 identify::show(number, mon.rect);

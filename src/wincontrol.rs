@@ -3,7 +3,7 @@
 //! finds the windows and works out where they go in desk millimetres, takes
 //! focus itself, and hands moves back to the zone snapping's placement steps.
 //! Grow, shrink and Priority resize a window's group of zones on the same worker,
-//! and so does tiling a screen's windows.
+//! and so do tiling a screen's windows and saving where they are as a layout.
 
 use crate::hook::SEAM_INPUT_TAG;
 use crate::log;
@@ -24,6 +24,8 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{
 };
 use windows::Win32::UI::WindowsAndMessaging::*;
 
+#[path = "fromwindows.rs"]
+mod fromwindows;
 #[path = "regroup.rs"]
 mod regroup;
 #[path = "tile.rs"]
@@ -39,11 +41,15 @@ const MAX_GAP: u32 = 32;
 const CLOSE_ENOUGH: i32 = 4;
 
 /// What a window command does.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 pub enum Task {
     Window(WindowVerb, Dir),
     Group(GroupVerb),
     Tile(tile::At),
+    /// Save from windows.
+    FromWindows(tile::At),
+    /// A layout picked on the Zones page, which the screen's snapped windows follow.
+    Pick(Box<tile::Pick>),
 }
 
 /// One window command, with what the worker needs to know about the desk.
@@ -77,6 +83,8 @@ struct Planned {
     layout: Option<(String, ZoneLayout, Option<regroup::Given>)>,
     /// What a tile did.
     tile: Option<tile::Done>,
+    /// The id of the library layout Save from windows made, which the layout brings into the library.
+    fresh: Option<String>,
     reply: Option<Sender<Reply>>,
 }
 
@@ -118,11 +126,11 @@ pub fn start(job: Job) {
 /// it can't be saved nothing moves. Layouts from edge drags are saved before it, so
 /// a group command's layout, which is what its windows move to, is the one that stays.
 /// A tile answers with what it did, or with why it did nothing when no API client is
-/// waiting to be told.
-pub fn planned(mut save: impl FnMut(&str, ZoneLayout) -> bool) -> Option<Result<tile::Done, String>> {
+/// waiting to be told. `save`'s flag says the layout is new to the library, from Save from windows.
+pub fn planned(mut save: impl FnMut(&str, ZoneLayout, bool) -> bool) -> Option<Result<tile::Done, String>> {
     let dragged = std::mem::take(&mut *DRAGGED.lock().unwrap_or_else(|e| e.into_inner()));
     for (screen, layout) in dragged {
-        if save(&screen, layout) {
+        if save(&screen, layout, false) {
             regroup::saved(&screen, None);
         } else {
             log::info!("zone edges: Seam was busy, so the new layout wasn't saved");
@@ -131,7 +139,7 @@ pub fn planned(mut save: impl FnMut(&str, ZoneLayout) -> bool) -> Option<Result<
     let note = NOTE.lock().unwrap_or_else(|e| e.into_inner()).take();
     let Some(plan) = PLANNED.lock().unwrap_or_else(|e| e.into_inner()).take() else { return note.map(Err) };
     if let Some((screen, layout, keep)) = plan.layout {
-        if !save(&screen, layout) {
+        if !save(&screen, layout, plan.fresh.is_some()) {
             answer(plan.reply, Err(RpcError::new(api::BUSY, "Seam is busy, try again")));
             return None;
         }
@@ -142,8 +150,9 @@ pub fn planned(mut save: impl FnMut(&str, ZoneLayout) -> bool) -> Option<Result<
         snap::place_all(plan.list);
     }
     let done = plan.tile;
-    let counts = done.as_ref().map(|d| json!({ "ok": true, "tiled": d.tiled, "left": d.left }));
-    answer(plan.reply, Ok(counts.unwrap_or_else(|| json!({ "ok": true }))));
+    let counts = done.as_ref().filter(|d| !d.pick).map(|d| json!({ "ok": true, "tiled": d.tiled, "left": d.left }));
+    let made = plan.fresh.map(|id| json!({ "ok": true, "id": id }));
+    answer(plan.reply, Ok(counts.or(made).unwrap_or_else(|| json!({ "ok": true }))));
     done.map(Ok)
 }
 
@@ -166,6 +175,8 @@ enum Outcome {
     Regroup(Vec<Placement>, String, ZoneLayout, Option<regroup::Given>),
     /// A tile: the moves, the layout it gave the screen, and what it did.
     Tile(Box<tile::Plan>),
+    /// Save from windows: the moves, the screen, and the new library layout it is given.
+    Saved(Vec<Placement>, String, ZoneLayout),
 }
 
 fn work() {
@@ -177,25 +188,34 @@ fn work() {
         let Some(mut job) = slot.take() else { continue };
         drop(slot);
         let reply = job.reply.take();
-        let outcome = match job.task {
-            Task::Window(verb, dir) => run(&job, verb, dir),
-            Task::Group(verb) => regroup::run(&job, verb),
-            Task::Tile(at) => tile::run(&job, at),
+        let outcome = match &job.task {
+            Task::Window(verb, dir) => run(&job, *verb, *dir),
+            Task::Group(verb) => regroup::run(&job, *verb),
+            Task::Tile(at) => tile::run(&job, *at),
+            Task::FromWindows(at) => fromwindows::run(&job, *at),
+            Task::Pick(pick) => tile::pick(&job, pick),
         };
         let planned = match outcome {
-            Ok(Outcome::Place(list)) => Ok(Some((list, None, None))),
-            Ok(Outcome::Regroup(list, screen, layout, keep)) => Ok(Some((list, Some((screen, layout, keep)), None))),
+            Ok(Outcome::Place(list)) => Ok(Some((list, None, None, None))),
+            Ok(Outcome::Regroup(list, screen, layout, keep)) => {
+                Ok(Some((list, Some((screen, layout, keep)), None, None)))
+            }
             Ok(Outcome::Tile(plan)) => {
                 let plan = *plan;
-                Ok(Some((plan.list, plan.layout.map(|(screen, layout)| (screen, layout, None)), Some(plan.done))))
+                let layout = plan.layout.map(|(screen, layout)| (screen, layout, None));
+                Ok(Some((plan.list, layout, Some(plan.done), None)))
+            }
+            Ok(Outcome::Saved(list, screen, layout)) => {
+                let fresh = layout.custom.clone();
+                Ok(Some((list, Some((screen, layout, None)), None, fresh)))
             }
             Ok(Outcome::Done) => Ok(None),
             Err(why) => Err(why),
         };
         match planned {
             Ok(None) => answer(reply, Ok(json!({ "ok": true }))),
-            Ok(Some((list, layout, tile))) => {
-                let plan = Planned { list, layout, tile, reply };
+            Ok(Some((list, layout, tile, fresh))) => {
+                let plan = Planned { list, layout, tile, fresh, reply };
                 let earlier = PLANNED.lock().unwrap_or_else(|e| e.into_inner()).replace(plan);
                 if let Some(earlier) = earlier {
                     replaced(earlier.reply);
@@ -205,10 +225,12 @@ fn work() {
                 }
             }
             Err(why) => {
-                match job.task {
+                match &job.task {
                     Task::Window(verb, dir) => log::info!("window {verb:?} {}: {why}", dir.name()),
                     Task::Group(verb) => log::info!("window {verb:?}: {why}"),
                     Task::Tile(_) => log::info!("tile screen: {why}"),
+                    Task::FromWindows(_) => log::info!("save from windows: {why}"),
+                    Task::Pick(_) => log::info!("zones pick: {why}"),
                 }
                 // A tile from a key or the tray has nobody to answer, so the screen is told.
                 if matches!(job.task, Task::Tile(_)) && reply.is_none() {

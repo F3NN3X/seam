@@ -16,10 +16,15 @@ All notable changes to Seam. The format follows [Keep a Changelog](https://keepa
 
 - **Focus on this window** minimizes the other windows on its screen, and pressing it again brings them back. A shortcut (no key until you set one), `window.focus_only` in the API (`scope` `workspace` minimizes everything outside the workspace in use), and a Stream Deck action.
 - **Spotlight** dims everything but the window you're using. A shortcut (no key until you set one), `window.spotlight` in the API, `spotlight` in the state, and a Stream Deck key that shows whether it's on.
+- A library of custom layouts on the Zones page, shared by every desk and screen: each has a tile after the templates, and a **...** menu with Edit, Rename, Duplicate and Delete. Editing one changes every screen that uses it, and deleting one leaves those screens with their zones. **New layout** starts one. `custom_layouts` in `config.json`, and `custom` on a screen's layout.
+- **Save from windows** on the Zones page makes a library layout from where the windows on a screen are now, and snaps them into it. `zones.from_windows` in the API.
+- Picking a layout on the Zones page puts the windows on that screen into the new zones, one window to a zone, snapped windows first. When windows moved, a notification offers Undo for 8 seconds.
 - **Edge resistance** on Displays, off by default: the pointer waits at the edge to another screen until you push that many pixels past it, so you can grab a window's edge or corner at a screen border. It gives way while a mouse button is down, so window drags aren't slowed. `pointer.edge_resistance_px` in `config.json`, 0 to 100.
 - **Glued edge push** on Displays sets how far to push past a glued edge before the pointer crosses, 60 px by default and 0 to cross at once. `pointer.glue_push_px` in `config.json`, 0 to 200.
 
 ### Changed
+
+- The **Custom** tile on the Zones page is gone. Clicking it only opened the editor for the screen's layout. **Edit layout** on a template now saves the result as a new library layout instead of changing the screen alone, and a screen whose layout is none of the tiles shows **Changed**, with **Save as layout**. Screens with a Custom layout from before show as Changed, and nothing is added to the library until you save one.
 
 - **Never manage these apps** moved from General to the Zones page, where it is the **Left alone** list under **Where apps open**. It is still `zones.exclude`.
 - When a window won't move because its app runs as administrator, the balloon names the app and tells it once per app instead of once per run. Clicking it opens Help, which has a new topic, "Apps running as administrator".

@@ -1,6 +1,7 @@
 //! The zone editor: split, merge and drag dividers on a copy of the layout's
 //! tree. Every edit stays in the panel, and only Done writes, through
-//! `config.patch`. Esc throws the edits away and Ctrl+Z undoes the last one.
+//! `config.patch`: into the screen's own layout, a library layout, or a new
+//! library layout. Esc throws the edits away and Ctrl+Z undoes the last one.
 
 use crate::pages::zones::chosen;
 use crate::panel::Panel;
@@ -10,8 +11,9 @@ use gpui_kit::component::{Disableable, ThemeStyled, WindowExt};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 use seam::desk::Mon;
+use seam::library;
 use seam::zones::{self, Dir, LeafTag, Node, Rect, Template, ZoneLayout};
-use serde_json::json;
+use serde_json::{json, Value};
 use std::rc::Rc;
 
 actions!(seam_zone_editor, [DiscardEdit, UndoEdit]);
@@ -53,10 +55,34 @@ impl Render for DragDivider {
     }
 }
 
+/// What the editor was opened on.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Opened {
+    /// The screen's layout, from Edit layout.
+    Screen,
+    /// A library layout, from its tile's menu.
+    Library(String),
+    /// A new library layout, from the New layout tile.
+    New,
+}
+
+/// What Done saves the tree as.
+#[derive(Clone, Debug, PartialEq)]
+enum Target {
+    /// The screen's own layout, which then follows no library layout.
+    Screen,
+    /// A library layout, and with it every screen that follows it.
+    Library(String),
+    /// A new library layout, which the screen is given. A template is never changed.
+    New,
+}
+
 pub struct Editor {
     /// The desk and screen being edited.
     pub sig: String,
     pub screen: String,
+    pub opened: Opened,
+    target: Target,
     pub(super) tree: Node,
     start: Node,
     /// What Reset goes back to: the template, or the tree the session began with.
@@ -85,20 +111,45 @@ impl Editor {
     }
 }
 
-/// Start editing the chosen screen's layout, or a single zone if it has none.
-pub fn open(panel: &mut Panel, window: &mut Window, cx: &mut Context<Panel>) {
+/// What Edit layout edits on a screen with `saved`: a template's tree as a new
+/// library layout, the library layout the screen follows, or the screen's own
+/// layout. A screen with no layout starts a new one from a single zone. Also the
+/// tree to start from and what Reset goes back to.
+fn screen_edit(saved: Option<&ZoneLayout>, library: &[Value]) -> (Target, Node, Node) {
+    let leaf = Node::Leaf(LeafTag::Leaf);
+    let Some(saved) = saved else { return (Target::New, leaf.clone(), leaf) };
+    if let Some(template) = zones::template_tree(saved.template) {
+        return (Target::New, saved.tree.clone(), template);
+    }
+    match saved.custom.as_deref().and_then(|id| library::find(library, id)) {
+        Some(entry) => (Target::Library(entry.id), entry.tree.clone(), entry.tree),
+        None => (Target::Screen, saved.tree.clone(), saved.tree.clone()),
+    }
+}
+
+/// Start editing on the chosen screen: its layout, a library layout or a new one.
+pub fn open(panel: &mut Panel, opened: Opened, window: &mut Window, cx: &mut Context<Panel>) {
     if panel.editor.is_some() {
         return;
     }
     let Some(sig) = panel.state.as_ref().map(|s| s.desk.sig.clone()) else { return };
     let Some((screen, saved)) = chosen(panel).map(|(m, l)| (m.id.clone(), l)) else { return };
-    let tree = saved.as_ref().map_or(Node::Leaf(LeafTag::Leaf), |l| l.tree.clone());
-    let base = saved.as_ref().and_then(|l| zones::template_tree(l.template)).unwrap_or_else(|| tree.clone());
+    let leaf = Node::Leaf(LeafTag::Leaf);
+    let (target, tree, base) = match &opened {
+        Opened::Screen => screen_edit(saved.as_ref(), &panel.config.custom_layouts),
+        Opened::Library(id) => {
+            let Some(entry) = library::find(&panel.config.custom_layouts, id) else { return };
+            (Target::Library(entry.id), entry.tree.clone(), entry.tree)
+        }
+        Opened::New => (Target::New, leaf.clone(), leaf),
+    };
     let focus = cx.focus_handle();
     focus.focus(window, cx);
     let editor = Editor {
         sig,
         screen,
+        opened,
+        target,
         start: tree.clone(),
         tree,
         base,
@@ -111,22 +162,24 @@ pub fn open(panel: &mut Panel, window: &mut Window, cx: &mut Context<Panel>) {
     cx.notify();
 }
 
-/// The tray changed the layout under an editor with no edits, after a window's edge
-/// was dragged or a grow key pressed: start again from the saved one, so edits
+/// The tray changed the layout under Edit layout with no edits, after a window's
+/// edge was dragged or a grow key pressed: start again from the saved one, so edits
 /// made next don't build on an older layout.
 pub fn reload(panel: &mut Panel) {
     let Some(editor) = panel.editor.as_ref().filter(|e| !e.dirty() && e.dragging.is_none()) else { return };
-    let desk = panel.config.desks.get(&editor.sig);
-    let saved = desk.and_then(|d| d.zones.get(&editor.screen)).and_then(zones::layout_of);
-    let tree = saved.as_ref().map_or(Node::Leaf(LeafTag::Leaf), |l| l.tree.clone());
-    if tree == editor.start {
+    if editor.opened != Opened::Screen {
         return;
     }
-    let base = saved.as_ref().and_then(|l| zones::template_tree(l.template)).unwrap_or_else(|| tree.clone());
+    let desk = panel.config.desks.get(&editor.sig);
+    let saved = desk.and_then(|d| d.zones.get(&editor.screen)).and_then(zones::layout_of);
+    let (target, tree, base) = screen_edit(saved.as_ref(), &panel.config.custom_layouts);
+    if tree == editor.start && target == editor.target {
+        return;
+    }
     if let Some(editor) = panel.editor.as_mut() {
         editor.selected = editor.selected.min(zones::leaf_count(&tree) - 1);
         editor.history.clear();
-        (editor.start, editor.tree, editor.base) = (tree.clone(), tree, base);
+        (editor.target, editor.start, editor.tree, editor.base) = (target, tree.clone(), tree, base);
     }
 }
 
@@ -169,17 +222,77 @@ pub(super) fn undo(panel: &mut Panel, cx: &mut Context<Panel>) {
     cx.notify();
 }
 
-/// Save the tree as the screen's layout, which is now Custom.
+/// Save the tree: as the screen's own layout, into the library layout being edited,
+/// which the tray passes on to every screen that follows it, or as a new library
+/// layout that the screen is given.
 pub(super) fn done(panel: &mut Panel, window: &mut Window, cx: &mut Context<Panel>) {
     let Some(editor) = panel.editor.take() else { return };
     cx.notify();
     if !editor.dirty() {
         return;
     }
-    let layout = ZoneLayout { template: Template::Custom, tree: editor.tree };
-    let Ok(layout) = serde_json::to_value(layout) else { return };
-    let patch = json!({ "desks": { editor.sig: { "zones": { editor.screen: layout } } } });
-    panel.patch(patch, window, cx);
+    let Editor { sig, screen, opened, target, tree, .. } = editor;
+    with_latest(panel, window, cx, move |panel, window, cx| {
+        // Edit layout looks at the screen again: a window's edge dragged since it
+        // opened has made the layout the screen's own.
+        let target = match opened {
+            Opened::Screen => {
+                let saved = panel.config.desks.get(&sig).and_then(|d| d.zones.get(&screen)).and_then(zones::layout_of);
+                screen_edit(saved.as_ref(), &panel.config.custom_layouts).0
+            }
+            _ => target,
+        };
+        let mut list = panel.config.custom_layouts.clone();
+        let found = match &target {
+            Target::Library(id) => list.iter().position(|v| v.get("id").and_then(Value::as_str) == Some(id.as_str())),
+            _ => None,
+        };
+        let patch = match (target, found) {
+            (Target::Screen, _) => {
+                let layout = ZoneLayout { template: Template::Custom, custom: None, tree };
+                let Some(layout) = library::screen_patch(&layout) else { return };
+                json!({ "desks": { sig: { "zones": { screen: layout } } } })
+            }
+            (Target::Library(_), Some(at)) => {
+                list[at]["tree"] = json!(tree);
+                json!({ "custom_layouts": list })
+            }
+            // A library layout deleted while it was being edited from its tile comes
+            // back as a new one, given to no screen.
+            (Target::Library(_), None) if opened != Opened::Screen => {
+                list.push(library::Entry { id: library::new_id(&list), name: library::next_name(&list), tree }.value());
+                json!({ "custom_layouts": list })
+            }
+            (Target::Library(_) | Target::New, _) => {
+                let entry = library::Entry { id: library::new_id(&list), name: library::next_name(&list), tree };
+                list.push(entry.value());
+                let Some(layout) = library::screen_patch(&entry.layout()) else { return };
+                json!({ "custom_layouts": list, "desks": { sig: { "zones": { screen: layout } } } })
+            }
+        };
+        panel.patch(patch, window, cx);
+    });
+}
+
+/// Run `then` with the latest config from the tray, so a change to the library made
+/// elsewhere since the panel last heard isn't lost when the whole list is saved.
+pub fn with_latest(
+    panel: &mut Panel,
+    window: &mut Window,
+    cx: &mut Context<Panel>,
+    then: impl FnOnce(&mut Panel, &mut Window, &mut Context<Panel>) + 'static,
+) {
+    panel.call("config.get", json!({}), window, cx, move |panel, result, window, cx| {
+        // Building the list from an older copy could drop a layout added elsewhere.
+        let Some(config) = result.ok().and_then(|c| serde_json::from_value(c).ok()) else {
+            let note = gpui_kit::component::notification::Notification::new()
+                .message("Couldn't read your layouts, so nothing was saved. Try again");
+            window.push_notification(note, cx);
+            return;
+        };
+        panel.config = config;
+        then(panel, window, cx);
+    });
 }
 
 fn split(panel: &mut Panel, dir: Dir, cx: &mut Context<Panel>) {

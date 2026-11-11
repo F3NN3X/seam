@@ -42,7 +42,7 @@ Start with a v0.1 `config.json` that has saved borders.
 
 Set a key for **Tile this screen's windows** on Shortcuts (it has no key until you set one). Start with screen 1 set to None and the other windows closed.
 
-- [ ] **Two windows, no layout.** Open Notepad and Calculator on screen 1 and press the key with the pointer on screen 1. They go side by side in two columns, the focused one in the first. A notification says "Tiled 2 windows on screen 1" and offers Undo. The Zones page shows Custom for screen 1.
+- [ ] **Two windows, no layout.** Open Notepad and Calculator on screen 1 and press the key with the pointer on screen 1. They go side by side in two columns, the focused one in the first. A notification says "Tiled 2 windows on screen 1" and offers Undo. The Zones page shows Changed for screen 1.
 - [ ] **One window.** Close one: the key shows "Nothing to tile" and no layout is saved.
 - [ ] **Three windows.** With a third window and screen 1 set to None again, the key picks Main + stack: the focused window takes the large zone on the left, the others the stacked zones.
 - [ ] **Five windows.** With five windows and None, the key picks 3x2, and with ten windows nine are tiled and the notification says one was left where it was.
@@ -300,7 +300,7 @@ Set up first: turn on **Tell me when a pinned window closes** in the Zones page'
 
 ## Zone editor
 
-- [ ] **Open.** On Zones, press **Edit layout** under the preview. The preview becomes the editor, with a toolbar under it: Split side by side, Split top and bottom, Merge with neighbour, Undo, Reset, Done. Press the **Custom** tile on a screen with no custom layout: it opens the editor too.
+- [ ] **Open.** On Zones, press **Edit layout** under the preview. The preview becomes the editor, with a toolbar under it: Split side by side, Split top and bottom, Merge with neighbour, Undo, Reset, Done. Press the **New layout** tile: it opens the editor too, on a single zone.
 - [ ] **No layout yet.** On a screen set to None, open the editor. It starts as one zone covering the screen, and splitting it works.
 - [ ] **Select.** Click a zone: it gets an amber outline and a faint amber fill. Tab to the preview, then use the arrow keys to move the selection from zone to zone. Tab again reaches every toolbar button, in order.
 - [ ] **Split.** Select a zone and press **Split side by side**: it becomes two zones, with the old number kept on the first. Do the same with **Split top and bottom**. The zones renumber left subtree first.
@@ -309,13 +309,37 @@ Set up first: turn on **Tell me when a pinned window closes** in the Zones page'
 - [ ] **Merge.** Select one of two sibling zones and press **Merge with neighbour**: they become one. Select a zone whose neighbour is split into more zones: the button is grey and its tooltip says merging needs the zone next to it to be a single zone.
 - [ ] **Undo.** Press Ctrl+Z after a split, a merge, a Reset and a divider drag. Each undoes exactly one step, and a drag is one step. The Undo button's tooltip names the last step, for example "Undo split (Ctrl+Z)". With focus anywhere on the page outside the editor, Ctrl+Z does nothing.
 - [ ] **Reset.** Press **Reset**. The tree goes back to the template the layout started from, or to how it was when the editor opened for a custom one. It can be undone.
-- [ ] **Done.** Press **Done**. The editor closes, the Custom tile is highlighted, the preview shows the tree, and `config.json` holds `"template": "custom"` plus the tree for that screen. Shift-drag a window: it snaps to the new zones, with no restart.
+- [ ] **Done.** On a screen set to Columns, edit and press **Done**. The editor closes, a new "Custom N" tile is highlighted, the preview shows the tree, and `config.json` holds the tree in `custom_layouts` and `"template": "custom"`, its `custom` id and the tree for that screen. Shift-drag a window: it snaps to the new zones, with no restart.
 - [ ] **Esc.** Edit, then press Esc with focus on a toolbar button, then again with focus on the preview. Both times the edits are thrown away with no dialog and `config.json` is unchanged.
 - [ ] **Leaving with edits.** Edit, then press another page in the sidebar, another screen tab or another layout tile. One dialog asks "Discard layout changes?" with Discard and Keep editing. Keep editing leaves everything as it was, Discard goes where you were headed. Without any edits there is no dialog.
 - [ ] **Only Done writes.** Watch `config.json` while editing. It doesn't change until Done.
 - [ ] **Every screen.** Edit the layout of the portrait U3477 and the 1920x550 panel, which are the tricky shapes. Dividers, px widths and the saved layout follow the real screen size.
 - [ ] **Layout changed while open.** Open the editor on screen 1 and make no edits. Drag the border of a window snapped on screen 1: when you let go the editor shows the new dividers, and an edit then Done builds on them. With an edit made first, the editor keeps your edits and Done saves them over the drag's layout.
 - [ ] **Screens change.** With the editor open, unplug a screen. The editor closes without saving.
+
+## Custom layouts
+
+Start with no `custom_layouts` in `config.json`, and screens 1 and 4 set to Columns.
+
+- [ ] **Old Custom layouts.** With a config from before this change where a screen has `"template": "custom"`, open Zones on that screen. The tiles are the templates, a selected **Changed** tile showing its zones, and **New layout**. **Save as layout** is under the tiles, and `custom_layouts` is still empty.
+- [ ] **Create two.** Press **New layout**, split the zone side by side, press **Done**. A "Custom 1" tile appears, selected, and screen 1 uses it. Do the same with a top and bottom split: "Custom 2". `custom_layouts` has both.
+- [ ] **Edit layout on a template.** On screen 4 with Columns, press **Edit layout**, drag a divider and press **Done**. A new "Custom 3" tile appears and screen 4 uses it. Pick Columns again: it is still the plain three columns.
+- [ ] **Apply each to two screens.** Click Custom 1 on screen 1 and on screen 4, then Custom 2 on screen 2 and screen 3. Each screen's tile is highlighted, and Shift-dragging a window snaps to that layout on every one of them.
+- [ ] **Picking moves the screen's windows.** On screen 1 with Grid, snap two terminal windows into the two left zones and leave Notepad loose on the right. Pick Columns: the two terminals each get a zone of their own (one goes to the first column, the other to the free column nearest it), Notepad takes the remaining column, no two windows share a zone, and a notification "Screen 1 has a new layout" says 3 windows moved. Click it within 8 seconds: Grid is back on the Zones page, both terminals are in their old zones and Notepad is back where it was. After 8 seconds a click does nothing.
+- [ ] **All snapped, crowded.** On screen 2 with Grid, snap the two terminals into the top-left and bottom-left zones and Notepad into the top-right zone. Pick Columns, then Rows, then Main + stack: each time the log says "3 moved" (or 2 moved and 1 left for Rows), and no two windows ever end up in the same zone.
+- [ ] **More windows than zones.** With four windows on screen 1, pick Rows: two windows get the two zones, snapped ones first, the other two stay where they are, and the notification says 2 left where they were.
+- [ ] **Picking with zones off.** Turn zones off and pick a layout: it is saved, nothing moves and no notification shows. Pick None with zones on: the zones go and no notification shows, because no window moved. Pick a layout on a screen with no windows on it: no notification either.
+- [ ] **Picking the same layout.** Click the tile that is already selected: nothing moves and no notification shows.
+- [ ] **Edit one.** Open the **...** of Custom 1 and choose **Edit**. Split a zone and press **Done**. Screens 1 and 4 both get the new zones, and their entries in `config.json` have the new tree with `custom` still set. Esc instead of Done changes nothing.
+- [ ] **Rename and duplicate.** **Rename** Custom 2 to "Desk work": the tile and the highlight on screens 2 and 3 follow. **Duplicate** it: "Desk work copy" appears with the same zones, and no screen uses it.
+- [ ] **Delete one.** **Delete** "Desk work". The dialog says "Delete Desk work?" and "Screens using it keep their zones". Delete: the tile goes, screens 2 and 3 keep their zones and show **Changed**, and their entries have no `custom`.
+- [ ] **Changed after a divider drag.** On screen 1 with Custom 1, drag the edge of a snapped window so its neighbour follows. The page shows **Changed** for screen 1, selected, with **Save as layout**, and screen 4 still has Custom 1's zones. **Save as layout** adds a new tile, which screen 1 then uses.
+- [ ] **Edit layout on Changed.** On a Changed screen, **Edit layout** and **Done** change that screen alone: no new tile, and still Changed.
+- [ ] **Many layouts.** Add layouts until there are a dozen. The tiles wrap two to a row and push the page down, with the preview still beside them.
+- [ ] **Save from windows, two columns.** On screen 1, put Notepad on the left half and Calculator on the right half with Win+Left and Win+Right. Press **Save from windows**. A new tile appears with two side-by-side zones split at the half, screen 1 uses it, and both windows snap into their zones. The API's `zones.from_windows` with `{"number":1}` does the same and answers `{ok, id}` with the new layout's id.
+- [ ] **Save from windows, main and stack.** One window on the left two thirds, two stacked on the right third: the new layout is a main zone of two thirds and two stacked zones.
+- [ ] **Save from windows, unsplittable.** Arrange four windows in a pinwheel around the middle of the screen, or let two overlap. **Save from windows** says "These windows don't line up into zones", and nothing changes.
+- [ ] **Older Seam.** Open the config in an older build: screens with a library layout read as Custom with the same zones.
 
 ## On-screen editor
 

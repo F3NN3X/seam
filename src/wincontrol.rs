@@ -107,11 +107,9 @@ pub fn start(job: Job) {
 
 /// The worker's moves are ready: start them on the snapping's steps. A changed
 /// layout goes to `save` first, so the windows' stamps follow the new zones. When
-/// it can't be saved nothing moves. Layouts from edge drags are saved after it.
+/// it can't be saved nothing moves. Layouts from edge drags are saved before it, so
+/// a group command's layout, which is what its windows move to, is the one that stays.
 pub fn planned(mut save: impl FnMut(&str, ZoneLayout) -> bool) {
-    if let Some(plan) = PLANNED.lock().unwrap_or_else(|e| e.into_inner()).take() {
-        run_plan(plan, &mut save);
-    }
     let dragged = std::mem::take(&mut *DRAGGED.lock().unwrap_or_else(|e| e.into_inner()));
     for (screen, layout) in dragged {
         if save(&screen, layout) {
@@ -119,6 +117,9 @@ pub fn planned(mut save: impl FnMut(&str, ZoneLayout) -> bool) {
         } else {
             log::info!("zone edges: Seam was busy, so the new layout wasn't saved");
         }
+    }
+    if let Some(plan) = PLANNED.lock().unwrap_or_else(|e| e.into_inner()).take() {
+        run_plan(plan, &mut save);
     }
 }
 

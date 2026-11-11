@@ -68,8 +68,11 @@ pub(super) fn tile_finished(app: &mut App, result: Option<Result<wincontrol::til
             let windows = if n == 1 { "window" } else { "windows" };
             let (title, body) = if done.pick {
                 let title = format!("Screen {} has a new layout", done.number);
-                let body = format!("{n} {windows} moved to the new zones. Click to undo");
-                log::info!("zones pick screen {}: {n} moved", done.number);
+                let body = match done.left {
+                    0 => format!("{n} {windows} moved to the new zones. Click to undo"),
+                    left => format!("{n} {windows} moved to the new zones, {left} left where they were. Click to undo"),
+                };
+                log::info!("zones pick screen {}: {n} moved, {} left", done.number, done.left);
                 (title, body)
             } else {
                 let body = match done.left {

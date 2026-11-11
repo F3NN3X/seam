@@ -88,22 +88,56 @@ fn area(r: Rect) -> i64 {
 /// largest free zone, then the others in turn take the free zone whose centre is
 /// nearest their own. Windows past the last free zone get none.
 fn assign(zones: &[Rect], mut open: Vec<usize>, windows: &[Rect], first: usize) -> Vec<(usize, usize)> {
+    let largest = open.iter().copied().enumerate().max_by_key(|(_, z)| (area(zones[*z]), std::cmp::Reverse(*z)));
+    let Some((at, zone)) = largest.filter(|_| first < windows.len()) else { return Vec::new() };
+    open.remove(at);
+    let rest = (0..windows.len()).filter(|i| *i != first).map(|w| (w, centre(windows[w])));
+    std::iter::once((first, zone)).chain(nearest(zones, &mut open, rest)).collect()
+}
+
+/// Each window in turn takes the free zone whose centre is nearest its point, as
+/// (window, zone) pairs, and the zone is no longer free. Windows past the last free zone get none.
+fn nearest(
+    zones: &[Rect],
+    open: &mut Vec<usize>,
+    windows: impl IntoIterator<Item = (usize, (i32, i32))>,
+) -> Vec<(usize, usize)> {
     let mut out = Vec::new();
-    let order = std::iter::once(first).chain((0..windows.len()).filter(|i| *i != first));
-    for (turn, w) in order.enumerate() {
-        let (cx, cy) = centre(windows[w]);
-        let apart = |z: usize| {
-            let (zx, zy) = centre(zones[z]);
-            i64::from(zx - cx).pow(2) + i64::from(zy - cy).pow(2)
+    for (w, point) in windows {
+        let Some((at, zone)) = open.iter().copied().enumerate().min_by_key(|(_, z)| (apart(zones[*z], point), *z))
+        else {
+            break;
         };
-        let best = if turn == 0 {
-            open.iter().copied().enumerate().max_by_key(|(_, z)| (area(zones[*z]), std::cmp::Reverse(*z)))
-        } else {
-            open.iter().copied().enumerate().min_by_key(|(_, z)| (apart(*z), *z))
-        };
-        let Some((at, zone)) = best else { break };
         open.remove(at);
         out.push((w, zone));
+    }
+    out
+}
+
+/// How far a zone's centre is from a point, squared.
+fn apart(zone: Rect, (x, y): (i32, i32)) -> i64 {
+    let (zx, zy) = centre(zone);
+    i64::from(zx - x).pow(2) + i64::from(zy - y).pow(2)
+}
+
+/// The closest window and free zone of all go together first, then the closest of
+/// the rest, and so on, so no two windows share a zone and none takes a zone
+/// another fits better only because it came first. Ties go to the earlier window.
+fn closest_first(zones: &[Rect], open: &mut Vec<usize>, windows: &[(usize, (i32, i32))]) -> Vec<(usize, usize)> {
+    let mut pairs: Vec<(i64, usize, usize)> = (0..windows.len())
+        .flat_map(|turn| open.iter().map(move |z| (turn, *z)))
+        .map(|(turn, z)| (apart(zones[z], windows[turn].1), turn, z))
+        .collect();
+    pairs.sort_unstable();
+    let mut out = Vec::new();
+    let mut placed = vec![false; windows.len()];
+    for (_, turn, z) in pairs {
+        if placed[turn] || !open.contains(&z) {
+            continue;
+        }
+        placed[turn] = true;
+        open.retain(|o| *o != z);
+        out.push((windows[turn].0, z));
     }
     out
 }
@@ -210,31 +244,48 @@ pub(super) fn run(job: &Job, at: At) -> Result<Outcome, String> {
     Ok(Outcome::Tile(Box::new(Plan { list, layout, done })))
 }
 
-/// A layout picked for a screen: each window snapped in its old zones goes to the
-/// new zone its old place's centre is in. Windows not snapped are left alone. The
-/// screen's old layout is still in the job, so the stamps are read against it.
+/// A layout picked for a screen: the windows Tile would take there each get a zone
+/// of their own. Windows snapped in the old zones go first, the closest pair of a
+/// window's old zones and a free zone at a time; then the loose ones, the
+/// focused one first, each to the free zone nearest its own middle. Windows past
+/// the last zone stay where they are. The screen's old layout is still in the job,
+/// so the stamps are read against it.
 pub(super) fn pick(job: &Job, p: &Pick) -> Result<Outcome, String> {
     let screens = direction::desk_screens(&job.mons, &job.links);
     let geo = geometry(job, &screens);
     let s = geo.iter().position(|g| g.id == p.screen).ok_or("No such screen")?;
     let g = &geo[s];
     let gap = (job.gap.min(MAX_GAP) as f32 * g.dpi as f32 / 96.0).round() as i32;
-    let (zones, cells) = (zones::rects(&p.layout.tree, g.work, gap), zones::rects(&p.layout.tree, g.work, 0));
-    let (mut list, mut back) = (Vec::new(), Vec::new());
-    if !g.zones.is_empty() {
-        for (h, rect) in windows_on(job, g) {
-            let Some((a, b)) = placed(job, &geo, s, h, rect) else { continue };
-            let old = zones::span(g.zones[a], g.zones[b]);
-            let (x, y) = centre(old);
-            let Some(z) = zones::zone_at(&cells, x, y) else { continue };
-            list.push(into_zone(h, g, z, z, zones[z]));
-            back.push(Back { place: into_zone(h, g, a, b, old), set: zones[z] });
-        }
-    }
+    let zones = zones::rects(&p.layout.tree, g.work, gap);
+    let seen = windows_on(job, g);
+    // The old zones each window is snapped in, if it is.
+    let old: Vec<Option<(usize, usize)>> =
+        seen.iter().map(|(h, rect)| (!g.zones.is_empty()).then(|| placed(job, &geo, s, *h, *rect)).flatten()).collect();
+    let span = |(a, b): (usize, usize)| zones::span(g.zones[a], g.zones[b]);
+    let mut open: Vec<usize> = (0..zones.len()).collect();
+    let snapped: Vec<_> = (0..seen.len()).filter_map(|w| old[w].map(|ab| (w, centre(span(ab))))).collect();
+    let mut picks = closest_first(&zones, &mut open, &snapped);
+    let focused = seen.iter().position(|(h, _)| h.0 as isize == job.hwnd);
+    let loose = (0..seen.len()).filter(|w| old[*w].is_none());
+    let loose = focused.filter(|f| old[*f].is_none()).into_iter().chain(loose.filter(|w| Some(*w) != focused));
+    picks.extend(nearest(&zones, &mut open, loose.map(|w| (w, centre(seen[w].1))).collect::<Vec<_>>()));
+
+    let list = picks.iter().map(|(w, z)| into_zone(seen[*w].0, g, *z, *z, zones[*z])).collect();
+    let back = picks
+        .iter()
+        .map(|(w, z)| {
+            let (h, rect) = seen[*w];
+            let place = match old[*w] {
+                Some((a, b)) => into_zone(h, g, a, b, span((a, b))),
+                None => free(h, g, rect),
+            };
+            Back { place, set: zones[*z] }
+        })
+        .collect();
     let done = Done {
         number: g.number,
-        tiled: list.len(),
-        left: 0,
+        tiled: picks.len(),
+        left: seen.len() - picks.len(),
         screen: p.screen.clone(),
         changed: Some(Change { now: Some(p.layout.clone()), before: p.before.clone() }),
         back,

@@ -162,12 +162,7 @@ pub(super) fn start_group(app: &App, verb: GroupVerb, reply: Option<Sender<Reply
     queue_window(app, wincontrol::Task::Group(verb), snap::zoned(), reply);
 }
 
-fn queue_window(
-    app: &App,
-    task: wincontrol::Task,
-    members: Vec<(isize, (String, usize, usize))>,
-    reply: Option<Sender<Reply>>,
-) {
+fn queue_window(app: &App, task: wincontrol::Task, members: Vec<snap::Zoned>, reply: Option<Sender<Reply>>) {
     let hwnd = unsafe { GetForegroundWindow() };
     let desk = app.cfg.desks.get(&app.sig).filter(|_| app.cfg.zones.enabled);
     let layout = |m: &Mon| desk.and_then(|d| d.zones.get(&m.id)).and_then(zones::layout_of);

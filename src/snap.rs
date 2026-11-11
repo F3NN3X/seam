@@ -297,14 +297,29 @@ pub fn zone_of(hwnd: HWND) -> Option<(String, usize, usize)> {
     .flatten()
 }
 
-/// Every window still in the zones it was snapped to, with its screen and zones,
-/// for finding a group's members. A window on its way counts, as in `zone_of`.
-pub fn zoned() -> Vec<(isize, (String, usize, usize))> {
+/// A window the snapping put in zones, as it recorded it.
+pub struct Zoned {
+    pub hwnd: isize,
+    /// The screen and zones.
+    pub zone: (String, usize, usize),
+    /// Where its visible frame was put.
+    pub at: Rect,
+    /// Still on its way there.
+    pub moving: bool,
+}
+
+/// Every snapped window as recorded, for finding a group's members. Whether each
+/// is still there is for the worker to check: that reads every window's rect.
+pub fn zoned() -> Vec<Zoned> {
     with_engine(|e| {
         let moving = |key: isize| e.pending.as_ref().is_some_and(|p| p.hwnd == key);
-        let here = |key: isize| moving(key) || e.current(hwnd_of(key)).is_some();
-        let list = e.snapped.iter().filter(|(key, _)| here(**key));
-        list.map(|(key, s)| (*key, (s.screen.clone(), s.from, s.to))).collect()
+        let entry = |(key, s): (&isize, &Snapped)| Zoned {
+            hwnd: *key,
+            zone: (s.screen.clone(), s.from, s.to),
+            at: s.at,
+            moving: moving(*key),
+        };
+        e.snapped.iter().map(entry).collect()
     })
     .unwrap_or_default()
 }

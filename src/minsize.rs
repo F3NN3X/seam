@@ -1,12 +1,13 @@
 //! How small a window can go, for sizing a group of zones. The app is asked with
 //! WM_GETMINMAXINFO, which can wait on it, so only the window-control worker asks,
 //! never the tray's main thread. A window that came out bigger than its zone
-//! counts too. Kept in memory by program and window class, at 96 dpi.
+//! counts too, for a while. Kept in memory by program and window class, at 96 dpi.
 
 use seam::winutil;
 use seam::zones::Rect;
 use std::collections::HashMap;
 use std::sync::Mutex;
+use std::time::{Duration, Instant};
 use windows::Win32::Foundation::*;
 use windows::Win32::UI::HiDpi::{GetDpiForWindow, GetSystemMetricsForDpi};
 use windows::Win32::UI::WindowsAndMessaging::*;
@@ -15,9 +16,18 @@ use windows::Win32::UI::WindowsAndMessaging::*;
 const ASK_MS: u32 = 100;
 /// Apps remembered before the cache starts again.
 const MAX_KEPT: usize = 512;
+/// How long a size the snapping saw counts. One odd placement mustn't stick.
+const SEEN_FOR: Duration = Duration::from_secs(10 * 60);
 
-/// (exe path, window class) to the smallest visible frame at 96 dpi.
-type Known = HashMap<(String, String), (i32, i32)>;
+type Key = (String, String);
+
+/// By (exe path, window class), the smallest visible frame at 96 dpi: what the app
+/// said, and the latest size the snapping saw with when it saw it.
+#[derive(Default)]
+struct Known {
+    asked: HashMap<Key, (i32, i32)>,
+    seen: HashMap<Key, ((i32, i32), Instant)>,
+}
 
 static KNOWN: Mutex<Option<Known>> = Mutex::new(None);
 /// Sizes the snapping saw, waiting for the worker: window, width, height (0 when
@@ -64,11 +74,11 @@ fn ask(h: HWND, margins: (i32, i32)) -> Option<(i32, i32)> {
     Some((scale(w, dpi, 96) - margins.0, scale(ht, dpi, 96) - margins.1))
 }
 
-fn key(h: HWND) -> Option<(String, String)> {
+fn key(h: HWND) -> Option<Key> {
     Some((winutil::exe_path(h)?, winutil::class_name(h)))
 }
 
-/// Fold in what the snapping saw since last time.
+/// Fold in what the snapping saw since last time, and let old sightings go.
 fn take_seen(known: &mut Known) {
     let seen = std::mem::take(&mut *SEEN.lock().unwrap_or_else(|e| e.into_inner()));
     for (hwnd, w, h, dpi) in seen {
@@ -77,40 +87,42 @@ fn take_seen(known: &mut Known) {
             continue;
         }
         let Some(key) = key(window) else { continue };
-        let floor = floor(margins(window));
-        let old = known.get(&key).copied().unwrap_or(floor);
-        let (w, h) = (scale(w, dpi, 96), scale(h, dpi, 96));
-        known.insert(key, (old.0.max(w), old.1.max(h)));
+        // The latest replaces what was seen before, so a one-off size goes again.
+        known.seen.insert(key, ((scale(w, dpi, 96), scale(h, dpi, 96)), Instant::now()));
     }
+    known.seen.retain(|_, (_, at)| at.elapsed() < SEEN_FOR);
 }
 
 /// The smallest visible frame of `h`, in pixels at `dpi`. Worker only: asking can
-/// wait up to 100 ms on the app. A hung window gets the system's floor.
+/// wait up to 100 ms on the app. A hung window, or one that doesn't answer, gets
+/// the system's floor this time and is asked again next time.
 pub fn of(h: HWND, dpi: u32) -> (i32, i32) {
     let mut guard = KNOWN.lock().unwrap_or_else(|e| e.into_inner());
-    let known = guard.get_or_insert_with(HashMap::new);
+    let known = guard.get_or_insert_with(Known::default);
     take_seen(known);
     let margins = margins(h);
     let floor = floor(margins);
-    let at96 = if winutil::is_hung(h) {
-        floor
-    } else {
-        match key(h) {
-            Some(key) => *known.entry(key).or_insert_with(|| {
-                let asked = ask(h, margins).unwrap_or(floor);
-                (asked.0.max(floor.0), asked.1.max(floor.1))
-            }),
-            None => ask(h, margins).unwrap_or(floor),
-        }
+    let key = key(h);
+    let asked = match key.as_ref().and_then(|k| known.asked.get(k)) {
+        Some(asked) => Some(*asked),
+        None if winutil::is_hung(h) => None,
+        None => ask(h, margins).map(|a| (a.0.max(floor.0), a.1.max(floor.1))),
     };
-    if known.len() > MAX_KEPT {
-        known.clear();
+    if let (Some(key), Some(asked)) = (key.clone(), asked) {
+        known.asked.insert(key, asked);
+    }
+    let seen = key.and_then(|k| known.seen.get(&k).map(|(size, _)| *size)).unwrap_or_default();
+    let at96 = asked.unwrap_or(floor);
+    let at96 = (at96.0.max(seen.0), at96.1.max(seen.1));
+    if known.asked.len() > MAX_KEPT || known.seen.len() > MAX_KEPT {
+        *known = Known::default();
     }
     (scale(at96.0, 96, dpi), scale(at96.1, 96, dpi))
 }
 
 /// A placement ended with the window bigger than `target`, so the app wouldn't go
-/// smaller: keep that side as its minimum. Only queues it, for the main thread.
+/// smaller: count that side as its minimum for a while. Only queues it, for the
+/// worker.
 pub fn observed(h: HWND, got: Rect, target: Rect, slack: i32) {
     let w = if got.w > target.w + slack { got.w } else { 0 };
     let ht = if got.h > target.h + slack { got.h } else { 0 };

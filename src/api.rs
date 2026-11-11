@@ -20,6 +20,8 @@ use windows::Win32::System::Pipes::GetNamedPipeServerProcessId;
 pub const API_VERSION: u32 = 1;
 /// Longest accepted line, in bytes.
 pub const MAX_LINE: usize = 1 << 20;
+/// Largest `step` `window.resize` takes, in pixels.
+pub const MAX_STEP_PX: i32 = 10_000;
 /// Events a client may fall behind by before it's dropped.
 pub const MAX_QUEUED_EVENTS: usize = 256;
 
@@ -268,8 +270,8 @@ fn command(method: &str, p: &Value) -> Result<Command, RpcError> {
                 Some(v) => Some(
                     v.as_u64()
                         .and_then(|n| i32::try_from(n).ok())
-                        .filter(|n| *n > 0)
-                        .ok_or_else(|| RpcError::new(INVALID_PARAMS, "step must be a number of pixels"))?,
+                        .filter(|n| (1..=MAX_STEP_PX).contains(n))
+                        .ok_or_else(|| RpcError::new(INVALID_PARAMS, "step must be 1 to 10000 pixels"))?,
                 ),
             };
             match p.get("by").and_then(Value::as_str) {
@@ -645,6 +647,7 @@ mod tests {
             (request("window.swap", r#"{"dir":"next"}"#), anyone, INVALID_PARAMS),
             (request("window.resize", r#"{"by":"wider"}"#), anyone, INVALID_PARAMS),
             (request("window.resize", r#"{"by":"grow","step":0}"#), anyone, INVALID_PARAMS),
+            (request("window.resize", r#"{"by":"grow","step":10001}"#), anyone, INVALID_PARAMS),
             (request("screen.identify", r#"{"number":-1}"#), anyone, INVALID_PARAMS),
             (request("workspace.switch", "{}"), anyone, INVALID_PARAMS),
             (request("workspace.status", "{}"), anyone, INVALID_PARAMS),

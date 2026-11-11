@@ -3,7 +3,7 @@
 //! snapping knows, and those whose stamp still fits after a restart of the tray.
 //! The solver works out the new layout, then every member whose place changed moves.
 
-use super::{direction, geometry, hwnd_of, into_zone, movable, zone_of, Job, Outcome, MAX_GAP};
+use super::{close, direction, geometry, hwnd_of, into_zone, movable, zone_of, Job, Outcome, MAX_GAP};
 use crate::minsize;
 use seam::api::GroupVerb;
 use seam::groups::{self, Stash};
@@ -12,17 +12,29 @@ use seam::zones::{self, Node, Rect, Template, ZoneLayout};
 use std::collections::HashMap;
 use std::sync::Mutex;
 use windows::Win32::Foundation::HWND;
+use windows::Win32::UI::WindowsAndMessaging::IsWindow;
 
 /// What Priority changed on a screen, to give back on the next press.
-struct Given {
+pub(super) struct Given {
     template: Template,
     stash: Stash,
     /// The tree Priority made. Any other change to the group drops the stash.
     after: Node,
 }
 
-/// Per screen id. Only this worker touches it.
+/// Per screen id. The worker reads it; it changes only once a layout is saved.
 static GIVEN: Mutex<Option<HashMap<String, Given>>> = Mutex::new(None);
+
+/// A group command's layout was saved: drop what Priority kept for the screen, and
+/// keep what a new Priority gave.
+pub(super) fn saved(screen: &str, keep: Option<Given>) {
+    let mut given = GIVEN.lock().unwrap_or_else(|e| e.into_inner());
+    let given = given.get_or_insert_with(HashMap::new);
+    given.remove(screen);
+    if let Some(keep) = keep {
+        given.insert(screen.to_string(), keep);
+    }
+}
 
 /// The zones a window covers when it spans `from` to `to`, as the snapping counts them.
 fn covered(cells: &[Rect], from: usize, to: usize) -> Vec<usize> {
@@ -30,6 +42,14 @@ fn covered(cells: &[Rect], from: usize, to: usize) -> Vec<usize> {
     let r = zones::span(*a, *b);
     let inside = |c: &Rect| c.x >= r.x && c.y >= r.y && c.x + c.w <= r.x + r.w && c.y + c.h <= r.y + r.h;
     cells.iter().enumerate().filter(|(_, c)| inside(c)).map(|(i, _)| i).collect()
+}
+
+/// A window that still exists, can be snapped, and is where the snapping put it.
+fn still_there(h: HWND, own: u32, exclude: &[String], at: Rect, moving: bool) -> bool {
+    if !unsafe { IsWindow(Some(h)) }.as_bool() || !winutil::is_snappable(h, own, exclude) {
+        return false;
+    }
+    moving || winutil::visible_rect(h).is_some_and(|r| close(r, at, winutil::is_resizable(h)))
 }
 
 pub(super) fn run(job: &Job, verb: GroupVerb) -> Result<Outcome, String> {
@@ -42,13 +62,16 @@ pub(super) fn run(job: &Job, verb: GroupVerb) -> Result<Outcome, String> {
     let layout = job.layouts.get(screens[s].mm.index).and_then(Option::as_ref).ok_or("That window isn't in a zone")?;
     let cells = zones::rects(&layout.tree, g.work, 0);
     // The focused window first, then the snapping's own record, then the stamps.
+    // Windows that closed, were minimized or moved away since aren't in the group.
+    let own = std::process::id();
     let mut members: Vec<(HWND, usize, usize)> = vec![(source, from, to)];
-    for (key, (id, a, b)) in &job.members {
-        if *id == g.id && *key != job.hwnd && *a <= *b && *b < cells.len() {
-            members.push((hwnd_of(*key), *a, *b));
+    for m in &job.members {
+        let (id, a, b) = &m.zone;
+        let (h, fits) = (hwnd_of(m.hwnd), *id == g.id && *a <= *b && *b < cells.len());
+        if fits && m.hwnd != job.hwnd && still_there(h, own, &job.exclude, m.at, m.moving) {
+            members.push((h, *a, *b));
         }
     }
-    let own = std::process::id();
     for h in winutil::top_level_windows() {
         if members.iter().any(|(m, ..)| *m == h) || !winutil::has_zone_stamp(h) {
             continue;
@@ -67,9 +90,11 @@ pub(super) fn run(job: &Job, verb: GroupVerb) -> Result<Outcome, String> {
     let mins = groups::leaf_mins(&layout.tree, g.work, gap, &sizes);
     let leaves = &sizes[0].0;
 
-    let mut given = GIVEN.lock().unwrap_or_else(|e| e.into_inner());
-    let given = given.get_or_insert_with(HashMap::new);
-    let earlier = given.get(&g.id).filter(|p| p.after == layout.tree);
+    let earlier = {
+        let given = GIVEN.lock().unwrap_or_else(|e| e.into_inner());
+        let found = given.as_ref().and_then(|m| m.get(&g.id)).filter(|p| p.after == layout.tree);
+        found.map(|p| (p.template, p.stash.clone()))
+    };
     let (new, keep) = match verb {
         GroupVerb::Grow(step) => {
             let solved =
@@ -83,7 +108,7 @@ pub(super) fn run(job: &Job, verb: GroupVerb) -> Result<Outcome, String> {
         }
         GroupVerb::Priority => match earlier {
             // A second press gives the group back as it was.
-            Some(p) => (ZoneLayout { template: p.template, tree: groups::restore(p.stash.clone()) }, None),
+            Some((template, stash)) => (ZoneLayout { template, tree: groups::restore(stash) }, None),
             None => {
                 let (tree, stash) = groups::priority(&layout.tree, g.work, leaves, &mins);
                 let keep = Given { template: layout.template, stash, after: tree.clone() };
@@ -102,14 +127,10 @@ pub(super) fn run(job: &Job, verb: GroupVerb) -> Result<Outcome, String> {
         if target == zones::span(before[a], before[b]) {
             continue;
         }
-        // A neighbour that can't move stops the whole change, as with Swap.
+        // A neighbour that can't move, hung or running as administrator, stops the
+        // whole change, as with Swap.
         movable(h, &job.exclude)?;
         list.push(into_zone(h, g, a, b, target));
     }
-    // Any change to the group drops what Priority kept, and a new Priority keeps its own.
-    given.remove(&g.id);
-    if let Some(keep) = keep {
-        given.insert(g.id.clone(), keep);
-    }
-    Ok(Outcome::Regroup(list, g.id.clone(), new))
+    Ok(Outcome::Regroup(list, g.id.clone(), new, keep))
 }

@@ -49,7 +49,7 @@ pub struct Job {
     /// Where the snapping last put that window, if it's still there.
     pub snapped: Option<(String, usize, usize)>,
     /// Every snapped window still in its zones, for a group command. Empty otherwise.
-    pub members: Vec<(isize, (String, usize, usize))>,
+    pub members: Vec<snap::Zoned>,
     pub mons: Vec<Mon>,
     pub links: Vec<Link>,
     /// Each screen's zones, or None for none or with zones off.
@@ -68,7 +68,7 @@ pub struct Job {
 struct Planned {
     list: Vec<Placement>,
     /// A screen's layout a group command changed, saved before anything moves.
-    layout: Option<(String, ZoneLayout)>,
+    layout: Option<(String, ZoneLayout, Option<regroup::Given>)>,
     reply: Option<Sender<Reply>>,
 }
 
@@ -106,11 +106,12 @@ pub fn start(job: Job) {
 /// it can't be saved nothing moves.
 pub fn planned(save: impl FnOnce(&str, ZoneLayout) -> bool) {
     let Some(plan) = PLANNED.lock().unwrap_or_else(|e| e.into_inner()).take() else { return };
-    if let Some((screen, layout)) = plan.layout {
+    if let Some((screen, layout, keep)) = plan.layout {
         if !save(&screen, layout) {
             answer(plan.reply, Err(RpcError::new(api::BUSY, "Seam is busy, try again")));
             return;
         }
+        regroup::saved(&screen, keep);
     }
     snap::place_all(plan.list);
     answer(plan.reply, Ok(json!({ "ok": true })));
@@ -120,8 +121,8 @@ pub fn planned(save: impl FnOnce(&str, ZoneLayout) -> bool) {
 enum Outcome {
     Done,
     Place(Vec<Placement>),
-    /// The moves of a group command, and the screen's new layout.
-    Regroup(Vec<Placement>, String, ZoneLayout),
+    /// The moves of a group command, the screen's new layout, and what Priority keeps for that screen once the layout is saved, if anything.
+    Regroup(Vec<Placement>, String, ZoneLayout, Option<regroup::Given>),
 }
 
 fn work() {
@@ -139,7 +140,7 @@ fn work() {
         };
         let planned = match outcome {
             Ok(Outcome::Place(list)) => Ok(Some((list, None))),
-            Ok(Outcome::Regroup(list, screen, layout)) => Ok(Some((list, Some((screen, layout))))),
+            Ok(Outcome::Regroup(list, screen, layout, keep)) => Ok(Some((list, Some((screen, layout, keep))))),
             Ok(Outcome::Done) => Ok(None),
             Err(why) => Err(why),
         };

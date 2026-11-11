@@ -180,8 +180,9 @@ fn shift(root: &mut Abs, area: Rect, path: &[bool], want: i32, mins: &[(i32, i32
         let mut floor = lo + own.max(tenth(len));
         if want < floor {
             if let Some(k) = bound(root, path, dir, true) {
-                let keep = own.max((hi - want + 8) / 9);
-                floor = shift(root, area, &path[..k], want - keep, mins) + keep;
+                let keep = own.max(hi.saturating_sub(want).saturating_add(8) / 9);
+                let start = shift(root, area, &path[..k], want.saturating_sub(keep), mins);
+                floor = start + own.max(tenth(hi - start));
             }
         }
         want.max(floor).min(at)
@@ -190,8 +191,9 @@ fn shift(root: &mut Abs, area: Rect, path: &[bool], want: i32, mins: &[(i32, i32
         let mut ceiling = hi - own.max(tenth(len));
         if want > ceiling {
             if let Some(k) = bound(root, path, dir, false) {
-                let keep = own.max((want - lo + 8) / 9);
-                ceiling = shift(root, area, &path[..k], want + keep, mins) - keep;
+                let keep = own.max(want.saturating_sub(lo).saturating_add(8) / 9);
+                let end = shift(root, area, &path[..k], want.saturating_add(keep), mins);
+                ceiling = end - own.max(tenth(end - lo));
             }
         }
         want.min(ceiling).max(at)
@@ -240,12 +242,15 @@ fn rebuild(node: &Abs, r: Rect) -> Node {
 /// height), in leaf order; a leaf never goes below `MIN_ZONE_PX` either. When the
 /// ratio clamp and the minimums leave less room than asked, the move is cut short.
 pub fn solve(tree: &Node, area: Rect, edge: &Edge, delta_px: i32, mins: &[(i32, i32)]) -> Solved {
+    // No move goes further than the area is long, so a huge delta is the same as that.
+    let reach = area.w.max(area.h).max(0);
+    let delta_px = delta_px.clamp(-reach, reach);
     let base = build(tree, area, &mut 0);
     let attempt = |delta: i32| {
         let mut abs = base.clone();
         let Some((Abs::Split { at, .. }, _)) = locate(&abs, area, &edge.path) else { return None };
         let at = *at;
-        let to = shift(&mut abs, area, &edge.path, at + delta, mins);
+        let to = shift(&mut abs, area, &edge.path, at.saturating_add(delta), mins);
         valid(&abs, area).then_some((abs, to - at))
     };
     let mut best = attempt(delta_px);
@@ -451,6 +456,14 @@ mod tests {
         cells.iter().map(|c| (c.x, c.w)).collect()
     }
 
+    /// Every split's ratio as stored, before `zones` clamps it.
+    fn stored(n: &Node) -> Vec<f32> {
+        match n {
+            Node::Split { ratio, a, b, .. } => [vec![*ratio], stored(a), stored(b)].concat(),
+            Node::Leaf(_) => Vec::new(),
+        }
+    }
+
     fn edge(path: &[bool]) -> Edge {
         Edge { path: path.to_vec() }
     }
@@ -486,6 +499,11 @@ mod tests {
         // With no minimum the ratio clamp still holds the first zone at a tenth.
         let free = solve(&columns(), AREA, &edge(&[]), -1000, &[]);
         assert_eq!(free.cells[0].w, 180);
+        // Deltas and steps far past the area don't overflow, and stop at the same place.
+        assert_eq!(solve(&columns(), AREA, &edge(&[]), i32::MIN, &[]).cells, free.cells);
+        let g = grow(&columns(), AREA, &[2], Some(i32::MAX), &[]).unwrap();
+        // The first zone at a tenth of the width, the middle one at a tenth of the rest.
+        assert_eq!(g.cells[2].w, 1800 - 180 - 162);
     }
 
     #[test]
@@ -513,6 +531,7 @@ mod tests {
             for d in zones::dividers(tree, area) {
                 for delta in (-1500..=1500).step_by(125) {
                     let s = solve(tree, area, &Edge { path: d.path.clone() }, delta, &mins);
+                    assert!(stored(&s.tree).iter().all(|r| (0.1..=0.9).contains(r)), "{tree:?} {delta}");
                     let filled: i64 = s.cells.iter().map(|c| i64::from(c.w) * i64::from(c.h)).sum();
                     assert_eq!(filled, i64::from(area.w) * i64::from(area.h), "{tree:?} {delta}");
                     for (i, c) in s.cells.iter().enumerate() {

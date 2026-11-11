@@ -44,7 +44,6 @@ struct Held {
     focused: isize,
     /// What the press was for, so only the same kind of press puts it back.
     scope: Option<FocusScope>,
-    screen: Option<Rect>,
 }
 
 /// A workspace switch finished: what was held belongs to the old context.
@@ -135,7 +134,8 @@ fn run(job: &Job, held: &mut Held) -> Result<Value, String> {
     // Pressing again puts back what the last press minimized, if it was the same kind
     // of press. If the user restored all of it meanwhile, there is nothing to put back
     // and this press minimizes.
-    let same = held.scope == Some(job.scope) && held.screen == screen;
+    // Wherever focus is now, so moving to another screen doesn't strand them.
+    let same = held.scope == Some(job.scope);
     if same && held.windows.iter().any(|k| exists(*k)) {
         let restored = bring_back(held, job.from_api);
         if restored > 0 {
@@ -200,7 +200,7 @@ fn run(job: &Job, held: &mut Held) -> Result<Value, String> {
     while Instant::now() < until && minimize.iter().any(|k| !winutil::is_minimized(hwnd_of(*k))) {
         std::thread::sleep(RESTORE_POLL);
     }
-    *held = Held { windows: minimize, focused: job.hwnd, scope: Some(job.scope), screen };
+    *held = Held { windows: minimize, focused: job.hwnd, scope: Some(job.scope) };
     Ok(json!({ "ok": true, "minimized": minimized }))
 }
 

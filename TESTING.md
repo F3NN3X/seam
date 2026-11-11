@@ -658,11 +658,23 @@ Quit any GitHub copy first, unless the step says otherwise.
 - [ ] **Import.** With a GitHub `config.json` in `%APPDATA%\Seam` and no package config (uninstall the package to clear it), start the packaged Seam. It starts with default settings, and the window shows "Import settings from your earlier Seam". **Import** brings the old settings in. Reopen the window: no offer. If the offer never shows, the package can't read `%APPDATA%\Seam`, which needs a decision.
 - [ ] **Uninstall.** Remove the package. Seam leaves the tray, and the GitHub copy still starts.
 
+### Switch back and Open alongside
+
+Set **Switch back to the previous workspace** on Shortcuts (it has no key until you set one). Have two workspaces, A and B, with **Other windows** on Minimize in both, and a Notepad window open that neither has.
+
+- [ ] **Nothing yet.** Restart Seam with a desk that has no previous workspace. The tray's Workspaces menu has no "Switch back" item, and the key shows the balloon "No workspace to switch back to".
+- [ ] **Toggle.** Switch to A, then B. The tray's Workspaces menu starts with "Switch back to A" and a separator. Press the key: A is applied. Press it again: B. `config.json` has `previous_workspace` on the desk, and Seam keeps it across a restart.
+- [ ] **Deleted.** Delete A while B is in use. The item goes from the tray menu, and the key shows the balloon again.
+- [ ] **API.** `workspace.switch_back` answers `{ok: true}` and does what the key does, or error 1 with no previous workspace.
+- [ ] **Stream Deck.** Put the **Switch back** action on a key and press it: the same as the hotkey.
+- [ ] **Open alongside.** On A's **...** menu choose **Open alongside**. A is applied but Notepad stays where it is, though A's **Other windows** is Minimize. A's setting is still Minimize, and **Switch now** minimizes Notepad again. A is shown as Active after the alongside switch.
+- [ ] **API.** `workspace.switch` with `{"name":"A","alongside":true}` leaves Notepad alone, and without `alongside` minimizes it.
+
 ## Stream Deck
 
 Build the plugin with `pnpm install`, `pnpm build` and `pnpm run pack` in `integrations/streamdeck`. Run these with Seam running and **Let other apps control Seam** on, and the Stream Deck app open.
 
-- [ ] **Install the packed file.** Double-click `dist\co.f3nn3x.seam.streamDeckPlugin`. Stream Deck installs it, and a Seam group with thirteen actions appears in the action list. General in Seam lists "streamdeck" among the connected apps.
+- [ ] **Install the packed file.** Double-click `dist\co.f3nn3x.seam.streamDeckPlugin`. Stream Deck installs it, and a Seam group with fourteen actions appears in the action list. General in Seam lists "streamdeck" among the connected apps.
 - [ ] **Switch workspace.** Drag the action to a key and pick a workspace in the dropdown, which lists the current desk's workspaces. The key shows its name. Press it: the workspace is applied, and the key lights once it's in use. Switch to another workspace by hotkey. The key goes dark.
 - [ ] **Drift dot.** With the key's workspace in use, drag one of its windows away. Within a second a small amber dot shows in the key's top-right corner. Press the key: the window goes back and the dot goes. Switch to another workspace: the key goes dark with no dot. Quit Seam while the dot shows: the key says "Seam isn't running" with no dot.
 - [ ] **Snap back.** Drag the action to a key. Move a window of the workspace in use and press it: the window goes back. With no workspace in use the key shows an alert.

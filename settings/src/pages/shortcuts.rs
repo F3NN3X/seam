@@ -179,6 +179,12 @@ pub fn render(panel: &mut Panel, _: &mut Window, cx: &mut Context<Panel>) -> imp
         keys.quick_save.as_ref(),
         21 + on_desk.len(),
     ));
+    workspace_rows.push(row(
+        "Switch back to the previous workspace",
+        "switch_back",
+        keys.switch_back.as_ref(),
+        22 + on_desk.len(),
+    ));
     div()
         .flex()
         .flex_col()

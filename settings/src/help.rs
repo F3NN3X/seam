@@ -73,7 +73,7 @@ pub const TOPICS: &[Topic] = &[
             ]),
             Text("When you finish, Seam saves the borders and turns on **Remap pointer at borders**. Ctrl+Shift+Alt+P pauses and resumes it. With **Also align Windows arrangement** on, Seam also moves your screens in Display settings to match."),
             Text("Each set of screens is a desk, with its own borders, zones and workspaces. **Saved desks** lists them, with when each was lined up, in your local time. Each desk's menu has **Rename** and **Forget**."),
-            Text("**Edge resistance**, on Displays, holds the pointer at the edge to another screen until you push that many pixels past it, so you can grab a window's edge or corner there. It's off at 0, works at every border, and gives way while a mouse button is down, so dragging a window across is never slowed."),
+            Text("**Edge resistance**, on Displays, holds the pointer at the edge to another screen until you push that many pixels past it, so you can grab a window's edge or corner there. It's off at 0, works at every border, and gives way while a mouse button is down, so dragging a window across is never slowed. It stays off while the remap is paused and during Line Up."),
             Text("Seam relies on Windows' **Ease cursor movement between displays**, so the pointer can always leave a screen toward its neighbour. When it's off, the Displays page says so, and **Turn it on** turns it on for you and checks that Windows kept it. Seam never turns it off."),
         ],
         opens: Some(Page::Displays),

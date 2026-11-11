@@ -139,14 +139,26 @@ pub fn decide(live: &Live, prev: (i32, i32), pt: (i32, i32)) -> Option<Move> {
         return Some(Move::Block(inside(&a, pt)));
     }
     // With edge resistance on, a move onto any other screen is held at the edge
-    // too, and then goes where Windows puts it.
-    if live.edge_resistance > 0 {
-        if let Some((side, _, over)) = exits[0] {
-            let on = *under.get_or_insert_with(|| live.rects.iter().position(|r| r.contains(pt.0, pt.1)));
-            if let Some(dst) = on.filter(|&j| j != src) {
-                let hold = Some(inside(&a, pt));
-                return Some(Move::Cross(Crossing { to: pt, src, dst, side, over, glue: None, hold }));
+    // too, and then goes where Windows puts it. So is a move onto no screen beside
+    // a neighbour that reaches past that edge, where Ease cursor movement would
+    // carry the pointer across at once.
+    if live.edge_resistance > 0 && exits[0].is_some() {
+        let on = *under.get_or_insert_with(|| live.rects.iter().position(|r| r.contains(pt.0, pt.1)));
+        let mut sides = exits.into_iter().flatten();
+        let found = match on {
+            // The exit that faces it, so a move out through a corner names the right side.
+            Some(dst) if dst != src => {
+                sides.clone().find(|e| facing(&a, &live.rects[dst], e.0)).or(exits[0]).map(|e| (dst, e))
             }
+            Some(_) => None,
+            None => sides.find_map(|e| {
+                let dst = live.rects.iter().position(|r| touching(&a, r).is_some() && reaches_past(r, &a, e.0));
+                dst.map(|dst| (dst, e))
+            }),
+        };
+        if let Some((dst, (side, _, over))) = found {
+            let hold = Some(inside(&a, pt));
+            return Some(Move::Cross(Crossing { to: pt, src, dst, side, over, glue: None, hold }));
         }
     }
     None
@@ -155,6 +167,16 @@ pub fn decide(live: &Live, prev: (i32, i32), pt: (i32, i32)) -> Option<Move> {
 /// `pt` moved onto the nearest pixel of `a`.
 fn inside(a: &Rect, pt: (i32, i32)) -> (i32, i32) {
     (pt.0.clamp(a.left, a.right - 1), pt.1.clamp(a.top, a.bottom - 1))
+}
+
+/// Some of `r` lies past side `side` of `a`.
+fn reaches_past(r: &Rect, a: &Rect, side: Side) -> bool {
+    match side {
+        Side::Right => r.right > a.right,
+        Side::Left => r.left < a.left,
+        Side::Bottom => r.bottom > a.bottom,
+        Side::Top => r.top < a.top,
+    }
 }
 
 /// How far the pointer has pushed past an edge, kept by the hook between moves.
@@ -579,6 +601,18 @@ mod tests {
         assert_eq!(l.push_needed(true, || false), 60);
         assert_eq!(Live { edge_resistance: 90, ..live(&[], &[]) }.push_needed(true, || false), 90);
         assert!(Push::default().after(Some(&right(0)), 0).1);
+        // Off the bottom of B onto no screen: A's neighbour below doesn't touch B,
+        // so nothing reaches past that edge and it's left to Windows.
+        assert_eq!(decide(&l, (1500, 999), (1500, 1004)), None);
+        // A short screen beside a tall one: off its bottom, where only the tall one
+        // goes on, Ease would carry the pointer over, so it's held there too.
+        let short = Rect::new(0, 0, 1000, 500);
+        let tall = Live { edge_resistance: 10, ..live(&[short, b], &[]) };
+        let Some(Move::Cross(c)) = decide(&tall, (500, 499), (500, 503)) else { panic!() };
+        assert_eq!((c.dst, c.side, c.to, c.hold), (1, Side::Bottom, (500, 503), Some((500, 499))));
+        // Out through its bottom-right corner onto the tall one, the side is the one facing it.
+        let Some(Move::Cross(c)) = decide(&tall, (995, 495), (1003, 510)) else { panic!() };
+        assert_eq!((c.dst, c.side, c.over), (1, Side::Right, 3));
         l.edge_resistance = 0;
         assert_eq!(decide(&l, (999, 500), (1003, 500)), None);
         assert_eq!(l.push_needed(false, || panic!("buttons asked while off")), 0);

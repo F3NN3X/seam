@@ -15,7 +15,9 @@ use windows::Win32::Foundation::{LPARAM, LRESULT, POINT, RECT, WPARAM};
 use windows::Win32::System::Threading::{
     GetCurrentThread, GetCurrentThreadId, SetThreadPriority, THREAD_PRIORITY_HIGHEST,
 };
-use windows::Win32::UI::Input::KeyboardAndMouse::{GetAsyncKeyState, VK_LBUTTON, VK_MBUTTON, VK_RBUTTON};
+use windows::Win32::UI::Input::KeyboardAndMouse::{
+    GetAsyncKeyState, VK_LBUTTON, VK_MBUTTON, VK_RBUTTON, VK_XBUTTON1, VK_XBUTTON2,
+};
 use windows::Win32::UI::WindowsAndMessaging::*;
 
 /// Hook timing in ns since the last `log_stats`. Only updated while logging.
@@ -70,9 +72,12 @@ pub fn set_live(live: Live) {
     drop(old); // freed outside the lock
 }
 
-/// Swap in new screens and borders, keeping how far the pointer must push.
+/// Swap in Line Up's screens and borders, keeping the glued edge push. Edge
+/// resistance stays off meanwhile, so it doesn't get in the way of trying the
+/// lines; `relink` brings it back.
 pub fn set_borders(rects: Vec<Rect>, links: Vec<Link>) {
     let mut guard = LIVE.write().unwrap_or_else(|e| e.into_inner());
+    guard.edge_resistance = 0;
     let old = (std::mem::replace(&mut guard.rects, rects), std::mem::replace(&mut guard.links, links));
     drop(guard);
     drop(old); // freed outside the lock
@@ -161,7 +166,9 @@ fn crossing(from: (i32, i32), pt: (i32, i32)) -> Option<(Move, i32)> {
 
 /// Any mouse button is down, as in a window drag or a drag and drop.
 fn buttons_down() -> bool {
-    [VK_LBUTTON, VK_RBUTTON, VK_MBUTTON].iter().any(|vk| unsafe { GetAsyncKeyState(i32::from(vk.0)) } < 0)
+    [VK_LBUTTON, VK_RBUTTON, VK_MBUTTON, VK_XBUTTON1, VK_XBUTTON2]
+        .iter()
+        .any(|vk| unsafe { GetAsyncKeyState(i32::from(vk.0)) } < 0)
 }
 
 /// Where this move should put the pointer, with the crossing if it crosses. A

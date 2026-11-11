@@ -787,8 +787,10 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
             DefWindowProcW(hwnd, msg, wparam, lparam)
         }
         WM_APP_SNAP_BLOCKED => {
-            let body = "Seam can't move windows from apps running as administrator.";
-            with_app(|a| notify(a, "Seam", body, BalloonAction::None));
+            let who = snap::take_blocked_app().unwrap_or_else(|| "This app".into());
+            let body =
+                format!("{who} runs as administrator, so Windows won't let Seam move it. Click for how to manage it");
+            with_app(|a| notify(a, "Seam", &body, BalloonAction::OpenPanel("help")));
             LRESULT(0)
         }
         WM_TIMER if wparam.0 == TIMER_UPDATE => {

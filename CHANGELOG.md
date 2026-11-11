@@ -16,6 +16,8 @@ All notable changes to Seam. The format follows [Keep a Changelog](https://keepa
 
 - **Focus on this window** minimizes the other windows on its screen, and pressing it again brings them back. A shortcut (no key until you set one), `window.focus_only` in the API (`scope` `workspace` minimizes everything outside the workspace in use), and a Stream Deck action.
 - **Spotlight** dims everything but the window you're using. A shortcut (no key until you set one), `window.spotlight` in the API, `spotlight` in the state, and a Stream Deck key that shows whether it's on.
+- **Edge resistance** on Displays, off by default: the pointer waits at the edge to another screen until you push that many pixels past it, so you can grab a window's edge or corner at a screen border. It gives way while a mouse button is down, so window drags aren't slowed. `pointer.edge_resistance_px` in `config.json`, 0 to 100.
+- **Glued edge push** on Displays sets how far to push past a glued edge before the pointer crosses, 60 px by default and 0 to cross at once. `pointer.glue_push_px` in `config.json`, 0 to 200.
 
 ### Changed
 

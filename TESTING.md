@@ -168,6 +168,20 @@ Set up first: on Zones, pick **Priority** for screen 1 and **Grid** for screen 2
 - [ ] **Changing screens.** Change a screen's resolution, then drag with Shift held. The zones match the new size, with no leftover overlay at the old one. Turn Zones off, and Task Manager's memory for `seam.exe` drops back.
 - [ ] **Overlay clean-up.** After every drag no overlay stays on any screen, including when you press Esc mid-drag or close the dragged window.
 
+### Where apps open
+
+Turn the debug log on. **Where apps open** is the last card on Zones, with the caption "Seam puts these apps in place whenever they open, outside workspaces too".
+
+- [ ] **Add a rule.** **Add an app**, pick Notepad from **Open now**, and it gets a row with its icon and a **Goes to** choice. Set it to screen 1, zone 2. `app_rules` in `config.json` holds one entry, and Undo takes the change back. Picking Notepad again says "Already has a place" and adds nothing.
+- [ ] **Opens in place.** With **Put apps in place when they open** off and no workspace in use, close Notepad and open it: it goes to zone 2 of screen 1 once, and the log has `app rule notepad: placed`. Drag it elsewhere: it stays there.
+- [ ] **The workspace owns the app.** Switch to a workspace that has a row for Notepad (placed on another screen), close Notepad and open it, with **Put apps in place when they open** on and then off: the rule never moves it. Open a second Notepad window after the row is taken: the rule still doesn't move it.
+- [ ] **Left alone.** Add Notepad to **Left alone** (**Never include this app** on a workspace row) and open it: it opens where Windows puts it, though the rule is still listed. **Remove** under **Left alone** brings the rule back into effect.
+- [ ] **Screen unplugged.** Make the rule's screen go away (unplug it or turn it off) and open Notepad: nothing moves, and there's no `app rule` line.
+- [ ] **A dialog isn't moved.** Press Ctrl+O in Notepad: the Open dialog stays where Windows puts it, while a new Notepad window still goes to the rule's zone.
+- [ ] **During a switch.** Start a workspace switch and open Notepad by hand while it runs: the switch owns it, and the rule doesn't move it afterwards.
+- [ ] **Full screen and Remove.** Change **Goes to** to "Screen 1, full": the next Notepad opens maximized on it. **...**, **Remove** deletes the rule with Undo, and the next Notepad opens untouched.
+- [ ] **Search and Help.** Searching "where apps open", "app rules" or "always open" finds the card, and Help has a **Where apps open** topic.
+
 ## Window control
 
 Set up first: Priority zones on screen 1, Grid on screen 2, none on the U3477. Open a few windows on every screen, some snapped and some not.
@@ -198,6 +212,10 @@ Set up first: Priority zones on screen 1, Grid on screen 2, none on the U3477. O
 - [ ] **Panel.** On Shortcuts, the Windows section lists move, focus and swap in each direction with their keys. Record a new key and it works from another app. Search "swap" or "focus" and the rows are found.
 - [ ] **API.** `window.move`, `window.focus` and `window.swap` with `{"dir":"left"}` act on the focused window and answer `{"ok":true}`. With nothing that way, on an administrator window, or on a hung one they answer error 3 with the reason. `{"dir":"next"}` answers error -32602.
 - [ ] **API focus.** From a test client run from a terminal, send `window.focus` with `{"dir":"right"}` while another app is focused. The window to the right takes focus, its taskbar button doesn't just flash, and the pointer doesn't move.
+- [ ] **Focus on this window.** Record a key for it. With four windows on screen 1 and one on screen 2, press it on one of screen 1: the other three minimize and screen 2 is untouched. Press it again: they come back in their old stacking order, and the window you pressed on has focus. Restore one by hand, press again: only the others come back. Close all the minimized ones, press again: it minimizes again. A window pinned on top and a sticky one stay. An app on the zones' exclude list, an administrator app and a hung app stay.
+- [ ] **Focus on this window, workspace.** With a workspace in use, `window.focus_only` with `{"scope":"workspace"}` minimizes every window on every screen that isn't one of its apps or another window of those apps; calling it again restores them. With no workspace in use it answers error 3. With a window manager like komorebi running it answers error 3 as well, and the key does nothing.
+- [ ] **Spotlight.** Record a key for it. Press it: every screen dims to about half, except the focused window, which stays bright. Click another window, and it becomes the bright one at once. Click on a window on screen 2: screen 1 stays dimmed above all its windows, screen 2 dims below the window. Minimize and restore windows, and Alt+Tab: the dim keeps following. Click through the dim: clicks reach the windows and nothing takes focus. Click the desktop or the taskbar: the dim hides, and comes back with the next window. Move the focused window to another screen by key: the dim follows within a moment. Unplug a screen or change resolution: the dim fits the screens. Press the key again, or quit Seam: the dim is gone. A topmost window (a pinned one) stays bright above the dim. With komorebi running it still works.
+- [ ] **Focus and spotlight API and Stream Deck.** `window.spotlight` with `{}` toggles and answers `{"on":true}`, then `{"on":false}`; `state.get` shows `spotlight`. A Stream Deck "Spotlight" key follows it and "Focus on this window" minimizes and restores.
 - [ ] **Hook timings unchanged.** Note `hook stats`, then use every move, focus and swap key and the API calls for 30 s while moving the pointer across the borders. `own max` and `avg` match a run without them, crossings still remap, and `SPI_SETFOREGROUNDLOCKTIMEOUT` is unchanged (`SystemParametersInfo` reads the same before and after).
 
 ## Pin, border and Release all
@@ -396,7 +414,7 @@ Each change below saves at once, with no Save button, and shows a notification w
 - [ ] **Installed.** The Installed tab lists the Start menu's apps by name with their icons, and no services, uninstallers or links. Search "note": only matching apps stay. Search for something that isn't there: "Nothing matches ...".
 - [ ] **A Store app.** Add Calculator from Installed with it closed. The row says "Packaged app". Switch: Calculator starts through its AUMID and isn't listed as `refused`.
 - [ ] **Already there.** An app that's already a row shows "In this workspace" in both tabs. Clicking it adds a second row, for a second window of that app.
-- [ ] **Never include.** "..." on a row, **Never include this app**. The row goes, its exe is in **Never manage these apps** on General and in `zones.exclude`, and a capture leaves it out. Undo brings the row back and takes it off the list. On General, **Remove** takes an app off the list with Undo. A Store app added from Installed has no Never include until a capture or Where it is now fills in its exe.
+- [ ] **Never include.** "..." on a row, **Never include this app**. The row goes, its exe is under **Left alone** on Zones and in `zones.exclude`, and a capture leaves it out. Undo brings the row back and takes it off the list. Under **Left alone** on Zones, **Remove** takes an app off the list with Undo. A Store app added from Installed has no Never include until a capture or Where it is now fills in its exe.
 
 ### Launch stages
 
@@ -455,7 +473,7 @@ Turn the debug log on, and **Put apps in place when they open** on, at the botto
 - [ ] **Drag while it settles.** Open an app and start dragging its window at once. Auto-apply leaves it where you drop it.
 - [ ] **Restore isn't an open.** Minimize a window you dragged away and restore it. It isn't put back in its zone. Close an app to the tray and show it again: it isn't moved either.
 - [ ] **Reopened.** Close one of the three apps and open it again. It goes back into its zone, because its row is free again.
-- [ ] **Never manage.** Add an app of the workspace to **Never manage these apps** on General, then open it: it's left where it opens.
+- [ ] **Never manage.** Add an app of the workspace to **Left alone** on Zones, then open it: it's left where it opens.
 - [ ] **Administrator.** Open an app of the workspace as administrator: it's left alone without a notice.
 - [ ] **Off.** Turn the switch off and open an app of the workspace. It stays where it opens, and the log's `wm: workspace in use true, auto-apply false` line shows the hooks changed.
 - [ ] **No workspace.** Plug a screen in or out, so no workspace is in use, and open an app: nothing happens.

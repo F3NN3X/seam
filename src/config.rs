@@ -73,6 +73,10 @@ pub struct Hotkeys {
     pub priority: Option<String>,
     /// "Switch back to the previous workspace" on this desk.
     pub switch_back: Option<String>,
+    /// "Focus on this window": minimize the others on its screen, and bring them back.
+    pub focus_only: Option<String>,
+    /// "Spotlight": dim everything but the window in use.
+    pub spotlight: Option<String>,
 }
 
 impl Default for Hotkeys {
@@ -106,6 +110,8 @@ impl Default for Hotkeys {
             shrink: None,
             priority: None,
             switch_back: None,
+            focus_only: None,
+            spotlight: None,
         }
     }
 }
@@ -335,6 +341,10 @@ pub struct Config {
     /// "Put apps in place when they open": a window that opens and matches a rule of
     /// the active workspace goes to its place once (§11.1). Off by default.
     pub auto_apply: bool,
+    /// "Where apps open": an app's window goes to its place whenever it opens, with
+    /// or without a workspace. Raw JSON like workspaces, so an entry this build
+    /// can't read is kept as it is and ignored.
+    pub app_rules: Vec<serde_json::Value>,
     /// The panel asked once whether to turn on Windows' "Ease cursor movement between
     /// displays", or Seam turned it on. Either way it isn't asked again.
     pub cursor_easing_asked: bool,
@@ -370,6 +380,7 @@ impl Default for Config {
             restore_session: false,
             restore_apps: RestoreApps::Windows,
             auto_apply: false,
+            app_rules: Vec::new(),
             cursor_easing_asked: false,
             restore_apps_saved: None,
             updates: UpdateSettings::default(),

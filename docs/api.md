@@ -106,7 +106,7 @@ In the examples, `->` is what you send, with the `jsonrpc` and `id` fields left 
 | `autoapply.set` | `on`: bool | `{on}` | Any | `-32602` | `{"method":"autoapply.set","params":{"on":true}}` |
 | `cursor_easing.set` | `on`: bool | `{on}`, the setting as Windows reports it | Panel | 3, 4 | `{"method":"cursor_easing.set","params":{"on":true}}` |
 
-`state.get` and `config.get` read a snapshot, so they answer at once even while Seam is busy. `config.patch` is validated: a patch that makes an invalid config, or comes from a different config version, answers `3` and changes nothing. `autoapply.set` is "Put apps in place when they open". `cursor_easing.set` only accepts `true`: Seam never turns Ease cursor movement off, and `false` answers `3`.
+`state.get` and `config.get` read a snapshot, so they answer at once even while Seam is busy. `config.patch` is validated: a patch that makes an invalid config, or comes from a different config version, answers `3` and changes nothing. `autoapply.set` is "Put apps in place when they open". `config.patch` can also set `app_rules`, the list behind "Where apps open": each entry is a workspace row with `exe` (or `aumid`), `monitor` (the screen's device path) and `target` (`{zone}`, `{state: "max"}` for the full screen). A patch replaces the whole list, and an entry this build can't read is kept and ignored. `cursor_easing.set` only accepts `true`: Seam never turns Ease cursor movement off, and `false` answers `3`.
 
 ### Desks and Line Up
 
@@ -136,6 +136,15 @@ These act on the window in the foreground, using the screens as they stand on yo
 | `window.priority` | none | `{ok: true}` | Any | 2, 3 | `{"method":"window.priority","params":{}}` |
 
 Error `3` carries the reason in `message`: no window has focus, nothing in that direction, the window can't be moved, runs as administrator or isn't responding. `window.resize` and `window.priority` act on the zones of the focused window's screen and every window in them, and also answer `3` when the window isn't in a zone, when no divider beside it can move, or when one of the windows that would move can't be. A second `window.priority` on the same layout puts it back as it was. A changed layout is saved, as Custom unless it is back to its template. `window.move`, `window.swap`, `window.resize` and `window.priority` also answer `3` while komorebi, GlazeWM, LeopardWM or "Another window manager handles my windows" has Seam leaving placement alone. `window.focus` still works then. Error `2` means a newer window command replaced this one before it ran.
+
+### Focus and spotlight
+
+| Method | Params | Result | Who | Errors | Example |
+|---|---|---|---|---|---|
+| `window.focus_only` | `scope?`: `"screen"` (default) or `"workspace"` | `{ok: true, minimized}` or `{ok: true, restored}` | Any | 2, 3, -32602 | `{"method":"window.focus_only","params":{"scope":"screen"}}` |
+| `window.spotlight` | `on?`: bool | `{on}` | Any | -32602 | `{"method":"window.spotlight","params":{"on":true}}` |
+
+`window.focus_only` minimizes every other window on the focused window's screen. With `scope` `"workspace"` it minimizes every window outside the workspace in use, on all of the desk's screens, using the matching a workspace switch uses. Seam's own, administrator, hung, excluded, sticky and pinned-on-top windows are left alone. Calling it again while any window it minimized still exists restores those that are still minimized, bottom of the stack first, and gives focus back to the window that had it. Error `3` carries the reason: no window has focus, no other window to minimize, or no workspace in use. It also answers `3` while another window manager has Seam leaving placement alone. `window.spotlight` toggles when `on` is left out, and answers the new state. It dims every screen except the focused window, and works next to another window manager. The state's `spotlight` says whether it is on.
 
 ### Pins
 
@@ -207,6 +216,7 @@ Subscribe with `events.subscribe` and a list of topics. An event belongs to the 
   "packaged": false,
   "remap": "on",
   "zones": "on",
+  "spotlight": false,
   "wm": {
     "other_wm": null,
     "manual_other_wm": false,
@@ -234,6 +244,7 @@ Subscribe with `events.subscribe` and a list of topics. An event belongs to the 
 | `packaged` | True for the Microsoft Store build |
 | `remap` | The pointer remap: `on`, `paused`, or `off_no_borders` when no border is lined up on this desk |
 | `zones` | `on` or `off`: whether drag snapping is enabled |
+| `spotlight` | Spotlight is dimming everything but the focused window |
 | `wm.other_wm` | `komorebi`, `glazewm` or `leopardwm` while that window manager is running, else `null`. Seam leaves placing windows to it |
 | `wm.manual_other_wm` | "Another window manager handles my windows" is on |
 | `wm.focus_border` | "Focus border" is on |

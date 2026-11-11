@@ -16,14 +16,14 @@ use crate::log;
 use crate::monitors::{self, Mon};
 use crate::snap::{self, WM_APP_REFIT, WM_APP_SNAP_BLOCKED};
 use crate::switcher::{
-    self, CaptureJob, LiveWorkspace, Screen as SwitchScreen, SwitchJob, WM_APP_CAPTURED, WM_APP_SESSION,
+    self, AppRules, CaptureJob, LiveWorkspace, Screen as SwitchScreen, SwitchJob, WM_APP_CAPTURED, WM_APP_SESSION,
     WM_APP_SWITCHED,
 };
 use crate::tray::{CLASS, WM_APP_API, WM_APP_LINEUP, WM_APP_WINDOWS_CHANGED};
 use crate::wm::{Pinned, WM_APP_WS_MOVED};
-use crate::{arrange, ease, hotkey, identify, live, overlay, showlayout, wincontrol, wm};
+use crate::{arrange, ease, focus_only, hotkey, identify, live, overlay, showlayout, spotlight, wincontrol, wm};
 use commands::{align_finished, busy, drain_api, patch_config, refused};
-use seam::api::{self, Client, Command, GroupVerb, PinKind, Reply, RpcError, WindowVerb};
+use seam::api::{self, Client, Command, FocusScope, GroupVerb, PinKind, Reply, RpcError, WindowVerb};
 use seam::config::{RestoreApps, TrayClick};
 use seam::direction::Dir;
 use seam::state::{
@@ -63,9 +63,9 @@ use windows::Win32::UI::Shell::*;
 use windows::Win32::UI::WindowsAndMessaging::*;
 use workspaces::{
     apply_hotkeys, aside, capture_job, captured, choose_in_use, desk_workspaces, detected_in_use, drift_checked,
-    drift_due, forget_deleted, live_of, migrate_hotkeys, other_wm_changed, quick_save, set_default, snap_back,
-    start_capture, start_switch, start_switch_job, start_window, switch_back, switched, sync_live, undo_quick_save,
-    update_workspace, ws_moved,
+    drift_due, forget_deleted, live_of, migrate_hotkeys, other_wm_changed, quick_save, set_default, set_spotlight,
+    snap_back, start_capture, start_focus_only, start_switch, start_switch_job, start_window, switch_back, switched,
+    sync_live, undo_quick_save, update_workspace, ws_moved,
 };
 use workspaces::{start_group, window_planned};
 
@@ -130,6 +130,8 @@ const HOTKEY_GROW: i32 = 30;
 const HOTKEY_SHRINK: i32 = 31;
 const HOTKEY_PRIORITY: i32 = 32;
 const HOTKEY_SWITCH_BACK: i32 = 23;
+const HOTKEY_FOCUS_ONLY: i32 = 40;
+const HOTKEY_SPOTLIGHT: i32 = 41;
 /// One hotkey id per workspace on the desk, from here up.
 const HOTKEY_WORKSPACE: i32 = 100;
 const NIN_KEYSELECT: u32 = NIN_SELECT | NINF_KEY;
@@ -335,6 +337,7 @@ fn refresh(app: &mut App) {
         return;
     }
     app.mons = monitors::enumerate();
+    spotlight::screens_changed(&app.mons);
     let sig = signature(app.mons.iter().map(|m| m.id.as_str()));
     let arrived = sig != app.sig && !app.mons.is_empty();
     app.sig = sig;
@@ -390,6 +393,7 @@ fn snapshot(app: &App) -> Snapshot {
         update: app.update.clone(),
         remap: Remap::of(app.cfg.enabled, app.links.len()),
         zones: if app.cfg.zones.enabled { state::Zones::On } else { state::Zones::Off },
+        spotlight: spotlight::is_on(),
         wm: WmState {
             other_wm: app.other_wm.map(String::from),
             manual_other_wm: app.cfg.windows.other_wm,
@@ -654,6 +658,12 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                         }
                     });
                 }
+                HOTKEY_FOCUS_ONLY => {
+                    with_app(|a| start_focus_only(a, FocusScope::Screen, None));
+                }
+                HOTKEY_SPOTLIGHT => {
+                    with_app(|a| set_spotlight(a, None));
+                }
                 HOTKEY_QUICK_SAVE => {
                     if let Some(Some(Err(e))) = with_app(|a| quick_save(a, None)) {
                         log::info!("quick save hotkey: {}", e.message);
@@ -881,6 +891,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                 wm::release_before_exit();
             }
             snap::shutdown();
+            spotlight::stop();
             with_app(|a| {
                 let nid = tray_data(a);
                 let _ = Shell_NotifyIconW(NIM_DELETE, &nid);

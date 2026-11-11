@@ -11,6 +11,7 @@ import {
 	SaveWindows,
 	SnapBack,
 	SwitchBack,
+	TileScreen,
 	Zones,
 } from "./actions/simple.js";
 import { FocusWindow, MoveWindow } from "./actions/window.js";
@@ -22,6 +23,7 @@ streamDeck.actions.registerAction(new SwitchWorkspace());
 streamDeck.actions.registerAction(new SnapBack());
 streamDeck.actions.registerAction(new SwitchBack());
 streamDeck.actions.registerAction(new SaveWindows());
+streamDeck.actions.registerAction(new TileScreen());
 streamDeck.actions.registerAction(new LineUp());
 streamDeck.actions.registerAction(new Remap());
 streamDeck.actions.registerAction(new Zones());

@@ -73,6 +73,8 @@ pub struct Hotkeys {
     pub priority: Option<String>,
     /// "Switch back to the previous workspace" on this desk.
     pub switch_back: Option<String>,
+    /// "Tile this screen's windows", on the screen under the pointer.
+    pub tile_screen: Option<String>,
 }
 
 impl Default for Hotkeys {
@@ -106,6 +108,7 @@ impl Default for Hotkeys {
             shrink: None,
             priority: None,
             switch_back: None,
+            tile_screen: None,
         }
     }
 }

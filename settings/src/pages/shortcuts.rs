@@ -164,6 +164,7 @@ pub fn render(panel: &mut Panel, _: &mut Window, cx: &mut Context<Panel>) -> imp
         row("Grow window into its neighbour", "grow", keys.grow.as_ref(), 900),
         row("Shrink window", "shrink", keys.shrink.as_ref(), 901),
         row("Give window two thirds of its group", "priority", keys.priority.as_ref(), 902),
+        row("Tile this screen's windows", "tile_screen", keys.tile_screen.as_ref(), 920),
     ]);
     window_rows.extend([
         row("Pin window on top", "pin_top", keys.pin_top.as_ref(), 17),

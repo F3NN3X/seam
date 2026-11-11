@@ -6,6 +6,8 @@ All notable changes to Seam. The format follows [Keep a Changelog](https://keepa
 
 ### Added
 
+- **Tile this screen's windows**: puts the loose windows on the screen under the pointer into its zones. A shortcut (no key until you set one), **Tile windows** in the tray menu (a submenu of screens when you have several), `screen.tile` in the API, and a **Tile screen** Stream Deck action. A screen with no layout is given one for the number of windows, and a notification offers Undo for 8 seconds.
+- **Main + stack** and **Stack + main** layouts on the Zones page: a main zone of two thirds beside two stacked zones. An older Seam reads a screen with one of them as having no zones.
 - **Grow window into its neighbour**, **Shrink window** and **Give window two thirds of its group** on Shortcuts, with no key until you set one. They move the dividers beside a window in a zone, and the windows in the other zones follow. No window goes below the smallest size its app allows: the divider beyond it moves instead. A second press of two thirds puts the zones back. The changed layout is saved as Custom. `window.resize` and `window.priority` in the API.
 - **Switch back to the previous workspace**: a shortcut (no key until you set one), the first item of the tray's Workspaces menu, `workspace.switch_back` in the API, and a Stream Deck action. `previous_workspace` on a desk in `config.json`.
 - **Open alongside**, on a workspace's **...** menu, switches once and leaves the other windows alone. `workspace.switch` takes `alongside`.

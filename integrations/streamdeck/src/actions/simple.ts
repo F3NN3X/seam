@@ -61,6 +61,14 @@ export class SaveWindows extends Plain {
 	}
 }
 
+/** Puts the loose windows on the screen under the pointer into its zones. */
+@action({ UUID: "co.f3nn3x.seam.tile-screen" })
+export class TileScreen extends Plain {
+	protected async press(): Promise<void> {
+		await seam.call("screen.tile");
+	}
+}
+
 @action({ UUID: "co.f3nn3x.seam.release" })
 export class ReleasePinned extends Plain {
 	protected async press(): Promise<void> {

@@ -2,6 +2,7 @@
 
 mod commands;
 mod session;
+mod tile;
 mod tray_icon;
 mod update;
 mod workspaces;
@@ -44,10 +45,12 @@ use std::sync::mpsc::{channel, Sender};
 use std::sync::Mutex;
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use tile::{start_tile, tile_finished, undo_tile};
 use tray_icon::{add_icon, make_icon, notify, show_menu, tray_data, update_tip};
 use update::{
     arm_auto_install, auto_install, check_for_updates, clean_up_after_update, read_update_state, update_read,
 };
+use wincontrol::tile::At;
 use windows::core::{w, PCWSTR};
 use windows::Win32::Foundation::*;
 use windows::Win32::Graphics::Gdi::*;
@@ -130,6 +133,7 @@ const HOTKEY_GROW: i32 = 30;
 const HOTKEY_SHRINK: i32 = 31;
 const HOTKEY_PRIORITY: i32 = 32;
 const HOTKEY_SWITCH_BACK: i32 = 23;
+const HOTKEY_TILE_SCREEN: i32 = 50;
 /// One hotkey id per workspace on the desk, from here up.
 const HOTKEY_WORKSPACE: i32 = 100;
 const NIN_KEYSELECT: u32 = NIN_SELECT | NINF_KEY;
@@ -140,6 +144,10 @@ const ID_RELEASE: usize = 3;
 const ID_OPEN: usize = 6;
 const ID_QUIT: usize = 9;
 const ID_SWITCH_BACK: usize = 10;
+/// Tile with one screen, or with several when the submenu couldn't be made.
+const ID_TILE: usize = 11;
+/// Menu ids of the screens in the Tile windows submenu, from here up to the workspaces.
+const ID_TILE_SCREEN: usize = 20;
 /// Menu ids of the workspaces in the submenu, from here up.
 const ID_WORKSPACE: usize = 100;
 
@@ -155,6 +163,8 @@ enum BalloonAction {
     RestoreSession,
     /// Put back what the last quick save changed.
     UndoQuickSave,
+    /// Put back the windows and layout of the last tile.
+    UndoTile,
 }
 
 /// Writes config.json on its own thread, so the main thread never does file I/O.
@@ -213,6 +223,18 @@ struct QuickUndo {
     until: Instant,
 }
 
+/// What Undo puts back after Tile windows.
+struct TileUndo {
+    sig: String,
+    /// The screen's id.
+    screen: String,
+    /// The tile gave the screen its layout, so Undo takes it away.
+    picked: bool,
+    /// Each moved window where it was.
+    back: Vec<snap::Placement>,
+    until: Instant,
+}
+
 /// An `arrangement.align` running on a worker.
 struct Aligning {
     reply: Sender<Reply>,
@@ -251,6 +273,8 @@ struct App {
     capturing: Option<Capturing>,
     /// The last quick save, while it can still be undone.
     quick_undo: Option<QuickUndo>,
+    /// The last tile, while it can still be undone.
+    tile_undo: Option<TileUndo>,
     clients: Vec<String>,
     last_state_event: Option<Instant>,
     /// The Store copy: Windows updates it, so the updater stays off.
@@ -598,6 +622,9 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                         Some(BalloonAction::UndoQuickSave) => {
                             with_app(undo_quick_save);
                         }
+                        Some(BalloonAction::UndoTile) => {
+                            with_app(undo_tile);
+                        }
                         Some(BalloonAction::RestoreSession) => {
                             with_app(|a| {
                                 if let Some(Err(e)) = a.session_offer.take().map(|s| restore_session(a, s)) {
@@ -658,6 +685,9 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                     if let Some(Some(Err(e))) = with_app(|a| quick_save(a, None)) {
                         log::info!("quick save hotkey: {}", e.message);
                     }
+                }
+                HOTKEY_TILE_SCREEN => {
+                    with_app(|a| start_tile(a, tile::pointer(), None));
                 }
                 id @ (HOTKEY_GROW | HOTKEY_SHRINK | HOTKEY_PRIORITY) => {
                     let verb = match id {
@@ -1014,6 +1044,7 @@ pub fn run() {
             recheck: false,
             capturing: None,
             quick_undo: None,
+            tile_undo: None,
             clients: Vec::new(),
             last_state_event: None,
             packaged: package::is_packaged(),

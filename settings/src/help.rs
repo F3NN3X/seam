@@ -51,7 +51,7 @@ pub const TOPICS: &[Topic] = &[
                 text: "Drag two lines across each border until the stripes run straight over the bezel",
                 page: Page::Displays,
             },
-            Step { title: "Pick zone layouts", text: "Choose Columns, Rows, Grid or Priority for each screen", page: Page::Zones },
+            Step { title: "Pick zone layouts", text: "Choose Columns, Rows, Grid, Priority, Main + stack or Stack + main for each screen", page: Page::Zones },
             Step {
                 title: "Capture a workspace",
                 text: "Arrange your windows, then save which app is where",
@@ -120,7 +120,7 @@ pub const TOPICS: &[Topic] = &[
     Topic {
         title: "Zones",
         blocks: &[
-            Text("Pick a layout for each screen: Columns, Rows, Grid or Priority. Then hold Shift while you drag a window. The zones show on the screen under the pointer, and letting go drops the window into the one that's lit."),
+            Text("Pick a layout for each screen: Columns, Rows, Grid, Priority, Main + stack or Stack + main. Then hold Shift while you drag a window. The zones show on the screen under the pointer, and letting go drops the window into the one that's lit."),
             List(&[
                 "Hold Ctrl as well to cover several zones with one window",
                 "**Show zones** and **Span zones** change the two keys",
@@ -129,6 +129,7 @@ pub const TOPICS: &[Topic] = &[
             ]),
             Text("**Edit layout** opens the editor on the screen itself. Click a zone to split it side by side or top and bottom, drag a divider, or merge two neighbours, then press **Done**. Esc throws the changes away and Ctrl+Z undoes the last one."),
             Text("**Keep windows in their zones** is experimental. It moves snapped windows back after a screen, resolution or scaling change, or after the PC wakes."),
+            Text("**Tile this screen's windows** puts the loose windows on a screen into its zones in one go: the one you are using gets the biggest zone, and the others take the nearest free one. A screen with no layout is given one that fits the number of windows, from two columns up to a 3x3 grid. It takes up to nine windows and leaves pinned, sticky, minimized and administrator windows alone. Tile windows in the tray menu does it for a screen too, and a notification offers Undo for 8 seconds. The shortcut has no key until you set one."),
             Text("Layouts belong to the desk, so each set of screens keeps its own."),
         ],
         opens: Some(Page::Zones),
@@ -212,7 +213,7 @@ pub const TOPICS: &[Topic] = &[
                 "Ctrl+Shift+Alt+L lines up your screens",
                 "Ctrl+Shift+Alt+P pauses or resumes the remap",
                 "Shift+Win+Alt+arrows move the focused window, and Ctrl+Shift+Alt+arrows focus the window that way",
-                "Swap, grow, shrink, two thirds, next and previous zone, the pins, capture, Snap back, Switch back and quick save have no key until you set one",
+                "Swap, grow, shrink, two thirds, tile, next and previous zone, the pins, capture, Snap back, Switch back and quick save have no key until you set one",
             ]),
             Text("Each workspace can have its own shortcut too. Press **Change** on a row, then the keys. Esc keeps the old ones and Backspace clears them. Ctrl+Shift+Alt plus a number is a good choice, since Ctrl+Alt alone types characters on many keyboards."),
             Text("If another app already holds a shortcut, its keys turn red and Seam keeps running without it."),

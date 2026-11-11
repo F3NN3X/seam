@@ -37,6 +37,7 @@ pub(super) fn apply_hotkeys(app: &mut App) {
         (HOTKEY_SHRINK, "shrink".to_string(), keys.shrink.clone()),
         (HOTKEY_PRIORITY, "priority".to_string(), keys.priority.clone()),
         (HOTKEY_SWITCH_BACK, "switch_back".to_string(), keys.switch_back.clone()),
+        (HOTKEY_TILE_SCREEN, "tile_screen".to_string(), keys.tile_screen.clone()),
     ];
     for (id, (verb, dir, combo)) in (HOTKEY_WINDOW..).zip(keys.directional()) {
         wanted.push((id, format!("{verb}_{dir}"), combo.cloned()));
@@ -162,7 +163,7 @@ pub(super) fn start_group(app: &App, verb: GroupVerb, reply: Option<Sender<Reply
     queue_window(app, wincontrol::Task::Group(verb), snap::zoned(), reply);
 }
 
-fn queue_window(app: &App, task: wincontrol::Task, members: Vec<snap::Zoned>, reply: Option<Sender<Reply>>) {
+pub(super) fn queue_window(app: &App, task: wincontrol::Task, members: Vec<snap::Zoned>, reply: Option<Sender<Reply>>) {
     let hwnd = unsafe { GetForegroundWindow() };
     let desk = app.cfg.desks.get(&app.sig).filter(|_| app.cfg.zones.enabled);
     let layout = |m: &Mon| desk.and_then(|d| d.zones.get(&m.id)).and_then(zones::layout_of);
@@ -187,7 +188,7 @@ fn queue_window(app: &App, task: wincontrol::Task, members: Vec<snap::Zoned>, re
 /// Window control's moves are ready. A group command changed a screen's layout,
 /// which is saved here once, before the windows move.
 pub(super) fn window_planned(app: &mut App) {
-    wincontrol::planned(|screen, layout| {
+    let tiled = wincontrol::planned(|screen, layout| {
         let (Ok(value), Some(desk)) = (serde_json::to_value(&layout), app.cfg.desks.get_mut(&app.sig)) else {
             return false;
         };
@@ -197,6 +198,7 @@ pub(super) fn window_planned(app: &mut App) {
         publish(app);
         true
     });
+    tile_finished(app, tiled);
 }
 
 /// A switch finished: say which workspace is in use, and how it went.

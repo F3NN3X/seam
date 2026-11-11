@@ -442,6 +442,35 @@ pub fn relabel(template: Template, tree: Node) -> ZoneLayout {
     ZoneLayout { template: if same { template } else { Template::Custom }, tree }
 }
 
+/// `n` equal parts along `dir`, each made by `part`.
+fn equal_parts(dir: Dir, n: usize, part: &dyn Fn() -> Node) -> Node {
+    if n <= 1 {
+        return part();
+    }
+    Node::Split { split: dir, ratio: 1.0 / n as f32, a: Box::new(part()), b: Box::new(equal_parts(dir, n - 1, part)) }
+}
+
+/// A grid of equal zones, `cols` across and `rows` down, numbered column by column.
+fn grid(cols: usize, rows: usize) -> Node {
+    equal_parts(Dir::Vertical, cols, &|| equal_parts(Dir::Horizontal, rows, &|| Node::Leaf(LeafTag::Leaf)))
+}
+
+/// The layout Tile gives a screen with none, for `n` windows: two columns, Main
+/// and stack, the 2x2 grid, then 3x2 and 3x3. One window or none needs none, and
+/// nine is as many as Tile takes. Only Main + stack and Grid are templates; the
+/// others are Custom, as no template has their tree.
+pub fn pick_for_count(n: usize) -> Option<ZoneLayout> {
+    let tree = match n {
+        0 | 1 => return None,
+        2 => grid(2, 1),
+        3 => return ZoneLayout::of(Template::MainStack),
+        4 => return ZoneLayout::of(Template::Grid),
+        5 | 6 => grid(3, 2),
+        _ => grid(3, 3),
+    };
+    Some(ZoneLayout { template: Template::Custom, tree })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -568,5 +597,23 @@ mod tests {
         assert_eq!(relabel(Template::Columns, columns()).template, Template::Columns);
         let (tree, _) = priority(&columns(), AREA, &[1], &[]);
         assert_eq!(relabel(Template::Columns, tree).template, Template::Custom);
+    }
+
+    #[test]
+    fn tile_picks_a_layout_with_room_for_every_window() {
+        let area = Rect { x: -1440, y: 200, w: 1440, h: 2520 };
+        assert!(pick_for_count(0).is_none() && pick_for_count(1).is_none());
+        for (n, zones) in [(2, 2), (3, 3), (4, 4), (5, 6), (6, 6), (7, 9), (8, 9), (9, 9)] {
+            let layout = pick_for_count(n).unwrap();
+            let cells = zones::rects(&layout.tree, area, 0);
+            assert_eq!(cells.len(), zones, "{n} windows");
+            let filled: i64 = cells.iter().map(|c| i64::from(c.w) * i64::from(c.h)).sum();
+            assert_eq!(filled, i64::from(area.w) * i64::from(area.h), "{n} windows leave holes or overlap");
+            assert!(cells.iter().all(|c| c.x >= area.x && c.y >= area.y && c.x + c.w <= area.x + area.w));
+            assert!(cells.iter().all(|c| c.y + c.h <= area.y + area.h && c.w > 0 && c.h > 0));
+            assert_eq!(layout.template == Template::Custom, n != 3 && n != 4, "{n} windows");
+        }
+        assert_eq!(pick_for_count(3).unwrap().template, Template::MainStack);
+        assert_eq!(pick_for_count(4).unwrap().template, Template::Grid);
     }
 }

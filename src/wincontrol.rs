@@ -26,6 +26,8 @@ use windows::Win32::UI::WindowsAndMessaging::*;
 #[path = "regroup.rs"]
 mod regroup;
 
+pub use regroup::{group_members, group_mins};
+
 /// The worker has moves for the main thread to start.
 pub const WM_APP_WINDOW: u32 = WM_APP + 18;
 /// The gap slider's end, as in the snapping.
@@ -115,6 +117,19 @@ pub fn planned(save: impl FnOnce(&str, ZoneLayout) -> bool) {
     }
     snap::place_all(plan.list);
     answer(plan.reply, Ok(json!({ "ok": true })));
+}
+
+/// A drag of a window's edge changed a screen's layout: save it the way a group
+/// command's is, which also drops what Priority kept for the screen. Nothing moves
+/// here, as the drag has put the windows already.
+pub fn save_layout(owner: isize, screen: String, layout: ZoneLayout) {
+    let plan = Planned { list: Vec::new(), layout: Some((screen, layout, None)), reply: None };
+    if let Some(earlier) = PLANNED.lock().unwrap_or_else(|e| e.into_inner()).replace(plan) {
+        replaced(earlier.reply);
+    }
+    unsafe {
+        let _ = PostMessageW(Some(hwnd_of(owner)), WM_APP_WINDOW, WPARAM(0), LPARAM(0));
+    }
 }
 
 /// What a command came to.
@@ -261,16 +276,22 @@ fn zone_of(
     if known.is_some() {
         return known;
     }
-    let set = winutil::zone_stamp(h);
     let (x, y) = centre(rect);
     let s = geo.iter().position(|g| g.bounds.contains(x, y))?;
-    let g = &geo[s];
-    if set.iter().any(|i| *i >= g.zones.len()) {
+    let (from, to, span) = stamped_in(h, rect, &geo[s].zones)?;
+    Some((s, from, to, span))
+}
+
+/// The first and last of `placed`, a screen's zones, that the stamp on a window
+/// names, and their rect, while its visible frame `rect` is still on them.
+pub fn stamped_in(h: HWND, rect: Rect, placed: &[Rect]) -> Option<(usize, usize, Rect)> {
+    let set = winutil::zone_stamp(h);
+    if set.iter().any(|i| *i >= placed.len()) {
         return None;
     }
-    let span = set.iter().map(|i| g.zones[*i]).reduce(zones::span)?;
+    let span = set.iter().map(|i| placed[*i]).reduce(zones::span)?;
     let (from, to) = (*set.iter().min()?, *set.iter().max()?);
-    close(rect, span, winutil::is_resizable(h)).then_some((s, from, to, span))
+    close(rect, span, winutil::is_resizable(h)).then_some((from, to, span))
 }
 
 /// Where along the free room a window starts, from 0 to 1.

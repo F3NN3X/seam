@@ -111,6 +111,25 @@ pub fn open(panel: &mut Panel, window: &mut Window, cx: &mut Context<Panel>) {
     cx.notify();
 }
 
+/// The tray changed the layout under an editor with no edits, after a window's edge
+/// was dragged or a grow key pressed: start again from the saved one, so edits
+/// made next don't build on an older layout.
+pub fn reload(panel: &mut Panel) {
+    let Some(editor) = panel.editor.as_ref().filter(|e| !e.dirty() && e.dragging.is_none()) else { return };
+    let desk = panel.config.desks.get(&editor.sig);
+    let saved = desk.and_then(|d| d.zones.get(&editor.screen)).and_then(zones::layout_of);
+    let tree = saved.as_ref().map_or(Node::Leaf(LeafTag::Leaf), |l| l.tree.clone());
+    if tree == editor.start {
+        return;
+    }
+    let base = saved.as_ref().and_then(|l| zones::template_tree(l.template)).unwrap_or_else(|| tree.clone());
+    if let Some(editor) = panel.editor.as_mut() {
+        editor.selected = editor.selected.min(zones::leaf_count(&tree) - 1);
+        editor.history.clear();
+        (editor.start, editor.tree, editor.base) = (tree.clone(), tree, base);
+    }
+}
+
 /// Run `then` once unsaved edits are out of the way. Without edits that's at
 /// once. With them, one dialog asks.
 pub fn guard(panel: &mut Panel, window: &mut Window, cx: &mut Context<Panel>, then: Then) {

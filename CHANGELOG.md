@@ -6,6 +6,7 @@ All notable changes to Seam. The format follows [Keep a Changelog](https://keepa
 
 ### Added
 
+- Dragging the edge of a window in a zone moves the windows in the zones on the other side with it, live. No window goes below the smallest size its app allows: the next divider moves instead. When you let go, the window fits its zone, the layout is saved as Custom and every window stays snapped. Esc puts everything back. **Resize neighbours with a window** on Zones, on by default, and `zones.resize_neighbours` in `config.json`.
 - **Grow window into its neighbour**, **Shrink window** and **Give window two thirds of its group** on Shortcuts, with no key until you set one. They move the dividers beside a window in a zone, and the windows in the other zones follow. No window goes below the smallest size its app allows: the divider beyond it moves instead. A second press of two thirds puts the zones back. The changed layout is saved as Custom. `window.resize` and `window.priority` in the API.
 - **Switch back to the previous workspace**: a shortcut (no key until you set one), the first item of the tray's Workspaces menu, `workspace.switch_back` in the API, and a Stream Deck action. `previous_workspace` on a desk in `config.json`.
 - **Open alongside**, on a workspace's **...** menu, switches once and leaves the other windows alone. `workspace.switch` takes `alongside`.

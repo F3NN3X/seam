@@ -22,6 +22,9 @@ use windows::Win32::UI::WindowsAndMessaging::*;
 #[path = "refit.rs"]
 mod refit;
 
+#[path = "edges.rs"]
+mod edges;
+
 pub use refit::{display_changed, found as refit_found, line_up_ended, WM_APP_REFIT};
 
 /// A window the tray couldn't move, probably because it runs as administrator.
@@ -104,6 +107,8 @@ struct Drag {
     anchor: Option<(usize, usize)>,
     shown: Option<View>,
     timer: usize,
+    /// The windows that follow its edges, when it's a window in a group of zones.
+    edges: Option<edges::Edges>,
 }
 
 struct Snapped {
@@ -311,17 +316,7 @@ pub struct Zoned {
 /// Every snapped window as recorded, for finding a group's members. Whether each
 /// is still there is for the worker to check: that reads every window's rect.
 pub fn zoned() -> Vec<Zoned> {
-    with_engine(|e| {
-        let moving = |key: isize| e.pending.as_ref().is_some_and(|p| p.hwnd == key);
-        let entry = |(key, s): (&isize, &Snapped)| Zoned {
-            hwnd: *key,
-            zone: (s.screen.clone(), s.from, s.to),
-            at: s.at,
-            moving: moving(*key),
-        };
-        e.snapped.iter().map(entry).collect()
-    })
-    .unwrap_or_default()
+    with_engine(|e| e.zoned()).unwrap_or_default()
 }
 
 /// Put windows where window control worked out, one after another. A newer
@@ -426,6 +421,17 @@ impl Engine {
         placed.collect()
     }
 
+    fn zoned(&self) -> Vec<Zoned> {
+        let moving = |key: isize| self.pending.as_ref().is_some_and(|p| p.hwnd == key);
+        let entry = |(key, s): (&isize, &Snapped)| Zoned {
+            hwnd: *key,
+            zone: (s.screen.clone(), s.from, s.to),
+            at: s.at,
+            moving: moving(*key),
+        };
+        self.snapped.iter().map(entry).collect()
+    }
+
     /// The snapped entry for a window that is still where it was put.
     fn current(&self, hwnd: HWND) -> Option<&Snapped> {
         let snapped = self.snapped.get(&(hwnd.0 as isize))?;
@@ -472,6 +478,7 @@ impl Engine {
         let button = Some(main_button()).filter(|b| held(*b));
         let timer = unsafe { SetTimer(None, 0, TICK_MS, Some(on_tick)) };
         let was_maximized = winutil::is_maximized(hwnd);
+        let edges = self.edges_start(hwnd, &geometry, was_maximized);
         self.drag = Some(Drag {
             hwnd: key,
             phase: Phase::Waiting,
@@ -485,6 +492,7 @@ impl Engine {
             anchor: None,
             shown: None,
             timer,
+            edges,
         });
     }
 
@@ -531,12 +539,18 @@ impl Engine {
             if now != drag.start {
                 let resized = !drag.was_maximized && (now.w != drag.start.w || now.h != drag.start.h);
                 drag.phase = if resized { Phase::Resizing } else { Phase::Moving };
-                if resized {
-                    // Zones have nothing to do with a resize.
+                if resized && drag.edges.is_none() {
+                    // Zones have nothing to do with a resize, unless the neighbours follow it.
                     unsafe {
                         let _ = KillTimer(None, drag.timer);
                     }
                 }
+            }
+        }
+        if drag.phase == Phase::Resizing {
+            let (hwnd, start) = (hwnd_of(drag.hwnd), drag.start);
+            if let Some(edges) = drag.edges.as_mut() {
+                edges.tick(hwnd, start);
             }
         }
         if drag.phase != Phase::Moving {
@@ -619,6 +633,13 @@ impl Engine {
     }
 
     fn finish_drag(&mut self, drag: &Drag, dropped: bool, hwnd: HWND) {
+        // A window in a group of zones stays snapped, and its neighbours land.
+        if drag.phase == Phase::Resizing {
+            let ended = dropped || drag.button.is_some_and(|b| !held(b));
+            if self.edges_end(drag, hwnd, ended) {
+                return;
+            }
+        }
         // Resized by hand: it's no longer in its zone.
         if dropped && drag.phase == Phase::Resizing {
             self.unsnap(hwnd, drag.stamped);

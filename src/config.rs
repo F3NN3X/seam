@@ -158,6 +158,8 @@ pub struct ZoneSettings {
     pub refit: bool,
     /// Edit layouts on the screen itself. Off shows a live view there and edits in the panel.
     pub edit_on_screen: bool,
+    /// Dragging the edge of a window in a zone moves the windows in the zones beside it.
+    pub resize_neighbours: bool,
     /// Exe file names, case-insensitive.
     pub exclude: Vec<String>,
 }
@@ -172,6 +174,7 @@ impl Default for ZoneSettings {
             restore_size: true,
             refit: false,
             edit_on_screen: true,
+            resize_neighbours: true,
             exclude: Vec::new(),
         }
     }

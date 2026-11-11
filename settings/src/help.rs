@@ -127,6 +127,7 @@ pub const TOPICS: &[Topic] = &[
                 "**Gap** sets the space between zones and the screen edge",
                 "**Restore size when dragged out** gives a window its old size back when you drop it outside a zone",
             ]),
+            Text("Drag the edge of a window in a zone and the windows in the zones on the other side follow it. No window goes below the smallest size its app allows: the edge beyond it moves instead. When you let go, the window fits its zone again and the layout is saved as Custom. Esc puts everything back. **Resize neighbours with a window** turns this off."),
             Text("**Edit layout** opens the editor on the screen itself. Click a zone to split it side by side or top and bottom, drag a divider, or merge two neighbours, then press **Done**. Esc throws the changes away and Ctrl+Z undoes the last one."),
             Text("**Keep windows in their zones** is experimental. It moves snapped windows back after a screen, resolution or scaling change, or after the PC wakes."),
             Text("Layouts belong to the desk, so each set of screens keeps its own."),

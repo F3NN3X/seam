@@ -126,11 +126,13 @@ pub enum Command {
         /// Leave the other windows alone for this one switch.
         alongside: bool,
     },
-    /// `row` with `into` takes only that row's window ("Where it is now").
+    /// `row` with `into` takes only that row's window ("Where it is now"). With `hwnd`
+    /// too, the row only takes the folder or page of that one window ("Add an app").
     WorkspaceCapture {
         name: Option<String>,
         into: Option<String>,
         row: Option<usize>,
+        hwnd: Option<isize>,
     },
     /// The editor saving one workspace of the current desk.
     WorkspaceUpdate {
@@ -266,7 +268,18 @@ fn command(method: &str, p: &Value) -> Result<Command, RpcError> {
             if row.is_some() && into.is_none() {
                 return Err(RpcError::new(INVALID_PARAMS, "row needs into"));
             }
-            Command::WorkspaceCapture { name: str_param(p, "name")?, into, row }
+            let hwnd = match p.get("hwnd") {
+                None | Some(Value::Null) => None,
+                Some(v) => Some(
+                    v.as_i64()
+                        .and_then(|n| isize::try_from(n).ok())
+                        .ok_or_else(|| RpcError::new(INVALID_PARAMS, "hwnd must be a window handle"))?,
+                ),
+            };
+            if hwnd.is_some() && row.is_none() {
+                return Err(RpcError::new(INVALID_PARAMS, "hwnd needs into and row"));
+            }
+            Command::WorkspaceCapture { name: str_param(p, "name")?, into, row, hwnd }
         }
         "workspace.update" => Command::WorkspaceUpdate {
             id: str_param(p, "id")?.ok_or_else(|| RpcError::new(INVALID_PARAMS, "id is required"))?,
@@ -678,7 +691,7 @@ mod tests {
             (
                 request("workspace.capture", r#"{"into":"ws_1","row":2}"#),
                 panel,
-                Command::WorkspaceCapture { name: None, into: Some("ws_1".into()), row: Some(2) },
+                Command::WorkspaceCapture { name: None, into: Some("ws_1".into()), row: Some(2), hwnd: None },
             ),
             (request("cursor_easing.set", r#"{"on":true}"#), panel, Command::CursorEasingSet(true)),
             (request("layout.show", r#"{"view":"windows"}"#), panel, Command::LayoutShow(LayoutView::Windows)),

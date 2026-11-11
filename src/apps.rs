@@ -25,8 +25,8 @@ fn with_com<T>(work: impl FnOnce() -> T) -> T {
 }
 
 /// Each real app window open now, topmost first, as a rule that keeps it where
-/// it is. `exclude` holds lower-case exe names that are never managed.
-pub fn open_now(exclude: &[String]) -> Vec<Rule> {
+/// it is, with its window. `exclude` holds lower-case exe names that are never managed.
+pub fn open_now(exclude: &[String]) -> Vec<(Rule, isize)> {
     with_com(|| {
         let own = std::process::id();
         let excluded = |name: &str| exclude.iter().any(|x| x == name);
@@ -45,7 +45,8 @@ pub fn open_now(exclude: &[String]) -> Vec<Rule> {
                 continue;
             }
             let aumid = winutil::aumid(h);
-            open.push(Rule { exe, aumid, class: facts.class, title_hint: winutil::title(h), ..Rule::default() });
+            let rule = Rule { exe, aumid, class: facts.class, title_hint: winutil::title(h), ..Rule::default() };
+            open.push((rule, h.0 as isize));
         }
         open
     })

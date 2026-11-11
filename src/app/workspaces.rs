@@ -520,10 +520,14 @@ pub(super) fn start_capture(
     name: Option<String>,
     into: Option<String>,
     row: Option<usize>,
+    hwnd: Option<isize>,
     reply: Option<Sender<Reply>>,
 ) -> Option<Reply> {
     if app.capturing.is_some() {
         return Some(busy("Already capturing"));
+    }
+    if hwnd.is_some() && !app.cfg.workspaces_remember_places {
+        return Some(refused("Remember folders and pages is off"));
     }
     let target = into.as_ref().map(|into| desk_workspaces(app).into_iter().find(|w| w.id == *into));
     if matches!(target, Some(None)) {
@@ -532,8 +536,12 @@ pub(super) fn start_capture(
     if row.is_some_and(|row| target.flatten().is_none_or(|w| row >= w.windows.len())) {
         return Some(Err(RpcError::new(api::NOT_FOUND, "no such row in that workspace")));
     }
-    app.capturing = Some(Capturing { reply, name, into, row, sig: app.sig.clone(), quick: false });
-    if switcher::capture(capture_job(app)) {
+    app.capturing = Some(Capturing { reply, name, into, row, hwnd, sig: app.sig.clone(), quick: false });
+    let started = match hwnd {
+        Some(hwnd) => switcher::capture_window(capture_job(app), hwnd),
+        None => switcher::capture(capture_job(app)),
+    };
+    if started {
         return None;
     }
     app.capturing = None;
@@ -545,7 +553,7 @@ pub(super) fn start_capture(
 /// Returns an answer only if it can't start.
 pub(super) fn quick_save(app: &mut App, reply: Option<Sender<Reply>>) -> Option<Reply> {
     let into = active_workspace(app).map(|w| w.id);
-    let refusal = start_capture(app, None, into, None, reply);
+    let refusal = start_capture(app, None, into, None, None, reply);
     if let Some(job) = app.capturing.as_mut().filter(|_| refusal.is_none()) {
         job.quick = true;
     }
@@ -627,6 +635,11 @@ pub(super) fn captured(app: &mut App) {
                 return answer(Err(RpcError::new(api::NOT_FOUND, "no such workspace on this desk")));
             };
             let updated = match job.row {
+                // "Add an app": only the picked window's folder or page, read here.
+                Some(row) if job.hwnd.is_some() => match workspace::take_window_place(old, row, &rules) {
+                    Some(updated) => updated,
+                    None => return answer(refused("That window has no folder or page to remember")),
+                },
                 Some(row) => match workspace::recapture_row(old, row, &rules) {
                     Some((updated, hit)) => {
                         stamps = Some(vec![(hwnds[hit], row)]);

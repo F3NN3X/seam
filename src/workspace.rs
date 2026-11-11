@@ -624,6 +624,18 @@ pub fn recapture_row(old: &Workspace, row: usize, fresh: &[Rule]) -> Option<(Wor
     Some((updated, hit as usize))
 }
 
+/// "Add an app" from the windows open now: the row takes the folder or page the tray
+/// read from the one window picked, `picked`, if that window is the row's app. `None`
+/// when it isn't, or the window has none.
+pub fn take_window_place(old: &Workspace, row: usize, picked: &[Rule]) -> Option<Workspace> {
+    let rule = old.windows.get(row)?;
+    let [from] = picked else { return None };
+    assign(std::slice::from_ref(rule), &as_candidates(picked)).into_iter().next().flatten()?;
+    let mut updated = old.clone();
+    updated.windows[row].place = Some(from.place.clone()?);
+    Some(updated)
+}
+
 /// The rows a switch starts, in start order, cut into stages. A stage ends at a
 /// row that waits for its window. Apps in a stage start together, each after its
 /// own delay, and the next stage starts once the waiting ones are up.

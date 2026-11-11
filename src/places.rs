@@ -69,6 +69,16 @@ pub(crate) fn kind_of(rule: &Rule) -> Option<Kind> {
     (BROWSERS.contains(&name.as_str()) && !web_app).then_some(Kind::Browser)
 }
 
+/// The browser's arguments for a page in a new window of its own, so a running browser
+/// doesn't add it as a tab to a window it has, which another row may own. `url` has
+/// passed `safe_url`, so it's one argument.
+pub(crate) fn new_window_args(rule: &Rule, url: &str) -> String {
+    match winutil::file_name(&rule.exe).as_str() {
+        "firefox.exe" => format!("-new-window {url}"),
+        _ => format!("--new-window {url}"),
+    }
+}
+
 /// Whether the path is on a fixed or removable drive of this PC, not a mapped one.
 pub(crate) fn local_drive(path: &str) -> bool {
     let root: Vec<u16> = path.chars().take(2).chain(['\\']).map(|c| c as u16).chain([0]).collect();

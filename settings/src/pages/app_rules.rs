@@ -199,7 +199,7 @@ pub fn view(panel: &mut Panel, cx: &mut Context<Panel>) -> AnyElement {
         let about = "Add an app to have its windows open in a place you choose";
         rows.push(ui::row("No apps yet", Some(about.into()), div(), p));
     }
-    let adding: app_picker::Add = Rc::new(add);
+    let adding: app_picker::Add = Rc::new(|panel, rule, _, window, cx| add(panel, rule, window, cx));
     let button = app_picker::button(panel, &apps, "Already has a place", adding, cx);
     rows.push(div().flex().px(px(16.)).py(px(12.)).child(button).into_any_element());
 

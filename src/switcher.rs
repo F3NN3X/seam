@@ -277,6 +277,31 @@ pub fn capture(job: CaptureJob) -> bool {
     spawned.is_ok()
 }
 
+/// Read one window as a capture would, with its folder or page: the one "Add an app"
+/// picked from the windows open now. The main thread gets `WM_APP_CAPTURED`, with no
+/// rule when the window is gone or isn't one a capture takes.
+pub fn capture_window(job: CaptureJob, hwnd: isize) -> bool {
+    let spawned = std::thread::Builder::new().name("seam-capture".into()).spawn(move || {
+        let _com = Com::enter();
+        let picked = seen_of(hwnd_of(hwnd), 0, &job.exclude, &mut Procs::new(), &mut |_, _| {});
+        let rule =
+            |c: Candidate| Rule { exe: c.exe, aumid: c.aumid, class: c.class, title_hint: c.title, ..Rule::default() };
+        let mut rules: Vec<Rule> = picked.into_iter().map(|s| rule(s.cand)).collect();
+        let hwnds: Vec<isize> = rules.iter().map(|_| hwnd).collect();
+        if job.places {
+            let read = places::read(&rules, &hwnds);
+            for (rule, place) in rules.iter_mut().zip(read) {
+                rule.place = place;
+            }
+        }
+        *CAPTURED.lock().unwrap_or_else(|e| e.into_inner()) = Some((rules, hwnds));
+        unsafe {
+            let _ = PostMessageW(Some(hwnd_of(job.owner)), WM_APP_CAPTURED, WPARAM(0), LPARAM(0));
+        }
+    });
+    spawned.is_ok()
+}
+
 pub fn take_captured() -> Option<(Vec<Rule>, Vec<isize>)> {
     CAPTURED.lock().unwrap_or_else(|e| e.into_inner()).take()
 }
@@ -526,9 +551,15 @@ fn launch(rule: &Rule, places: bool) -> Result<(), &'static str> {
     if rule.exe.to_lowercase().contains(r"\steamapps\") {
         return Err("steam game");
     }
-    if rule.place.as_ref().is_some_and(|place| places && open_place(rule, place)) {
-        log::info!("{}: started on its saved folder or page", app_name(rule));
-        return Ok(());
+    if let Some(place) = &rule.place {
+        let (app, kind) = (app_name(rule), place_kind(place));
+        match open_place(rule, place, places) {
+            Ok(()) => {
+                log::info!("{app}: started on its saved {kind}");
+                return Ok(());
+            }
+            Err(why) => log::info!("{app}: saved {kind} not used, {why}"),
+        }
     }
     let aumid = rule.aumid.as_deref().filter(|a| workspace::safe_aumid(a));
     if let Some(aumid) = aumid {
@@ -546,28 +577,44 @@ fn launch(rule: &Rule, places: bool) -> Result<(), &'static str> {
     shell_open(&rule.exe, None).then_some(()).ok_or("not installed")
 }
 
+/// What the log calls a place: never the folder or page itself.
+fn place_kind(place: &Place) -> &'static str {
+    match place {
+        Place::Folder(_) => "folder",
+        Place::Url(_) => "page",
+    }
+}
+
 /// Start an app on the folder or page its window showed: an Explorer row on a folder
 /// of a fixed or removable drive that still exists, or a browser row on an http or
-/// https page. Anything else, and the app starts as usual.
-fn open_place(rule: &Rule, place: &Place) -> bool {
+/// https page, in a window of its own. Otherwise why not, and the app starts as usual.
+fn open_place(rule: &Rule, place: &Place, remember: bool) -> Result<(), &'static str> {
     let kind = places::kind_of(rule);
-    match place {
-        Place::Folder(folder) => {
-            kind == Some(places::Kind::Explorer)
-                && workspace::safe_folder(folder)
-                && places::local_drive(folder)
-                && Path::new(folder).is_dir()
-                && shell_open(&explorer_path(), Some(&workspace::explorer_arg(folder)))
-        }
-        Place::Url(url) => {
-            kind == Some(places::Kind::Browser)
-                && workspace::safe_url(url)
-                && workspace::safe_exe(&rule.exe)
-                && !is_network_drive(&rule.exe)
-                && Path::new(&rule.exe).is_file()
-                && shell_open(&rule.exe, Some(url))
-        }
+    let checks = match place {
+        Place::Folder(folder) => [
+            (remember, "the setting is off"),
+            (kind == Some(places::Kind::Explorer), "not an Explorer row"),
+            (workspace::safe_folder(folder), "not a folder Seam opens"),
+            (places::local_drive(folder) && Path::new(folder).is_dir(), "the folder is gone or not on this PC"),
+        ],
+        Place::Url(url) => [
+            (remember, "the setting is off"),
+            (kind == Some(places::Kind::Browser), "not a browser row"),
+            (workspace::safe_url(url), "not a page Seam opens"),
+            (workspace::safe_exe(&rule.exe) && !is_network_drive(&rule.exe), "the browser can't be started from there"),
+        ],
+    };
+    if let Some((_, why)) = checks.iter().find(|(ok, _)| !ok) {
+        return Err(why);
     }
+    let started = match place {
+        Place::Folder(folder) => shell_open(&explorer_path(), Some(&workspace::explorer_arg(folder))),
+        // A browser that runs already would open the page as a tab of a window it has.
+        Place::Url(url) => {
+            Path::new(&rule.exe).is_file() && shell_open(&rule.exe, Some(&places::new_window_args(rule, url)))
+        }
+    };
+    started.then_some(()).ok_or("it didn't start")
 }
 
 /// `GetDriveTypeW` answer for a network drive (`DRIVE_REMOTE`).
@@ -1190,6 +1237,12 @@ fn run_switch(job: &SwitchJob, mine: u64) -> Option<Switched> {
     } else {
         // What is running already goes in one pass, before anything starts.
         let running: Vec<usize> = (0..found.len()).filter(|i| found[*i].is_some()).collect();
+        // A window that's open is never sent to its row's folder or page.
+        for rule in running.iter().map(|i| &ws.windows[*i]).filter(|_| run.places) {
+            if let Some(place) = &rule.place {
+                log::info!("{}: saved {} not used, its window is open", app_name(rule), place_kind(place));
+            }
+        }
         place_rules(&run, &found, &running, &seen, &mut tally);
         if cancelled() {
             return None;

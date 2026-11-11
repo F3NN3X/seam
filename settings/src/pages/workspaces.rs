@@ -550,7 +550,7 @@ fn detail(panel: &mut Panel, ws: Workspace, window: &mut Window, cx: &mut Contex
     }
     let id = ws.id.clone();
     let add_app: app_picker::Add =
-        Rc::new(move |panel, rule, window, cx| workspace_editor::add_app(panel, &id, rule, window, cx));
+        Rc::new(move |panel, rule, hwnd, window, cx| workspace_editor::add_app(panel, &id, rule, hwnd, window, cx));
     let add = app_picker::button(panel, &ws.windows, "In this workspace", add_app, cx);
     rows.push(div().flex().px(px(16.)).py(px(12.)).child(add).into_any_element());
     rows.extend(workspace_editor::zones_section(panel, &ws, window, cx));

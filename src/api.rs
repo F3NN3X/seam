@@ -79,6 +79,14 @@ pub enum PinKind {
     Sticky,
 }
 
+/// What `window.focus_only` minimizes: the others on the focused window's screen,
+/// or everything on the desk outside the workspace in use.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FocusScope {
+    Screen,
+    Workspace,
+}
+
 /// Which layout `layout.show` draws on the screens.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum LayoutView {
@@ -142,6 +150,9 @@ pub enum Command {
         kind: PinKind,
         on: Option<bool>,
     },
+    WindowFocusOnly(FocusScope),
+    /// `on` is None to toggle.
+    WindowSpotlight(Option<bool>),
     WmRelease,
     SessionRestore,
     LineupStart,
@@ -264,6 +275,18 @@ fn command(method: &str, p: &Value) -> Result<Command, RpcError> {
             };
             Command::WindowPin { kind, on }
         }
+        "window.focus_only" => Command::WindowFocusOnly(match p.get("scope") {
+            None | Some(Value::Null) => FocusScope::Screen,
+            Some(v) => match v.as_str() {
+                Some("screen") => FocusScope::Screen,
+                Some("workspace") => FocusScope::Workspace,
+                _ => return Err(RpcError::new(INVALID_PARAMS, "scope must be screen or workspace")),
+            },
+        }),
+        "window.spotlight" => Command::WindowSpotlight(match p.get("on") {
+            None | Some(Value::Null) => None,
+            Some(_) => Some(on_param(p)?),
+        }),
         "wm.release" => Command::WmRelease,
         "session.restore" => Command::SessionRestore,
         "lineup.start" => Command::LineupStart,

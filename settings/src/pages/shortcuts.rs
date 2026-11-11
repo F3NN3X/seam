@@ -159,6 +159,11 @@ pub fn render(panel: &mut Panel, _: &mut Window, cx: &mut Context<Panel>) -> imp
         .enumerate()
         .map(|(i, ((verb, dir, combo), title))| row(title, &format!("{verb}_{dir}"), combo, 5 + i))
         .collect();
+    // Slots far past the workspace rows, which count up from 20.
+    window_rows.extend([
+        row("Focus on this window", "focus_only", keys.focus_only.as_ref(), 910),
+        row("Spotlight", "spotlight", keys.spotlight.as_ref(), 911),
+    ]);
     window_rows.extend([
         row("Pin window on top", "pin_top", keys.pin_top.as_ref(), 17),
         row("Keep window out of workspace switches", "pin_sticky", keys.pin_sticky.as_ref(), 18),

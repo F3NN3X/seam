@@ -68,6 +68,10 @@ pub struct Hotkeys {
     pub quick_save: Option<String>,
     /// "Switch back to the previous workspace" on this desk.
     pub switch_back: Option<String>,
+    /// "Focus on this window": minimize the others on its screen, and bring them back.
+    pub focus_only: Option<String>,
+    /// "Spotlight": dim everything but the window in use.
+    pub spotlight: Option<String>,
 }
 
 impl Default for Hotkeys {
@@ -98,6 +102,8 @@ impl Default for Hotkeys {
             snap_back: None,
             quick_save: None,
             switch_back: None,
+            focus_only: None,
+            spotlight: None,
         }
     }
 }

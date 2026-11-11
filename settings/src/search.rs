@@ -152,6 +152,18 @@ const ENTRIES: &[Entry] = &[
     entry(Page::Shortcuts, "Swap with window to the right", "Global shortcut", "hotkey keyboard direction exchange"),
     entry(Page::Shortcuts, "Swap with window above", "Global shortcut", "hotkey keyboard direction exchange up"),
     entry(Page::Shortcuts, "Swap with window below", "Global shortcut", "hotkey keyboard direction exchange down"),
+    entry(
+        Page::Shortcuts,
+        "Focus on this window",
+        "Minimize the others on its screen, and bring them back",
+        "hotkey keyboard focus minimize others hide declutter",
+    ),
+    entry(
+        Page::Shortcuts,
+        "Spotlight",
+        "Dim everything but the window you're using",
+        "hotkey keyboard dim focus darken highlight",
+    ),
     entry(Page::Shortcuts, "Pin window on top", "Global shortcut", "hotkey keyboard topmost always"),
     entry(Page::Shortcuts, "Keep window out of workspace switches", "Global shortcut", "hotkey keyboard sticky pin"),
     entry(Page::Shortcuts, "Release pinned windows", "Global shortcut", "hotkey keyboard unpin reset border"),

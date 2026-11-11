@@ -1248,6 +1248,29 @@ fn run_switch(job: &SwitchJob, mine: u64) -> Option<Switched> {
     Some(Switched { id: ws.id.clone(), name: ws.name.clone(), launched, placed: tally.placed, skipped: tally.skipped })
 }
 
+/// The windows a workspace doesn't use, topmost first, matched as a switch does:
+/// the rows' windows and other windows of the same apps stay out of it, and so do
+/// elevated windows and ones that stay (sticky, or pinned on top).
+pub fn outside(ws: &Workspace, exclude: &[String]) -> Result<Vec<isize>, &'static str> {
+    let seen = snapshot_with(exclude, &mut Procs::new(), &mut |_, _| {});
+    let known: Vec<Candidate> = seen.iter().map(|s| s.cand.clone()).collect();
+    let found = workspace::assign(&ws.windows, &known);
+    if found.iter().all(Option::is_none) {
+        return Err("Nothing from this workspace is open");
+    }
+    let claimed: HashSet<isize> = found.iter().flatten().copied().collect();
+    let (mut exes, mut aumids): (HashSet<String>, HashSet<String>) = (HashSet::new(), HashSet::new());
+    for c in known.iter().filter(|c| claimed.contains(&c.hwnd)) {
+        exes.insert(c.exe.to_lowercase());
+        aumids.extend(c.aumid.clone());
+    }
+    let others = seen.iter().filter(|s| !s.elevated && !stays(s.pin, true) && !claimed.contains(&s.cand.hwnd));
+    let apart = others.filter(|s| {
+        !exes.contains(&s.cand.exe.to_lowercase()) && !s.cand.aumid.as_ref().is_some_and(|a| aumids.contains(a))
+    });
+    Ok(apart.map(|s| s.cand.hwnd).collect())
+}
+
 /// Pin a window as a rule says. The seam-wm thread does it and logs how it went.
 fn pin_again(hwnd: isize, pin: Pin) {
     if pin.bits() & winutil::PIN_TOP != 0 {

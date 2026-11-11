@@ -137,6 +137,23 @@ const quickSave = (p) => {
   return { ...base, h: 28, svg: base.svg + window + arrow };
 };
 
+/** A dashed window on the left screen, minimized, and the filled one on the right that stays. */
+const focusOnly = (p) => {
+  const base = mark(p);
+  const thin = Math.min(p.width, 1);
+  const away = `<rect x="3.5" y="6.5" width="5" height="7" rx="1" fill="none" stroke="${p.line}" stroke-width="${thin}" stroke-dasharray="1.5 1.5"/>`;
+  const stays = `<rect x="22" y="5" width="6" height="10" rx="1" fill="${p.line}"/>`;
+  return { ...base, svg: base.svg + away + stays };
+};
+
+/** The left screen dimmed, and the filled window on the right left bright. */
+const spotlight = (p) => {
+  const base = mark(p);
+  const dim = `<rect x="0.5" y="2.5" width="11" height="15" rx="2" fill="${p.line}" fill-opacity="0.35"/>`;
+  const bright = `<rect x="22" y="5" width="6" height="10" rx="1" fill="${p.line}"/>`;
+  return { ...base, svg: base.svg + dim + bright };
+};
+
 const place = (glyph, scale, cx, cy) =>
   `<g transform="translate(${cx - (glyph.w * scale) / 2} ${cy - (glyph.h * scale) / 2}) scale(${scale})">${glyph.svg}</g>`;
 
@@ -179,6 +196,8 @@ const actions = {
   "snap-back": { draw: snapBack, states: ["lit"] },
   "switch-back": { draw: switchBack, states: ["lit"] },
   "quick-save": { draw: quickSave, states: ["lit"] },
+  "focus-only": { draw: focusOnly, states: ["lit"] },
+  spotlight: { draw: spotlight, states: ["idle", "lit"] },
 };
 
 for (const [name, { draw, states }] of Object.entries(actions)) {

@@ -234,6 +234,27 @@ impl Default for ApiSettings {
     }
 }
 
+/// How hard the pointer pushes past a screen's edge before it crosses.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default)]
+pub struct PointerSettings {
+    /// "Edge resistance": pixels past the edge to any other screen, 0 for off.
+    /// Up to `MAX_EDGE_RESISTANCE_PX`.
+    pub edge_resistance_px: u32,
+    /// "Glued edge push": pixels past a glued edge, 0 to cross at once. Up to
+    /// `MAX_GLUE_PUSH_PX`.
+    pub glue_push_px: u32,
+}
+
+pub const MAX_EDGE_RESISTANCE_PX: u32 = 100;
+pub const MAX_GLUE_PUSH_PX: u32 = 200;
+
+impl Default for PointerSettings {
+    fn default() -> Self {
+        PointerSettings { edge_resistance_px: 0, glue_push_px: 60 }
+    }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(default)]
 pub struct UpdateSettings {
@@ -361,6 +382,7 @@ pub struct Config {
     pub restore_apps_saved: Option<u32>,
     pub updates: UpdateSettings,
     pub api: ApiSettings,
+    pub pointer: PointerSettings,
     /// Layout signature (sorted device paths) -> desk.
     pub desks: BTreeMap<String, Desk>,
     /// Signatures we've already offered to line up, so we only ask once.
@@ -394,6 +416,7 @@ impl Default for Config {
             restore_apps_saved: None,
             updates: UpdateSettings::default(),
             api: ApiSettings::default(),
+            pointer: PointerSettings::default(),
             desks: BTreeMap::new(),
             seen: Vec::new(),
             layouts: BTreeMap::new(),

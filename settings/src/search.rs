@@ -47,6 +47,18 @@ const ENTRIES: &[Entry] = &[
     ),
     entry(
         Page::Displays,
+        "Edge resistance",
+        "Push this many pixels past a screen's edge before the pointer crosses",
+        "resistance edge grab corner push",
+    ),
+    entry(
+        Page::Displays,
+        "Glued edge push",
+        "How far to push past a glued edge before the pointer crosses",
+        "push taskbar glue edge",
+    ),
+    entry(
+        Page::Displays,
         "Ease cursor movement between displays",
         "Windows' setting Seam needs. Displays offers to turn it on while it's off",
         "ease cursor easing deadzone jump pointer stuck",

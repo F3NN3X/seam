@@ -19,6 +19,8 @@ All notable changes to Seam. The format follows [Keep a Changelog](https://keepa
 - A library of custom layouts on the Zones page, shared by every desk and screen: each has a tile after the templates, and a **...** menu with Edit, Rename, Duplicate and Delete. Editing one changes every screen that uses it, and deleting one leaves those screens with their zones. **New layout** starts one. `custom_layouts` in `config.json`, and `custom` on a screen's layout.
 - **Save from windows** on the Zones page makes a library layout from where the windows on a screen are now, and snaps them into it. `zones.from_windows` in the API.
 - Picking a layout on the Zones page moves the windows snapped on that screen into the new zones. When windows moved, a notification offers Undo for 8 seconds.
+- **Edge resistance** on Displays, off by default: the pointer waits at the edge to another screen until you push that many pixels past it, so you can grab a window's edge or corner at a screen border. It gives way while a mouse button is down, so window drags aren't slowed. `pointer.edge_resistance_px` in `config.json`, 0 to 100.
+- **Glued edge push** on Displays sets how far to push past a glued edge before the pointer crosses, 60 px by default and 0 to cross at once. `pointer.glue_push_px` in `config.json`, 0 to 200.
 
 ### Changed
 

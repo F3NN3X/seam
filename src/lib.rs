@@ -6,6 +6,7 @@ pub mod config;
 pub mod desk;
 pub mod direction;
 pub mod geom;
+pub mod groups;
 pub mod hotkey;
 pub mod layout;
 pub mod log;

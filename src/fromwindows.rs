@@ -29,6 +29,7 @@ pub(super) fn run(job: &Job, at: At) -> Result<Outcome, String> {
     let tree = groups::from_rects(&rects, g.work).ok_or("These windows don't line up into zones")?;
     let gap = (job.gap.min(MAX_GAP) as f32 * g.dpi as f32 / 96.0).round() as i32;
     let (placed, cells) = (zones::rects(&tree, g.work, gap), zones::rects(&tree, g.work, 0));
+    // `from_rects` has checked that each window's centre is in a zone of its own.
     let list = seen
         .iter()
         .filter_map(|(h, r)| {

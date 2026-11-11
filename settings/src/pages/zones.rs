@@ -242,18 +242,26 @@ fn library_menu(i: usize, entry: &library::Entry, cx: &mut Context<Panel>) -> An
         .into_any_element()
 }
 
-/// Save the whole library. The tray passes a changed tree on to the screens that
-/// follow it, and a deleted layout's screens keep their zones.
-fn save_library(panel: &mut Panel, list: Vec<Value>, window: &mut Window, cx: &mut Context<Panel>) {
-    panel.patch(json!({ "custom_layouts": list }), window, cx);
+/// Make one change to the latest library and save the whole list. The tray passes a
+/// changed tree on to the screens that follow it, and a deleted layout's screens
+/// keep their zones.
+fn edit_library(
+    panel: &mut Panel,
+    window: &mut Window,
+    cx: &mut Context<Panel>,
+    change: impl FnOnce(&mut Vec<Value>) + 'static,
+) {
+    zone_editor::with_latest(panel, window, cx, move |panel, window, cx| {
+        let mut list = panel.config.custom_layouts.clone();
+        change(&mut list);
+        if list != panel.config.custom_layouts {
+            panel.patch(json!({ "custom_layouts": list }), window, cx);
+        }
+    });
 }
 
-/// The library with `change` made to the entry with `id`, or None when it's gone.
-fn changed(panel: &Panel, id: &str, change: impl FnOnce(&mut Value)) -> Option<Vec<Value>> {
-    let mut list = panel.config.custom_layouts.clone();
-    let at = list.iter().position(|v| v.get("id").and_then(Value::as_str) == Some(id))?;
-    change(&mut list[at]);
-    Some(list)
+fn position(list: &[Value], id: &str) -> Option<usize> {
+    list.iter().position(|v| v.get("id").and_then(Value::as_str) == Some(id))
 }
 
 fn rename_layout(entry: library::Entry, window: &mut Window, cx: &mut Context<Panel>) {
@@ -278,10 +286,13 @@ fn rename_layout(entry: library::Entry, window: &mut Window, cx: &mut Context<Pa
                 if text.trim().is_empty() {
                     return false;
                 }
+                let (id, name) = (id.clone(), text.trim().to_string());
                 let _ = view.update(cx, |panel, cx| {
-                    if let Some(list) = changed(panel, &id, |v| v["name"] = json!(text.trim())) {
-                        save_library(panel, list, window, cx);
-                    }
+                    edit_library(panel, window, cx, move |list| {
+                        if let Some(at) = position(list, &id) {
+                            list[at]["name"] = json!(name);
+                        }
+                    })
                 });
                 true
             })
@@ -290,10 +301,10 @@ fn rename_layout(entry: library::Entry, window: &mut Window, cx: &mut Context<Pa
 
 /// A copy of a library layout, as a new one beside it.
 fn duplicate(panel: &mut Panel, entry: library::Entry, window: &mut Window, cx: &mut Context<Panel>) {
-    let mut list = panel.config.custom_layouts.clone();
-    let copy = library::Entry { id: library::new_id(&list), name: format!("{} copy", entry.name), tree: entry.tree };
-    list.push(copy.value());
-    save_library(panel, list, window, cx);
+    edit_library(panel, window, cx, move |list| {
+        let name = format!("{} copy", entry.name);
+        list.push(library::Entry { id: library::new_id(list), name, tree: entry.tree }.value());
+    });
 }
 
 fn delete_layout(entry: library::Entry, window: &mut Window, cx: &mut Context<Panel>) {
@@ -306,10 +317,11 @@ fn delete_layout(entry: library::Entry, window: &mut Window, cx: &mut Context<Pa
             .ok_text("Delete")
             .cancel_text("Cancel")
             .on_ok(move |_, window, cx| {
+                let id = id.clone();
                 let _ = view.update(cx, |panel, cx| {
-                    let mut list = panel.config.custom_layouts.clone();
-                    list.retain(|v| v.get("id").and_then(Value::as_str) != Some(id.as_str()));
-                    save_library(panel, list, window, cx);
+                    edit_library(panel, window, cx, move |list| {
+                        list.retain(|v| v.get("id").and_then(Value::as_str) != Some(id.as_str()))
+                    })
                 });
                 true
             })
@@ -320,11 +332,13 @@ fn delete_layout(entry: library::Entry, window: &mut Window, cx: &mut Context<Pa
 fn save_as_layout(panel: &mut Panel, tree: Node, window: &mut Window, cx: &mut Context<Panel>) {
     let Some(sig) = panel.state.as_ref().map(|s| s.desk.sig.clone()) else { return };
     let Some(screen) = chosen(panel).map(|(m, _)| m.id.clone()) else { return };
-    let mut list = panel.config.custom_layouts.clone();
-    let entry = library::Entry { id: library::new_id(&list), name: library::next_name(&list), tree };
-    list.push(entry.value());
-    let Ok(layout) = serde_json::to_value(entry.layout()) else { return };
-    panel.patch(json!({ "custom_layouts": list, "desks": { sig: { "zones": { screen: layout } } } }), window, cx);
+    zone_editor::with_latest(panel, window, cx, move |panel, window, cx| {
+        let mut list = panel.config.custom_layouts.clone();
+        let entry = library::Entry { id: library::new_id(&list), name: library::next_name(&list), tree };
+        list.push(entry.value());
+        let Some(layout) = library::screen_patch(&entry.layout()) else { return };
+        panel.patch(json!({ "custom_layouts": list, "desks": { sig: { "zones": { screen: layout } } } }), window, cx);
+    });
 }
 
 /// One swatch in a row: "none" first, the named colours, then the custom one.
@@ -542,7 +556,7 @@ fn set_layout(panel: &mut Panel, layout: Option<ZoneLayout>, window: &mut Window
     let Some(sig) = panel.state.as_ref().map(|s| s.desk.sig.clone()) else { return };
     let Some((mon, _)) = chosen(panel) else { return };
     // No entry means no zones, and a patch's null removes the entry.
-    let layout = layout.and_then(|l| serde_json::to_value(l).ok()).unwrap_or(Value::Null);
+    let layout = layout.and_then(|l| library::screen_patch(&l)).unwrap_or(Value::Null);
     let patch = json!({ "desks": { sig: { "zones": { mon.id.clone(): layout } } } });
     panel.patch(patch, window, cx);
 }

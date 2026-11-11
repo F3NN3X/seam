@@ -472,7 +472,7 @@ pub fn pick_for_count(n: usize) -> Option<ZoneLayout> {
 }
 
 /// How far two windows may overlap and still lie either side of a cut, as frames do.
-const OVERLAP_PX: i32 = 4;
+const OVERLAP_PX: i32 = 16;
 /// A cut this close to a quarter, a third, a half, two thirds or three quarters goes there.
 const SNAP_PX: i32 = 12;
 
@@ -481,13 +481,22 @@ const SNAP_PX: i32 = 12;
 /// and none across it, side by side before top and bottom, then the same in each
 /// side. A cut sits in the middle of the room between the windows, and on the
 /// editor's quarter or third marks when it's within a few pixels of one. None
-/// when windows overlap, no cut separates them, or the tree passes the editor's limits.
+/// when windows overlap, no cut separates them, the tree passes the editor's limits,
+/// or the windows' centres don't each fall in a zone of their own.
 pub fn from_rects(rects: &[Rect], area: Rect) -> Option<Node> {
     if rects.is_empty() || rects.len() > zones::MAX_ZONES || area.w <= 0 || area.h <= 0 {
         return None;
     }
     let tree = cut_up(rects.to_vec(), area)?;
     let deepest = (0..rects.len()).filter_map(|i| zones::depth_of(&tree, i)).max().unwrap_or(0);
+    let cells = zones::rects(&tree, area, 0);
+    let mut held = vec![false; cells.len()];
+    for r in rects {
+        let zone = zones::zone_at(&cells, r.x + r.w / 2, r.y + r.h / 2)?;
+        if std::mem::replace(&mut held[zone], true) {
+            return None;
+        }
+    }
     (deepest <= zones::MAX_DEPTH).then_some(tree)
 }
 
@@ -515,11 +524,12 @@ fn cut_up(mut rects: Vec<Rect>, area: Rect) -> Option<Node> {
     None
 }
 
-/// The ratio of a cut at `at`, on a mark when it's close to one.
+/// The ratio of a cut at `at`, on the nearest mark when it's close to one.
 fn ratio_at(at: i32, area: Rect, dir: Dir) -> f32 {
     const MARKS: [f32; 5] = [0.25, 1.0 / 3.0, 0.5, 2.0 / 3.0, 0.75];
     let (lo, len) = span_of(area, dir);
-    let mark = MARKS.into_iter().find(|m| (lo + (len as f32 * m).round() as i32 - at).abs() <= SNAP_PX);
+    let off = |m: f32| (lo + (len as f32 * m).round() as i32 - at).abs();
+    let mark = MARKS.into_iter().filter(|m| off(*m) <= SNAP_PX).min_by_key(|m| off(*m));
     mark.unwrap_or(((at - lo) as f32 / len as f32).clamp(LOW, HIGH))
 }
 
@@ -686,6 +696,8 @@ mod tests {
         let two = [Rect { x: 0, y: 0, w: 700, h: 1000 }, Rect { x: 740, y: 0, w: 1060, h: 1000 }];
         let Some(Node::Split { split: Dir::Vertical, ratio, .. }) = from_rects(&two, AREA) else { panic!() };
         assert_eq!(divider_at(AREA, Dir::Vertical, ratio), 720);
+        // Where two marks are near, the nearer one wins.
+        assert_eq!(ratio_at(19, Rect { x: 0, y: 0, w: 60, h: 10 }, Dir::Vertical), 1.0 / 3.0);
         // A pinwheel has no straight cut across it, and overlapping windows have none either.
         let pinwheel = [
             Rect { x: 0, y: 0, w: 1200, h: 400 },

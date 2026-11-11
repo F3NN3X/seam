@@ -18,7 +18,8 @@ use windows::Win32::UI::WindowsAndMessaging::IsWindow;
 /// What Priority changed on a screen, to give back on the next press.
 pub(super) struct Given {
     template: Template,
-    /// The library layout the screen followed, which the second press links again.
+    /// The library layout the screen followed. The second press links it again, if
+    /// the library still has it with this tree (`library::link`).
     custom: Option<String>,
     stash: Stash,
     /// The tree Priority made. Any other change to the group drops the stash.

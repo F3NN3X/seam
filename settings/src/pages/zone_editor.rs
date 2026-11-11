@@ -231,31 +231,63 @@ pub(super) fn done(panel: &mut Panel, window: &mut Window, cx: &mut Context<Pane
     if !editor.dirty() {
         return;
     }
-    let mut list = panel.config.custom_layouts.clone();
-    let found = match &editor.target {
-        Target::Library(id) => list.iter().position(|v| v.get("id").and_then(Value::as_str) == Some(id.as_str())),
-        _ => None,
-    };
-    let patch = match (editor.target, found) {
-        (Target::Screen, _) => {
-            let layout = ZoneLayout { template: Template::Custom, custom: None, tree: editor.tree };
-            let Ok(layout) = serde_json::to_value(layout) else { return };
-            json!({ "desks": { editor.sig: { "zones": { editor.screen: layout } } } })
+    let Editor { sig, screen, opened, target, tree, .. } = editor;
+    with_latest(panel, window, cx, move |panel, window, cx| {
+        // Edit layout looks at the screen again: a window's edge dragged since it
+        // opened has made the layout the screen's own.
+        let target = match opened {
+            Opened::Screen => {
+                let saved = panel.config.desks.get(&sig).and_then(|d| d.zones.get(&screen)).and_then(zones::layout_of);
+                screen_edit(saved.as_ref(), &panel.config.custom_layouts).0
+            }
+            _ => target,
+        };
+        let mut list = panel.config.custom_layouts.clone();
+        let found = match &target {
+            Target::Library(id) => list.iter().position(|v| v.get("id").and_then(Value::as_str) == Some(id.as_str())),
+            _ => None,
+        };
+        let patch = match (target, found) {
+            (Target::Screen, _) => {
+                let layout = ZoneLayout { template: Template::Custom, custom: None, tree };
+                let Some(layout) = library::screen_patch(&layout) else { return };
+                json!({ "desks": { sig: { "zones": { screen: layout } } } })
+            }
+            (Target::Library(_), Some(at)) => {
+                list[at]["tree"] = json!(tree);
+                json!({ "custom_layouts": list })
+            }
+            // A library layout deleted while it was being edited from its tile comes
+            // back as a new one, given to no screen.
+            (Target::Library(_), None) if opened != Opened::Screen => {
+                list.push(library::Entry { id: library::new_id(&list), name: library::next_name(&list), tree }.value());
+                json!({ "custom_layouts": list })
+            }
+            (Target::Library(_) | Target::New, _) => {
+                let entry = library::Entry { id: library::new_id(&list), name: library::next_name(&list), tree };
+                list.push(entry.value());
+                let Some(layout) = library::screen_patch(&entry.layout()) else { return };
+                json!({ "custom_layouts": list, "desks": { sig: { "zones": { screen: layout } } } })
+            }
+        };
+        panel.patch(patch, window, cx);
+    });
+}
+
+/// Run `then` with the latest config from the tray, so a change to the library made
+/// elsewhere since the panel last heard isn't lost when the whole list is saved.
+pub fn with_latest(
+    panel: &mut Panel,
+    window: &mut Window,
+    cx: &mut Context<Panel>,
+    then: impl FnOnce(&mut Panel, &mut Window, &mut Context<Panel>) + 'static,
+) {
+    panel.call("config.get", json!({}), window, cx, move |panel, result, window, cx| {
+        if let Some(config) = result.ok().and_then(|c| serde_json::from_value(c).ok()) {
+            panel.config = config;
         }
-        (Target::Library(_), Some(at)) => {
-            list[at]["tree"] = json!(editor.tree);
-            json!({ "custom_layouts": list })
-        }
-        // A library layout deleted while it was being edited comes back as a new one.
-        (Target::Library(_) | Target::New, _) => {
-            let entry =
-                library::Entry { id: library::new_id(&list), name: library::next_name(&list), tree: editor.tree };
-            list.push(entry.value());
-            let Ok(layout) = serde_json::to_value(entry.layout()) else { return };
-            json!({ "custom_layouts": list, "desks": { editor.sig: { "zones": { editor.screen: layout } } } })
-        }
-    };
-    panel.patch(patch, window, cx);
+        then(panel, window, cx);
+    });
 }
 
 fn split(panel: &mut Panel, dir: Dir, cx: &mut Context<Panel>) {

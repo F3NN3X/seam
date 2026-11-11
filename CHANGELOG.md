@@ -4,6 +4,10 @@ All notable changes to Seam. The format follows [Keep a Changelog](https://keepa
 
 ## [Unreleased]
 
+### Added
+
+- **Grow window into its neighbour**, **Shrink window** and **Give window two thirds of its group** on Shortcuts, with no key until you set one. They move the dividers beside a window in a zone, and the windows in the other zones follow. No window goes below the smallest size its app allows: the divider beyond it moves instead. A second press of two thirds puts the zones back. The changed layout is saved as Custom. `window.resize` and `window.priority` in the API.
+
 ## [0.6.5] - 2026-11-09
 
 ### Added

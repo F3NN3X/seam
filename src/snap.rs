@@ -4,7 +4,7 @@
 //! mouse hook (D7).
 
 use crate::tray::WM_APP_WINDOWS_CHANGED;
-use crate::{log, overlay, zone_paint};
+use crate::{log, minsize, overlay, zone_paint};
 use seam::config::{Config, WindowSize, ZoneSettings};
 use seam::desk::{self, Mon};
 use seam::geom;
@@ -286,6 +286,18 @@ pub fn zone_of(hwnd: HWND) -> Option<(String, usize, usize)> {
         s.map(|s| (s.screen.clone(), s.from, s.to))
     })
     .flatten()
+}
+
+/// Every window still in the zones it was snapped to, with its screen and zones,
+/// for finding a group's members. A window on its way counts, as in `zone_of`.
+pub fn zoned() -> Vec<(isize, (String, usize, usize))> {
+    with_engine(|e| {
+        let moving = |key: isize| e.pending.as_ref().is_some_and(|p| p.hwnd == key);
+        let here = |key: isize| moving(key) || e.current(hwnd_of(key)).is_some();
+        let list = e.snapped.iter().filter(|(key, _)| here(**key));
+        list.map(|(key, s)| (*key, (s.screen.clone(), s.from, s.to))).collect()
+    })
+    .unwrap_or_default()
 }
 
 /// Put windows where window control worked out, one after another. A newer
@@ -765,9 +777,13 @@ impl Engine {
                     return;
                 }
                 // It moved, but an app that answered a DPI change late can leave it off by its margins.
-                let landed =
-                    winutil::visible_rect(hwnd).is_some_and(|v| close(v, p.target, winutil::is_resizable(hwnd)));
+                let (visible, sized) = (winutil::visible_rect(hwnd), winutil::is_resizable(hwnd));
+                let landed = visible.is_some_and(|v| close(v, p.target, sized));
                 if landed || p.retries >= MAX_RETRIES {
+                    // Still bigger than its place after the retries: that's as small as the app goes.
+                    if let (false, true, Some(v)) = (landed, sized, visible) {
+                        minsize::observed(hwnd, v, p.target, CLOSE_ENOUGH);
+                    }
                     return;
                 }
                 p.retries += 1;

@@ -20,6 +20,8 @@ mod identify;
 #[cfg(windows)]
 mod live;
 #[cfg(windows)]
+mod minsize;
+#[cfg(windows)]
 mod overlay;
 #[cfg(windows)]
 mod showlayout;

@@ -72,6 +72,15 @@ impl WindowVerb {
     }
 }
 
+/// What `window.resize` and `window.priority` do to the focused window's group of zones.
+/// Grow and shrink carry a step in pixels, or None for the default.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum GroupVerb {
+    Grow(Option<i32>),
+    Shrink(Option<i32>),
+    Priority,
+}
+
 /// Which pin `window.pin` sets (D106).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PinKind {
@@ -134,6 +143,7 @@ pub enum Command {
     ZonesSet(bool),
     ZoneMove(Dir),
     Window(WindowVerb, direction::Dir),
+    WindowGroup(GroupVerb),
     /// `on` is None to toggle.
     WindowPin {
         kind: PinKind,
@@ -247,6 +257,23 @@ fn command(method: &str, p: &Value) -> Result<Command, RpcError> {
                 _ => return Err(RpcError::new(INVALID_PARAMS, "dir must be left, right, up or down")),
             }
         }
+        "window.resize" => {
+            let step = match p.get("step") {
+                None | Some(Value::Null) => None,
+                Some(v) => Some(
+                    v.as_u64()
+                        .and_then(|n| i32::try_from(n).ok())
+                        .filter(|n| *n > 0)
+                        .ok_or_else(|| RpcError::new(INVALID_PARAMS, "step must be a number of pixels"))?,
+                ),
+            };
+            match p.get("by").and_then(Value::as_str) {
+                Some("grow") => Command::WindowGroup(GroupVerb::Grow(step)),
+                Some("shrink") => Command::WindowGroup(GroupVerb::Shrink(step)),
+                _ => return Err(RpcError::new(INVALID_PARAMS, "by must be grow or shrink")),
+            }
+        }
+        "window.priority" => Command::WindowGroup(GroupVerb::Priority),
         "window.pin" => {
             let kind = match p.get("kind").and_then(Value::as_str) {
                 Some("top") => PinKind::Top,
@@ -549,6 +576,13 @@ mod tests {
                 anyone,
                 Command::Window(WindowVerb::Focus, direction::Dir::Down),
             ),
+            (request("window.resize", r#"{"by":"grow"}"#), anyone, Command::WindowGroup(GroupVerb::Grow(None))),
+            (
+                request("window.resize", r#"{"by":"shrink","step":40}"#),
+                anyone,
+                Command::WindowGroup(GroupVerb::Shrink(Some(40))),
+            ),
+            (request("window.priority", "{}"), anyone, Command::WindowGroup(GroupVerb::Priority)),
             (request("screen.identify", r#"{"number":3}"#), anyone, Command::ScreenIdentify(3)),
             (request("panel.open", r#"{"page":"about"}"#), anyone, Command::PanelOpen(Some("about".into()))),
             (
@@ -603,6 +637,8 @@ mod tests {
             (request("remap.set", r#"{"on":"yes"}"#), anyone, INVALID_PARAMS),
             (request("zone.move", r#"{"dir":"up"}"#), anyone, INVALID_PARAMS),
             (request("window.swap", r#"{"dir":"next"}"#), anyone, INVALID_PARAMS),
+            (request("window.resize", r#"{"by":"wider"}"#), anyone, INVALID_PARAMS),
+            (request("window.resize", r#"{"by":"grow","step":0}"#), anyone, INVALID_PARAMS),
             (request("screen.identify", r#"{"number":-1}"#), anyone, INVALID_PARAMS),
             (request("workspace.switch", "{}"), anyone, INVALID_PARAMS),
             (request("workspace.status", "{}"), anyone, INVALID_PARAMS),

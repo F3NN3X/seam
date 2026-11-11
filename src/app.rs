@@ -23,7 +23,7 @@ use crate::tray::{CLASS, WM_APP_API, WM_APP_LINEUP, WM_APP_WINDOWS_CHANGED};
 use crate::wm::{Pinned, WM_APP_WS_MOVED};
 use crate::{arrange, ease, hotkey, identify, live, overlay, showlayout, wincontrol, wm};
 use commands::{align_finished, busy, drain_api, patch_config, refused};
-use seam::api::{self, Client, Command, PinKind, Reply, RpcError, WindowVerb};
+use seam::api::{self, Client, Command, GroupVerb, PinKind, Reply, RpcError, WindowVerb};
 use seam::config::{RestoreApps, TrayClick};
 use seam::direction::Dir;
 use seam::state::{
@@ -67,6 +67,7 @@ use workspaces::{
     start_capture, start_switch, start_switch_job, start_window, switched, sync_live, undo_quick_save,
     update_workspace, ws_moved,
 };
+use workspaces::{start_group, window_planned};
 
 const WM_APP_TRAY: u32 = WM_APP + 1;
 /// A worker finished `arrangement.align`.
@@ -124,6 +125,10 @@ const HOTKEY_WINDOW: i32 = 10;
 const WINDOW_KEYS: i32 = 12;
 /// After the directional ones.
 const HOTKEY_QUICK_SAVE: i32 = 22;
+/// Grow, shrink and Priority on the focused window's group of zones.
+const HOTKEY_GROW: i32 = 30;
+const HOTKEY_SHRINK: i32 = 31;
+const HOTKEY_PRIORITY: i32 = 32;
 /// One hotkey id per workspace on the desk, from here up.
 const HOTKEY_WORKSPACE: i32 = 100;
 const NIN_KEYSELECT: u32 = NIN_SELECT | NINF_KEY;
@@ -644,6 +649,14 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                         log::info!("quick save hotkey: {}", e.message);
                     }
                 }
+                id @ (HOTKEY_GROW | HOTKEY_SHRINK | HOTKEY_PRIORITY) => {
+                    let verb = match id {
+                        HOTKEY_GROW => GroupVerb::Grow(None),
+                        HOTKEY_SHRINK => GroupVerb::Shrink(None),
+                        _ => GroupVerb::Priority,
+                    };
+                    with_app(|a| start_group(a, verb, None));
+                }
                 id if (HOTKEY_WINDOW..HOTKEY_WINDOW + WINDOW_KEYS).contains(&id) => {
                     with_app(|a| {
                         let (verb, dir, _) = a.cfg.hotkeys.directional()[(id - HOTKEY_WINDOW) as usize];
@@ -758,7 +771,10 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
             LRESULT(0)
         }
         wincontrol::WM_APP_WINDOW => {
-            wincontrol::planned();
+            // Busy elsewhere: the moves wait for nothing, but a layout can't be saved.
+            if with_app(window_planned).is_none() {
+                wincontrol::planned(|_, _| false);
+            }
             LRESULT(0)
         }
         wm::WM_APP_WM => {

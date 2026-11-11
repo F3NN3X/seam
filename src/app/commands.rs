@@ -144,6 +144,10 @@ pub(super) fn run_command(app: &mut App, queued: Queued) {
             start_window(app, verb, dir, Some(reply));
             return;
         }
+        Command::WindowGroup(verb) => {
+            start_group(app, verb, Some(reply));
+            return;
+        }
         Command::WindowPin { kind, on } => {
             wm::pin(kind, on, unsafe { GetForegroundWindow() }.0 as isize, Some(reply));
             return;

@@ -45,6 +45,14 @@ export class SnapBack extends Plain {
 	}
 }
 
+/** Switches to the workspace that was in use before this one. Pressing it again goes back. */
+@action({ UUID: "co.f3nn3x.seam.switch-back" })
+export class SwitchBack extends Plain {
+	protected async press(): Promise<void> {
+		await seam.call("workspace.switch_back");
+	}
+}
+
 /** Saves the windows into the workspace in use, the way "Update from screen" does, or into a new one. */
 @action({ UUID: "co.f3nn3x.seam.quick-save" })
 export class SaveWindows extends Plain {

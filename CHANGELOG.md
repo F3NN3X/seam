@@ -4,6 +4,11 @@ All notable changes to Seam. The format follows [Keep a Changelog](https://keepa
 
 ## [Unreleased]
 
+### Added
+
+- **Switch back to the previous workspace**: a shortcut (no key until you set one), the first item of the tray's Workspaces menu, `workspace.switch_back` in the API, and a Stream Deck action. `previous_workspace` on a desk in `config.json`.
+- **Open alongside**, on a workspace's **...** menu, switches once and leaves the other windows alone. `workspace.switch` takes `alongside`.
+
 ## [0.6.5] - 2026-11-09
 
 ### Added

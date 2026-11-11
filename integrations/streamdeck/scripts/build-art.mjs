@@ -114,6 +114,18 @@ const snapBack = (p) => {
   return { ...base, h: 28, svg: base.svg + drifted + placed + arrowBelow(p) };
 };
 
+/** An outlined window on the right screen, the filled one on the left it goes back to, and the arrow pointing back. */
+const switchBack = (p) => {
+  const base = mark(p);
+  const thin = Math.min(p.width, 1);
+  const from = `<rect x="22.5" y="6.5" width="5" height="7" rx="1" fill="none" stroke="${p.line}" stroke-width="${thin}"/>`;
+  const to = `<rect x="3" y="5" width="6" height="10" rx="1" fill="${p.line}"/>`;
+  const arrow =
+    `<line x1="24" y1="25" x2="8" y2="25" stroke="${p.line}" stroke-width="${p.width}" stroke-linecap="round"/>` +
+    `<polyline points="11,22.5 8,25 11,27.5" fill="none" stroke="${p.line}" stroke-width="${p.width}" stroke-linecap="round" stroke-linejoin="round"/>`;
+  return { ...base, h: 28, svg: base.svg + from + to + arrow };
+};
+
 /** A window on the right screen, and the arrow down onto the line it's saved to. */
 const quickSave = (p) => {
   const base = mark(p);
@@ -165,6 +177,7 @@ const actions = {
   "pin-top": { draw: pinTop, states: ["lit"] },
   release: { draw: release, states: ["lit"] },
   "snap-back": { draw: snapBack, states: ["lit"] },
+  "switch-back": { draw: switchBack, states: ["lit"] },
   "quick-save": { draw: quickSave, states: ["lit"] },
 };
 

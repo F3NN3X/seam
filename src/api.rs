@@ -104,6 +104,8 @@ pub enum Command {
     WorkspaceSwitch {
         id: Option<String>,
         name: Option<String>,
+        /// Leave the other windows alone for this one switch.
+        alongside: bool,
     },
     /// `row` with `into` takes only that row's window ("Where it is now").
     WorkspaceCapture {
@@ -122,6 +124,7 @@ pub enum Command {
     },
     /// Switch to the active workspace again, so drifted windows go back.
     WorkspaceSnapBack,
+    WorkspaceSwitchBack,
     /// Save the windows on screen into the workspace in use, or a new one (§7).
     WorkspaceQuickSave,
     /// The workspace taken as in use at start when none is remembered, or none.
@@ -200,7 +203,8 @@ fn command(method: &str, p: &Value) -> Result<Command, RpcError> {
             if id.is_none() && name.is_none() {
                 return Err(RpcError::new(INVALID_PARAMS, "id or name is required"));
             }
-            Command::WorkspaceSwitch { id, name }
+            let alongside = p.get("alongside").and_then(Value::as_bool).unwrap_or(false);
+            Command::WorkspaceSwitch { id, name, alongside }
         }
         "workspace.capture" => {
             let row = match p.get("row") {
@@ -229,6 +233,7 @@ fn command(method: &str, p: &Value) -> Result<Command, RpcError> {
             id: str_param(p, "id")?.ok_or_else(|| RpcError::new(INVALID_PARAMS, "id is required"))?,
         },
         "workspace.snap_back" => Command::WorkspaceSnapBack,
+        "workspace.switch_back" => Command::WorkspaceSwitchBack,
         "workspace.quick_save" => Command::WorkspaceQuickSave,
         "workspace.set_default" => Command::WorkspaceSetDefault(str_param(p, "id")?),
         "autoapply.set" => Command::AutoApplySet(on_param(p)?),
@@ -554,10 +559,11 @@ mod tests {
             (
                 request("workspace.switch", r#"{"name":"Coding"}"#),
                 anyone,
-                Command::WorkspaceSwitch { id: None, name: Some("Coding".into()) },
+                Command::WorkspaceSwitch { id: None, name: Some("Coding".into()), alongside: false },
             ),
             (request("workspace.status", r#"{"id":"ws_1"}"#), anyone, Command::WorkspaceStatus { id: "ws_1".into() }),
             (request("workspace.snap_back", "{}"), anyone, Command::WorkspaceSnapBack),
+            (request("workspace.switch_back", "{}"), anyone, Command::WorkspaceSwitchBack),
             (request("workspace.quick_save", "{}"), anyone, Command::WorkspaceQuickSave),
             (request("autoapply.set", r#"{"on":true}"#), anyone, Command::AutoApplySet(true)),
             (

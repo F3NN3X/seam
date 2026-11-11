@@ -95,7 +95,7 @@ pub(super) fn restore_session(app: &mut App, session: Workspace) -> Reply {
     let mode = app.cfg.restore_apps;
     log::info!("restoring the last session: {} windows, apps reopened by {mode:?}", session.windows.len());
     let arrange_for = (mode == RestoreApps::Windows).then_some(ARRANGE_WAIT);
-    start_switch_job(app, session, arrange_for)
+    start_switch_job(app, session, arrange_for, false)
 }
 
 // ---- Windows' Restart apps (D128)

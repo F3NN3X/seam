@@ -469,9 +469,16 @@ fn detail(panel: &mut Panel, ws: Workspace, window: &mut Window, cx: &mut Contex
         .dropdown_menu(move |menu, _, _| {
             let (rename, exporting, importing, deleting) = (view.clone(), view.clone(), view.clone(), view.clone());
             let (to_export, id) = (more_ws.clone(), more_ws.id.clone());
+            let (alongside, alongside_id) = (view.clone(), more_ws.id.clone());
             let (defaulting, default_to) = (view.clone(), (!is_default).then(|| more_ws.id.clone()));
             let default_label = if is_default { "Stop being the default" } else { "Set as default" };
-            menu.item(PopupMenuItem::new("Rename").on_click(move |_, _, cx| {
+            menu.item(PopupMenuItem::new("Open alongside").on_click(move |_, window, cx| {
+                let id = alongside_id.clone();
+                let _ = alongside.update(cx, |panel, cx| {
+                    panel.command("workspace.switch", json!({ "id": id, "alongside": true }), window, cx);
+                });
+            }))
+            .item(PopupMenuItem::new("Rename").on_click(move |_, _, cx| {
                 let _ = rename.update(cx, start_naming);
             }))
             .item(PopupMenuItem::new(default_label).on_click(move |_, window, cx| {

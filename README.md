@@ -125,6 +125,8 @@ A workspace saves which app is on which screen and in which zone (or at its own 
 - **Other windows** says what a switch does with everything else on the desk's screens: leave it, minimize it, or close it. Close only asks. Each app gets a normal close request, so one with unsaved work shows its own prompt and stays open. Seam never ends a process.
 - **Update from screen** saves the windows as they are now into a workspace, and keeps each app's launch details, its place in the order, and the apps that aren't running.
 - **Save windows to the active workspace** (no key until you set one) does the same for the workspace in use without opening Seam, and says "Saved Coding". Click that notification within 8 seconds to undo it. With no workspace in use it saves a new one, "Workspace 3" say, and that becomes the one in use.
+- **Switch back to the previous workspace** (no key until you set one) goes to the workspace that was in use before this one, and pressing it again goes back. The tray's **Workspaces** menu starts with "Switch back to <name>" when there is one, and Stream Deck has a Switch back key. With nothing to go back to it says "No workspace to switch back to".
+- **Open alongside**, on a workspace's **...** menu, switches once and leaves the other windows alone, whatever **Other windows** says. The setting itself doesn't change.
 - **Set as default**, on a workspace's menu, makes it the one in use when Seam starts and none is remembered.
 - The list shows each workspace's apps as a row of icons, up to six and then "+n". The one in use shows a green dot and "Active", or "Active, moved" once one of its windows moved.
 
@@ -182,6 +184,7 @@ A Stream Deck plugin in `integrations/streamdeck` puts Seam on keys. It talks to
 |---|---|
 | Switch workspace | Pick a workspace on the current desk. The key lights while it's in use, with an amber dot once a window of it was moved or minimized. Pressing it puts them back. |
 | Snap back | Puts the windows of the workspace in use back. |
+| Switch back | Switches to the workspace that was in use before this one. |
 | Save windows | Saves the windows into the workspace in use, as **Save windows to the active workspace** does. |
 | Line up screens | Opens Line Up. |
 | Pause or resume remap, Zones on or off | Two-state keys that follow Seam, so they stay right when you change a setting elsewhere. |
@@ -290,7 +293,7 @@ Yes, through the [local API](docs/api.md), which is what the Stream Deck plugin 
 | Shift+Win+Alt+arrows | Move the focused window that way on the desk |
 | Ctrl+Shift+Alt+arrows | Focus the window that way |
 | Shift (while dragging) | Show the zones. Add Ctrl to cover several zones |
-| None until you set one | Swap, next and previous zone, the three pin keys, one capture key, **Snap back to this workspace**, **Save windows to the active workspace**, and one key per workspace |
+| None until you set one | Swap, next and previous zone, the three pin keys, one capture key, **Snap back to this workspace**, **Switch back to the previous workspace**, **Save windows to the active workspace**, and one key per workspace |
 
 Set these on the Shortcuts page. Ctrl+Shift+Alt plus a number is a good choice for workspaces, since Ctrl+Alt alone types characters on many keyboards.
 

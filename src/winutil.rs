@@ -151,11 +151,47 @@ pub fn is_full_screen(h: HWND) -> bool {
     unsafe { !IsIconic(h).as_bool() && !IsZoomed(h).as_bool() && is_fullscreen(h, GetWindowLongW(h, GWL_STYLE) as u32) }
 }
 
-/// What to call the window's app in a message: its exe's name without `.exe`.
+/// What to call the window's app in a message: the exe's own description, such
+/// as "Task Manager", else its file name without `.exe`, capitalised.
 pub fn app_name(h: HWND) -> Option<String> {
     let path = exe_path_of(process_id(h))?;
+    if let Some(d) = file_description(&path) {
+        return Some(d);
+    }
     let stem = std::path::Path::new(&path).file_stem()?.to_string_lossy().into_owned();
-    Some(stem).filter(|s| !s.is_empty())
+    let mut c = stem.chars();
+    c.next().map(|f| f.to_uppercase().chain(c).collect())
+}
+
+/// The FileDescription in an exe's version info, in its first language.
+fn file_description(path: &str) -> Option<String> {
+    use windows::core::HSTRING;
+    use windows::Win32::Storage::FileSystem::{GetFileVersionInfoSizeW, GetFileVersionInfoW, VerQueryValueW};
+    let file = HSTRING::from(path);
+    unsafe {
+        let size = GetFileVersionInfoSizeW(&file, None);
+        if size == 0 {
+            return None;
+        }
+        let mut data = vec![0u8; size as usize];
+        GetFileVersionInfoW(&file, None, size, data.as_mut_ptr().cast()).ok()?;
+        let query = |key: &str| -> Option<(*const u8, usize)> {
+            let mut ptr = std::ptr::null_mut();
+            let mut len = 0u32;
+            VerQueryValueW(data.as_ptr().cast(), &HSTRING::from(key), &mut ptr, &mut len)
+                .as_bool()
+                .then_some((ptr as *const u8, len as usize))
+                .filter(|(p, l)| !p.is_null() && *l > 0)
+        };
+        let (lang, len) = query("\\VarFileInfo\\Translation")?;
+        if len < 4 {
+            return None;
+        }
+        let ids = std::slice::from_raw_parts(lang as *const u16, 2);
+        let (text, chars) = query(&format!("\\StringFileInfo\\{:04x}{:04x}\\FileDescription", ids[0], ids[1]))?;
+        let name = String::from_utf16_lossy(std::slice::from_raw_parts(text as *const u16, chars));
+        Some(name.trim_end_matches('\0').trim().to_owned()).filter(|s| !s.is_empty())
+    }
 }
 
 /// Whether the process is elevated.

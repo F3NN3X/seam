@@ -69,6 +69,14 @@ export class TileScreen extends Plain {
 	}
 }
 
+/** Opens the overlay for picking the layout of the screen under the pointer. */
+@action({ UUID: "co.f3nn3x.seam.quick-layout" })
+export class QuickLayout extends Plain {
+	protected async press(): Promise<void> {
+		await seam.call("zones.quick");
+	}
+}
+
 @action({ UUID: "co.f3nn3x.seam.release" })
 export class ReleasePinned extends Plain {
 	protected async press(): Promise<void> {

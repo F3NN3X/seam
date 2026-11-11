@@ -38,6 +38,7 @@ pub(super) fn apply_hotkeys(app: &mut App) {
         (HOTKEY_PRIORITY, "priority".to_string(), keys.priority.clone()),
         (HOTKEY_SWITCH_BACK, "switch_back".to_string(), keys.switch_back.clone()),
         (HOTKEY_TILE_SCREEN, "tile_screen".to_string(), keys.tile_screen.clone()),
+        (HOTKEY_QUICK_LAYOUT, "quick_layout".to_string(), keys.quick_layout.clone()),
         (HOTKEY_FOCUS_ONLY, "focus_only".to_string(), keys.focus_only.clone()),
         (HOTKEY_SPOTLIGHT, "spotlight".to_string(), keys.spotlight.clone()),
     ];

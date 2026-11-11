@@ -110,6 +110,22 @@
 			]
 		},
 		{
+			"UUID": "co.f3nn3x.seam.quick-layout",
+			"Name": "Quick layout",
+			"Tooltip": "Pick the layout of the screen under the pointer from the keyboard.",
+			"Icon": "imgs/actions/quick-layout/icon",
+			"Controllers": [
+				"Keypad"
+			],
+			"States": [
+				{
+					"Image": "imgs/actions/quick-layout/key",
+					"Title": "Quick layout",
+					"TitleAlignment": "bottom"
+				}
+			]
+		},
+		{
 			"UUID": "co.f3nn3x.seam.lineup",
 			"Name": "Line up screens",
 			"Tooltip": "Open Line Up to match the screen edges to your desk.",

@@ -22,7 +22,9 @@ use crate::switcher::{
 };
 use crate::tray::{CLASS, WM_APP_API, WM_APP_LINEUP, WM_APP_WINDOWS_CHANGED};
 use crate::wm::{Pinned, WM_APP_WS_MOVED};
-use crate::{arrange, ease, focus_only, hotkey, identify, live, overlay, showlayout, spotlight, wincontrol, wm};
+use crate::{
+    arrange, ease, focus_only, hotkey, identify, live, overlay, quicklayout, showlayout, spotlight, wincontrol, wm,
+};
 use commands::{align_finished, busy, drain_api, patch_config, refused};
 use seam::api::{self, Client, Command, FocusScope, GroupVerb, PinKind, Reply, RpcError, WindowVerb};
 use seam::config::{RestoreApps, TrayClick};
@@ -134,6 +136,7 @@ const HOTKEY_SHRINK: i32 = 31;
 const HOTKEY_PRIORITY: i32 = 32;
 const HOTKEY_SWITCH_BACK: i32 = 23;
 const HOTKEY_TILE_SCREEN: i32 = 50;
+const HOTKEY_QUICK_LAYOUT: i32 = 55;
 const HOTKEY_FOCUS_ONLY: i32 = 40;
 const HOTKEY_SPOTLIGHT: i32 = 41;
 /// One hotkey id per workspace on the desk, from here up.
@@ -712,6 +715,11 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                 HOTKEY_TILE_SCREEN => {
                     with_app(|a| start_tile(a, tile::pointer(), None));
                 }
+                HOTKEY_QUICK_LAYOUT => {
+                    if let Some(Err(why)) = with_app(|a| tile::open_quick_layout(a, None, false)) {
+                        log::info!("quick layout hotkey: {why}");
+                    }
+                }
                 id @ (HOTKEY_GROW | HOTKEY_SHRINK | HOTKEY_PRIORITY) => {
                     let verb = match id {
                         HOTKEY_GROW => GroupVerb::Grow(None),
@@ -819,6 +827,10 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
         WM_TIMER if wparam.0 == TIMER_STATE => {
             let _ = KillTimer(Some(hwnd), TIMER_STATE);
             with_app(send_state_event);
+            LRESULT(0)
+        }
+        quicklayout::WM_APP_QUICK_LAYOUT => {
+            with_app(tile::apply_quick_picks);
             LRESULT(0)
         }
         WM_APP_ALIGNED => {

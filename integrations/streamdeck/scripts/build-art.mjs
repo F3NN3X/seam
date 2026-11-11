@@ -60,6 +60,15 @@ const tileScreen = (p) => {
   return { ...base, svg: base.svg + `<line x1="1" y1="10" x2="13" y2="10" stroke="${p.line}" stroke-width="${Math.min(p.width, 1)}"/>` };
 };
 
+/** One screen with a small panel of layouts open on it. */
+const quickLayout = (p) => {
+  const base = zones(p);
+  const thin = Math.min(p.width, 1);
+  const panel = `<rect x="9.5" y="5.5" width="13" height="9" rx="1" fill="${color.page}" stroke="${p.line}" stroke-width="${thin}"/>`;
+  const cells = `<line x1="16" y1="6" x2="16" y2="14" stroke="${p.line}" stroke-width="${thin}"/>`;
+  return { ...base, svg: base.svg + panel + cells };
+};
+
 const zoneStep = (dir) => (p) => {
   const base = zones(p);
   const [tail, tip, back] = dir === "next" ? [10, 22, 19] : [22, 10, 13];
@@ -193,6 +202,7 @@ const actions = {
   remap: { draw: remap, states: ["idle", "lit"] },
   zones: { draw: zones, states: ["idle", "lit"] },
   "tile-screen": { draw: tileScreen, states: ["lit"] },
+  "quick-layout": { draw: quickLayout, states: ["lit"] },
   "zone-next": { draw: zoneStep("next"), states: ["lit"] },
   "zone-prev": { draw: zoneStep("prev"), states: ["lit"] },
   desk: { draw: mark, states: ["lit"] },

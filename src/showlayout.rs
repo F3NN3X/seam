@@ -27,7 +27,7 @@ const SECONDARY: (u8, u8, u8) = (0xB0, 0xB0, 0xB0);
 const ACCENT: (u8, u8, u8) = (0xFF, 0xB0, 0x20);
 const MUTED: (u8, u8, u8) = (0x94, 0x94, 0x94);
 
-type Color = (u8, u8, u8);
+pub(crate) type Color = (u8, u8, u8);
 
 #[derive(Clone, Copy, PartialEq)]
 enum Style {
@@ -117,17 +117,17 @@ fn plan(view: LayoutView, mons: &[Mon], links: &[Link]) -> Vec<Plane> {
     planes
 }
 
-fn rgb((r, g, b): Color) -> COLORREF {
+pub(crate) fn rgb((r, g, b): Color) -> COLORREF {
     COLORREF(r as u32 | (g as u32) << 8 | (b as u32) << 16)
 }
 
-unsafe fn fill(dc: HDC, r: RECT, c: Color) {
+pub(crate) unsafe fn fill(dc: HDC, r: RECT, c: Color) {
     let brush = CreateSolidBrush(rgb(c));
     FillRect(dc, &r, brush);
     let _ = DeleteObject(brush.into());
 }
 
-unsafe fn text(dc: HDC, s: &str, mut r: RECT, px: i32, c: Color, flags: DRAW_TEXT_FORMAT) {
+pub(crate) unsafe fn text(dc: HDC, s: &str, mut r: RECT, px: i32, c: Color, flags: DRAW_TEXT_FORMAT) {
     let font = CreateFontW(
         -px,
         0,

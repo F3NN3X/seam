@@ -90,8 +90,49 @@ pub(super) fn tile_finished(app: &mut App, result: Option<Result<wincontrol::til
                 back: done.back,
                 until,
             });
-            notify(app, &title, &body, BalloonAction::UndoTile);
+            // With the overlay up, Ctrl+Z is the undo, and a notice would only get in its way.
+            if !quicklayout::is_open() {
+                notify(app, &title, &body, BalloonAction::UndoTile);
+            }
         }
+    }
+}
+
+/// Open the quick layout overlay on a screen, by Line Up number or the one under
+/// the pointer. With zones off, or with another window manager running, it still
+/// opens and says so, since a pick is saved either way.
+pub(super) fn open_quick_layout(app: &mut App, number: Option<u32>, from_api: bool) -> Result<(), String> {
+    let at = match number {
+        Some(n) => n.checked_sub(1).map(|i| i as usize),
+        None => {
+            let At::Point(x, y) = pointer() else { return Err("No such screen".into()) };
+            Some(app.mons.iter().position(|m| m.rect.contains(x, y)).unwrap_or(0))
+        }
+    };
+    let mon = at.and_then(|i| app.mons.get(i)).ok_or("No such screen")?;
+    let desk = app.cfg.desks.get(&app.sig).ok_or("This desk isn't saved yet")?;
+    let now = desk.zones.get(&mon.id).and_then(zones::layout_of);
+    let library = seam::library::entries(&app.cfg.custom_layouts);
+    let note = aside(app).or_else(|| {
+        (!app.cfg.zones.enabled).then(|| "Zones are off. A layout you pick is kept for when they are on".to_string())
+    });
+    quicklayout::show(quicklayout::Spec {
+        number: at.map_or(1, |i| i as u32 + 1),
+        rect: mon.rect,
+        note,
+        choices: quicklayout::choices(&library, &mon.id, now.as_ref()),
+        now,
+        tray: app.hwnd.0 as isize,
+        from_api,
+    });
+    Ok(())
+}
+
+/// The overlay picked layouts: apply each as a click on the Zones page would.
+pub(super) fn apply_quick_picks(app: &mut App) {
+    for (number, layout) in quicklayout::take_picks() {
+        let (reply, _) = channel();
+        pick_layout(app, number, layout, reply);
     }
 }
 

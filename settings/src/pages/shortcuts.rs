@@ -89,6 +89,14 @@ fn start_recording(panel: &mut Panel, action: String, cx: &mut Context<Panel>) {
     cx.notify();
 }
 
+/// A line under a row's title, for the shortcuts whose name doesn't say enough.
+fn caption(action: &str) -> Option<&'static str> {
+    match action {
+        "quick_layout" => Some("Pick this screen's layout from the keyboard"),
+        _ => None,
+    }
+}
+
 /// One row. `slot` numbers the row, so its buttons get ids of their own.
 fn shortcut_row(
     panel: &Panel,
@@ -125,7 +133,7 @@ fn shortcut_row(
     } else if panel.hotkey_warning.as_deref() == Some(action.as_str()) {
         Some(note("Ctrl+Alt types characters on many keyboards. Add Shift", p.negative))
     } else {
-        None
+        caption(&action).map(|text| note(text, p.secondary))
     };
     let keys = match combo {
         Some(combo) => keycaps(combo, conflict, p).into_any_element(),
@@ -167,6 +175,7 @@ pub fn render(panel: &mut Panel, _: &mut Window, cx: &mut Context<Panel>) -> imp
         row("Shrink window", "shrink", keys.shrink.as_ref(), 901),
         row("Give window two thirds of its group", "priority", keys.priority.as_ref(), 902),
         row("Tile this screen's windows", "tile_screen", keys.tile_screen.as_ref(), 920),
+        row("Quick layout", "quick_layout", keys.quick_layout.as_ref(), 930),
     ]);
     window_rows.extend([
         row("Pin window on top", "pin_top", keys.pin_top.as_ref(), 17),

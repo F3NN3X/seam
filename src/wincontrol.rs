@@ -29,6 +29,8 @@ mod regroup;
 #[path = "tile.rs"]
 pub mod tile;
 
+pub use regroup::{group_members, group_mins};
+
 /// The worker has moves for the main thread to start.
 pub const WM_APP_WINDOW: u32 = WM_APP + 18;
 /// The gap slider's end, as in the snapping.
@@ -81,6 +83,8 @@ struct Planned {
 static SLOT: Mutex<Option<Job>> = Mutex::new(None);
 static WAKE: Condvar = Condvar::new();
 static PLANNED: Mutex<Option<Planned>> = Mutex::new(None);
+/// Layouts edge drags changed, waiting to be saved in order.
+static DRAGGED: Mutex<Vec<(String, ZoneLayout)>> = Mutex::new(Vec::new());
 /// Why a tile with no API client waiting did nothing. It has its own place, so it can't cancel a move waiting in PLANNED.
 static NOTE: Mutex<Option<String>> = Mutex::new(None);
 
@@ -111,9 +115,19 @@ pub fn start(job: Job) {
 
 /// The worker's moves are ready: start them on the snapping's steps. A changed
 /// layout goes to `save` first, so the windows' stamps follow the new zones. When
-/// it can't be saved nothing moves. A tile answers with what it did, or with why it
-/// did nothing when no API client is waiting to be told.
-pub fn planned(save: impl FnOnce(&str, ZoneLayout) -> bool) -> Option<Result<tile::Done, String>> {
+/// it can't be saved nothing moves. Layouts from edge drags are saved before it, so
+/// a group command's layout, which is what its windows move to, is the one that stays.
+/// A tile answers with what it did, or with why it did nothing when no API client is
+/// waiting to be told.
+pub fn planned(mut save: impl FnMut(&str, ZoneLayout) -> bool) -> Option<Result<tile::Done, String>> {
+    let dragged = std::mem::take(&mut *DRAGGED.lock().unwrap_or_else(|e| e.into_inner()));
+    for (screen, layout) in dragged {
+        if save(&screen, layout) {
+            regroup::saved(&screen, None);
+        } else {
+            log::info!("zone edges: Seam was busy, so the new layout wasn't saved");
+        }
+    }
     let note = NOTE.lock().unwrap_or_else(|e| e.into_inner()).take();
     let Some(plan) = PLANNED.lock().unwrap_or_else(|e| e.into_inner()).take() else { return note.map(Err) };
     if let Some((screen, layout, keep)) = plan.layout {
@@ -123,11 +137,25 @@ pub fn planned(save: impl FnOnce(&str, ZoneLayout) -> bool) -> Option<Result<til
         }
         regroup::saved(&screen, keep);
     }
-    snap::place_all(plan.list);
+    // An empty list would clear window control's moves still waiting.
+    if !plan.list.is_empty() {
+        snap::place_all(plan.list);
+    }
     let done = plan.tile;
     let counts = done.as_ref().map(|d| json!({ "ok": true, "tiled": d.tiled, "left": d.left }));
     answer(plan.reply, Ok(counts.unwrap_or_else(|| json!({ "ok": true }))));
     done.map(Ok)
+}
+
+/// A drag of a window's edge changed a screen's layout: save it the way a group
+/// command's is, which also drops what Priority kept for the screen. It waits
+/// behind a group command's plan rather than replacing it. Nothing moves here, as
+/// the drag has put the windows already.
+pub fn save_layout(owner: isize, screen: String, layout: ZoneLayout) {
+    DRAGGED.lock().unwrap_or_else(|e| e.into_inner()).push((screen, layout));
+    unsafe {
+        let _ = PostMessageW(Some(hwnd_of(owner)), WM_APP_WINDOW, WPARAM(0), LPARAM(0));
+    }
 }
 
 /// What a command came to.
@@ -290,16 +318,22 @@ fn zone_of(
     if known.is_some() {
         return known;
     }
-    let set = winutil::zone_stamp(h);
     let (x, y) = centre(rect);
     let s = geo.iter().position(|g| g.bounds.contains(x, y))?;
-    let g = &geo[s];
-    if set.iter().any(|i| *i >= g.zones.len()) {
+    let (from, to, span) = stamped_in(h, rect, &geo[s].zones)?;
+    Some((s, from, to, span))
+}
+
+/// The first and last of `placed`, a screen's zones, that the stamp on a window
+/// names, and their rect, while its visible frame `rect` is still on them.
+pub fn stamped_in(h: HWND, rect: Rect, placed: &[Rect]) -> Option<(usize, usize, Rect)> {
+    let set = winutil::zone_stamp(h);
+    if set.iter().any(|i| *i >= placed.len()) {
         return None;
     }
-    let span = set.iter().map(|i| g.zones[*i]).reduce(zones::span)?;
+    let span = set.iter().map(|i| placed[*i]).reduce(zones::span)?;
     let (from, to) = (*set.iter().min()?, *set.iter().max()?);
-    close(rect, span, winutil::is_resizable(h)).then_some((s, from, to, span))
+    close(rect, span, winutil::is_resizable(h)).then_some((from, to, span))
 }
 
 /// Where along the free room a window starts, from 0 to 1.

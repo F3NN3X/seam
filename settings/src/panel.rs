@@ -401,6 +401,7 @@ impl Panel {
             self.editor = None;
             self.read_screens();
         }
+        pages::zone_editor::reload(self);
         self.relink();
     }
 

@@ -80,6 +80,7 @@ Pick a layout for each screen (Columns, Rows, Grid, Priority, Main + stack or St
 - Both keys, the **gap** between zones, and whether a window gets its old size back when you drop it outside a zone are on the Zones page.
 - **Edit layout** (or the **Custom** tile) makes your own layout: split a zone side by side or top and bottom, drag a divider (it snaps to quarters and thirds), merge two neighbours, then press **Done**. Esc throws the changes away and Ctrl+Z undoes the last one. A layout can have up to 128 zones.
 - The editor opens on the screen itself, over its work area. If you'd rather edit in the preview, turn off **Edit layouts on the screen**.
+- Drag the edge of a window in a zone and the windows in the zones on the other side follow it live, with no gaps or overlaps. None goes below the smallest size its app allows: the next divider moves instead. When you let go, the window fits its zone and the layout is saved as Custom. Esc puts everything back. Turn off **Resize neighbours with a window** to resize a window on its own.
 - **Keep windows in their zones** (experimental, off by default) moves snapped windows back into their zones after a screen, resolution or scaling change, or after the PC wakes. Windows you've moved since they snapped are left alone.
 - Layouts belong to the set of screens you have connected, so each desk keeps its own.
 

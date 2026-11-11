@@ -36,6 +36,7 @@ pub(super) fn apply_hotkeys(app: &mut App) {
         (HOTKEY_GROW, "grow".to_string(), keys.grow.clone()),
         (HOTKEY_SHRINK, "shrink".to_string(), keys.shrink.clone()),
         (HOTKEY_PRIORITY, "priority".to_string(), keys.priority.clone()),
+        (HOTKEY_SWITCH_BACK, "switch_back".to_string(), keys.switch_back.clone()),
     ];
     for (id, (verb, dir, combo)) in (HOTKEY_WINDOW..).zip(keys.directional()) {
         wanted.push((id, format!("{verb}_{dir}"), combo.cloned()));
@@ -84,7 +85,7 @@ pub(super) fn capture_job(app: &App) -> CaptureJob {
 
 /// Start switching to a workspace on this desk. The worker does the rest and the
 /// result comes back as an event.
-pub(super) fn start_switch(app: &mut App, id: Option<&str>, name: Option<&str>) -> Reply {
+pub(super) fn start_switch(app: &mut App, id: Option<&str>, name: Option<&str>, alongside: bool) -> Reply {
     let found = desk_workspaces(app).into_iter().find(|w| match (id, name) {
         (Some(id), _) => w.id == id,
         (None, Some(name)) => w.name.eq_ignore_ascii_case(name),
@@ -93,21 +94,22 @@ pub(super) fn start_switch(app: &mut App, id: Option<&str>, name: Option<&str>) 
     let Some(workspace) = found else {
         return Err(RpcError::new(api::NOT_FOUND, "no such workspace on this desk"));
     };
-    switch_to(app, workspace)
+    start_switch_job(app, workspace, None, alongside)
 }
 
 /// Hand a workspace, saved or the last session, to the switch worker.
-pub(super) fn switch_to(app: &mut App, workspace: Workspace) -> Reply {
-    start_switch_job(app, workspace, None)
-}
-
-pub(super) fn start_switch_job(app: &mut App, workspace: Workspace, arrange_for: Option<Duration>) -> Reply {
+pub(super) fn start_switch_job(
+    app: &mut App,
+    workspace: Workspace,
+    arrange_for: Option<Duration>,
+    alongside: bool,
+) -> Reply {
     log::info!("switching to workspace {}", workspace.name);
     // A hotkey gives the tray the right to take focus. For anyone else this is all it can do.
     let _ = unsafe { AllowSetForegroundWindow(std::process::id()) };
     let (owner, screens, gap) = (app.hwnd.0 as isize, job_screens(app), app.cfg.zones.gap);
     let (pins_stay, size_mode) = (app.cfg.windows.pins_stay_on_switch, app.cfg.window_size_on_move);
-    let job = SwitchJob { owner, workspace, screens, gap, arrange_for, pins_stay, size_mode };
+    let job = SwitchJob { owner, workspace, screens, gap, arrange_for, pins_stay, size_mode, alongside };
     if switcher::switch(job) {
         Ok(json!({ "ok": true }))
     } else {
@@ -261,6 +263,10 @@ pub(super) fn set_in_use(app: &mut App, id: Option<String>) {
     app.workspace = id.clone();
     let Some(desk) = app.cfg.desks.get_mut(&app.sig) else { return };
     if desk.active_workspace != id {
+        // Only a change to another workspace leaves one behind; losing it doesn't.
+        if id.is_some() && desk.active_workspace.is_some() {
+            desk.previous_workspace = desk.active_workspace.take();
+        }
         desk.active_workspace = id;
         persist(app);
     }
@@ -276,7 +282,7 @@ pub(super) fn forget_deleted(app: &mut App) -> bool {
     }
     let Some(desk) = app.cfg.desks.get_mut(&app.sig) else { return false };
     let mut changed = false;
-    for slot in [&mut desk.active_workspace, &mut desk.default_workspace] {
+    for slot in [&mut desk.active_workspace, &mut desk.previous_workspace, &mut desk.default_workspace] {
         if gone(slot) {
             *slot = None;
             changed = true;
@@ -342,8 +348,18 @@ pub(super) fn set_default(app: &mut App, id: Option<String>) -> Reply {
 /// Snap back: switch to the workspace in use again, so what drifted goes back.
 pub(super) fn snap_back(app: &mut App) -> Reply {
     match app.workspace.clone() {
-        Some(id) => start_switch(app, Some(&id), None),
+        Some(id) => start_switch(app, Some(&id), None, false),
         None => Err(RpcError::new(api::NOT_FOUND, "No workspace is in use on this desk")),
+    }
+}
+
+/// Switch back: switch to the workspace that was in use before this one. Switching
+/// back twice goes to and fro between the two.
+pub(super) fn switch_back(app: &mut App) -> Reply {
+    let previous = app.cfg.desks.get(&app.sig).and_then(|d| d.previous_workspace.clone());
+    match previous.filter(|id| desk_workspaces(app).iter().any(|w| w.id == *id)) {
+        Some(id) => start_switch(app, Some(&id), None, false),
+        None => Err(RpcError::new(api::NOT_FOUND, "No workspace to switch back to")),
     }
 }
 

@@ -32,7 +32,7 @@ fn covered(cells: &[Rect], from: usize, to: usize) -> Vec<usize> {
     cells.iter().enumerate().filter(|(_, c)| inside(c)).map(|(i, _)| i).collect()
 }
 
-pub(super) fn run(job: &Job, verb: GroupVerb) -> Result<Outcome, &'static str> {
+pub(super) fn run(job: &Job, verb: GroupVerb) -> Result<Outcome, String> {
     let screens = direction::desk_screens(&job.mons, &job.links);
     let source = hwnd_of(job.hwnd);
     let rect = movable(source, &job.exclude)?;
@@ -92,7 +92,7 @@ pub(super) fn run(job: &Job, verb: GroupVerb) -> Result<Outcome, &'static str> {
         },
     };
     if new.tree == layout.tree {
-        return Err("That window already has its share of the group");
+        return Err("That window already has its share of the group".into());
     }
     let before = zones::rects(&layout.tree, g.work, gap);
     let after = zones::rects(&new.tree, g.work, gap);

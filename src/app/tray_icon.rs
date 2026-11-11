@@ -107,6 +107,13 @@ pub(super) fn show_menu(app: &mut App) {
         let submenu = if workspaces.is_empty() { None } else { CreatePopupMenu().ok() };
         if let Some(submenu) = submenu {
             let active = app.workspace.as_deref();
+            let previous = app.cfg.desks.get(&app.sig).and_then(|d| d.previous_workspace.as_deref());
+            if let Some(ws) = workspaces.iter().find(|w| Some(w.id.as_str()) == previous) {
+                let label = format!("Switch back to {}", ws.name.replace('&', "&&"));
+                let label: Vec<u16> = label.encode_utf16().chain(std::iter::once(0)).collect();
+                let _ = AppendMenuW(submenu, MF_STRING, ID_SWITCH_BACK, PCWSTR(label.as_ptr()));
+                let _ = AppendMenuW(submenu, MF_SEPARATOR, 0, None);
+            }
             for (id, ws) in (ID_WORKSPACE..).zip(&workspaces) {
                 // A tab puts the shortcut at the right edge, and && is how a menu spells &.
                 let mut label = ws.name.replace('&', "&&");
@@ -139,9 +146,15 @@ pub(super) fn show_menu(app: &mut App) {
             }
             ID_ENABLED => set_remap(app, !app.cfg.enabled),
             ID_RELEASE => wm::release(None),
+            ID_SWITCH_BACK => {
+                if let Err(e) = switch_back(app) {
+                    log::info!("workspace menu: {}", e.message);
+                    notify(app, "Switch back", &e.message, BalloonAction::None);
+                }
+            }
             id if id >= ID_WORKSPACE => {
                 let chosen = workspaces.get(id - ID_WORKSPACE).map(|w| w.id.clone());
-                if let Some(Err(e)) = chosen.map(|id| start_switch(app, Some(&id), None)) {
+                if let Some(Err(e)) = chosen.map(|id| start_switch(app, Some(&id), None, false)) {
                     log::info!("workspace menu: {}", e.message);
                 }
             }

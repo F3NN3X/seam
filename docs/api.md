@@ -153,20 +153,22 @@ Workspaces belong to a desk, and these methods act on the desk that is connected
 | Method | Params | Result | Who | Errors | Example |
 |---|---|---|---|---|---|
 | `workspaces.list` | `desk?`: a desk's `sig` | `[{id, name, hotkey, windows, active, default}]` | Any | 1 | `{"method":"workspaces.list"}` |
-| `workspace.switch` | `id` or `name` | `{ok: true}` | Any | 1, 3, `-32602` | `{"method":"workspace.switch","params":{"name":"Coding"}}` |
+| `workspace.switch` | `id` or `name`, `alongside?`: bool | `{ok: true}` | Any | 1, 3, `-32602` | `{"method":"workspace.switch","params":{"name":"Coding"}}` |
 | `workspace.capture` | `name?`, `into?`: workspace id, `row?`: number | `{id}` | Panel or Seam | 1, 2, 3, 4 | `{"method":"workspace.capture","params":{"name":"Review"}}` |
 | `workspace.quick_save` | none | `{id, created}` | Any | 1, 2, 3 | `{"method":"workspace.quick_save"}` |
 | `workspace.snap_back` | none | `{ok: true}` | Any | 1, 3 | `{"method":"workspace.snap_back"}` |
+| `workspace.switch_back` | none | `{ok: true}` | Any | 1, 3 | `{"method":"workspace.switch_back"}` |
 | `workspace.status` | `id` | `[{rule_index, state}]` | Any | 1 | `{"method":"workspace.status","params":{"id":"ws_7f3a"}}` |
 | `workspace.update` | `id`, `workspace`: the whole workspace object | `{ok: true}` | Panel | 1, 3, 4 | `{"method":"workspace.update","params":{"id":"ws_7f3a","workspace":{...}}}` |
 | `workspace.set_default` | `id`: a workspace id, or `null` to clear | `{id}` | Panel or Seam | 1, 3, 4 | `{"method":"workspace.set_default","params":{"id":"ws_7f3a"}}` |
 | `session.restore` | none | `{ok: true}` | Panel or Seam | 1, 3, 4 | `{"method":"session.restore"}` |
 
 - `workspaces.list`: `hotkey` is the workspace's shortcut, or `null`. `windows` is how many apps it holds. `default` marks the one taken as in use at start when none is remembered. Names are matched case-insensitively by `workspace.switch`, and `id` wins when both are sent.
-- `workspace.switch` answers as soon as the switch has started. When it ends you get a `workspace.switched` event, so wait for that if you need the result. Error `3` is "Couldn't start the switch".
+- `workspace.switch` answers as soon as the switch has started. When it ends you get a `workspace.switched` event, so wait for that if you need the result. Error `3` is "Couldn't start the switch". With `alongside` true (default false) the switch leaves the other windows alone this once, whatever the workspace's **Other windows** says. It doesn't change the saved setting.
 - `workspace.capture` saves the windows on screen into a new workspace, or into `into` (like **Update from screen**). With `row` and `into`, only that row of the workspace is updated, from its open window, like **Where it is now**. `row` without `into` is `-32602`. Error `2` is "Already capturing", and `3` includes a row whose app isn't open.
 - `workspace.quick_save` saves into the workspace in use, or into a new "Workspace N" that becomes the one in use (`created` is then true). Seam shows a notification that undoes it for 8 seconds.
 - `workspace.snap_back` switches to the workspace in use again, so windows that moved or were minimized go back. Error `1` means no workspace is in use.
+- `workspace.switch_back` switches to the workspace that was in use on this desk before the current one, as `workspace.switch` does, and a second call goes back again. Error `1` ("No workspace to switch back to") when there is none, or it was deleted.
 - `workspace.status` gives each app's state, by its row number from 0: `in_place`, `moved`, `minimized`, `not_running`, `background` (the app runs with no window, as one closed to the tray does) or `cant_move` (it runs as administrator). Error `1` when the id isn't on this desk.
 - `workspace.update` saves one edited workspace of the current desk, the way the editor does. It answers `3` when a new program isn't safe to launch or a chosen zone isn't on its screen.
 - `session.restore` restores the desk's last session through the workspace switch, with other windows left alone. Its result arrives as `workspace.switched` with `id` `last_session`. Error `1` when no session is saved for the desk.

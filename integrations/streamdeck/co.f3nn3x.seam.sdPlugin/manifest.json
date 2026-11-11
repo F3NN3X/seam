@@ -62,6 +62,22 @@
 			]
 		},
 		{
+			"UUID": "co.f3nn3x.seam.switch-back",
+			"Name": "Switch back",
+			"Tooltip": "Switch to the workspace that was in use before this one.",
+			"Icon": "imgs/actions/switch-back/icon",
+			"Controllers": [
+				"Keypad"
+			],
+			"States": [
+				{
+					"Image": "imgs/actions/switch-back/key",
+					"Title": "Switch back",
+					"TitleAlignment": "bottom"
+				}
+			]
+		},
+		{
 			"UUID": "co.f3nn3x.seam.quick-save",
 			"Name": "Save windows",
 			"Tooltip": "Save the windows as they are now into the workspace in use, or into a new one when none is.",

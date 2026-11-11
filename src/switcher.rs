@@ -388,6 +388,8 @@ pub struct SwitchJob {
     pub pins_stay: bool,
     /// "When a window moves to another screen".
     pub size_mode: WindowSize,
+    /// "Open alongside": leave the other windows alone this once, whatever the workspace says.
+    pub alongside: bool,
 }
 
 /// How a switch went: what the event says.
@@ -1181,10 +1183,11 @@ fn run_switch(job: &SwitchJob, mine: u64) -> Option<Switched> {
     // Other windows on this desk's screens: only ones that were there before the switch began,
     // and never anything that belongs to an app this workspace has or has started, whose
     // splash screens, updaters and real main window may open late.
-    if ws.other_windows != OtherWindows::Leave && found.iter().all(Option::is_none) {
+    let other_windows = if job.alongside { OtherWindows::Leave } else { ws.other_windows };
+    if other_windows != OtherWindows::Leave && found.iter().all(Option::is_none) {
         // Without a single match the workspace says nothing about what is on screen.
         tally.skipped.push(("Other windows".into(), "nothing matched".into()));
-    } else if ws.other_windows != OtherWindows::Leave {
+    } else if other_windows != OtherWindows::Leave {
         let claimed: HashSet<isize> = found.iter().flatten().copied().collect();
         let (mut exes, mut aumids): (HashSet<String>, HashSet<String>) = (HashSet::new(), HashSet::new());
         let mine_rules =
@@ -1216,7 +1219,7 @@ fn run_switch(job: &SwitchJob, mine: u64) -> Option<Switched> {
             }
             // Asks only. The app decides, so one with unsaved work keeps its window.
             unsafe {
-                match ws.other_windows {
+                match other_windows {
                     OtherWindows::Minimize => {
                         let _ = ShowWindowAsync(h, SW_MINIMIZE);
                     }

@@ -7,6 +7,12 @@ All notable changes to Seam. The format follows [Keep a Changelog](https://keepa
 ### Added
 
 - **Grow window into its neighbour**, **Shrink window** and **Give window two thirds of its group** on Shortcuts, with no key until you set one. They move the dividers beside a window in a zone, and the windows in the other zones follow. No window goes below the smallest size its app allows: the divider beyond it moves instead. A second press of two thirds puts the zones back. The changed layout is saved as Custom. `window.resize` and `window.priority` in the API.
+- **Switch back to the previous workspace**: a shortcut (no key until you set one), the first item of the tray's Workspaces menu, `workspace.switch_back` in the API, and a Stream Deck action. `previous_workspace` on a desk in `config.json`.
+- **Open alongside**, on a workspace's **...** menu, switches once and leaves the other windows alone. `workspace.switch` takes `alongside`.
+
+### Changed
+
+- When a window won't move because its app runs as administrator, the balloon names the app and tells it once per app instead of once per run. Clicking it opens Help, which has a new topic, "Apps running as administrator".
 
 ## [0.6.5] - 2026-11-09
 

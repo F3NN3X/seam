@@ -160,7 +160,9 @@ pub(super) fn run_command(app: &mut App, queued: Queued) {
             Some(session) => restore_session(app, session.workspace()),
             None => Err(RpcError::new(api::NOT_FOUND, "No last session is saved for this desk")),
         },
-        Command::WorkspaceSwitch { id, name } => start_switch(app, id.as_deref(), name.as_deref()),
+        Command::WorkspaceSwitch { id, name, alongside } => {
+            start_switch(app, id.as_deref(), name.as_deref(), alongside)
+        }
         Command::WorkspaceUpdate { id, workspace } => update_workspace(app, &id, workspace),
         Command::WorkspaceStatus { id } => match desk_workspaces(app).into_iter().find(|w| w.id == id) {
             Some(ws) => {
@@ -170,6 +172,7 @@ pub(super) fn run_command(app: &mut App, queued: Queued) {
             None => Err(RpcError::new(api::NOT_FOUND, "no such workspace on this desk")),
         },
         Command::WorkspaceSnapBack => snap_back(app),
+        Command::WorkspaceSwitchBack => switch_back(app),
         Command::WorkspaceSetDefault(id) => set_default(app, id),
         Command::WorkspaceQuickSave => {
             if let Some(refusal) = quick_save(app, Some(reply.clone())) {

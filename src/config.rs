@@ -71,6 +71,8 @@ pub struct Hotkeys {
     pub shrink: Option<String>,
     /// "Give window two thirds of its group", or back as it was on a second press.
     pub priority: Option<String>,
+    /// "Switch back to the previous workspace" on this desk.
+    pub switch_back: Option<String>,
 }
 
 impl Default for Hotkeys {
@@ -103,6 +105,7 @@ impl Default for Hotkeys {
             grow: None,
             shrink: None,
             priority: None,
+            switch_back: None,
         }
     }
 }
@@ -280,6 +283,9 @@ pub struct Desk {
     /// The id of the workspace last in use here, so a restart shows it as in use again.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub active_workspace: Option<String>,
+    /// The id of the workspace that was in use before the current one, for Switch back.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub previous_workspace: Option<String>,
     /// The id of the workspace taken as in use at start when none was remembered.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub default_workspace: Option<String>,

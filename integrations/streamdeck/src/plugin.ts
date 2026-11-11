@@ -10,6 +10,7 @@ import {
 	Desk,
 	SaveWindows,
 	SnapBack,
+	SwitchBack,
 	Zones,
 } from "./actions/simple.js";
 import { FocusWindow, MoveWindow } from "./actions/window.js";
@@ -19,6 +20,7 @@ streamDeck.logger.setLevel("info");
 
 streamDeck.actions.registerAction(new SwitchWorkspace());
 streamDeck.actions.registerAction(new SnapBack());
+streamDeck.actions.registerAction(new SwitchBack());
 streamDeck.actions.registerAction(new SaveWindows());
 streamDeck.actions.registerAction(new LineUp());
 streamDeck.actions.registerAction(new Remap());

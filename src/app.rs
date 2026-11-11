@@ -64,7 +64,7 @@ use windows::Win32::UI::WindowsAndMessaging::*;
 use workspaces::{
     apply_hotkeys, aside, capture_job, captured, choose_in_use, desk_workspaces, detected_in_use, drift_checked,
     drift_due, forget_deleted, live_of, migrate_hotkeys, other_wm_changed, quick_save, set_default, snap_back,
-    start_capture, start_switch, start_switch_job, start_window, switched, sync_live, undo_quick_save,
+    start_capture, start_switch, start_switch_job, start_window, switch_back, switched, sync_live, undo_quick_save,
     update_workspace, ws_moved,
 };
 use workspaces::{start_group, window_planned};
@@ -129,6 +129,7 @@ const HOTKEY_QUICK_SAVE: i32 = 22;
 const HOTKEY_GROW: i32 = 30;
 const HOTKEY_SHRINK: i32 = 31;
 const HOTKEY_PRIORITY: i32 = 32;
+const HOTKEY_SWITCH_BACK: i32 = 23;
 /// One hotkey id per workspace on the desk, from here up.
 const HOTKEY_WORKSPACE: i32 = 100;
 const NIN_KEYSELECT: u32 = NIN_SELECT | NINF_KEY;
@@ -138,6 +139,7 @@ const ID_ENABLED: usize = 2;
 const ID_RELEASE: usize = 3;
 const ID_OPEN: usize = 6;
 const ID_QUIT: usize = 9;
+const ID_SWITCH_BACK: usize = 10;
 /// Menu ids of the workspaces in the submenu, from here up.
 const ID_WORKSPACE: usize = 100;
 
@@ -644,6 +646,14 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                         log::info!("snap back hotkey: {}", e.message);
                     }
                 }
+                HOTKEY_SWITCH_BACK => {
+                    with_app(|a| {
+                        if let Err(e) = switch_back(a) {
+                            log::info!("switch back hotkey: {}", e.message);
+                            notify(a, "Switch back", &e.message, BalloonAction::None);
+                        }
+                    });
+                }
                 HOTKEY_QUICK_SAVE => {
                     if let Some(Some(Err(e))) = with_app(|a| quick_save(a, None)) {
                         log::info!("quick save hotkey: {}", e.message);
@@ -669,7 +679,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                     with_app(|a| {
                         let action = a.bound.iter().find(|(id, ..)| *id == slot).map(|(_, action, _)| action.clone());
                         let id = action.as_deref().and_then(|action| action.strip_prefix("workspace:"));
-                        if let Some(Err(e)) = id.map(|id| start_switch(a, Some(id), None)) {
+                        if let Some(Err(e)) = id.map(|id| start_switch(a, Some(id), None, false)) {
                             log::info!("workspace hotkey: {}", e.message);
                         }
                     });
@@ -803,8 +813,10 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
             DefWindowProcW(hwnd, msg, wparam, lparam)
         }
         WM_APP_SNAP_BLOCKED => {
-            let body = "Seam can't move windows from apps running as administrator.";
-            with_app(|a| notify(a, "Seam", body, BalloonAction::None));
+            let who = snap::take_blocked_app().unwrap_or_else(|| "This app".into());
+            let body =
+                format!("{who} runs as administrator, so Windows won't let Seam move it. Click for how to manage it");
+            with_app(|a| notify(a, "Seam", &body, BalloonAction::OpenPanel("help")));
             LRESULT(0)
         }
         WM_TIMER if wparam.0 == TIMER_UPDATE => {

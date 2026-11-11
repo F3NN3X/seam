@@ -110,6 +110,12 @@ const ENTRIES: &[Entry] = &[
     entry(Page::Workspaces, "Capture current windows", "Save which apps are where on this desk", "workspace save new"),
     entry(Page::Workspaces, "Update from screen", "Save the windows as they are now into a workspace", "capture"),
     entry(Page::Workspaces, "Switch now", "Put the apps of a workspace where they go", "workspace launch"),
+    entry(
+        Page::Workspaces,
+        "Open alongside",
+        "Switch without touching the other windows, just this once",
+        "keep open leave alongside workspace",
+    ),
     entry(Page::Workspaces, "Start missing apps", "Ticked apps open if they're closed", "launch"),
     entry(Page::Workspaces, "Other windows", "Leave, minimize or politely close the rest", "close minimize leave"),
     entry(Page::Workspaces, "Export workspace", "Save a workspace to a file", "import share backup"),
@@ -160,6 +166,12 @@ const ENTRIES: &[Entry] = &[
     entry(Page::Shortcuts, "Move window to next zone", "Global shortcut", "hotkey keyboard snap"),
     entry(Page::Shortcuts, "Move window to previous zone", "Global shortcut", "hotkey keyboard snap"),
     entry(Page::Shortcuts, "Capture current windows", "Global shortcut", "hotkey keyboard workspace"),
+    entry(
+        Page::Shortcuts,
+        "Switch back to the previous workspace",
+        "Global shortcut",
+        "hotkey keyboard workspace back previous last",
+    ),
     entry(
         Page::Shortcuts,
         "Snap back to this workspace",

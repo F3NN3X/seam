@@ -204,21 +204,24 @@ pub fn is_seam(h: HWND) -> bool {
 }
 
 /// A window Seam may move, or why not.
-fn movable(h: HWND, exclude: &[String]) -> Result<Rect, &'static str> {
+fn movable(h: HWND, exclude: &[String]) -> Result<Rect, String> {
     if h.is_invalid() || !unsafe { IsWindow(Some(h)) }.as_bool() {
-        return Err("No window has focus");
+        return Err("No window has focus".into());
     }
     if !winutil::is_snappable(h, std::process::id(), exclude) || is_seam(h) {
-        return Err("That window can't be moved");
+        return Err("That window can't be moved".into());
     }
     if winutil::is_hung(h) {
-        return Err("That window isn't responding");
+        return Err("That window isn't responding".into());
     }
     // Windows keeps a lower process from moving this one (D12).
     if winutil::is_elevated_over_us(h) {
-        return Err("That window runs as administrator");
+        return Err(match winutil::app_name(h) {
+            Some(name) => format!("{name} runs as administrator"),
+            None => "That window runs as administrator".into(),
+        });
     }
-    winutil::visible_rect(h).ok_or("That window can't be moved")
+    winutil::visible_rect(h).ok_or_else(|| "That window can't be moved".into())
 }
 
 /// The windows focus and swap can reach, topmost first. Seam's own, hung and
@@ -338,7 +341,7 @@ pub fn focus(h: HWND, nudge: bool) {
     }
 }
 
-fn run(job: &Job, verb: WindowVerb, dir: Dir) -> Result<Outcome, &'static str> {
+fn run(job: &Job, verb: WindowVerb, dir: Dir) -> Result<Outcome, String> {
     let screens = direction::desk_screens(&job.mons, &job.links);
     let source = hwnd_of(job.hwnd);
     match verb {
@@ -351,21 +354,21 @@ fn run(job: &Job, verb: WindowVerb, dir: Dir) -> Result<Outcome, &'static str> {
                     focus(list[i].0, job.from_api);
                     Ok(Outcome::Done)
                 }
-                Found::Screen(_) => Err("No window on the screen in that direction"),
-                Found::Nothing => Err("Nothing in that direction"),
+                Found::Screen(_) => Err("No window on the screen in that direction".into()),
+                Found::Nothing => Err("Nothing in that direction".into()),
             }
         }
         WindowVerb::Move => {
             let rect = movable(source, &job.exclude)?;
             let geo = geometry(job, &screens);
-            move_one(job, dir, &screens, &geo, source, rect).map(|p| Outcome::Place(vec![p]))
+            move_one(job, dir, &screens, &geo, source, rect).map(|p| Outcome::Place(vec![p])).map_err(String::from)
         }
         WindowVerb::Swap => {
             let rect = movable(source, &job.exclude)?;
             let list = others(source, &screens);
             let rects: Vec<Rect> = list.iter().map(|(_, r)| *r).collect();
             let Found::Window(i) = direction::find(&screens, &rects, rect, dir) else {
-                return Err("No window in that direction");
+                return Err("No window in that direction".into());
             };
             let (other, other_rect) = list[i];
             movable(other, &job.exclude)?;
@@ -390,7 +393,7 @@ fn run(job: &Job, verb: WindowVerb, dir: Dir) -> Result<Outcome, &'static str> {
             let second = place(other, other_rect, source, rect, job.snapped.as_ref());
             match (first, second) {
                 (Some(a), Some(b)) => Ok(Outcome::Place(vec![a, b])),
-                _ => Err("No window in that direction"),
+                _ => Err("No window in that direction".into()),
             }
         }
     }

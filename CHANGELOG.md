@@ -4,6 +4,10 @@ All notable changes to Seam. The format follows [Keep a Changelog](https://keepa
 
 ## [Unreleased]
 
+### Changed
+
+- When a window won't move because its app runs as administrator, the balloon names the app and tells it once per app instead of once per run. Clicking it opens Help, which has a new topic, "Apps running as administrator".
+
 ## [0.6.5] - 2026-11-09
 
 ### Added

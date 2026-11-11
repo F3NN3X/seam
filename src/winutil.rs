@@ -151,6 +151,13 @@ pub fn is_full_screen(h: HWND) -> bool {
     unsafe { !IsIconic(h).as_bool() && !IsZoomed(h).as_bool() && is_fullscreen(h, GetWindowLongW(h, GWL_STYLE) as u32) }
 }
 
+/// What to call the window's app in a message: its exe's name without `.exe`.
+pub fn app_name(h: HWND) -> Option<String> {
+    let path = exe_path_of(process_id(h))?;
+    let stem = std::path::Path::new(&path).file_stem()?.to_string_lossy().into_owned();
+    Some(stem).filter(|s| !s.is_empty())
+}
+
 /// Whether the process is elevated.
 fn token_elevated(process: HANDLE) -> Result<bool, windows::core::Error> {
     unsafe {

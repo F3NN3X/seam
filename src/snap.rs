@@ -11,7 +11,8 @@ use seam::geom;
 use seam::winutil::{self, work_area};
 use seam::zones::{self, Rect, ZoneLayout};
 use std::cell::RefCell;
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
+use std::sync::Mutex;
 use std::time::Instant;
 use windows::Win32::Foundation::*;
 use windows::Win32::UI::Accessibility::*;
@@ -25,6 +26,13 @@ pub use refit::{display_changed, found as refit_found, line_up_ended, WM_APP_REF
 
 /// A window the tray couldn't move, probably because it runs as administrator.
 pub const WM_APP_SNAP_BLOCKED: u32 = WM_APP + 14;
+/// The app `WM_APP_SNAP_BLOCKED` is about, for the tray to name.
+static BLOCKED_APP: Mutex<Option<String>> = Mutex::new(None);
+
+/// The app the last `WM_APP_SNAP_BLOCKED` named, once.
+pub fn take_blocked_app() -> Option<String> {
+    BLOCKED_APP.lock().unwrap_or_else(|e| e.into_inner()).take()
+}
 const TICK_MS: u32 = 16;
 /// Time for an app to react to a move before the next step.
 const SETTLE_MS: u32 = 120;
@@ -143,7 +151,8 @@ struct Engine {
     drag: Option<Drag>,
     snapped: HashMap<isize, Snapped>,
     pending: Option<Pending>,
-    warned: bool,
+    /// Exe paths already told about this run.
+    warned: HashSet<String>,
     refit: refit::Refit,
     /// Window control's moves, one at a time through the same steps.
     queued: VecDeque<Placement>,
@@ -417,7 +426,7 @@ impl Engine {
         // Windows keeps a lower process from moving this one, so don't offer zones for it (D12).
         if winutil::is_elevated_over_us(hwnd) {
             if self.active() {
-                self.blocked();
+                self.blocked(hwnd);
             }
             return;
         }
@@ -760,7 +769,7 @@ impl Engine {
             Some(Step::Verify) => {
                 if winutil::window_rect(hwnd) == Some(p.before) {
                     if !p.quiet {
-                        self.blocked();
+                        self.blocked(hwnd);
                     }
                     return;
                 }
@@ -779,12 +788,13 @@ impl Engine {
         self.pending = Some(p);
     }
 
-    /// Say so once per run, because a window that won't move is nearly always
-    /// one running as administrator (D12).
-    fn blocked(&mut self) {
+    /// Say so once per app per run, because a window that won't move is nearly
+    /// always one running as administrator (D12).
+    fn blocked(&mut self, hwnd: HWND) {
         log::info!("a window didn't move, probably because it runs as administrator");
-        if !self.warned {
-            self.warned = true;
+        let path = winutil::exe_path_of(winutil::process_id(hwnd)).unwrap_or_default();
+        if self.warned.insert(path) {
+            *BLOCKED_APP.lock().unwrap_or_else(|e| e.into_inner()) = winutil::app_name(hwnd);
             unsafe {
                 let _ = PostMessageW(Some(hwnd_of(self.owner)), WM_APP_SNAP_BLOCKED, WPARAM(0), LPARAM(0));
             }

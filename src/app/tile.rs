@@ -117,7 +117,7 @@ pub(super) fn pick_layout(app: &mut App, number: u32, layout: Option<Value>, rep
     };
     let before = desk.zones.get(&screen).and_then(zones::layout_of);
     if let Some(layout) = layout.as_mut() {
-        seam::library::link(&mut app.cfg.custom_layouts, layout, false);
+        seam::library::link(&mut app.cfg.custom_layouts, layout, None);
     }
     if layout == before {
         let _ = reply.send(Ok(json!({ "ok": true })));

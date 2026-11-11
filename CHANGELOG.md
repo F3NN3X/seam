@@ -6,6 +6,7 @@ All notable changes to Seam. The format follows [Keep a Changelog](https://keepa
 
 ### Added
 
+- Dragging the edge of a window in a zone moves the windows in the zones on the other side with it, live. No window goes below the smallest size its app allows: the next divider moves instead. When you let go, the window fits its zone, the layout is saved as Custom and every window stays snapped. Esc puts everything back. **Resize neighbours with a window** on Zones, on by default, and `zones.resize_neighbours` in `config.json`.
 - **Tile this screen's windows**: puts the loose windows on the screen under the pointer into its zones. A shortcut (no key until you set one), **Tile windows** in the tray menu (a submenu of screens when you have several), `screen.tile` in the API, and a **Tile screen** Stream Deck action. A screen with no layout is given one for the number of windows, and a notification offers Undo for 8 seconds.
 - **Main + stack** and **Stack + main** layouts on the Zones page: a main zone of two thirds beside two stacked zones. An older Seam reads a screen with one of them as having no zones.
 - **Where apps open**, a card on the Zones page: add an app, pick its screen and zone (or the full screen), and its windows go there once whenever they open, workspace or not. A workspace in use that has a row for the app wins. Dialogs, apps that run as administrator, apps under **Left alone** and windows that open during a switch are never moved, and a rule whose screen isn't connected does nothing. `app_rules` in the config holds them.

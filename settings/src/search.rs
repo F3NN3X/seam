@@ -93,6 +93,12 @@ const ENTRIES: &[Entry] = &[
         "refit resolution scaling unplug",
     ),
     entry(Page::Zones, "Restore size when dragged out", "The window gets its old size back", "snap"),
+    entry(
+        Page::Zones,
+        "Resize neighbours with a window",
+        "Windows in the zones next to it follow its edge",
+        "resize neighbour edge follow",
+    ),
     entry(Page::Zones, "Focus border", "Colour the border of the window that has focus", "windows highlight active"),
     entry(
         Page::Zones,

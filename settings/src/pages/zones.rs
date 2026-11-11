@@ -513,6 +513,19 @@ pub fn render(panel: &mut Panel, window: &mut Window, cx: &mut Context<Panel>) -
             view.update(cx, |panel, cx| panel.patch(json!({ "zones": { "edit_on_screen": on } }), window, cx))
         }
     });
+    let neighbours =
+        switch("zone-neighbours", "Resize neighbours with a window", zones_cfg.resize_neighbours, window, cx, {
+            let view = view.clone();
+            move |on, window, cx| {
+                view.update(cx, |panel, cx| panel.patch(json!({ "zones": { "resize_neighbours": on } }), window, cx))
+            }
+        });
+    let neighbours_row = row(
+        "Resize neighbours with a window",
+        Some("Windows in the zones next to it follow its edge".into()),
+        neighbours,
+        p,
+    );
     let on_screen_row = row(
         "Edit layouts on the screen",
         Some("Off shows a live view on the screen, and you edit in the preview here".into()),
@@ -777,7 +790,12 @@ pub fn render(panel: &mut Panel, window: &mut Window, cx: &mut Context<Panel>) -
         )
         .child(section(
             "Snapping",
-            div().flex().flex_col().gap(px(12.)).child(snapping).child(card(vec![on_screen_row, refit_row], p)),
+            div()
+                .flex()
+                .flex_col()
+                .gap(px(12.))
+                .child(snapping)
+                .child(card(vec![neighbours_row, on_screen_row, refit_row], p)),
             p,
         ))
         .child(section("Windows", windows_card, p))

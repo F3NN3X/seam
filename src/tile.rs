@@ -33,6 +33,8 @@ pub struct Pick {
     pub screen: String,
     pub layout: ZoneLayout,
     pub before: Option<ZoneLayout>,
+    /// The window to treat as focused, when it isn't the one in front.
+    pub focused: Option<isize>,
 }
 
 /// A screen's layout a tile or a pick changed. Undo puts `before` back while the
@@ -265,7 +267,8 @@ pub(super) fn pick(job: &Job, p: &Pick) -> Result<Outcome, String> {
     let mut open: Vec<usize> = (0..zones.len()).collect();
     let snapped: Vec<_> = (0..seen.len()).filter_map(|w| old[w].map(|ab| (w, centre(span(ab))))).collect();
     let mut picks = closest_first(&zones, &mut open, &snapped);
-    let focused = seen.iter().position(|(h, _)| h.0 as isize == job.hwnd);
+    let front = p.focused.unwrap_or(job.hwnd);
+    let focused = seen.iter().position(|(h, _)| h.0 as isize == front);
     let loose = (0..seen.len()).filter(|w| old[*w].is_none());
     let loose = focused.filter(|f| old[*f].is_none()).into_iter().chain(loose.filter(|w| Some(*w) != focused));
     picks.extend(nearest(&zones, &mut open, loose.map(|w| (w, centre(seen[w].1))).collect::<Vec<_>>()));

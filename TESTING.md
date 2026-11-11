@@ -63,6 +63,9 @@ Set a key for **Quick layout** on Shortcuts (it has no key until you set one). M
 - [ ] **Keys 1 to 9.** Open windows on the screen and press 2. The screen takes the second layout and its windows move into the zones, one to a zone. The panel stays open, the mark moves, and no Undo notification appears. Press 4 to try another.
 - [ ] **Arrows and Enter.** The arrows move a white ring over the thumbnails, left and right by one and up and down by a row. Enter picks the one it is on.
 - [ ] **Ctrl+Z.** After two picks, Ctrl+Z puts the screen back to the first pick's layout, and again to the one it had when the panel opened. With nothing left to undo it does nothing.
+- [ ] **Quick picks.** Press 2, 3 and Ctrl+Z as fast as you can. When it settles, the "In use" mark is on the layout the Zones page shows for the screen, and Ctrl+Z goes back through what was actually applied.
+- [ ] **Toggle.** Pressing the key again while the panel is open closes it.
+- [ ] **Focus.** The window that was in front when you opened the panel still takes the largest zone of a pick. If Windows keeps the focus elsewhere, the panel closes by itself after a moment.
 - [ ] **Esc and click.** Esc closes the panel. So does a click outside it, which also goes through to what was under it. A click on a thumbnail picks it and the panel stays open.
 - [ ] **More than nine.** With more than nine layouts on the screen, the arrows scroll the grid a row at a time, the numbers follow what is shown, and the header says which ones are shown.
 - [ ] **Used on.** A custom layout tied to screen 1 shows on screen 1's panel but not on screen 2's, unless screen 2 is using it. One for any screen shows on both.

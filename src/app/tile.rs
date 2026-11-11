@@ -102,6 +102,10 @@ pub(super) fn tile_finished(app: &mut App, result: Option<Result<wincontrol::til
 /// the pointer. With zones off, or with another window manager running, it still
 /// opens and says so, since a pick is saved either way.
 pub(super) fn open_quick_layout(app: &mut App, number: Option<u32>, from_api: bool) -> Result<(), String> {
+    // The key opens it and closes it again.
+    if !from_api && quicklayout::close() {
+        return Ok(());
+    }
     let at = match number {
         Some(n) => n.checked_sub(1).map(|i| i as usize),
         None => {
@@ -116,8 +120,13 @@ pub(super) fn open_quick_layout(app: &mut App, number: Option<u32>, from_api: bo
     let note = aside(app).or_else(|| {
         (!app.cfg.zones.enabled).then(|| "Zones are off. A layout you pick is kept for when they are on".to_string())
     });
+    // The window in use now is the one a pick treats as focused, not the overlay.
+    if !quicklayout::is_open() {
+        quicklayout::remember_focus(unsafe { GetForegroundWindow() });
+    }
     quicklayout::show(quicklayout::Spec {
         number: at.map_or(1, |i| i as u32 + 1),
+        screen: mon.id.clone(),
         rect: mon.rect,
         note,
         choices: quicklayout::choices(&library, &mon.id, now.as_ref()),
@@ -128,18 +137,38 @@ pub(super) fn open_quick_layout(app: &mut App, number: Option<u32>, from_api: bo
     Ok(())
 }
 
-/// The overlay picked layouts: apply each as a click on the Zones page would.
-pub(super) fn apply_quick_picks(app: &mut App) {
-    for (number, layout) in quicklayout::take_picks() {
-        let (reply, _) = channel();
-        pick_layout(app, number, layout, reply);
+/// The overlay picked layouts: apply each as a click on the Zones page would. When
+/// its answer comes, or it's refused or replaced, the overlay is told what the
+/// screen has, so what it shows is the screen's and not what it asked for.
+pub(super) fn apply_quick(app: &mut App) {
+    let tray = app.hwnd.0 as isize;
+    for pick in quicklayout::take_picks() {
+        let Some(at) = app.mons.iter().position(|m| m.id == pick.screen) else { continue };
+        let (reply, answer) = channel();
+        let focused = Some(quicklayout::focus_before()).filter(|h| *h != 0);
+        pick_layout(app, at as u32 + 1, pick.layout, focused, reply);
+        let screen = pick.screen;
+        std::thread::spawn(move || {
+            let _ = answer.recv_timeout(Duration::from_secs(10));
+            quicklayout::done(screen, tray);
+        });
+    }
+    for screen in quicklayout::take_done() {
+        let actual = app.cfg.desks.get(&app.sig).and_then(|d| d.zones.get(&screen)).and_then(zones::layout_of);
+        quicklayout::settled(&screen, actual);
     }
 }
 
 /// A layout picked on the Zones page. With zones on, the screen's snapped windows
 /// follow it into the new zones on the worker, and a notice offers Undo. Otherwise,
 /// or for no zones, it is only saved, still with Undo while zones are on.
-pub(super) fn pick_layout(app: &mut App, number: u32, layout: Option<Value>, reply: Sender<Reply>) {
+pub(super) fn pick_layout(
+    app: &mut App,
+    number: u32,
+    layout: Option<Value>,
+    focused: Option<isize>,
+    reply: Sender<Reply>,
+) {
     let Some(screen) = number.checked_sub(1).and_then(|i| app.mons.get(i as usize)).map(|m| m.id.clone()) else {
         let _ = reply.send(Err(RpcError::new(api::NOT_FOUND, "no such screen")));
         return;
@@ -167,7 +196,7 @@ pub(super) fn pick_layout(app: &mut App, number: u32, layout: Option<Value>, rep
     let moving = aside(app).is_none() && app.cfg.zones.enabled && !crate::switcher::switching();
     match layout {
         Some(layout) if moving => {
-            let pick = wincontrol::tile::Pick { screen, layout, before };
+            let pick = wincontrol::tile::Pick { screen, layout, before, focused };
             queue_window(app, wincontrol::Task::Pick(Box::new(pick)), snap::zoned(), Some(reply));
         }
         layout => {

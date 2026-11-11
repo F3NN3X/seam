@@ -131,7 +131,7 @@ pub(super) fn run_command(app: &mut App, queued: Queued) {
             Err(why) => refused(why),
         },
         Command::ZonesPick { number, layout } => {
-            tile::pick_layout(app, number, layout, reply);
+            tile::pick_layout(app, number, layout, None, reply);
             return;
         }
         Command::ZonesFromWindows(number) => {

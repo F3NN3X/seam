@@ -80,6 +80,8 @@ const WM_APP_ALIGNED: u32 = WM_APP + 11;
 /// A worker read the updater's state file.
 const WM_APP_UPDATE: u32 = WM_APP + 13;
 const TIMER_REFRESH: usize = 1;
+/// Retries the quick layout overlay's picks the app was too busy for (menu open).
+const TIMER_QUICK: usize = 40;
 /// Windows silently removes low-level hooks that ever time out, so re-arm periodically.
 const TIMER_REARM: usize = 2;
 /// Retries API commands the app was too busy for (menu open).
@@ -830,7 +832,15 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
             LRESULT(0)
         }
         quicklayout::WM_APP_QUICK_LAYOUT => {
-            with_app(tile::apply_quick_picks);
+            if with_app(tile::apply_quick).is_none() {
+                SetTimer(Some(hwnd), TIMER_QUICK, 50, None);
+            }
+            LRESULT(0)
+        }
+        WM_TIMER if wparam.0 == TIMER_QUICK => {
+            if with_app(tile::apply_quick).is_some() {
+                let _ = KillTimer(Some(hwnd), TIMER_QUICK);
+            }
             LRESULT(0)
         }
         WM_APP_ALIGNED => {

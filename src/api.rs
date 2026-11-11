@@ -463,6 +463,7 @@ pub fn workspaces_list(snapshot: &Snapshot, desk: Option<&str>) -> Reply {
             "name": w["name"],
             "hotkey": w["hotkey"],
             "windows": w["windows"].as_array().map_or(0, Vec::len),
+            "zones": w.get("zones").cloned().unwrap_or_else(|| json!({})),
             "active": w["id"].as_str() == active,
             "default": default.is_some() && w["id"].as_str() == default,
         })

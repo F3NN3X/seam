@@ -188,8 +188,8 @@ fn home() -> PathBuf {
 }
 
 fn export(panel: &Panel, ws: Workspace, window: &mut Window, cx: &mut Context<Panel>) {
-    let used: BTreeMap<String, ScreenInfo> =
-        screen_infos(panel).into_iter().filter(|(id, _)| ws.windows.iter().any(|r| r.monitor == *id)).collect();
+    let refers = |id: &String| ws.windows.iter().any(|r| r.monitor == *id) || ws.zones.contains_key(id);
+    let used: BTreeMap<String, ScreenInfo> = screen_infos(panel).into_iter().filter(|(id, _)| refers(id)).collect();
     let name: String = ws.name.chars().map(|c| if c.is_alphanumeric() || c == ' ' { c } else { '-' }).collect();
     let file = Export { seam_workspace: Export::VERSION, workspace: ws, screens: used };
     let chosen = cx.prompt_for_new_path(&home(), Some(&format!("{name}.seam-workspace.json")));
@@ -513,7 +513,8 @@ fn detail(panel: &mut Panel, ws: Workspace, window: &mut Window, cx: &mut Contex
     let mut rows = vec![header];
     rows.extend(workspace_editor::rows(panel, &ws, window, cx));
     let mut states = (0..ws.windows.len()).filter_map(|i| workspace_editor::row_state(panel, &ws, i));
-    if states.any(|s| matches!(s, RowState::Moved | RowState::Minimized)) {
+    let moved = states.any(|s| matches!(s, RowState::Moved | RowState::Minimized));
+    if moved || workspace_editor::zones_moved(panel, &ws) {
         rows.push(div().flex().px(px(16.)).py(px(12.)).child(snap_back_button(panel, &ws, cx)).into_any_element());
     }
     let id = ws.id.clone();
@@ -521,6 +522,7 @@ fn detail(panel: &mut Panel, ws: Workspace, window: &mut Window, cx: &mut Contex
         Rc::new(move |panel, rule, window, cx| workspace_editor::add_app(panel, &id, rule, window, cx));
     let add = app_picker::button(panel, &ws.windows, "In this workspace", add_app, cx);
     rows.push(div().flex().px(px(16.)).py(px(12.)).child(add).into_any_element());
+    rows.extend(workspace_editor::zones_section(panel, &ws, window, cx));
 
     let view = cx.entity();
     let id = ws.id.clone();

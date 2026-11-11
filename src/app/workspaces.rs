@@ -110,12 +110,16 @@ pub(super) fn start_switch_job(
     log::info!("switching to workspace {}", workspace.name);
     // A hotkey gives the tray the right to take focus. For anyone else this is all it can do.
     let _ = unsafe { AllowSetForegroundWindow(std::process::id()) };
+    // The last session has no layouts, so a restore leaves them alone.
+    apply_zones(app, &workspace);
+    let name = workspace.name.clone();
     let (owner, screens, gap) = (app.hwnd.0 as isize, job_screens(app), app.cfg.zones.gap);
     let (pins_stay, size_mode) = (app.cfg.windows.pins_stay_on_switch, app.cfg.window_size_on_move);
     let job = SwitchJob { owner, workspace, screens, gap, arrange_for, pins_stay, size_mode, alongside };
     if switcher::switch(job) {
         Ok(json!({ "ok": true }))
     } else {
+        log::info!("workspace {}: the switch didn't start, its screen layouts stay set", name);
         refused("Couldn't start the switch")
     }
 }
@@ -236,6 +240,18 @@ pub(super) fn window_planned(app: &mut App) {
 /// a `fresh` one from Save from windows goes into the library. False when this
 /// desk isn't saved.
 pub(super) fn set_screen_layout(app: &mut App, screen: &str, layout: Option<zones::ZoneLayout>, fresh: bool) -> bool {
+    if !store_screen_layout(app, screen, layout, fresh) {
+        return false;
+    }
+    persist(app);
+    snap::update(app.hwnd, &app.cfg, &app.sig, &app.mons, aside(app).as_deref());
+    publish(app);
+    true
+}
+
+/// `set_screen_layout` without saving the file or telling anyone, so several
+/// screens can change at once.
+fn store_screen_layout(app: &mut App, screen: &str, layout: Option<zones::ZoneLayout>, fresh: bool) -> bool {
     if !app.cfg.desks.contains_key(&app.sig) {
         return false;
     }
@@ -252,10 +268,39 @@ pub(super) fn set_screen_layout(app: &mut App, screen: &str, layout: Option<zone
         Some(value) => desk.zones.insert(screen.to_string(), value),
         None => desk.zones.remove(screen),
     };
-    persist(app);
-    snap::update(app.hwnd, &app.cfg, &app.sig, &app.mons, aside(app).as_deref());
-    publish(app);
     true
+}
+
+/// Give each connected screen the layout the workspace has for it, before its switch
+/// is built, so the switch places apps into the new zones. Saved as a pick on the
+/// Zones page is, but the screen's snapped windows aren't moved: the switch places
+/// the workspace's apps. A screen kept as is, not connected, or whose zones already
+/// match (`zones_match`, as the editor's status) stays. Saved with zones off or
+/// another window manager in charge too.
+fn apply_zones(app: &mut App, workspace: &Workspace) {
+    let mut changed = Vec::new();
+    for m in &app.mons {
+        let Some(saved) = workspace.zones.get(&m.id) else { continue };
+        let before = app.cfg.desks.get(&app.sig).and_then(|d| d.zones.get(&m.id)).and_then(zones::layout_of);
+        if workspace::zones_match(saved, before.as_ref()) {
+            continue;
+        }
+        let Some(mut layout) = workspace::screen_layout(saved) else { continue };
+        if let Some(layout) = layout.as_mut() {
+            seam::library::link(&mut app.cfg.custom_layouts, layout, None);
+        }
+        changed.push((m.id.clone(), layout));
+    }
+    let mut stored = 0;
+    for (screen, layout) in changed {
+        stored += usize::from(store_screen_layout(app, &screen, layout, false));
+    }
+    if stored > 0 {
+        log::info!("workspace {}: {stored} screen layouts changed", workspace.name);
+        persist(app);
+        snap::update(app.hwnd, &app.cfg, &app.sig, &app.mons, aside(app).as_deref());
+        publish(app);
+    }
 }
 
 /// A switch finished: say which workspace is in use, and how it went.
@@ -562,6 +607,9 @@ pub(super) fn captured(app: &mut App) {
         }
     };
     let Some(desk) = app.cfg.desks.get_mut(&job.sig) else { return answer(refused("That desk is gone")) };
+    // Every screen of the desk, with the layout it has now.
+    let layouts: Vec<(String, Option<zones::ZoneLayout>)> =
+        job.sig.split('|').map(|id| (id.to_string(), desk.zones.get(id).and_then(zones::layout_of))).collect();
     let existing = workspace::list(&desk.workspaces);
     // The workspace as it was, for a quick save's Undo.
     let mut before = None;
@@ -584,7 +632,8 @@ pub(super) fn captured(app: &mut App) {
                 },
                 None => {
                     rows = Some(workspace::capture_rows(old, &rules));
-                    Workspace { windows: workspace::merge_capture(old, rules), ..old.clone() }
+                    let zones = workspace::capture_zones(&old.zones, &layouts);
+                    Workspace { windows: workspace::merge_capture(old, rules), zones, ..old.clone() }
                 }
             };
             let same = |v: &&mut Value| workspace::parse(v).is_some_and(|w| w.id == *into);
@@ -603,7 +652,9 @@ pub(super) fn captured(app: &mut App) {
             if job.quick {
                 rows = Some((0..rules.len()).collect());
             }
-            let created = Workspace { id: workspace::new_id(&ids), name, windows: rules, ..Workspace::default() };
+            let zones = workspace::capture_zones(&Default::default(), &layouts);
+            let created =
+                Workspace { id: workspace::new_id(&ids), name, windows: rules, zones, ..Workspace::default() };
             desk.workspaces.push(workspace::to_value(&created));
             created
         }
@@ -643,10 +694,15 @@ pub(super) fn update_workspace(app: &mut App, id: &str, sent: Value) -> Reply {
     let Some(old) = workspace::list(&desk.workspaces).into_iter().find(|w| w.id == id) else {
         return Err(RpcError::new(api::NOT_FOUND, "no such workspace on this desk"));
     };
-    let sent: Workspace = match serde_json::from_value(sent) {
+    // A client that doesn't know `zones` leaves the screen layouts as they were.
+    let keeps_zones = sent.get("zones").is_none();
+    let mut sent: Workspace = match serde_json::from_value(sent) {
         Ok(ws) => ws,
         Err(e) => return refused(format!("That isn't a workspace: {e}")),
     };
+    if keeps_zones {
+        sent.zones = old.zones.clone();
+    }
     let zones = |monitor: &str| {
         let layout = desk.zones.get(monitor).and_then(zones::layout_of);
         layout.map_or(0, |l| zones::leaf_count(&l.tree))

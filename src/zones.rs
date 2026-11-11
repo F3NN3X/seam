@@ -232,6 +232,20 @@ pub fn depth_of(node: &Node, index: usize) -> Option<usize> {
     }
 }
 
+/// How many splits lie above the deepest zone.
+fn deepest(node: &Node) -> usize {
+    match node {
+        Node::Leaf(_) => 0,
+        Node::Split { a, b, .. } => 1 + deepest(a).max(deepest(b)),
+    }
+}
+
+/// A tree no bigger than the editor can make: at most `MAX_ZONES` zones, nested at
+/// most `MAX_DEPTH` deep. For trees that come from a file.
+pub fn within_limits(tree: &Node) -> bool {
+    leaf_count(tree) <= MAX_ZONES && deepest(tree) <= MAX_DEPTH
+}
+
 /// Whether the layout has room for another zone.
 pub fn can_split(tree: &Node) -> bool {
     leaf_count(tree) < MAX_ZONES

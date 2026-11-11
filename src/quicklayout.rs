@@ -12,7 +12,7 @@ use seam::library::Entry;
 use seam::zones::{self, Node, Template, ZoneLayout};
 use serde_json::Value;
 use std::cell::RefCell;
-use std::sync::atomic::{AtomicBool, AtomicIsize, AtomicU32, Ordering};
+use std::sync::atomic::{AtomicIsize, AtomicU32, Ordering};
 use std::sync::mpsc::channel;
 use std::sync::{Mutex, MutexGuard};
 use std::time::Duration;
@@ -153,8 +153,10 @@ pub struct Pick {
 /// Counts the overlays opened.
 static GENERATION: AtomicU32 = AtomicU32::new(0);
 
-/// The overlay is on its way out, but its thread hasn't ended yet.
-static CLOSING: AtomicBool = AtomicBool::new(false);
+/// The thread of the overlay on its way out, whose thread hasn't ended yet, or 0.
+/// It only counts while it's still `OPEN`, so an old overlay going away late can't
+/// mark a newer one as closing.
+static CLOSING: AtomicU32 = AtomicU32::new(0);
 
 /// Picks for the tray, in order.
 static PICKS: Mutex<Vec<Pick>> = Mutex::new(Vec::new());
@@ -188,10 +190,11 @@ pub fn close() -> bool {
 /// For the key: close the overlay if it's up, and say so. One already on its way
 /// out is waited for a moment, and then the key opens a new one.
 pub fn close_for_key() -> bool {
-    if !is_open() {
+    let open = OPEN.load(Ordering::SeqCst);
+    if open == 0 {
         return false;
     }
-    if CLOSING.load(Ordering::SeqCst) {
+    if CLOSING.load(Ordering::SeqCst) == open {
         for _ in 0..20 {
             if !is_open() {
                 break;
@@ -205,8 +208,10 @@ pub fn close_for_key() -> bool {
 
 /// End the overlay's message loop.
 fn quit() {
-    CLOSING.store(true, Ordering::SeqCst);
-    unsafe { PostQuitMessage(0) };
+    unsafe {
+        CLOSING.store(GetCurrentThreadId(), Ordering::SeqCst);
+        PostQuitMessage(0);
+    }
 }
 
 pub fn remember_focus(h: HWND) {
@@ -776,7 +781,6 @@ fn run(spec: Spec, generation: u32, ready: std::sync::mpsc::Sender<()>) {
         WINDOW.with(|w| *w.borrow_mut() = hwnd);
         let _ = SetWindowPos(hwnd, Some(HWND_TOPMOST), x, y, width, height, SWP_SHOWWINDOW);
         // The tray can use the overlay now, so it hears of it before focus is asked for.
-        CLOSING.store(false, Ordering::SeqCst);
         OPEN.store(id, Ordering::SeqCst);
         let _ = ready.send(());
         wincontrol::focus(hwnd, spec.from_api);

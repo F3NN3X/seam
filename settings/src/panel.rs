@@ -101,6 +101,9 @@ pub struct Panel {
     pub ease_on: bool,
     /// The screen whose zones the Zones page shows, as an index into `mons`.
     pub zone_screen: usize,
+    /// "Show all screens" under Your layouts: every custom layout, not only those for
+    /// the screen. Kept while the panel is open, not saved.
+    pub all_layouts: bool,
     /// The zone editor's unsaved copy of a layout, while it's open.
     pub editor: Option<pages::zone_editor::Editor>,
     /// The editor's window on the real screen, while it's open.
@@ -259,6 +262,7 @@ impl Panel {
             layout_view: seam::api::LayoutView::Seam,
             ease_on: seam::ease::is_on(),
             zone_screen: 0,
+            all_layouts: false,
             editor: None,
             screen_window: None,
             workspace: None,

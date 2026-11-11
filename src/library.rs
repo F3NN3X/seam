@@ -2,6 +2,7 @@
 //! A screen's layout picked from it records the id as `custom`, and follows the
 //! library layout when it's edited, until the screen's own tree changes. Raw JSON
 //! in the config like app rules, so an entry this build can't read is kept and ignored.
+//! An entry's `screens` lists the device paths it's offered on. None means any screen.
 
 use crate::config::Config;
 use crate::zones::{self, Node, Template, ZoneLayout};
@@ -13,12 +14,24 @@ pub struct Entry {
     pub id: String,
     pub name: String,
     pub tree: Node,
+    /// The screens it's for, by device path. Empty for any screen.
+    pub screens: Vec<String>,
 }
 
 impl Entry {
     /// As stored in `custom_layouts`.
     pub fn value(&self) -> Value {
-        json!({ "id": self.id, "name": self.name, "tree": self.tree })
+        let mut value = json!({ "id": self.id, "name": self.name, "tree": self.tree });
+        if !self.screens.is_empty() {
+            value["screens"] = json!(self.screens);
+        }
+        value
+    }
+
+    /// Whether it's offered on the screen with this device path. Paths are compared
+    /// ignoring case, as Windows may report them in either.
+    pub fn fits(&self, device: &str) -> bool {
+        self.screens.is_empty() || self.screens.iter().any(|s| s.eq_ignore_ascii_case(device))
     }
 
     /// A screen's layout that follows this one.
@@ -36,11 +49,21 @@ pub fn entry(saved: &Value) -> Option<Entry> {
     let id = id_of(saved)?.to_string();
     let name = saved.get("name")?.as_str()?.to_string();
     let layout = zones::layout_of(&json!({ "template": "custom", "tree": saved.get("tree")? }))?;
-    Some(Entry { id, name, tree: layout.tree })
+    let screens = saved
+        .get("screens")
+        .and_then(Value::as_array)
+        .map_or_else(Vec::new, |list| list.iter().filter_map(Value::as_str).map(String::from).collect());
+    Some(Entry { id, name, tree: layout.tree, screens })
 }
 
 pub fn entries(saved: &[Value]) -> Vec<Entry> {
     saved.iter().filter_map(entry).collect()
+}
+
+/// The entries offered on the screen with this device path: those for any screen,
+/// and those tied to it.
+pub fn for_screen<'a>(entries: &'a [Entry], device: &'a str) -> impl Iterator<Item = &'a Entry> {
+    entries.iter().filter(move |e| e.fits(device))
 }
 
 pub fn find(saved: &[Value], id: &str) -> Option<Entry> {
@@ -88,16 +111,17 @@ pub fn follow(before: &[Value], config: &mut Config) {
 }
 
 /// A layout the tray is about to save for a screen. A `fresh` one, from Save from
-/// windows, adds its tree to the library under its id as "Custom N". Any other
+/// windows on the screen with that device path, adds its tree to the library under
+/// its id as "Custom N", for that screen. Any other
 /// keeps its link only while the library still has that id with the same tree,
 /// so Priority's second press after the library layout was edited or deleted
 /// gives the screen its tree back on its own.
-pub fn link(saved: &mut Vec<Value>, layout: &mut ZoneLayout, fresh: bool) {
+pub fn link(saved: &mut Vec<Value>, layout: &mut ZoneLayout, fresh: Option<&str>) {
     let Some(id) = layout.custom.clone() else { return };
     let known = saved.iter().any(|v| id_of(v) == Some(id.as_str()));
-    if fresh && !known {
+    if let Some(screen) = fresh.filter(|_| !known) {
         let name = next_name(saved);
-        saved.push(Entry { id, name, tree: layout.tree.clone() }.value());
+        saved.push(Entry { id, name, tree: layout.tree.clone(), screens: vec![screen.to_string()] }.value());
     } else if find(saved, &id).is_none_or(|entry| entry.tree != layout.tree) {
         layout.custom = None;
     }
@@ -120,8 +144,8 @@ mod tests {
     // A patch is a merge, so a screen given a template has to lose its link to a library layout.
     #[test]
     fn a_linked_screen_given_a_template_follows_no_library_layout() {
-        let entry =
-            Entry { id: "a1".into(), name: "Custom 1".into(), tree: zones::template_tree(Template::Rows).unwrap() };
+        let tree = zones::template_tree(Template::Rows).unwrap();
+        let entry = Entry { id: "a1".into(), name: "Custom 1".into(), tree, screens: Vec::new() };
         let linked = serde_json::to_value(entry.layout()).unwrap();
         let config: Config = serde_json::from_value(json!({
             "custom_layouts": [entry.value()],

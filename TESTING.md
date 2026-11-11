@@ -55,6 +55,25 @@ Set a key for **Tile this screen's windows** on Shortcuts (it has no key until y
 - [ ] **Other window manager.** While komorebi runs, the key does nothing and the notification says why.
 - [ ] **Stream Deck.** The **Tile screen** action does what the key does.
 
+## Quick layout
+
+Set a key for **Quick layout** on Shortcuts (it has no key until you set one). Make one custom layout for screen 1 only and one for any screen.
+
+- [ ] **Open on each screen.** Put the pointer on each screen in turn and press the key. A panel opens in the middle of that screen, titled with its number, and takes focus. It shows the built-in layouts first, then the custom ones, then None, numbered from 1. The layout the screen has is marked with an amber ring and says "In use", and no thumbnail is tinted amber.
+- [ ] **Keys 1 to 9.** Open windows on the screen and press 2. The screen takes the second layout and its windows move into the zones, one to a zone. The panel stays open, the mark moves, and no Undo notification appears. Press 4 to try another.
+- [ ] **Arrows and Enter.** The arrows move a white ring over the thumbnails, left and right by one and up and down by a row. Enter picks the one it is on.
+- [ ] **Ctrl+Z.** After two picks, Ctrl+Z puts the screen back to the first pick's layout, and again to the one it had when the panel opened. With nothing left to undo it does nothing.
+- [ ] **Quick picks.** Press 2, 3 and Ctrl+Z as fast as you can. When it settles, the "In use" mark is on the layout the Zones page shows for the screen, and Ctrl+Z goes back through what was actually applied.
+- [ ] **Toggle.** Pressing the key again while the panel is open closes it.
+- [ ] **Focus.** The window that was in front when you opened the panel still takes the largest zone of a pick. If Windows keeps the focus elsewhere, the panel closes by itself after a moment.
+- [ ] **Esc and click.** Esc closes the panel. So does a click outside it, which also goes through to what was under it. A click on a thumbnail picks it and the panel stays open.
+- [ ] **More than nine.** With more than nine layouts on the screen, the arrows scroll the grid a row at a time, the numbers follow what is shown, and the header says which ones are shown.
+- [ ] **Used on.** A custom layout tied to screen 1 shows on screen 1's panel but not on screen 2's, unless screen 2 is using it. One for any screen shows on both.
+- [ ] **Zones off.** Turn zones off and open the panel. It says zones are off. A pick is saved, and the Zones page shows it, but no window moves.
+- [ ] **Other window manager.** While komorebi runs, the panel opens with a line saying Seam leaves the windows to it, and a pick only saves.
+- [ ] **API.** `zones.quick` with no params opens it on the screen under the pointer and takes focus. `{"number":9}` answers error 1.
+- [ ] **Stream Deck.** The **Quick layout** action opens the panel.
+
 ## Tray and shortcuts
 
 - [ ] **Menu.** Right-click the tray icon: status line, **Open Seam…**, **Line Up Screens…**, the **Workspaces** menu when there are workspaces, **Tile windows**, **Remap pointer at borders**, **Release pinned windows**, **Quit Seam**.

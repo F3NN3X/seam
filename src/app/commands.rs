@@ -123,8 +123,15 @@ pub(super) fn run_command(app: &mut App, queued: Queued) {
         {
             Err(RpcError::new(api::NOT_FOUND, "no such screen"))
         }
+        Command::ZonesQuick(Some(number)) if number.checked_sub(1).and_then(|i| app.mons.get(i as usize)).is_none() => {
+            Err(RpcError::new(api::NOT_FOUND, "no such screen"))
+        }
+        Command::ZonesQuick(number) => match tile::open_quick_layout(app, number, true) {
+            Ok(()) => ok(),
+            Err(why) => refused(why),
+        },
         Command::ZonesPick { number, layout } => {
-            tile::pick_layout(app, number, layout, reply);
+            tile::pick_layout(app, number, layout, None, reply);
             return;
         }
         Command::ZonesFromWindows(number) => {

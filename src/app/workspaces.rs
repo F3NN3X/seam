@@ -38,6 +38,8 @@ pub(super) fn apply_hotkeys(app: &mut App) {
         (HOTKEY_PRIORITY, "priority".to_string(), keys.priority.clone()),
         (HOTKEY_SWITCH_BACK, "switch_back".to_string(), keys.switch_back.clone()),
         (HOTKEY_TILE_SCREEN, "tile_screen".to_string(), keys.tile_screen.clone()),
+        (HOTKEY_FOCUS_ONLY, "focus_only".to_string(), keys.focus_only.clone()),
+        (HOTKEY_SPOTLIGHT, "spotlight".to_string(), keys.spotlight.clone()),
     ];
     for (id, (verb, dir, combo)) in (HOTKEY_WINDOW..).zip(keys.directional()) {
         wanted.push((id, format!("{verb}_{dir}"), combo.cloned()));
@@ -185,6 +187,42 @@ pub(super) fn queue_window(app: &App, task: wincontrol::Task, members: Vec<snap:
     });
 }
 
+/// Queue "Focus on this window" for the focused window. The worker answers.
+pub(super) fn start_focus_only(app: &App, scope: FocusScope, reply: Option<Sender<Reply>>) {
+    let refuse = |why: String, reply: Option<Sender<Reply>>| {
+        log::info!("focus on this window: {why}");
+        if let Some(tx) = reply {
+            let _ = tx.send(refused(why));
+        }
+    };
+    if let Some(why) = aside(app) {
+        return refuse(why, reply);
+    }
+    let workspace = app.workspace.as_ref().and_then(|id| desk_workspaces(app).into_iter().find(|w| w.id == *id));
+    if scope == FocusScope::Workspace && workspace.is_none() {
+        return refuse("No workspace is in use on this desk".into(), reply);
+    }
+    focus_only::start(focus_only::Job {
+        scope,
+        hwnd: unsafe { GetForegroundWindow() }.0 as isize,
+        screens: app.mons.iter().map(|m| m.rect).collect(),
+        exclude: app.cfg.zones.exclude.iter().map(|x| x.to_lowercase()).collect(),
+        workspace,
+        // A hotkey gives the tray the right to take focus. The API has to earn it.
+        from_api: reply.is_some(),
+        reply,
+    });
+}
+
+/// Turn spotlight on or off, or over when `on` is `None`. Returns whether it's on now.
+pub(super) fn set_spotlight(app: &mut App, on: Option<bool>) -> bool {
+    let now = spotlight::set(on.unwrap_or(!spotlight::is_on()), &app.mons);
+    wm::spotlight(now);
+    log::info!("spotlight: {}", if now { "on" } else { "off" });
+    publish(app);
+    now
+}
+
 /// Window control's moves are ready. A group command changed a screen's layout,
 /// which is saved here once, before the windows move.
 pub(super) fn window_planned(app: &mut App) {
@@ -220,6 +258,7 @@ pub(super) fn switched(app: &mut App) {
     }
     // Apps opened by hand during the switch go to their places now.
     live::switch_ended();
+    focus_only::forget();
     windows_changed(app);
     publish(app);
     let skipped: Vec<Value> =
@@ -253,6 +292,18 @@ pub(super) fn sync_live(app: &mut App) {
     let auto_apply = app.cfg.auto_apply && aside(app).is_none();
     let live = active.map(|ws| live_of(app, ws));
     live::set_active(app.hwnd.0 as isize, live, auto_apply);
+    live::set_rules(app_rules_of(app));
+}
+
+/// The app rules this build can use, unless another window manager has the windows.
+fn app_rules_of(app: &App) -> Option<AppRules> {
+    let rules = workspace::app_rules(&app.cfg.app_rules);
+    if rules.is_empty() || aside(app).is_some() {
+        return None;
+    }
+    let exclude = app.cfg.zones.exclude.iter().map(|x| x.to_lowercase()).collect();
+    let (screens, gap, pins_stay) = (job_screens(app), app.cfg.zones.gap, app.cfg.windows.pins_stay_on_switch);
+    Some(AppRules { rules, screens, gap, pins_stay, exclude, size_mode: app.cfg.window_size_on_move })
 }
 
 /// The workspace in use changed: remember it for this desk, so a restart shows it again.

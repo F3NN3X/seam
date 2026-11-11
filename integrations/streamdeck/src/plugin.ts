@@ -8,8 +8,10 @@ import {
 	ReleasePinned,
 	Remap,
 	Desk,
+	FocusOnThisWindow,
 	SaveWindows,
 	SnapBack,
+	Spotlight,
 	SwitchBack,
 	TileScreen,
 	Zones,
@@ -33,6 +35,8 @@ streamDeck.actions.registerAction(new MoveWindow());
 streamDeck.actions.registerAction(new FocusWindow());
 streamDeck.actions.registerAction(new PinOnTop());
 streamDeck.actions.registerAction(new ReleasePinned());
+streamDeck.actions.registerAction(new FocusOnThisWindow());
+streamDeck.actions.registerAction(new Spotlight());
 streamDeck.actions.registerAction(new Desk());
 
 // An error nobody caught must not take the plugin, and so every key, down with it.

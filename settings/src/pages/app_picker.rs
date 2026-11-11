@@ -1,8 +1,8 @@
 //! "Add an app": a popover on the editor's button with the app windows open now
-//! and the apps installed, searchable. A click adds the app and closes it.
+//! and the apps installed, searchable. A click adds the app and closes it. The
+//! workspace editor and the Zones page's "Where apps open" both use it.
 
 use crate::icons;
-use crate::pages::workspace_editor::add_app;
 use crate::pages::workspaces::app_title;
 use crate::panel::Panel;
 use crate::theme::palette;
@@ -12,7 +12,8 @@ use gpui_kit::component::popover::Popover;
 use gpui_kit::component::tab::{Tab, TabBar};
 use gpui_kit::*;
 use seam::apps;
-use seam::workspace::{Rule, Workspace};
+use seam::workspace::Rule;
+use std::rc::Rc;
 use std::sync::Arc;
 
 const WIDTH: f32 = 320.;
@@ -95,18 +96,21 @@ fn label(rule: &Rule, installed: bool) -> String {
     }
 }
 
-/// The workspace already has a row for this app.
-fn already(ws: &Workspace, rule: &Rule) -> bool {
+/// What the picker hands an app to once it's picked.
+pub type Add = Rc<dyn Fn(&mut Panel, Rule, &mut Window, &mut Context<Panel>)>;
+
+/// The apps already there already have a row or a rule for this app.
+fn already(taken: &[Rule], rule: &Rule) -> bool {
     let same_exe = |r: &Rule| !rule.exe.is_empty() && r.exe.eq_ignore_ascii_case(&rule.exe);
     let same_aumid = |r: &Rule| rule.aumid.is_some() && r.aumid == rule.aumid;
-    ws.windows.iter().any(|r| same_exe(r) || same_aumid(r))
+    taken.iter().any(|r| same_exe(r) || same_aumid(r))
 }
 
-/// One entry: the app as it would be added, whether it's in the workspace, and its icon.
+/// One entry: the app as it would be added, whether it's there already, and its icon.
 type Entry = (Rule, bool, Option<Arc<Image>>);
 
 /// The entries of the tab on show that match the search.
-fn entries(panel: &mut Panel, ws: &Workspace, cx: &mut Context<Panel>) -> Option<Vec<Entry>> {
+fn entries(panel: &mut Panel, taken: &[Rule], cx: &mut Context<Panel>) -> Option<Vec<Entry>> {
     let picker = &panel.editing.picker;
     let installed = picker.tab == 1;
     let list = if installed { picker.installed.clone() } else { picker.open_now.clone() }?;
@@ -119,17 +123,18 @@ fn entries(panel: &mut Panel, ws: &Workspace, cx: &mut Context<Panel>) -> Option
     };
     let shown: Vec<Rule> = list.into_iter().filter(|r| matches(r)).collect();
     icons::request(panel, &shown, cx);
-    Some(shown.into_iter().map(|r| (already(ws, &r), panel.icons.get(&r), r)).map(|(a, i, r)| (r, a, i)).collect())
+    Some(shown.into_iter().map(|r| (already(taken, &r), panel.icons.get(&r), r)).map(|(a, i, r)| (r, a, i)).collect())
 }
 
-/// "Add an app" and its popover.
-pub fn button(panel: &mut Panel, ws: &Workspace, cx: &mut Context<Panel>) -> AnyElement {
+/// "Add an app" and its popover. `taken` are the apps already there, which the list
+/// says `there` of, and `add` gets the one picked.
+pub fn button(panel: &mut Panel, taken: &[Rule], there: &'static str, add: Add, cx: &mut Context<Panel>) -> AnyElement {
     let open = panel.editing.picker.open;
-    let found = if open { entries(panel, ws, cx) } else { None };
+    let found = if open { entries(panel, taken, cx) } else { None };
     let (tab, query, search) =
         (panel.editing.picker.tab, panel.editing.picker.query.clone(), panel.editing.picker.search.clone());
     let focus = search.read(cx).focus_handle(cx);
-    let (view, id) = (cx.entity(), ws.id.clone());
+    let view = cx.entity();
     let p = palette(cx);
     let content = move |_: &mut _, _: &mut Window, _: &mut Context<_>| {
         let installed = tab == 1;
@@ -156,11 +161,11 @@ pub fn button(panel: &mut Panel, ws: &Workspace, cx: &mut Context<Panel>) -> Any
             Some(found) if found.is_empty() => note("No apps found in the Start menu".into()).into_any_element(),
             Some(found) => {
                 let items = found.iter().enumerate().map(|(n, (rule, already, icon))| {
-                    let (view, id, rule) = (view.clone(), id.clone(), rule.clone());
+                    let (view, add, rule) = (view.clone(), add.clone(), rule.clone());
                     let name = label(&rule, installed);
                     // A window says which one it is. An app already there can be added again, for a second window.
                     let detail = match (already, installed) {
-                        (true, _) => Some("In this workspace".to_string()),
+                        (true, _) => Some(there.to_string()),
                         (false, false) => Some(rule.title_hint.clone()),
                         (false, true) => None,
                     };
@@ -190,10 +195,10 @@ pub fn button(panel: &mut Panel, ws: &Workspace, cx: &mut Context<Panel>) -> Any
                                 ),
                         )
                         .on_click(move |_, window, cx| {
-                            let rule = rule.clone();
+                            let (rule, add) = (rule.clone(), add.clone());
                             view.update(cx, |panel, cx| {
                                 panel.editing.picker.open = false;
-                                add_app(panel, &id, Rule { launch: true, ..rule }, window, cx);
+                                add(panel, Rule { launch: true, ..rule }, window, cx);
                             });
                         })
                         .into_any_element()

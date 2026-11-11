@@ -6,6 +6,8 @@ import os from "node:os";
 export type SeamState = {
 	remap: "on" | "paused" | "off_no_borders";
 	zones: "on" | "off";
+	/** Spotlight is dimming everything but the focused window. */
+	spotlight?: boolean;
 	desk: { sig: string; name: string };
 	/** `drifted`: a window of it was moved or minimized since, so Snap back has work to do. */
 	workspace: { id: string; name: string; drifted?: boolean } | null;

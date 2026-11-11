@@ -99,6 +99,26 @@ export class Zones extends SeamAction {
 	}
 }
 
+/** Minimizes the other windows on the focused window's screen. Pressing it again brings them back. */
+@action({ UUID: "co.f3nn3x.seam.focus-only" })
+export class FocusOnThisWindow extends Plain {
+	protected async press(): Promise<void> {
+		await seam.call("window.focus_only");
+	}
+}
+
+/** Lit while Spotlight dims everything but the focused window. */
+@action({ UUID: "co.f3nn3x.seam.spotlight" })
+export class Spotlight extends SeamAction {
+	protected async render(key: KeyAction<JsonObject>, _settings: JsonObject, state: SeamState): Promise<void> {
+		await key.setState(state.spotlight ? 1 : 0);
+	}
+
+	protected async press(_key: KeyAction<JsonObject>, _settings: JsonObject, state: SeamState): Promise<void> {
+		await seam.call("window.spotlight", { on: !state.spotlight });
+	}
+}
+
 /** Shows the active desk's name. Pressing it opens the Displays page. */
 @action({ UUID: "co.f3nn3x.seam.desk" })
 export class Desk extends SeamAction {

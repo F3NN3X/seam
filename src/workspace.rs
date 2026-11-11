@@ -256,6 +256,16 @@ pub fn list(saved: &[Value]) -> Vec<Workspace> {
     saved.iter().filter_map(parse).collect()
 }
 
+/// The app rules this build can use: an app, a screen and a place to go to. Others
+/// stay in the config and are ignored.
+pub fn app_rules(saved: &[Value]) -> Vec<Rule> {
+    let usable = |r: &Rule| {
+        let named = !r.exe.is_empty() || r.aumid.is_some();
+        named && !r.monitor.is_empty() && r.target != (Target::State { state: WinState::Keep })
+    };
+    saved.iter().filter_map(|v| serde_json::from_value(v.clone()).ok()).filter(usable).collect()
+}
+
 pub fn to_value(workspace: &Workspace) -> Value {
     serde_json::to_value(workspace).unwrap_or_default()
 }

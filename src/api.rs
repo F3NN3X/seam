@@ -174,6 +174,12 @@ pub enum Command {
     ScreenTile(Option<u32>),
     /// Save the windows on a screen as a new custom layout: its Line Up number, or the one under the pointer.
     ZonesFromWindows(Option<u32>),
+    /// The panel picking a screen's layout (None for no zones): the screen's snapped
+    /// windows follow it, with Undo.
+    ZonesPick {
+        number: u32,
+        layout: Option<Value>,
+    },
     LayoutShow(LayoutView),
     PanelOpen(Option<String>),
     EventsSubscribe(Vec<String>),
@@ -344,6 +350,14 @@ fn command(method: &str, p: &Value) -> Result<Command, RpcError> {
         ),
         "screen.tile" => Command::ScreenTile(screen_param(p)?),
         "zones.from_windows" => Command::ZonesFromWindows(screen_param(p)?),
+        "zones.pick" => Command::ZonesPick {
+            number: screen_param(p)?.ok_or_else(|| RpcError::new(INVALID_PARAMS, "number is required"))?,
+            layout: match p.get("layout") {
+                None | Some(Value::Null) => None,
+                Some(v) if v.is_object() => Some(v.clone()),
+                Some(_) => return Err(RpcError::new(INVALID_PARAMS, "layout must be a layout or null")),
+            },
+        },
         "layout.show" => match p.get("view").and_then(Value::as_str) {
             Some("seam") => Command::LayoutShow(LayoutView::Seam),
             Some("windows") => Command::LayoutShow(LayoutView::Windows),
@@ -372,6 +386,7 @@ fn allowed(command: &Command, peer: Peer) -> Result<(), RpcError> {
     }
     let permitted = match command {
         Command::ConfigPatch(_)
+        | Command::ZonesPick { .. }
         | Command::WorkspaceUpdate { .. }
         | Command::CursorEasingSet(_)
         | Command::LayoutShow(_) => peer.panel,

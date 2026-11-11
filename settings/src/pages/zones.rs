@@ -2,7 +2,7 @@
 
 use crate::pages::app_rules;
 use crate::pages::zone_editor::{self, Opened};
-use crate::panel::Panel;
+use crate::panel::{error_text, refusal, Panel};
 use crate::theme::{palette, Palette};
 use crate::ui::{self, card, row, section, switch};
 use gpui_kit::component::button::ButtonVariants;
@@ -552,13 +552,25 @@ pub fn chosen(panel: &Panel) -> Option<(&Mon, Option<ZoneLayout>)> {
     Some((mon, saved))
 }
 
+/// Give the chosen screen a layout, or no zones. It shows at once, and the tray
+/// saves it and moves the screen's snapped windows into the new zones, with Undo.
 fn set_layout(panel: &mut Panel, layout: Option<ZoneLayout>, window: &mut Window, cx: &mut Context<Panel>) {
     let Some(sig) = panel.state.as_ref().map(|s| s.desk.sig.clone()) else { return };
     let Some((mon, _)) = chosen(panel) else { return };
+    let number = panel.zone_screen.min(panel.mons.len() - 1) + 1;
     // No entry means no zones, and a patch's null removes the entry.
-    let layout = layout.and_then(|l| library::screen_patch(&l)).unwrap_or(Value::Null);
-    let patch = json!({ "desks": { sig: { "zones": { mon.id.clone(): layout } } } });
-    panel.patch(patch, window, cx);
+    let shown = layout.as_ref().and_then(library::screen_patch).unwrap_or(Value::Null);
+    if let Ok(config) = panel.config.patched(&json!({ "desks": { sig: { "zones": { mon.id.clone(): shown } } } })) {
+        panel.config = config;
+    }
+    cx.notify();
+    let sent = layout.and_then(|l| serde_json::to_value(l).ok()).unwrap_or(Value::Null);
+    panel.call("zones.pick", json!({ "number": number, "layout": sent }), window, cx, |panel, result, window, cx| {
+        if let Err(e) = result {
+            window.push_notification(refusal("Layout left as it was", &error_text(&e)), cx);
+        }
+        panel.reload_config(window, cx);
+    });
 }
 
 fn preview(mon: &Mon, layout: Option<&ZoneLayout>, gap: u32, room: f64, p: Palette) -> Div {

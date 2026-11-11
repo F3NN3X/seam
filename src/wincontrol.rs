@@ -41,13 +41,15 @@ const MAX_GAP: u32 = 32;
 const CLOSE_ENOUGH: i32 = 4;
 
 /// What a window command does.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 pub enum Task {
     Window(WindowVerb, Dir),
     Group(GroupVerb),
     Tile(tile::At),
     /// Save from windows.
     FromWindows(tile::At),
+    /// A layout picked on the Zones page, which the screen's snapped windows follow.
+    Pick(Box<tile::Pick>),
 }
 
 /// One window command, with what the worker needs to know about the desk.
@@ -148,7 +150,7 @@ pub fn planned(mut save: impl FnMut(&str, ZoneLayout, bool) -> bool) -> Option<R
         snap::place_all(plan.list);
     }
     let done = plan.tile;
-    let counts = done.as_ref().map(|d| json!({ "ok": true, "tiled": d.tiled, "left": d.left }));
+    let counts = done.as_ref().filter(|d| !d.pick).map(|d| json!({ "ok": true, "tiled": d.tiled, "left": d.left }));
     let made = plan.fresh.map(|id| json!({ "ok": true, "id": id }));
     answer(plan.reply, Ok(counts.or(made).unwrap_or_else(|| json!({ "ok": true }))));
     done.map(Ok)
@@ -186,11 +188,12 @@ fn work() {
         let Some(mut job) = slot.take() else { continue };
         drop(slot);
         let reply = job.reply.take();
-        let outcome = match job.task {
-            Task::Window(verb, dir) => run(&job, verb, dir),
-            Task::Group(verb) => regroup::run(&job, verb),
-            Task::Tile(at) => tile::run(&job, at),
-            Task::FromWindows(at) => fromwindows::run(&job, at),
+        let outcome = match &job.task {
+            Task::Window(verb, dir) => run(&job, *verb, *dir),
+            Task::Group(verb) => regroup::run(&job, *verb),
+            Task::Tile(at) => tile::run(&job, *at),
+            Task::FromWindows(at) => fromwindows::run(&job, *at),
+            Task::Pick(pick) => tile::pick(&job, pick),
         };
         let planned = match outcome {
             Ok(Outcome::Place(list)) => Ok(Some((list, None, None, None))),
@@ -222,11 +225,12 @@ fn work() {
                 }
             }
             Err(why) => {
-                match job.task {
+                match &job.task {
                     Task::Window(verb, dir) => log::info!("window {verb:?} {}: {why}", dir.name()),
                     Task::Group(verb) => log::info!("window {verb:?}: {why}"),
                     Task::Tile(_) => log::info!("tile screen: {why}"),
                     Task::FromWindows(_) => log::info!("save from windows: {why}"),
+                    Task::Pick(_) => log::info!("zones pick: {why}"),
                 }
                 // A tile from a key or the tray has nobody to answer, so the screen is told.
                 if matches!(job.task, Task::Tile(_)) && reply.is_none() {

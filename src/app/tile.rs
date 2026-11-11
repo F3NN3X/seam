@@ -1,8 +1,9 @@
 //! Tile this screen's windows on the main thread: starting it from a key, the tray
 //! or the API, and the notice that offers Undo. The worker picks the windows and
-//! the zones (`wincontrol::tile`).
+//! the zones (`wincontrol::tile`). A layout picked on the Zones page moves the
+//! screen's snapped windows and offers the same Undo.
 
-use super::workspaces::queue_window;
+use super::workspaces::{queue_window, set_screen_layout};
 use super::*;
 use wincontrol::tile::At;
 
@@ -59,17 +60,28 @@ pub(super) fn tile_finished(app: &mut App, result: Option<Result<wincontrol::til
         }
         Some(Ok(done)) => {
             let n = done.tiled;
-            let title = format!("Tiled {n} {} on screen {}", if n == 1 { "window" } else { "windows" }, done.number);
-            let body = match done.left {
-                0 => "Click to undo".to_string(),
-                left => format!("{left} left where they were. Click to undo"),
+            let windows = if n == 1 { "window" } else { "windows" };
+            let (title, body) = if done.pick {
+                let title = format!("Screen {} has a new layout", done.number);
+                let body = match n {
+                    0 => "Click to undo".to_string(),
+                    n => format!("{n} {windows} moved to the new zones. Click to undo"),
+                };
+                log::info!("zones pick screen {}: {n} moved", done.number);
+                (title, body)
+            } else {
+                let body = match done.left {
+                    0 => "Click to undo".to_string(),
+                    left => format!("{left} left where they were. Click to undo"),
+                };
+                log::info!("tile screen {}: {n} placed, {} left", done.number, done.left);
+                (format!("Tiled {n} {windows} on screen {}", done.number), body)
             };
-            log::info!("tile screen {}: {n} placed, {} left", done.number, done.left);
             let until = Instant::now() + QUICK_UNDO_FOR;
             app.tile_undo = Some(TileUndo {
                 sig: app.sig.clone(),
                 screen: done.screen,
-                picked: done.picked,
+                changed: done.changed,
                 back: done.back,
                 until,
             });
@@ -78,25 +90,78 @@ pub(super) fn tile_finished(app: &mut App, result: Option<Result<wincontrol::til
     }
 }
 
-/// The notice was clicked: take away the layout the tile picked, if it is still the
-/// screen's, and put each window that is still where the tile set it back where it
-/// was, while that's still within 8 s. A window that was maximized comes back at its
-/// size from then, not maximized: placement has no way to maximize.
+/// A layout picked on the Zones page. With zones on, the screen's snapped windows
+/// follow it into the new zones on the worker, and a notice offers Undo. Otherwise,
+/// or for no zones, it is only saved, still with Undo while zones are on.
+pub(super) fn pick_layout(app: &mut App, number: u32, layout: Option<Value>, reply: Sender<Reply>) {
+    let Some(screen) = number.checked_sub(1).and_then(|i| app.mons.get(i as usize)).map(|m| m.id.clone()) else {
+        let _ = reply.send(Err(RpcError::new(api::NOT_FOUND, "no such screen")));
+        return;
+    };
+    let mut layout = match layout.map(|v| zones::layout_of(&v)) {
+        None => None,
+        Some(Some(layout)) => Some(layout),
+        Some(None) => {
+            let _ = reply.send(Err(RpcError::new(api::INVALID_PARAMS, "layout isn't a zone layout")));
+            return;
+        }
+    };
+    let Some(desk) = app.cfg.desks.get(&app.sig) else {
+        let _ = reply.send(refused("This desk isn't saved yet"));
+        return;
+    };
+    let before = desk.zones.get(&screen).and_then(zones::layout_of);
+    if let Some(layout) = layout.as_mut() {
+        seam::library::link(&mut app.cfg.custom_layouts, layout, false);
+    }
+    if layout == before {
+        let _ = reply.send(Ok(json!({ "ok": true })));
+        return;
+    }
+    let moving = aside(app).is_none() && app.cfg.zones.enabled && !crate::switcher::switching();
+    match layout {
+        Some(layout) if moving => {
+            let pick = wincontrol::tile::Pick { screen, layout, before };
+            queue_window(app, wincontrol::Task::Pick(Box::new(pick)), snap::zoned(), Some(reply));
+        }
+        layout => {
+            if !set_screen_layout(app, &screen, layout.clone(), false) {
+                let _ = reply.send(refused("This desk isn't saved yet"));
+                return;
+            }
+            if moving {
+                let done = wincontrol::tile::Done {
+                    number: number as usize,
+                    tiled: 0,
+                    left: 0,
+                    screen,
+                    changed: Some(wincontrol::tile::Change { now: layout, before }),
+                    back: Vec::new(),
+                    pick: true,
+                };
+                tile_finished(app, Some(Ok(done)));
+            }
+            let _ = reply.send(Ok(json!({ "ok": true })));
+        }
+    }
+}
+
+/// The notice was clicked: give the screen back the layout it had before the tile
+/// or the pick, if it still has the one they gave it, and put each window that is
+/// still where it was set back where it was, while that's still within 8 s. A window
+/// that was maximized comes back at its size from then, not maximized: placement
+/// has no way to maximize.
 pub(super) fn undo_tile(app: &mut App) {
     let Some(undo) = app.tile_undo.take() else { return };
     if Instant::now() > undo.until || undo.sig != app.sig {
         log::info!("tile screen: too late to undo");
         return;
     }
-    if let Some(picked) = undo.picked {
-        if let Some(desk) = app.cfg.desks.get_mut(&app.sig) {
-            let same = desk.zones.get(&undo.screen).and_then(zones::layout_of).is_some_and(|now| now == picked);
-            if same {
-                desk.zones.remove(&undo.screen);
-                persist(app);
-                snap::update(app.hwnd, &app.cfg, &app.sig, &app.mons, aside(app).as_deref());
-                publish(app);
-            }
+    if let Some(change) = undo.changed {
+        let desk = app.cfg.desks.get(&app.sig);
+        let now = desk.and_then(|d| d.zones.get(&undo.screen)).and_then(zones::layout_of);
+        if desk.is_some() && now == change.now {
+            set_screen_layout(app, &undo.screen, change.before, false);
         }
     }
     let here = |b: &wincontrol::tile::Back| {

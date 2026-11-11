@@ -123,6 +123,10 @@ pub(super) fn run_command(app: &mut App, queued: Queued) {
         {
             Err(RpcError::new(api::NOT_FOUND, "no such screen"))
         }
+        Command::ZonesPick { number, layout } => {
+            tile::pick_layout(app, number, layout, reply);
+            return;
+        }
         Command::ZonesFromWindows(number) => {
             let at = number.map_or_else(tile::pointer, |n| At::Screen(n as usize));
             tile::start_from_windows(app, at, reply);

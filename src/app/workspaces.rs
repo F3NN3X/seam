@@ -227,21 +227,35 @@ pub(super) fn set_spotlight(app: &mut App, on: Option<bool>) -> bool {
 /// which is saved here once, before the windows move. A layout from Save from
 /// windows goes into the library too.
 pub(super) fn window_planned(app: &mut App) {
-    let tiled = wincontrol::planned(|screen, mut layout, fresh| {
-        if !app.cfg.desks.contains_key(&app.sig) {
-            return false;
-        }
-        seam::library::link(&mut app.cfg.custom_layouts, &mut layout, fresh);
-        let (Ok(value), Some(desk)) = (serde_json::to_value(&layout), app.cfg.desks.get_mut(&app.sig)) else {
-            return false;
-        };
-        desk.zones.insert(screen.to_string(), value);
-        persist(app);
-        snap::update(app.hwnd, &app.cfg, &app.sig, &app.mons, aside(app).as_deref());
-        publish(app);
-        true
-    });
+    let tiled = wincontrol::planned(|screen, layout, fresh| set_screen_layout(app, screen, Some(layout), fresh));
     tile_finished(app, tiled);
+}
+
+/// Save a screen's layout on this desk, or take it away for no zones. A layout
+/// that follows a library layout keeps the link only while it still matches, and
+/// a `fresh` one from Save from windows goes into the library. False when this
+/// desk isn't saved.
+pub(super) fn set_screen_layout(app: &mut App, screen: &str, layout: Option<zones::ZoneLayout>, fresh: bool) -> bool {
+    if !app.cfg.desks.contains_key(&app.sig) {
+        return false;
+    }
+    let value = match layout {
+        Some(mut layout) => {
+            seam::library::link(&mut app.cfg.custom_layouts, &mut layout, fresh);
+            let Ok(value) = serde_json::to_value(&layout) else { return false };
+            Some(value)
+        }
+        None => None,
+    };
+    let Some(desk) = app.cfg.desks.get_mut(&app.sig) else { return false };
+    match value {
+        Some(value) => desk.zones.insert(screen.to_string(), value),
+        None => desk.zones.remove(screen),
+    };
+    persist(app);
+    snap::update(app.hwnd, &app.cfg, &app.sig, &app.mons, aside(app).as_deref());
+    publish(app);
+    true
 }
 
 /// A switch finished: say which workspace is in use, and how it went.

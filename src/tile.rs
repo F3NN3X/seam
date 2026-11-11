@@ -2,6 +2,7 @@
 //! a screen go into its zones, or into a layout picked for how many there are when
 //! the screen has none. The snapping's placement does the moving, so the zones are
 //! stamped and recorded as for any snap; this works out which window goes where.
+//! A layout picked on the Zones page moves that screen's snapped windows the same way.
 
 use super::{
     centre, close, direction, free, geometry, into_zone, movable, regroup, zone_of, Geo, Job, Outcome, MAX_GAP,
@@ -25,19 +26,39 @@ pub enum At {
     Point(i32, i32),
 }
 
-/// What a tile did, for the notice, the answer and Undo.
+/// A layout picked on the Zones page for a screen, and the one it had.
+#[derive(Clone, Debug)]
+pub struct Pick {
+    /// The screen's id.
+    pub screen: String,
+    pub layout: ZoneLayout,
+    pub before: Option<ZoneLayout>,
+}
+
+/// A screen's layout a tile or a pick changed. Undo puts `before` back while the
+/// screen still has `now`.
+#[derive(Clone, Debug)]
+pub struct Change {
+    pub now: Option<ZoneLayout>,
+    pub before: Option<ZoneLayout>,
+}
+
+/// What a tile or a pick did, for the notice, the answer and Undo.
 pub struct Done {
     /// Line Up number.
     pub number: usize,
+    /// Windows put into zones.
     pub tiled: usize,
     /// Windows that found no zone, or were past the ninth.
     pub left: usize,
     /// The screen's id.
     pub screen: String,
-    /// The layout the tile gave the screen, which Undo takes away again if it is still there.
-    pub picked: Option<ZoneLayout>,
+    /// The layout change, if there was one.
+    pub changed: Option<Change>,
     /// Each moved window, for Undo.
     pub back: Vec<Back>,
+    /// A layout picked on the Zones page rather than a tile.
+    pub pick: bool,
 }
 
 /// A window the tile moved.
@@ -181,9 +202,43 @@ pub(super) fn run(job: &Job, at: At) -> Result<Outcome, String> {
         tiled: picks.len(),
         left: beyond + loose.len() - picks.len(),
         screen: g.id.clone(),
-        picked: existing.is_none().then(|| layout.clone()),
+        changed: existing.is_none().then(|| Change { now: Some(layout.clone()), before: None }),
         back,
+        pick: false,
     };
     let layout = existing.is_none().then(|| (g.id.clone(), layout));
     Ok(Outcome::Tile(Box::new(Plan { list, layout, done })))
+}
+
+/// A layout picked for a screen: each window snapped in its old zones goes to the
+/// new zone its old place's centre is in. Windows not snapped are left alone. The
+/// screen's old layout is still in the job, so the stamps are read against it.
+pub(super) fn pick(job: &Job, p: &Pick) -> Result<Outcome, String> {
+    let screens = direction::desk_screens(&job.mons, &job.links);
+    let geo = geometry(job, &screens);
+    let s = geo.iter().position(|g| g.id == p.screen).ok_or("No such screen")?;
+    let g = &geo[s];
+    let gap = (job.gap.min(MAX_GAP) as f32 * g.dpi as f32 / 96.0).round() as i32;
+    let (zones, cells) = (zones::rects(&p.layout.tree, g.work, gap), zones::rects(&p.layout.tree, g.work, 0));
+    let (mut list, mut back) = (Vec::new(), Vec::new());
+    if !g.zones.is_empty() {
+        for (h, rect) in windows_on(job, g) {
+            let Some((a, b)) = placed(job, &geo, s, h, rect) else { continue };
+            let old = zones::span(g.zones[a], g.zones[b]);
+            let (x, y) = centre(old);
+            let Some(z) = zones::zone_at(&cells, x, y) else { continue };
+            list.push(into_zone(h, g, z, z, zones[z]));
+            back.push(Back { place: into_zone(h, g, a, b, old), set: zones[z] });
+        }
+    }
+    let done = Done {
+        number: g.number,
+        tiled: list.len(),
+        left: 0,
+        screen: p.screen.clone(),
+        changed: Some(Change { now: Some(p.layout.clone()), before: p.before.clone() }),
+        back,
+        pick: true,
+    };
+    Ok(Outcome::Tile(Box::new(Plan { list, layout: Some((p.screen.clone(), p.layout.clone())), done })))
 }

@@ -215,6 +215,7 @@ pub(super) fn start_focus_only(app: &App, scope: FocusScope, reply: Option<Sende
         hwnd: unsafe { GetForegroundWindow() }.0 as isize,
         screens: app.mons.iter().map(|m| m.rect).collect(),
         exclude: app.cfg.zones.exclude.iter().map(|x| x.to_lowercase()).collect(),
+        places: app.cfg.workspaces_remember_places,
         workspace,
         // A hotkey gives the tray the right to take focus. The API has to earn it.
         from_api: reply.is_some(),
@@ -347,7 +348,8 @@ pub(super) fn active_workspace(app: &App) -> Option<Workspace> {
 pub(super) fn live_of(app: &App, workspace: Workspace) -> LiveWorkspace {
     let exclude = app.cfg.zones.exclude.iter().map(|x| x.to_lowercase()).collect();
     let (screens, gap, pins_stay) = (job_screens(app), app.cfg.zones.gap, app.cfg.windows.pins_stay_on_switch);
-    LiveWorkspace { workspace, screens, gap, pins_stay, exclude, size_mode: app.cfg.window_size_on_move }
+    let (size_mode, places) = (app.cfg.window_size_on_move, app.cfg.workspaces_remember_places);
+    LiveWorkspace { workspace, screens, gap, pins_stay, exclude, size_mode, places }
 }
 
 /// Hand the workspace in use to the live worker, and tell the seam-wm thread what to
@@ -371,7 +373,8 @@ fn app_rules_of(app: &App) -> Option<AppRules> {
     }
     let exclude = app.cfg.zones.exclude.iter().map(|x| x.to_lowercase()).collect();
     let (screens, gap, pins_stay) = (job_screens(app), app.cfg.zones.gap, app.cfg.windows.pins_stay_on_switch);
-    Some(AppRules { rules, screens, gap, pins_stay, exclude, size_mode: app.cfg.window_size_on_move })
+    let (size_mode, places) = (app.cfg.window_size_on_move, app.cfg.workspaces_remember_places);
+    Some(AppRules { rules, screens, gap, pins_stay, exclude, size_mode, places })
 }
 
 /// The workspace in use changed: remember it for this desk, so a restart shows it again.
@@ -679,6 +682,17 @@ pub(super) fn captured(app: &mut App) {
         }
     };
     persist(app);
+    // A row with a place remembers the window it was read from (D336).
+    if app.cfg.workspaces_remember_places {
+        let binds: Vec<(isize, usize)> = match (&job.pick, job.row, &rows, &stamps) {
+            (Some(pick), Some(row), _, _) => vec![(pick.hwnd, row)],
+            (_, _, Some(rows), _) => hwnds.iter().copied().zip(rows.iter().copied()).collect(),
+            (_, _, _, Some(windows)) => windows.clone(),
+            _ if job.into.is_none() => hwnds.iter().copied().zip(0..).collect(),
+            _ => Vec::new(),
+        };
+        switcher::bind_rows(&saved, &binds);
+    }
     // The saved windows hold their rows, as after a switch, so drift and auto-apply see them at once.
     let key = workspace::stamp_key(&saved.id);
     if let Some(rows) = rows {
@@ -749,6 +763,8 @@ pub(super) fn update_workspace(app: &mut App, id: &str, sent: Value) -> Reply {
     // and the next switch stamps everything again.
     let unmoved = moves.len() == checked.windows.len() && moves.iter().enumerate().all(|(i, m)| *m == Some(i));
     if reply.is_ok() && !unmoved {
+        // The windows place rows remember follow their rows the same way (D336).
+        switcher::rebind(id, &moves);
         live::restamp(workspace::stamp_key(id), moves);
     }
     reply

@@ -14,7 +14,7 @@ use seam::config::WindowSize;
 use seam::desk;
 use seam::winutil;
 use seam::workspace::{
-    self, Candidate, OtherWindows, Pin, Place, RowState, RowStatus, Rule, Shown, Target, WinState, Workspace,
+    self, Bound, Candidate, OtherWindows, Pin, Place, RowState, RowStatus, Rule, Shown, Target, WinState, Workspace,
     SESSION_ID,
 };
 use seam::zones::{self, Rect, ZoneLayout};
@@ -919,6 +919,9 @@ struct Run<'a> {
     stamp: Option<u32>,
     /// Apps started open on their row's folder or page.
     places: bool,
+    /// Each row's remembered window as the switch began, `None` for a row without a
+    /// place (D336).
+    bound: Vec<Option<Bound>>,
 }
 
 /// Place the windows of the rules `which` that have one, then pin again what the
@@ -1065,11 +1068,19 @@ fn catch(run: &Run, cands: Vec<Candidate>, waits: &mut Waits, starts: &mut Start
         return;
     }
     let rules: Vec<Rule> = starts.waiting.iter().map(|(i, _)| run.ws.windows[*i].clone()).collect();
+    // A place row started its app, so it takes only a window that wasn't there before
+    // and isn't bound to any row (D336).
+    let bound: Vec<Option<Bound>> = starts.waiting.iter().map(|(i, _)| run.bound[*i].map(|_| Bound::Unbound)).collect();
+    let mut before: HashSet<isize> = waits.seen.iter().map(|s| s.cand.hwnd).collect();
+    before.extend(bound_windows());
     let mut caught = Vec::new();
-    for ((i, since), hit) in starts.waiting.iter().zip(workspace::assign(&rules, &fresh)) {
+    for ((i, since), hit) in starts.waiting.iter().zip(workspace::assign_bound(&rules, &fresh, &bound, &before)) {
         if let Some(hwnd) = hit {
             waits.found[*i] = Some(hwnd);
             caught.push(*i);
+            if run.bound[*i].is_some() {
+                bind(&run.ws.id, *i, hwnd);
+            }
             let app = app_name(&run.ws.windows[*i]);
             log::info!("{}: {app} showed after {} ms", run.ws.name, since.elapsed().as_millis());
         }
@@ -1178,32 +1189,84 @@ fn usable_place(rule: &Rule) -> Option<&Place> {
     (places::kind_of(rule) == Some(kind)).then_some(place)
 }
 
-/// A switch's first match of rows to windows. With "Remember folders and pages" on
-/// (`remember`) and a row with a place, the open windows of those rows' apps are read
-/// once, and a row with a place takes only a window showing it (D336). Otherwise as
-/// `workspace::assign`.
-fn first_match(ws: &Workspace, known: &[Candidate], remember: bool) -> Vec<Option<isize>> {
-    if !remember || !ws.windows.iter().any(|r| usable_place(r).is_some()) {
-        return workspace::assign(&ws.windows, known);
+/// "Remember folders and pages" (D336): the window of each place row, by workspace id
+/// and row, in memory only. `None` once that window was closed. A row is its index,
+/// carried over edits by `workspace::moved_rows` as the switch stamps are. A window
+/// is one row's only.
+static BOUND: Mutex<Vec<(String, usize, Option<isize>)>> = Mutex::new(Vec::new());
+
+fn alive(hwnd: isize) -> bool {
+    unsafe { IsWindow(Some(hwnd_of(hwnd))) }.as_bool()
+}
+
+/// Remember `hwnd` as the window of row `row` of workspace `id`.
+fn bind(id: &str, row: usize, hwnd: isize) {
+    let mut bound = BOUND.lock().unwrap_or_else(|e| e.into_inner());
+    bound.retain(|(w, r, h)| !(w == id && *r == row) && *h != Some(hwnd));
+    bound.push((id.to_string(), row, Some(hwnd)));
+}
+
+/// Bind the windows a capture read, each to its row, for the rows of `ws` with a place.
+pub fn bind_rows(ws: &Workspace, windows: &[(isize, usize)]) {
+    for (hwnd, row) in windows {
+        if ws.windows.get(*row).is_some_and(|r| usable_place(r).is_some()) {
+            bind(&ws.id, *row, *hwnd);
+        }
     }
-    let rules: Vec<Rule> = ws.windows.iter().map(|r| Rule { place: usable_place(r).cloned(), ..r.clone() }).collect();
-    let with_place: Vec<&Rule> = rules.iter().filter(|r| r.place.is_some()).collect();
-    let wanted: Vec<usize> =
-        (0..known.len()).filter(|i| with_place.iter().any(|r| workspace::same_app(r, &known[*i]))).collect();
-    let as_rule = |c: &Candidate| Rule {
-        exe: c.exe.clone(),
-        aumid: c.aumid.clone(),
-        class: c.class.clone(),
-        title_hint: c.title.clone(),
-        ..Rule::default()
+}
+
+/// An edit reordered, removed or added rows of workspace `id`: its bindings follow.
+pub fn rebind(id: &str, moves: &[Option<usize>]) {
+    let mut bound = BOUND.lock().unwrap_or_else(|e| e.into_inner());
+    bound.retain_mut(|(w, r, _)| {
+        if w != id {
+            return true;
+        }
+        match moves.get(*r).copied().flatten() {
+            Some(to) => {
+                *r = to;
+                true
+            }
+            None => false,
+        }
+    });
+}
+
+/// Every open window bound to any row. Closed ones are marked as they're read.
+fn bound_windows() -> HashSet<isize> {
+    let mut bound = BOUND.lock().unwrap_or_else(|e| e.into_inner());
+    prune(&mut bound);
+    bound.iter().filter_map(|(_, _, h)| *h).collect()
+}
+
+fn prune(bound: &mut [(String, usize, Option<isize>)]) {
+    for entry in bound.iter_mut().filter(|(_, _, h)| h.is_some_and(|h| !alive(h))) {
+        entry.2 = None;
+    }
+}
+
+/// Each row's binding for `workspace::assign_bound`, `None` for a row without a usable
+/// place or with the setting off, and the windows bound to other workspaces' rows.
+fn bindings(ws: &Workspace, remember: bool) -> (Vec<Option<Bound>>, HashSet<isize>) {
+    if !remember {
+        return (vec![None; ws.windows.len()], HashSet::new());
+    }
+    let mut bound = BOUND.lock().unwrap_or_else(|e| e.into_inner());
+    prune(&mut bound);
+    let of = |row: usize| match bound.iter().find(|(w, r, _)| *w == ws.id && *r == row) {
+        Some((_, _, Some(h))) => Bound::Alive(*h),
+        Some((_, _, None)) => Bound::Gone,
+        None => Bound::Unbound,
     };
-    let read_rules: Vec<Rule> = wanted.iter().map(|i| as_rule(&known[*i])).collect();
-    let hwnds: Vec<isize> = wanted.iter().map(|i| known[*i].hwnd).collect();
-    let mut shown = vec![None; known.len()];
-    for (i, place) in wanted.into_iter().zip(places::read(&read_rules, &hwnds)) {
-        shown[i] = place;
-    }
-    workspace::assign_by_place(&rules, known, &shown)
+    let rows = ws.windows.iter().enumerate().map(|(i, r)| usable_place(r).map(|_| of(i))).collect();
+    let elsewhere = bound.iter().filter(|(w, _, _)| *w != ws.id).filter_map(|(_, _, h)| *h).collect();
+    (rows, elsewhere)
+}
+
+/// `workspace::assign_bound` for a workspace, with the windows the tray remembers.
+fn match_rows(ws: &Workspace, wins: &[Candidate], remember: bool) -> Vec<Option<isize>> {
+    let (bound, elsewhere) = bindings(ws, remember);
+    workspace::assign_bound(&ws.windows, wins, &bound, &elsewhere)
 }
 
 /// Does the whole switch. Returns `None` if a newer one replaced it.
@@ -1214,14 +1277,29 @@ fn run_switch(job: &SwitchJob, mine: u64) -> Option<Switched> {
     let stamp = (ws.id != SESSION_ID).then(|| workspace::stamp_key(&ws.id));
     let geos = geometry(&job.screens, job.gap);
     let (pins_stay, size_mode, places) = (job.pins_stay, job.size_mode, job.places);
-    let run = Run { ws, geos, pins_stay, size_mode, cancelled: &cancelled, stamp, places };
+    let (bound, elsewhere) = bindings(ws, places);
+    let run = Run { ws, geos, pins_stay, size_mode, cancelled: &cancelled, stamp, places, bound };
     let mut tally = Tally::default();
     let mut procs = Procs::new();
 
     // Snapshot and match.
     let seen = snapshot(&mut procs);
     let mut known: Vec<Candidate> = seen.iter().map(|s| s.cand.clone()).collect();
-    let mut found = first_match(ws, &known, run.places);
+    let mut found = workspace::assign_bound(&ws.windows, &known, &run.bound, &elsewhere);
+    // An unbound place row keeps the window it matched by app from now on.
+    for (i, b) in run.bound.iter().enumerate() {
+        let app = app_name(&ws.windows[i]);
+        match (b, found[i]) {
+            (Some(Bound::Alive(_)), _) => log::info!("{app}: its window is open"),
+            (Some(Bound::Unbound), hit) => {
+                log::info!("{app}: not bound yet, matching by app");
+                if let Some(hwnd) = hit {
+                    bind(&ws.id, i, hwnd);
+                }
+            }
+            _ => {}
+        }
+    }
     // This workspace's stamps on windows it didn't match this time are out of date.
     if let Some(key) = stamp {
         let matched: HashSet<isize> = found.iter().flatten().copied().collect();
@@ -1256,7 +1334,8 @@ fn run_switch(job: &SwitchJob, mine: u64) -> Option<Switched> {
                 snapshot(&mut procs).into_iter().map(|s| s.cand).filter(|c| !claimed.contains(&c.hwnd)).collect();
             let missing: Vec<usize> = (0..done.len()).filter(|i| found[*i].is_none()).collect();
             let rules: Vec<Rule> = missing.iter().map(|i| ws.windows[*i].clone()).collect();
-            for (i, hit) in missing.into_iter().zip(workspace::assign(&rules, &fresh)) {
+            let bound: Vec<Option<Bound>> = missing.iter().map(|i| run.bound[*i]).collect();
+            for (i, hit) in missing.into_iter().zip(workspace::assign_bound(&rules, &fresh, &bound, &elsewhere)) {
                 found[i] = hit;
             }
         }
@@ -1276,16 +1355,15 @@ fn run_switch(job: &SwitchJob, mine: u64) -> Option<Switched> {
         if cancelled() {
             return None;
         }
-        let wanted = |(i, r): (usize, &Rule)| (ws.launch_missing && found[i].is_none() && r.launch).then_some(i);
+        // A place row whose window is open but not one a switch takes (on another
+        // desktop, say) isn't started a second time.
+        let open = |i: usize| matches!(run.bound[i], Some(Bound::Alive(_)));
+        let wanted =
+            |(i, r): (usize, &Rule)| (ws.launch_missing && found[i].is_none() && r.launch && !open(i)).then_some(i);
         let starting: Vec<usize> = ws.windows.iter().enumerate().filter_map(wanted).collect();
-        for (i, rule) in ws.windows.iter().enumerate().filter(|_| run.places) {
-            let (Some(place), app) = (usable_place(rule), app_name(rule)) else { continue };
-            let kind = place_kind(place);
-            if found[i].is_some() {
-                log::info!("{app}: saved {kind} open in a window");
-            } else if starting.contains(&i) {
-                log::info!("{app}: no window on its saved {kind}, starting one");
-            }
+        for &i in starting.iter().filter(|i| run.bound[**i] == Some(Bound::Gone)) {
+            let (app, kind) = (app_name(&ws.windows[i]), usable_place(&ws.windows[i]).map_or("place", place_kind));
+            log::info!("{app}: its window was closed, starting on its saved {kind}");
         }
         if !starting.is_empty() {
             let mut waits = Waits { found: &mut found, known: &mut known, procs: &mut procs, seen: &seen };
@@ -1387,10 +1465,10 @@ fn run_switch(job: &SwitchJob, mine: u64) -> Option<Switched> {
 /// The windows a workspace doesn't use, topmost first, matched as a switch does:
 /// the rows' windows and other windows of the same apps stay out of it, and so do
 /// elevated windows and ones that stay (sticky, or pinned on top).
-pub fn outside(ws: &Workspace, exclude: &[String]) -> Result<Vec<isize>, &'static str> {
+pub fn outside(ws: &Workspace, exclude: &[String], remember: bool) -> Result<Vec<isize>, &'static str> {
     let seen = snapshot_with(exclude, &mut Procs::new(), &mut |_, _| {});
     let known: Vec<Candidate> = seen.iter().map(|s| s.cand.clone()).collect();
-    let found = workspace::assign(&ws.windows, &known);
+    let found = match_rows(ws, &known, remember);
     if found.iter().all(Option::is_none) {
         return Err("Nothing from this workspace is open");
     }
@@ -1429,6 +1507,8 @@ pub struct LiveWorkspace {
     pub exclude: Vec<String>,
     /// "When a window moves to another screen".
     pub size_mode: WindowSize,
+    /// "Remember folders and pages": place rows match their remembered windows (D336).
+    pub places: bool,
 }
 
 /// How each row's app is doing, the way a switch would see it. Runs on a worker.
@@ -1438,7 +1518,7 @@ pub fn status(live: &LiveWorkspace) -> Vec<RowStatus> {
     let mut procs = Procs::new();
     let seen = snapshot(&mut procs);
     let cands: Vec<Candidate> = seen.iter().map(|s| s.cand.clone()).collect();
-    let found = workspace::assign(&live.workspace.windows, &cands);
+    let found = match_rows(&live.workspace, &cands, live.places);
     // An app with no window may still run, closed to the tray.
     let mut background = Background::default();
     let rows = live.workspace.windows.iter().zip(found).enumerate();
@@ -1500,7 +1580,11 @@ pub fn place_opened(live: &LiveWorkspace, hwnd: isize) -> Option<String> {
         others.filter_map(winutil::ws_stamp).filter(|(k, _)| *k == key).map(|(_, r)| r).collect();
     let free: Vec<usize> = (0..ws.windows.len()).filter(|i| !taken.contains(i)).collect();
     let rules: Vec<Rule> = free.iter().map(|i| ws.windows[*i].clone()).collect();
-    let hit = workspace::assign(&rules, std::slice::from_ref(&seen.cand)).iter().position(Option::is_some)?;
+    // A place row takes only its remembered window, as in a switch (D336).
+    let (bound, elsewhere) = bindings(ws, live.places);
+    let bound: Vec<Option<Bound>> = free.iter().map(|i| bound[*i]).collect();
+    let cand = std::slice::from_ref(&seen.cand);
+    let hit = workspace::assign_bound(&rules, cand, &bound, &elsewhere).iter().position(Option::is_some)?;
     let (row, rule) = (free[hit], &ws.windows[free[hit]]);
     let app = app_name(rule);
     let geos = geometry(&live.screens, live.gap);
@@ -1539,6 +1623,8 @@ pub struct AppRules {
     /// Lower-case exe names Seam never manages: a rule doesn't apply to them.
     pub exclude: Vec<String>,
     pub size_mode: WindowSize,
+    /// "Remember folders and pages", for whether the workspace in use owns a window.
+    pub places: bool,
 }
 
 /// Put a window that just opened where its app's rule puts it, once. A rule whose
@@ -1558,7 +1644,7 @@ pub fn place_by_rule(set: &AppRules, owner: Option<&Workspace>, hwnd: isize) -> 
     }
     // The workspace in use owns every window of an app it has a row for.
     let cand = std::slice::from_ref(&seen.cand);
-    if owner.is_some_and(|ws| workspace::assign(&ws.windows, cand).iter().any(Option::is_some)) {
+    if owner.is_some_and(|ws| match_rows(ws, cand, set.places).iter().any(Option::is_some)) {
         return None;
     }
     let hit = workspace::assign(&set.rules, cand).iter().position(Option::is_some)?;

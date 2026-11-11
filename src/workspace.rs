@@ -6,7 +6,7 @@
 use crate::zones::{self, Rect, Template, ZoneLayout};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_json::{json, Value};
-use std::collections::{hash_map::RandomState, BTreeMap};
+use std::collections::{hash_map::RandomState, BTreeMap, HashSet};
 use std::hash::{BuildHasher, Hasher};
 use std::path::{Component, Path, Prefix};
 
@@ -470,7 +470,7 @@ pub fn assign(rules: &[Rule], wins: &[Candidate]) -> Vec<Option<isize>> {
 }
 
 /// Whether the window is one of the rule's app: by AUMID when the rule has one, else by exe.
-pub fn same_app(r: &Rule, w: &Candidate) -> bool {
+fn same_app(r: &Rule, w: &Candidate) -> bool {
     match (&r.aumid, &w.aumid) {
         (Some(a), Some(b)) => a == b,
         (Some(_), None) => false,
@@ -489,46 +489,55 @@ fn pick(r: &Rule, wins: &[Candidate], taken: &mut [bool], allowed: impl Fn(usize
     Some(w.hwnd)
 }
 
-/// `assign` with "Remember folders and pages" on (D336). `shown` is the folder or page
-/// each window shows now, `None` where it wasn't read or has none. A row with a place
-/// goes first and takes only a window showing that place, so with none it's started.
-/// Then the other rows match as `assign` does, but never take a window showing a
-/// place some row has.
-pub fn assign_by_place(rules: &[Rule], wins: &[Candidate], shown: &[Option<Place>]) -> Vec<Option<isize>> {
-    let shows = |w: usize, p: &Place| shown.get(w).and_then(Option::as_ref).is_some_and(|s| same_place(p, s));
-    let reserved = |w: usize| rules.iter().filter_map(|r| r.place.as_ref()).any(|p| shows(w, p));
+/// The window the tray remembers for a row with a saved folder or page, with
+/// "Remember folders and pages" on (D336).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Bound {
+    /// None yet: the tray started since, or the row is older.
+    Unbound,
+    /// This window, which is still open.
+    Alive(isize),
+    /// Its window was closed.
+    Gone,
+}
+
+/// `assign`, with the windows the tray remembers for place rows (D336). `bound[i]` is
+/// `None` for a row that isn't one, which matches as `assign` does but never takes a
+/// window bound to a place row here. A place row bound to an open window takes that
+/// window only, and one whose window was closed takes none, so it's started on its
+/// place. An unbound one matches by app, but never takes a window bound to a place
+/// row here or in `elsewhere` (other workspaces, or windows a launch must not take).
+pub fn assign_bound(
+    rules: &[Rule],
+    wins: &[Candidate],
+    bound: &[Option<Bound>],
+    elsewhere: &HashSet<isize>,
+) -> Vec<Option<isize>> {
+    let bound_of = |i: usize| bound.get(i).copied().flatten();
+    let mine: HashSet<isize> = (0..rules.len())
+        .filter_map(|i| match bound_of(i) {
+            Some(Bound::Alive(h)) => Some(h),
+            _ => None,
+        })
+        .collect();
     let mut taken = vec![false; wins.len()];
     let mut found = vec![None; rules.len()];
+    // Bound windows first, so no row before them in the order can take them.
     for (i, r) in rules.iter().enumerate() {
-        if let Some(p) = &r.place {
-            found[i] = pick(r, wins, &mut taken, |w| shows(w, p));
+        if let Some(Bound::Alive(h)) = bound_of(i) {
+            found[i] = pick(r, wins, &mut taken, |w| wins[w].hwnd == h);
         }
     }
-    for (i, r) in rules.iter().enumerate().filter(|(_, r)| r.place.is_none()) {
-        found[i] = pick(r, wins, &mut taken, |w| !reserved(w));
+    let free = |w: usize| !mine.contains(&wins[w].hwnd);
+    for (i, r) in rules.iter().enumerate() {
+        found[i] = match bound_of(i) {
+            Some(Bound::Alive(_)) => found[i],
+            Some(Bound::Gone) => None,
+            Some(Bound::Unbound) => pick(r, wins, &mut taken, |w| free(w) && !elsewhere.contains(&wins[w].hwnd)),
+            None => pick(r, wins, &mut taken, free),
+        };
     }
     found
-}
-
-/// Whether two places are the same folder or page: a folder ignoring case and a
-/// trailing `\`, a page by scheme, host and path, ignoring case on the scheme and
-/// host, a trailing `/`, the query and the fragment.
-pub fn same_place(a: &Place, b: &Place) -> bool {
-    match (a, b) {
-        (Place::Folder(a), Place::Folder(b)) => {
-            a.trim_end_matches('\\').to_lowercase() == b.trim_end_matches('\\').to_lowercase()
-        }
-        (Place::Url(a), Place::Url(b)) => page_key(a) == page_key(b),
-        _ => false,
-    }
-}
-
-/// A page's scheme and host in lower case, and its path without a trailing `/`.
-fn page_key(url: &str) -> (String, String, String) {
-    let (scheme, rest) = url.split_once("://").unwrap_or(("", url));
-    let rest = rest.split(['?', '#']).next().unwrap_or_default();
-    let (host, path) = rest.split_once('/').unwrap_or((rest, ""));
-    (scheme.to_ascii_lowercase(), host.to_lowercase(), path.trim_end_matches('/').to_string())
 }
 
 /// `r` as fractions of `work`.
@@ -1096,6 +1105,27 @@ mod tests {
         let file = Export { seam_workspace: Export::VERSION, workspace: ws, screens: BTreeMap::new() };
         let imported = import(file, &here, &[], &[]);
         assert_eq!(imported.zones.keys().collect::<Vec<_>>(), ["n"]);
+    }
+
+    // What a place row matches decides which window is moved and which app is started
+    // (D336): its own window while open, none once closed, by app when not bound yet,
+    // and no other row takes a window bound to one.
+    #[test]
+    fn place_rows_keep_their_own_windows() {
+        let chrome = r"C:\Chrome\chrome.exe";
+        // Window 2 is the topmost, so plain matching would give it to the first row.
+        let wins: Vec<Candidate> =
+            [(1, 1), (2, 0), (3, 2), (4, 3)].map(|(h, z)| win(h, chrome, None, "", "", z)).into();
+        let rules: Vec<Rule> = (0..5).map(|_| rule(chrome, None, "", "")).collect();
+        let bound = [Some(Bound::Unbound), Some(Bound::Alive(2)), Some(Bound::Gone), None, Some(Bound::Alive(9))];
+        let elsewhere = HashSet::from([1]);
+        // The unbound row goes by app but skips window 2, bound here, and window 1, bound
+        // in another workspace. Window 2 stays with its bound row. The closed one gets
+        // nothing, so it's started. The plain row doesn't steal window 2 either. One bound
+        // to a window that isn't a candidate gets none.
+        assert_eq!(assign_bound(&rules, &wins, &bound, &elsewhere), vec![Some(3), Some(2), None, Some(1), None]);
+        // With nothing bound, it's plain matching.
+        assert_eq!(assign_bound(&rules, &wins, &[None; 5], &HashSet::new()), assign(&rules, &wins));
     }
 
     // A saved place is opened when a switch starts the app, so the editor and the API

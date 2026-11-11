@@ -18,6 +18,8 @@ use windows::Win32::UI::WindowsAndMessaging::IsWindow;
 /// What Priority changed on a screen, to give back on the next press.
 pub(super) struct Given {
     template: Template,
+    /// The library layout the screen followed, which the second press links again.
+    custom: Option<String>,
     stash: Stash,
     /// The tree Priority made. Any other change to the group drops the stash.
     after: Node,
@@ -117,7 +119,7 @@ pub(super) fn run(job: &Job, verb: GroupVerb) -> Result<Outcome, String> {
     let earlier = {
         let given = GIVEN.lock().unwrap_or_else(|e| e.into_inner());
         let found = given.as_ref().and_then(|m| m.get(&g.id)).filter(|p| p.after == layout.tree);
-        found.map(|p| (p.template, p.stash.clone()))
+        found.map(|p| (p.template, p.custom.clone(), p.stash.clone()))
     };
     let (new, keep) = match verb {
         GroupVerb::Grow(step) => {
@@ -132,10 +134,11 @@ pub(super) fn run(job: &Job, verb: GroupVerb) -> Result<Outcome, String> {
         }
         GroupVerb::Priority => match earlier {
             // A second press gives the group back as it was.
-            Some((template, stash)) => (ZoneLayout { template, tree: groups::restore(stash) }, None),
+            Some((template, custom, stash)) => (ZoneLayout { template, custom, tree: groups::restore(stash) }, None),
             None => {
                 let (tree, stash) = groups::priority(&layout.tree, g.work, leaves, &mins);
-                let keep = Given { template: layout.template, stash, after: tree.clone() };
+                let custom = layout.custom.clone();
+                let keep = Given { template: layout.template, custom, stash, after: tree.clone() };
                 (groups::relabel(layout.template, tree), Some(keep))
             }
         },

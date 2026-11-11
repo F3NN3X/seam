@@ -61,6 +61,18 @@ const ENTRIES: &[Entry] = &[
     entry(Page::Zones, "Edit layout", "Split, merge and resize the zones of a screen", "editor custom divider"),
     entry(
         Page::Zones,
+        "Custom layouts",
+        "Your own layouts, shared by every desk and screen",
+        "custom layout library new layout rename duplicate delete save as layout changed",
+    ),
+    entry(
+        Page::Zones,
+        "Save from windows",
+        "Make a layout from where the windows on a screen are now",
+        "custom layout library save windows arrangement",
+    ),
+    entry(
+        Page::Zones,
         "Where apps open",
         "Seam puts these apps in place whenever they open, outside workspaces too",
         "app rules always open place add an app",

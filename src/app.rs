@@ -823,7 +823,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
         wincontrol::WM_APP_WINDOW => {
             // Busy elsewhere: the moves wait for nothing, but a layout can't be saved.
             if with_app(window_planned).is_none() {
-                wincontrol::planned(|_, _| false);
+                wincontrol::planned(|_, _, _| false);
             }
             LRESULT(0)
         }

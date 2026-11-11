@@ -1,20 +1,26 @@
 //! Zones: a layout for each screen, and how dragging a window snaps to it.
 
-use crate::pages::{app_rules, zone_editor};
+use crate::pages::app_rules;
+use crate::pages::zone_editor::{self, Opened};
 use crate::panel::Panel;
 use crate::theme::{palette, Palette};
 use crate::ui::{self, card, row, section, switch};
+use gpui_kit::component::button::ButtonVariants;
 use gpui_kit::component::color_picker::{ColorPicker, ColorPickerState};
+use gpui_kit::component::dialog::{DialogAction, DialogClose, DialogFooter};
+use gpui_kit::component::input::{Input, InputState};
+use gpui_kit::component::menu::{DropdownMenu, PopupMenuItem};
 use gpui_kit::component::slider::Slider;
 use gpui_kit::component::tooltip::Tooltip;
-use gpui_kit::component::ThemeStyled;
+use gpui_kit::component::{Icon, Sizable, ThemeStyled, WindowExt};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 use seam::config::WindowSize;
 use seam::desk::Mon;
+use seam::library;
 use seam::palette as colours;
 use seam::state;
-use seam::zones::{self, Dir, LeafTag, Node, Rect, Template, ZoneLayout};
+use seam::zones::{self, Node, Rect, Template, ZoneLayout};
 use serde_json::{json, Value};
 use std::rc::Rc;
 use std::time::Duration;
@@ -56,18 +62,53 @@ fn key_label(key: &str) -> &'static str {
     KEYS.iter().find(|(k, _)| *k == key).map_or("Shift", |(_, label)| label)
 }
 
-/// The tree a tile draws. Custom has none of its own, so it shows a sample.
-fn art_tree(template: Template, own: Option<&ZoneLayout>) -> Option<Node> {
-    let leaf = || Box::new(Node::Leaf(LeafTag::Leaf));
-    match template {
-        Template::None => None,
-        Template::Custom => own.map(|l| l.tree.clone()).or(Some(Node::Split {
-            split: Dir::Vertical,
-            ratio: 0.6,
-            a: leaf(),
-            b: Box::new(Node::Split { split: Dir::Horizontal, ratio: 0.5, a: leaf(), b: leaf() }),
-        })),
-        t => zones::template_tree(t),
+/// A tile in the layout picker.
+#[derive(Clone)]
+enum Pick {
+    Template(Template),
+    Library(library::Entry),
+    /// The screen's own layout, which is no template's or library layout's.
+    Changed(Node),
+    New,
+}
+
+impl Pick {
+    fn key(&self) -> String {
+        match self {
+            Pick::Template(t) => format!("zone-tile-{}", t.title()),
+            Pick::Library(entry) => format!("zone-tile-library-{}", entry.id),
+            Pick::Changed(_) => "zone-tile-changed".into(),
+            Pick::New => "zone-tile-new".into(),
+        }
+    }
+
+    fn title(&self) -> SharedString {
+        match self {
+            Pick::Template(t) => t.title().into(),
+            Pick::Library(entry) => entry.name.clone().into(),
+            Pick::Changed(_) => "Changed".into(),
+            Pick::New => "New layout".into(),
+        }
+    }
+
+    /// The tree the tile draws.
+    fn art(&self) -> Option<Node> {
+        match self {
+            Pick::Template(t) => zones::template_tree(*t),
+            Pick::Library(entry) => Some(entry.tree.clone()),
+            Pick::Changed(tree) => Some(tree.clone()),
+            Pick::New => None,
+        }
+    }
+
+    /// Whether this is the layout the screen has now.
+    fn selected(&self, saved: Option<&ZoneLayout>) -> bool {
+        match self {
+            Pick::Template(t) => saved.map_or(Template::None, |l| l.template) == *t,
+            Pick::Library(entry) => saved.is_some_and(|l| l.custom.as_ref() == Some(&entry.id)),
+            Pick::Changed(_) => true,
+            Pick::New => false,
+        }
     }
 }
 
@@ -75,19 +116,23 @@ fn pieces(tree: &Node, width: f32, height: f32, gap: i32) -> Vec<Rect> {
     zones::rects(tree, Rect { x: 0, y: 0, w: width as i32, h: height as i32 }, gap)
 }
 
-fn tile(
-    i: usize,
-    template: Template,
-    layout: Option<&ZoneLayout>,
-    selected: bool,
-    window: &mut Window,
-    cx: &mut Context<Panel>,
-) -> AnyElement {
+/// Picking a tile. Unsaved edits ask first.
+fn pick(panel: &mut Panel, choice: &Pick, window: &mut Window, cx: &mut Context<Panel>) {
+    let then: zone_editor::Then = match choice.clone() {
+        Pick::Template(t) => Rc::new(move |panel, window, cx| set_layout(panel, ZoneLayout::of(t), window, cx)),
+        Pick::Library(entry) => Rc::new(move |panel, window, cx| set_layout(panel, Some(entry.layout()), window, cx)),
+        Pick::Changed(_) => return,
+        Pick::New => Rc::new(|panel, window, cx| zone_editor::open(panel, Opened::New, window, cx)),
+    };
+    zone_editor::guard(panel, window, cx, then);
+}
+
+fn tile(i: usize, choice: Pick, selected: bool, window: &mut Window, cx: &mut Context<Panel>) -> AnyElement {
     let p = palette(cx);
-    let id = ElementId::Name(format!("zone-tile-{}", template.title()).into());
+    let id = ElementId::Name(choice.key().into());
     let focus = window.use_keyed_state(id.clone(), cx, |_, cx| cx.focus_handle()).read(cx).clone();
     let mut art = div().relative().w(px(TILE_ART.0)).h(px(TILE_ART.1));
-    match art_tree(template, layout.filter(|l| l.template == template)) {
+    match choice.art() {
         Some(tree) => {
             for r in pieces(&tree, TILE_ART.0, TILE_ART.1, 2) {
                 art = art.child(
@@ -102,16 +147,19 @@ fn tile(
                 );
             }
         }
+        None if matches!(choice, Pick::New) => {
+            let plus = div().size_full().flex().items_center().justify_center().rounded(px(4.)).border_1();
+            art = art.child(plus.border_dashed().border_color(p.hairline_strong).text_color(p.secondary).child("+"));
+        }
         None => art = art.child(div().size_full().rounded(px(4.)).bg(p.page)),
     }
-    // Custom is made in the editor, so its tile opens it.
-    let pick = move |panel: &mut Panel, window: &mut Window, cx: &mut Context<Panel>| {
-        if template == Template::Custom {
-            return zone_editor::open(panel, window, cx);
-        }
-        let then: zone_editor::Then = Rc::new(move |panel, window, cx| set_template(panel, template, window, cx));
-        zone_editor::guard(panel, window, cx, then);
+    let title = choice.title();
+    let more = match &choice {
+        Pick::Library(entry) => Some(library_menu(i, entry, cx)),
+        _ => None,
     };
+    let choice = Rc::new(choice);
+    let (click, key) = (choice.clone(), choice);
     let face = div()
         .id(id)
         .track_focus(&focus)
@@ -128,25 +176,155 @@ fn tile(
         .when(ui::focused(&focus, window), |d| d.focus_ring_style(window, cx))
         .child(art)
         .child(
-            div().text_size(px(13.)).text_color(if selected { p.text } else { p.secondary }).child(template.title()),
+            div()
+                .min_w_0()
+                .truncate()
+                .text_size(px(13.))
+                .text_color(if selected { p.text } else { p.secondary })
+                .child(title),
         );
     let face = face
         .cursor_pointer()
-        .on_click(cx.listener(move |panel, _, window, cx| pick(panel, window, cx)))
+        .on_click(cx.listener(move |panel, _, window, cx| pick(panel, &click, window, cx)))
         .on_key_down(cx.listener(move |panel, e: &KeyDownEvent, window, cx| {
             if matches!(e.keystroke.key.as_str(), "space" | "enter") {
-                pick(panel, window, cx);
+                pick(panel, &key, window, cx);
             }
         }));
     // A second, fainter ring around the chosen tile.
     div()
         .id(("zone-halo", i))
+        .relative()
         .p(px(1.))
         .rounded(px(12.))
         .border_1()
         .border_color(if selected { p.accent.opacity(0.4) } else { hsla(0., 0., 0., 0.) })
         .child(face)
+        // Over the tile's corner, and a click on it stays there.
+        .children(more.map(|more| div().absolute().top(px(4.)).right(px(4.)).occlude().child(more)))
         .into_any_element()
+}
+
+/// The "..." of a library layout's tile: Edit, Rename, Duplicate and Delete.
+fn library_menu(i: usize, entry: &library::Entry, cx: &mut Context<Panel>) -> AnyElement {
+    let view = cx.entity().downgrade();
+    let entry = entry.clone();
+    ui::secondary(("zone-tile-more", i), "", cx)
+        .ghost()
+        .xsmall()
+        .icon(Icon::new(assets::IconName::Ellipsis))
+        .accessibility_label(format!("More for {}", entry.name))
+        .dropdown_menu(move |menu, _, _| {
+            let (editing, renaming, copying, deleting) = (view.clone(), view.clone(), view.clone(), view.clone());
+            let (edit, rename, copy, delete) = (entry.clone(), entry.clone(), entry.clone(), entry.clone());
+            menu.item(PopupMenuItem::new("Edit").on_click(move |_, window, cx| {
+                let id = edit.id.clone();
+                let _ = editing.update(cx, |panel, cx| {
+                    let then: zone_editor::Then = Rc::new(move |panel, window, cx| {
+                        zone_editor::open(panel, Opened::Library(id.clone()), window, cx)
+                    });
+                    zone_editor::guard(panel, window, cx, then);
+                });
+            }))
+            .item(PopupMenuItem::new("Rename").on_click(move |_, window, cx| {
+                let entry = rename.clone();
+                let _ = renaming.update(cx, |_, cx| rename_layout(entry, window, cx));
+            }))
+            .item(PopupMenuItem::new("Duplicate").on_click(move |_, window, cx| {
+                let entry = copy.clone();
+                let _ = copying.update(cx, |panel, cx| duplicate(panel, entry, window, cx));
+            }))
+            .item(PopupMenuItem::new("Delete").on_click(move |_, window, cx| {
+                let entry = delete.clone();
+                let _ = deleting.update(cx, |_, cx| delete_layout(entry, window, cx));
+            }))
+        })
+        .into_any_element()
+}
+
+/// Save the whole library. The tray passes a changed tree on to the screens that
+/// follow it, and a deleted layout's screens keep their zones.
+fn save_library(panel: &mut Panel, list: Vec<Value>, window: &mut Window, cx: &mut Context<Panel>) {
+    panel.patch(json!({ "custom_layouts": list }), window, cx);
+}
+
+/// The library with `change` made to the entry with `id`, or None when it's gone.
+fn changed(panel: &Panel, id: &str, change: impl FnOnce(&mut Value)) -> Option<Vec<Value>> {
+    let mut list = panel.config.custom_layouts.clone();
+    let at = list.iter().position(|v| v.get("id").and_then(Value::as_str) == Some(id))?;
+    change(&mut list[at]);
+    Some(list)
+}
+
+fn rename_layout(entry: library::Entry, window: &mut Window, cx: &mut Context<Panel>) {
+    let input = cx.new(|cx| InputState::new(window, cx).placeholder("Layout name").default_value(entry.name));
+    let view = cx.entity().downgrade();
+    let first = std::cell::Cell::new(true);
+    window.open_dialog(cx, move |dialog, window, cx| {
+        if first.replace(false) {
+            input.update(cx, |state, cx| state.focus(window, cx));
+        }
+        let (name, view, id) = (input.clone(), view.clone(), entry.id.clone());
+        dialog
+            .title("Rename layout")
+            .child(Input::new(&input))
+            .footer(
+                DialogFooter::new()
+                    .child(DialogClose::new().trigger(|b| b.label("Cancel")))
+                    .child(DialogAction::new().child(ui::primary("rename-layout-ok", "Rename"))),
+            )
+            .on_ok(move |_, window, cx| {
+                let text = name.read(cx).value();
+                if text.trim().is_empty() {
+                    return false;
+                }
+                let _ = view.update(cx, |panel, cx| {
+                    if let Some(list) = changed(panel, &id, |v| v["name"] = json!(text.trim())) {
+                        save_library(panel, list, window, cx);
+                    }
+                });
+                true
+            })
+    });
+}
+
+/// A copy of a library layout, as a new one beside it.
+fn duplicate(panel: &mut Panel, entry: library::Entry, window: &mut Window, cx: &mut Context<Panel>) {
+    let mut list = panel.config.custom_layouts.clone();
+    let copy = library::Entry { id: library::new_id(&list), name: format!("{} copy", entry.name), tree: entry.tree };
+    list.push(copy.value());
+    save_library(panel, list, window, cx);
+}
+
+fn delete_layout(entry: library::Entry, window: &mut Window, cx: &mut Context<Panel>) {
+    let view = cx.entity().downgrade();
+    window.open_alert_dialog(cx, move |alert, _, _| {
+        let (view, id) = (view.clone(), entry.id.clone());
+        alert
+            .title(format!("Delete {}?", entry.name))
+            .description("Screens using it keep their zones")
+            .ok_text("Delete")
+            .cancel_text("Cancel")
+            .on_ok(move |_, window, cx| {
+                let _ = view.update(cx, |panel, cx| {
+                    let mut list = panel.config.custom_layouts.clone();
+                    list.retain(|v| v.get("id").and_then(Value::as_str) != Some(id.as_str()));
+                    save_library(panel, list, window, cx);
+                });
+                true
+            })
+    });
+}
+
+/// Save as layout: the screen's own layout becomes a new library layout, which the screen then follows.
+fn save_as_layout(panel: &mut Panel, tree: Node, window: &mut Window, cx: &mut Context<Panel>) {
+    let Some(sig) = panel.state.as_ref().map(|s| s.desk.sig.clone()) else { return };
+    let Some(screen) = chosen(panel).map(|(m, _)| m.id.clone()) else { return };
+    let mut list = panel.config.custom_layouts.clone();
+    let entry = library::Entry { id: library::new_id(&list), name: library::next_name(&list), tree };
+    list.push(entry.value());
+    let Ok(layout) = serde_json::to_value(entry.layout()) else { return };
+    panel.patch(json!({ "custom_layouts": list, "desks": { sig: { "zones": { screen: layout } } } }), window, cx);
 }
 
 /// One swatch in a row: "none" first, the named colours, then the custom one.
@@ -360,11 +538,11 @@ pub fn chosen(panel: &Panel) -> Option<(&Mon, Option<ZoneLayout>)> {
     Some((mon, saved))
 }
 
-fn set_template(panel: &mut Panel, template: Template, window: &mut Window, cx: &mut Context<Panel>) {
+fn set_layout(panel: &mut Panel, layout: Option<ZoneLayout>, window: &mut Window, cx: &mut Context<Panel>) {
     let Some(sig) = panel.state.as_ref().map(|s| s.desk.sig.clone()) else { return };
     let Some((mon, _)) = chosen(panel) else { return };
     // No entry means no zones, and a patch's null removes the entry.
-    let layout = ZoneLayout::of(template).and_then(|l| serde_json::to_value(l).ok()).unwrap_or(Value::Null);
+    let layout = layout.and_then(|l| serde_json::to_value(l).ok()).unwrap_or(Value::Null);
     let patch = json!({ "desks": { sig: { "zones": { mon.id.clone(): layout } } } });
     panel.patch(patch, window, cx);
 }
@@ -733,7 +911,6 @@ pub fn render(panel: &mut Panel, window: &mut Window, cx: &mut Context<Panel>) -
     if panel.editor.as_ref().is_some_and(|e| Some(&e.sig) != sig.as_ref() || e.screen != mon.id) {
         panel.editor = None;
     }
-    let selected = saved.as_ref().map_or(Template::None, |l| l.template);
     let labels: Vec<SharedString> =
         panel.mons.iter().enumerate().map(|(i, m)| format!("{}  {}", i + 1, m.name).into()).collect();
     let tabs =
@@ -742,11 +919,11 @@ pub fn render(panel: &mut Panel, window: &mut Window, cx: &mut Context<Panel>) -
             move |i, window, cx| {
                 view.update(cx, |panel, cx| {
                     // An editor that's open carries on with the screen picked.
-                    let editing = panel.editor.is_some();
+                    let editing = panel.editor.as_ref().map(|e| e.opened.clone());
                     let then: zone_editor::Then = Rc::new(move |panel, window, cx| {
                         panel.zone_screen = i;
-                        if editing {
-                            zone_editor::open(panel, window, cx);
+                        if let Some(opened) = editing.clone() {
+                            zone_editor::open(panel, opened, window, cx);
                         }
                         cx.notify();
                     });
@@ -755,16 +932,44 @@ pub fn render(panel: &mut Panel, window: &mut Window, cx: &mut Context<Panel>) -
             }
         });
 
+    // The templates, the library, then New layout. A layout that is none of them
+    // shows as Changed, selected, before New layout.
+    let library = library::entries(&panel.config.custom_layouts);
+    let own = saved.as_ref().filter(|l| {
+        l.template == Template::Custom && !l.custom.as_ref().is_some_and(|id| library.iter().any(|e| e.id == *id))
+    });
+    let own = own.map(|l| l.tree.clone());
+    let picks = Template::ALL
+        .into_iter()
+        .filter(|t| *t != Template::Custom)
+        .map(Pick::Template)
+        .chain(library.into_iter().map(Pick::Library))
+        .chain(own.clone().map(Pick::Changed))
+        .chain([Pick::New]);
     let mut tiles =
         div().flex().flex_wrap().content_start().w(px(TILE_WIDTH * 2. + TILE_GAP * 2. + 4.)).gap(px(TILE_GAP));
-    for (i, template) in Template::ALL.into_iter().enumerate() {
-        tiles = tiles.child(tile(i, template, saved.as_ref(), template == selected, window, cx));
+    for (i, choice) in picks.enumerate() {
+        let selected = choice.selected(saved.as_ref());
+        tiles = tiles.child(tile(i, choice, selected, window, cx));
     }
+    let save_as = own.map(|tree| {
+        ui::secondary("save-as-layout", "Save as layout", cx)
+            .on_click(cx.listener(move |panel, _, window, cx| save_as_layout(panel, tree.clone(), window, cx)))
+    });
+    let picker = div().flex().flex_col().gap(px(12.)).child(tiles).children(save_as);
     let room = f64::from(window.viewport_size().width) - 240. - 64. - TILE_WIDTH as f64 * 2. - 24. - 20.;
-    let caption = ui::description("Stored as parts of the screen, so a new resolution keeps the layout", p);
+    let caption =
+        ui::description("Stored as parts of the screen, so a new resolution keeps the layout", p).flex_1().min_w_0();
+    let number = panel.zone_screen.min(panel.mons.len() - 1) + 1;
+    let from_windows = ui::secondary("save-from-windows", "Save from windows", cx)
+        .tooltip("Make a layout from where the windows on this screen are now")
+        .on_click(cx.listener(move |panel, _, window, cx| {
+            panel.command("zones.from_windows", json!({ "number": number }), window, cx)
+        }));
     let edit_layout = ui::secondary("edit-layout", "Edit layout", cx)
-        .on_click(cx.listener(|panel, _, window, cx| zone_editor::open(panel, window, cx)));
-    let below = div().flex().items_center().justify_between().gap(px(16.)).child(caption).child(edit_layout);
+        .on_click(cx.listener(|panel, _, window, cx| zone_editor::open(panel, Opened::Screen, window, cx)));
+    let buttons = div().flex().flex_none().items_center().gap(px(8.)).child(from_windows).child(edit_layout);
+    let below = div().flex().items_center().justify_between().gap(px(16.)).child(caption).child(buttons);
     let gap_px = zones_cfg.gap.min(32);
     let stage = if panel.editor.is_some() {
         zone_editor::view(panel, &mon, gap_px, room, PREVIEW_HEIGHT, window, cx)
@@ -785,7 +990,7 @@ pub fn render(panel: &mut Panel, window: &mut Window, cx: &mut Context<Panel>) -
                 .flex()
                 .items_start()
                 .gap(px(24.))
-                .child(tiles)
+                .child(picker)
                 .child(div().flex().flex_col().flex_1().min_w_0().child(stage)),
         )
         .child(section(

@@ -348,6 +348,11 @@ pub struct Config {
     /// or without a workspace. Raw JSON like workspaces, so an entry this build
     /// can't read is kept as it is and ignored.
     pub app_rules: Vec<serde_json::Value>,
+    /// The library of custom layouts, `{id, name, tree}`, shared by every desk and
+    /// screen. Raw JSON, so an entry this build can't read is kept and ignored.
+    /// Left out of the file while empty.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub custom_layouts: Vec<serde_json::Value>,
     /// The panel asked once whether to turn on Windows' "Ease cursor movement between
     /// displays", or Seam turned it on. Either way it isn't asked again.
     pub cursor_easing_asked: bool,
@@ -384,6 +389,7 @@ impl Default for Config {
             restore_apps: RestoreApps::Windows,
             auto_apply: false,
             app_rules: Vec::new(),
+            custom_layouts: Vec::new(),
             cursor_easing_asked: false,
             restore_apps_saved: None,
             updates: UpdateSettings::default(),
@@ -467,6 +473,7 @@ impl Config {
         if !config.restore_session {
             config.desks.values_mut().for_each(|desk| desk.last_session = None);
         }
+        crate::library::follow(&self.custom_layouts, &mut config);
         Ok(config)
     }
 

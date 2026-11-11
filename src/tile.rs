@@ -3,7 +3,9 @@
 //! the screen has none. The snapping's placement does the moving, so the zones are
 //! stamped and recorded as for any snap; this works out which window goes where.
 
-use super::{centre, close, direction, free, geometry, into_zone, movable, regroup, zone_of, Job, Outcome, MAX_GAP};
+use super::{
+    centre, close, direction, free, geometry, into_zone, movable, regroup, zone_of, Geo, Job, Outcome, MAX_GAP,
+};
 use crate::snap::Placement;
 use seam::groups;
 use seam::winutil;
@@ -104,17 +106,18 @@ fn placed(job: &Job, geo: &[super::Geo], s: usize, h: HWND, rect: Rect) -> Optio
     }
 }
 
-pub(super) fn run(job: &Job, at: At) -> Result<Outcome, String> {
-    let screens = direction::desk_screens(&job.mons, &job.links);
-    let geo = geometry(job, &screens);
+/// The screen `at` names, as its place in `geo`.
+pub(super) fn screen_of(geo: &[Geo], at: At) -> Option<usize> {
     let s = match at {
         At::Screen(number) => geo.iter().position(|g| g.number == number),
         At::Point(x, y) => geo.iter().position(|g| g.bounds.contains(x, y)).or(Some(0)),
     };
-    let s = s.filter(|s| *s < geo.len()).ok_or("No such screen")?;
-    let g = &geo[s];
+    s.filter(|s| *s < geo.len())
+}
 
-    // Windows to tile, topmost first: normal app windows Seam may move, on this screen.
+/// Normal app windows Seam may move on screen `g`, topmost first. Pinned, sticky
+/// and topmost windows aren't among them.
+pub(super) fn windows_on(job: &Job, g: &Geo) -> Vec<(HWND, Rect)> {
     let own = std::process::id();
     let mut seen: Vec<(HWND, Rect)> = Vec::new();
     for h in winutil::top_level_windows() {
@@ -127,6 +130,17 @@ pub(super) fn run(job: &Job, at: At) -> Result<Outcome, String> {
             seen.push((h, rect));
         }
     }
+    seen
+}
+
+pub(super) fn run(job: &Job, at: At) -> Result<Outcome, String> {
+    let screens = direction::desk_screens(&job.mons, &job.links);
+    let geo = geometry(job, &screens);
+    let s = screen_of(&geo, at).ok_or("No such screen")?;
+    let g = &geo[s];
+
+    // Windows to tile, topmost first: normal app windows Seam may move, on this screen.
+    let seen = windows_on(job, g);
 
     let existing = job.layouts.get(screens[s].mm.index).and_then(Option::as_ref);
     let layout = match existing {

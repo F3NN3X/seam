@@ -224,9 +224,14 @@ pub(super) fn set_spotlight(app: &mut App, on: Option<bool>) -> bool {
 }
 
 /// Window control's moves are ready. A group command changed a screen's layout,
-/// which is saved here once, before the windows move.
+/// which is saved here once, before the windows move. A layout from Save from
+/// windows goes into the library too.
 pub(super) fn window_planned(app: &mut App) {
-    let tiled = wincontrol::planned(|screen, layout| {
+    let tiled = wincontrol::planned(|screen, mut layout, fresh| {
+        if !app.cfg.desks.contains_key(&app.sig) {
+            return false;
+        }
+        seam::library::link(&mut app.cfg.custom_layouts, &mut layout, fresh);
         let (Ok(value), Some(desk)) = (serde_json::to_value(&layout), app.cfg.desks.get_mut(&app.sig)) else {
             return false;
         };

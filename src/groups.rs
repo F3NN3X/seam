@@ -436,10 +436,10 @@ pub fn leaf_mins(tree: &Node, area: Rect, gap: i32, windows: &[(Vec<usize>, (i32
 }
 
 /// A changed layout keeps its template while its tree is still the template's,
-/// and is Custom otherwise (decision 1).
+/// and is Custom otherwise (decision 1). Either way it no longer follows a library layout.
 pub fn relabel(template: Template, tree: Node) -> ZoneLayout {
     let same = zones::template_tree(template).is_some_and(|t| t == tree);
-    ZoneLayout { template: if same { template } else { Template::Custom }, tree }
+    ZoneLayout { template: if same { template } else { Template::Custom }, custom: None, tree }
 }
 
 /// `n` equal parts along `dir`, each made by `part`.
@@ -468,7 +468,59 @@ pub fn pick_for_count(n: usize) -> Option<ZoneLayout> {
         5 | 6 => grid(3, 2),
         _ => grid(3, 3),
     };
-    Some(ZoneLayout { template: Template::Custom, tree })
+    Some(ZoneLayout { template: Template::Custom, custom: None, tree })
+}
+
+/// How far two windows may overlap and still lie either side of a cut, as frames do.
+const OVERLAP_PX: i32 = 4;
+/// A cut this close to a quarter, a third, a half, two thirds or three quarters goes there.
+const SNAP_PX: i32 = 12;
+
+/// The split tree a screen's windows line up into, one zone each, inside `area`.
+/// Guillotine cuts: a straight cut across the whole part with windows on both sides
+/// and none across it, side by side before top and bottom, then the same in each
+/// side. A cut sits in the middle of the room between the windows, and on the
+/// editor's quarter or third marks when it's within a few pixels of one. None
+/// when windows overlap, no cut separates them, or the tree passes the editor's limits.
+pub fn from_rects(rects: &[Rect], area: Rect) -> Option<Node> {
+    if rects.is_empty() || rects.len() > zones::MAX_ZONES || area.w <= 0 || area.h <= 0 {
+        return None;
+    }
+    let tree = cut_up(rects.to_vec(), area)?;
+    let deepest = (0..rects.len()).filter_map(|i| zones::depth_of(&tree, i)).max().unwrap_or(0);
+    (deepest <= zones::MAX_DEPTH).then_some(tree)
+}
+
+fn cut_up(mut rects: Vec<Rect>, area: Rect) -> Option<Node> {
+    if rects.len() == 1 {
+        return Some(Node::Leaf(LeafTag::Leaf));
+    }
+    for dir in [Dir::Vertical, Dir::Horizontal] {
+        rects.sort_by_key(|r| span_of(*r, dir));
+        let mut reach = i32::MIN;
+        for k in 1..rects.len() {
+            let (start, len) = span_of(rects[k - 1], dir);
+            reach = reach.max(start + len);
+            let next = span_of(rects[k], dir).0;
+            if reach > next + OVERLAP_PX {
+                continue;
+            }
+            let ratio = ratio_at((reach + next) / 2, area, dir);
+            let (ra, rb) = cut(area, dir, divider_at(area, dir, ratio));
+            let rest = rects.split_off(k);
+            let (a, b) = (cut_up(rects, ra)?, cut_up(rest, rb)?);
+            return Some(Node::Split { split: dir, ratio, a: Box::new(a), b: Box::new(b) });
+        }
+    }
+    None
+}
+
+/// The ratio of a cut at `at`, on a mark when it's close to one.
+fn ratio_at(at: i32, area: Rect, dir: Dir) -> f32 {
+    const MARKS: [f32; 5] = [0.25, 1.0 / 3.0, 0.5, 2.0 / 3.0, 0.75];
+    let (lo, len) = span_of(area, dir);
+    let mark = MARKS.into_iter().find(|m| (lo + (len as f32 * m).round() as i32 - at).abs() <= SNAP_PX);
+    mark.unwrap_or(((at - lo) as f32 / len as f32).clamp(LOW, HIGH))
 }
 
 #[cfg(test)]
@@ -615,5 +667,37 @@ mod tests {
         }
         assert_eq!(pick_for_count(3).unwrap().template, Template::MainStack);
         assert_eq!(pick_for_count(4).unwrap().template, Template::Grid);
+    }
+
+    #[test]
+    fn windows_line_up_into_the_zones_they_stand_in() {
+        // Windows as the zones would place them with an 8 px gap, on a screen left of the main one.
+        let area = Rect { x: -1920, y: 0, w: 1920, h: 1040 };
+        let main_stack = zones::template_tree(Template::MainStack).unwrap();
+        for tree in [grid(2, 1), main_stack, grid(3, 2)] {
+            let windows = zones::rects(&tree, area, 8);
+            assert_eq!(from_rects(&windows, area), Some(tree.clone()), "{tree:?}");
+            // In another order, and a few pixels off the marks, it's the same tree.
+            let mut nudged: Vec<Rect> = windows.iter().rev().map(|r| Rect { x: r.x + 3, w: r.w - 5, ..*r }).collect();
+            nudged.rotate_left(1);
+            assert_eq!(from_rects(&nudged, area), Some(tree.clone()), "{tree:?} nudged");
+        }
+        // Off the marks, a cut sits in the middle of the room between the windows.
+        let two = [Rect { x: 0, y: 0, w: 700, h: 1000 }, Rect { x: 740, y: 0, w: 1060, h: 1000 }];
+        let Some(Node::Split { split: Dir::Vertical, ratio, .. }) = from_rects(&two, AREA) else { panic!() };
+        assert_eq!(divider_at(AREA, Dir::Vertical, ratio), 720);
+        // A pinwheel has no straight cut across it, and overlapping windows have none either.
+        let pinwheel = [
+            Rect { x: 0, y: 0, w: 1200, h: 400 },
+            Rect { x: 1200, y: 0, w: 600, h: 700 },
+            Rect { x: 600, y: 700, w: 1200, h: 300 },
+            Rect { x: 0, y: 400, w: 600, h: 600 },
+        ];
+        assert_eq!(from_rects(&pinwheel, AREA), None);
+        let overlapping = [Rect { x: 0, y: 0, w: 1000, h: 600 }, Rect { x: 800, y: 400, w: 1000, h: 600 }];
+        assert_eq!(from_rects(&overlapping, AREA), None);
+        // One window is one zone; none is nothing.
+        assert_eq!(from_rects(&[AREA], AREA), Some(Node::Leaf(LeafTag::Leaf)));
+        assert_eq!(from_rects(&[], AREA), None);
     }
 }

@@ -27,6 +27,19 @@ pub(super) fn start_tile(app: &mut App, at: At, reply: Option<Sender<Reply>>) {
     queue_window(app, wincontrol::Task::Tile(at), snap::zoned(), reply);
 }
 
+/// Queue Save from windows, which only the API asks for. The worker answers.
+pub(super) fn start_from_windows(app: &mut App, at: At, reply: Sender<Reply>) {
+    let refusal = aside(app)
+        .or_else(|| (!app.cfg.zones.enabled).then(|| "Zones are off".to_string()))
+        .or_else(|| crate::switcher::switching().then(|| "A workspace switch is still running".to_string()));
+    if let Some(why) = refusal {
+        log::info!("save from windows: {why}");
+        let _ = reply.send(refused(why));
+        return;
+    }
+    queue_window(app, wincontrol::Task::FromWindows(at), Vec::new(), Some(reply));
+}
+
 /// The pointer's place, for a key.
 pub(super) fn pointer() -> At {
     let mut pt = POINT::default();

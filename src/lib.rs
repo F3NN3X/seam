@@ -9,6 +9,7 @@ pub mod geom;
 pub mod groups;
 pub mod hotkey;
 pub mod layout;
+pub mod library;
 pub mod log;
 pub mod palette;
 pub mod state;

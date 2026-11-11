@@ -172,6 +172,8 @@ pub enum Command {
     ScreenIdentify(u32),
     /// Tile the loose windows of a screen: its Line Up number, or the one under the pointer.
     ScreenTile(Option<u32>),
+    /// Save the windows on a screen as a new custom layout: its Line Up number, or the one under the pointer.
+    ZonesFromWindows(Option<u32>),
     LayoutShow(LayoutView),
     PanelOpen(Option<String>),
     EventsSubscribe(Vec<String>),
@@ -198,6 +200,18 @@ fn str_param(params: &Value, key: &str) -> Result<Option<String>, RpcError> {
         None | Some(Value::Null) => Ok(None),
         Some(Value::String(s)) => Ok(Some(s.clone())),
         Some(_) => Err(RpcError::new(INVALID_PARAMS, format!("{key} must be a string"))),
+    }
+}
+
+/// An optional `number`, a screen's Line Up number.
+fn screen_param(params: &Value) -> Result<Option<u32>, RpcError> {
+    match params.get("number") {
+        None | Some(Value::Null) => Ok(None),
+        Some(v) => v
+            .as_u64()
+            .and_then(|n| u32::try_from(n).ok())
+            .map(Some)
+            .ok_or_else(|| RpcError::new(INVALID_PARAMS, "number must be a screen number")),
     }
 }
 
@@ -328,14 +342,8 @@ fn command(method: &str, p: &Value) -> Result<Command, RpcError> {
                 .and_then(|n| u32::try_from(n).ok())
                 .ok_or_else(|| RpcError::new(INVALID_PARAMS, "number must be a screen number"))?,
         ),
-        "screen.tile" => Command::ScreenTile(match p.get("number") {
-            None | Some(Value::Null) => None,
-            Some(v) => Some(
-                v.as_u64()
-                    .and_then(|n| u32::try_from(n).ok())
-                    .ok_or_else(|| RpcError::new(INVALID_PARAMS, "number must be a screen number"))?,
-            ),
-        }),
+        "screen.tile" => Command::ScreenTile(screen_param(p)?),
+        "zones.from_windows" => Command::ZonesFromWindows(screen_param(p)?),
         "layout.show" => match p.get("view").and_then(Value::as_str) {
             Some("seam") => Command::LayoutShow(LayoutView::Seam),
             Some("windows") => Command::LayoutShow(LayoutView::Windows),

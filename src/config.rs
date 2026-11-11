@@ -541,6 +541,10 @@ impl Config {
         }
         for desk in c.desks.values_mut() {
             desk.workspaces = crate::workspace::without_places(&desk.workspaces);
+            // The last session never saves them, so one in a file is dropped too.
+            if let Some(session) = desk.last_session.take() {
+                desk.last_session = crate::workspace::without_places(&[session]).pop();
+            }
         }
         Ok(c)
     }

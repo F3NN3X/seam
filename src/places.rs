@@ -1,8 +1,8 @@
 //! "Remember folders and pages" (D330): the folder an Explorer window shows, read
 //! through the shell's window list, and the page a browser shows, read from its
 //! address bar through UI Automation. Only a capture asks for them. The Explorer
-//! windows and each browser window are read on threads of their own, and all of them
-//! get at most `PAGE_WAIT`, so a hung window can't hold up a capture.
+//! windows and each browser window are read on threads of their own, given at most
+//! `FOLDER_WAIT` and `PAGE_WAIT`, so a hung window can't hold up a capture.
 
 use crate::log;
 use seam::winutil;
@@ -30,8 +30,10 @@ use windows::Win32::UI::Shell::{
 };
 use windows::Win32::UI::WindowsAndMessaging::FindWindowExW;
 
-/// The longest the Explorer windows, and each browser window, may take to read.
+/// The longest each browser window may take to read.
 const PAGE_WAIT: Duration = Duration::from_millis(300);
+/// The longest the Explorer windows may take to read, all together.
+const FOLDER_WAIT: Duration = Duration::from_secs(1);
 
 /// Browsers whose address bar is read, by exe name. Chromium's first.
 const BROWSERS: [&str; 7] =
@@ -41,8 +43,8 @@ const BROWSERS: [&str; 7] =
 /// only means its page isn't saved. `privat` covers private, (private), privata and privaten.
 const PRIVATE: [&str; 8] = ["incognito", "inkognito", "inprivate", "privat", "privad", "privé", "privée", "prywatn"];
 
-/// Page reads still running, ones that never ended included. At `MAX_READING` a
-/// capture reads no pages.
+/// Folder and page reads still running, ones that never ended included. At
+/// `MAX_READING` a capture starts no more.
 static READING: AtomicUsize = AtomicUsize::new(0);
 const MAX_READING: usize = 8;
 
@@ -73,13 +75,14 @@ pub(crate) fn local_drive(path: &str) -> bool {
     matches!(unsafe { GetDriveTypeW(PCWSTR(root.as_ptr())) }, DRIVE_FIXED | DRIVE_REMOVABLE)
 }
 
-/// Counts a page read as running for as long as its thread lives.
+/// Counts a read as running for as long as its thread lives.
 struct Reading;
 
 impl Reading {
-    fn enter() -> Reading {
-        READING.fetch_add(1, Ordering::SeqCst);
-        Reading
+    /// `None` while `MAX_READING` reads still run.
+    fn enter() -> Option<Reading> {
+        let taken = READING.fetch_update(Ordering::SeqCst, Ordering::SeqCst, |n| (n < MAX_READING).then_some(n + 1));
+        taken.is_ok().then_some(Reading)
     }
 }
 
@@ -92,51 +95,61 @@ impl Drop for Reading {
 /// The folder or page of each captured window that has one, in the rules' order.
 pub fn read(rules: &[Rule], hwnds: &[isize]) -> Vec<Option<Place>> {
     let started = Instant::now();
-    let deadline = started + PAGE_WAIT;
+    let left = |wait: Duration| (started + wait).saturating_duration_since(Instant::now());
     let kinds: Vec<Option<Kind>> = rules.iter().map(kind_of).collect();
     let explorers = kinds.contains(&Some(Kind::Explorer));
+    let mut full = 0;
     let folders = if explorers { ask_folders() } else { None };
-    // Every browser window at once, each on its own thread, unless earlier reads still hang.
-    let reading = READING.load(Ordering::SeqCst);
-    if reading >= MAX_READING && kinds.contains(&Some(Kind::Browser)) {
-        log::info!("places: {reading} page reads still running, no pages this time");
-    }
-    let mut pages: HashMap<usize, Receiver<Option<String>>> = HashMap::new();
+    full += usize::from(explorers && folders.is_none());
+    // Every browser window at once, each on its own thread, while earlier reads don't hang.
+    let mut asked: HashMap<usize, Receiver<Option<String>>> = HashMap::new();
     let browsers = rules.iter().enumerate().filter(|(i, _)| kinds[*i] == Some(Kind::Browser));
-    for (i, rule) in browsers.filter(|_| reading < MAX_READING) {
+    for (i, rule) in browsers {
         let title = rule.title_hint.to_lowercase();
         if PRIVATE.iter().any(|w| title.contains(w)) {
             log::info!("places: {} skipped, a private window", winutil::file_name(&rule.exe));
             continue;
         }
-        pages.extend(ask_page(hwnds[i]).map(|rx| (i, rx)));
+        match ask_page(hwnds[i]) {
+            Some(rx) => {
+                asked.insert(i, rx);
+            }
+            None => full += 1,
+        }
     }
-    let folders = folders.and_then(|rx| rx.recv_timeout(deadline.saturating_duration_since(Instant::now())).ok());
-    let (mut found, mut late) = (0, 0);
-    let places = (0..rules.len()).map(|i| {
-        let place = match kinds[i] {
-            Some(Kind::Explorer) => folders.as_ref().and_then(|f| f.get(&hwnds[i])).cloned().map(Place::Folder),
-            Some(Kind::Browser) => pages.get(&i).and_then(|rx| {
-                let page = rx.recv_timeout(deadline.saturating_duration_since(Instant::now()));
-                late += usize::from(page.is_err());
-                page.ok().flatten().map(Place::Url)
-            }),
-            None => None,
-        };
-        found += usize::from(place.is_some());
-        place
+    if full > 0 {
+        log::info!("places: {} reads still running, {full} windows not read", READING.load(Ordering::SeqCst));
+    }
+    let mut late = 0;
+    let pages: HashMap<usize, String> = asked
+        .into_iter()
+        .filter_map(|(i, rx)| {
+            let page = rx.recv_timeout(left(PAGE_WAIT));
+            late += usize::from(page.is_err());
+            page.ok().flatten().map(|p| (i, p))
+        })
+        .collect();
+    let folders = folders.and_then(|rx| rx.recv_timeout(left(FOLDER_WAIT)).ok());
+    let places = (0..rules.len()).map(|i| match kinds[i] {
+        Some(Kind::Explorer) => folders.as_ref().and_then(|f| f.get(&hwnds[i])).cloned().map(Place::Folder),
+        Some(Kind::Browser) => pages.get(&i).cloned().map(Place::Url),
+        None => None,
     });
     let places: Vec<Option<Place>> = places.collect();
-    let ms = started.elapsed().as_millis();
+    let (found, ms) = (places.iter().flatten().count(), started.elapsed().as_millis());
     let explorer = if explorers && folders.is_none() { ", Explorer too slow" } else { "" };
     log::info!("places: {found} folders and pages in {ms} ms, {late} browsers too slow{explorer}");
     places
 }
 
-/// Start reading the Explorer windows' folders on their own thread.
+/// Start reading the Explorer windows' folders on their own thread, unless too many
+/// reads still run.
 fn ask_folders() -> Option<Receiver<HashMap<isize, String>>> {
     let (tx, rx) = mpsc::channel();
+    // Counted until the thread ends, or at once if it never starts.
+    let reading = Reading::enter()?;
     let spawned = std::thread::Builder::new().name("seam-folders".into()).spawn(move || {
+        let _reading = reading;
         unsafe {
             let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
         }
@@ -189,11 +202,11 @@ fn folder_of(browser: &IWebBrowserApp) -> Option<(HWND, Option<String>)> {
     }
 }
 
-/// Start reading a browser window's page on its own thread.
+/// Start reading a browser window's page on its own thread, unless too many reads still run.
 fn ask_page(hwnd: isize) -> Option<Receiver<Option<String>>> {
     let (tx, rx) = mpsc::channel();
     // Counted until the thread ends, or at once if it never starts.
-    let reading = Reading::enter();
+    let reading = Reading::enter()?;
     let spawned = std::thread::Builder::new().name("seam-page".into()).spawn(move || {
         let _reading = reading;
         unsafe {

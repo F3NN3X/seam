@@ -116,7 +116,8 @@ pub(super) fn start_switch_job(
     let name = workspace.name.clone();
     let (owner, screens, gap) = (app.hwnd.0 as isize, job_screens(app), app.cfg.zones.gap);
     let (pins_stay, size_mode) = (app.cfg.windows.pins_stay_on_switch, app.cfg.window_size_on_move);
-    let places = app.cfg.workspaces_remember_places;
+    // The last session never saves a folder or page, so it never opens one either.
+    let places = app.cfg.workspaces_remember_places && workspace.id != SESSION_ID;
     let job = SwitchJob { owner, workspace, screens, gap, arrange_for, pins_stay, size_mode, alongside, places };
     if switcher::switch(job) {
         Ok(json!({ "ok": true }))

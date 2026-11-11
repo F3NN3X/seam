@@ -775,35 +775,42 @@ pub fn safe_url(url: &str) -> bool {
         && !url.chars().any(|c| c.is_whitespace() || c.is_control() || c == '"')
 }
 
-/// Query parameters that can carry a sign-in or a secret. A page with any of them is
-/// kept without its query.
-const SECRET_PARAMS: [&str; 17] = [
-    "code",
-    "token",
-    "access_token",
-    "id_token",
-    "refresh_token",
-    "key",
-    "apikey",
-    "api_key",
-    "auth",
-    "session",
-    "sessionid",
-    "sig",
-    "signature",
-    "password",
-    "secret",
-    "otp",
-    "state",
-];
+/// Bits of a query parameter's name that say it can carry a sign-in or a secret. A
+/// page with any such parameter is kept without its query.
+const SECRET_PARTS: [&str; 13] =
+    ["token", "secret", "key", "pass", "sig", "auth", "code", "sess", "cred", "otp", "jwt", "sid", "state"];
 
-/// A page as it's stored: without its query when a parameter could carry a secret,
-/// and without its fragment when it holds a value. Otherwise as it is.
+/// `%XX` escapes turned back into the characters they stand for.
+fn percent_decoded(text: &str) -> String {
+    let bytes = text.as_bytes();
+    let (mut out, mut i) = (Vec::with_capacity(bytes.len()), 0);
+    while i < bytes.len() {
+        let hex = bytes.get(i + 1..i + 3).and_then(|h| std::str::from_utf8(h).ok());
+        match hex.and_then(|h| u8::from_str_radix(h, 16).ok()).filter(|_| bytes[i] == b'%') {
+            Some(byte) => {
+                out.push(byte);
+                i += 3;
+            }
+            None => {
+                out.push(bytes[i]);
+                i += 1;
+            }
+        }
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
+/// A page as it's stored: without its query when a parameter's name, decoded, has a
+/// bit of `SECRET_PARTS` in it, and without its fragment when it holds a value.
+/// Otherwise as it is.
 fn without_secrets(page: &str) -> String {
     let (rest, fragment) = page.split_once('#').map_or((page, None), |(r, f)| (r, Some(f)));
     let (base, query) = rest.split_once('?').map_or((rest, None), |(b, q)| (b, Some(q)));
-    let name = |param: &str| param.split('=').next().unwrap_or_default().to_string();
-    let secret = |param: &str| SECRET_PARAMS.iter().any(|s| name(param).eq_ignore_ascii_case(s));
+    let name = |param: &str| percent_decoded(param.split('=').next().unwrap_or_default()).to_lowercase();
+    let secret = |param: &str| {
+        let name = name(param);
+        SECRET_PARTS.iter().any(|s| name.contains(s))
+    };
     let mut kept = base.to_string();
     if let Some(query) = query.filter(|q| !q.split('&').any(secret)) {
         kept = format!("{kept}?{query}");
@@ -816,7 +823,8 @@ fn without_secrets(page: &str) -> String {
 
 /// The page a browser's address bar shows, as it's stored, or `None` for anything but
 /// an http or https page. Chromium and Firefox hide the scheme, so a bare host gets it
-/// back: `http://` for localhost, an IP address or a name with no dot, else `https://`.
+/// back: `http://` for localhost, an IP address, or a name with no dot and a port, and
+/// `https://` for a name with a dot. Other text with no dot, a search word, isn't a page.
 pub fn page_of(bar: &str) -> Option<String> {
     let bar = bar.trim();
     let lower = bar.to_ascii_lowercase();
@@ -824,15 +832,18 @@ pub fn page_of(bar: &str) -> Option<String> {
         bar.to_string()
     } else {
         let host = bar.split(['/', '?', '#']).next().unwrap_or_default();
-        let (name, port) = host.split_once(':').unwrap_or((host, "80"));
+        let (name, port) = host.split_once(':').map_or((host, None), |(n, p)| (n, Some(p)));
         let named = !name.is_empty() && !name.starts_with('.') && !name.ends_with('.');
         let plain = name.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-'));
-        let port = !port.is_empty() && port.chars().all(|c| c.is_ascii_digit());
-        if !(named && plain && port) {
+        let port_ok = port.is_none_or(|p| !p.is_empty() && p.chars().all(|c| c.is_ascii_digit()));
+        let octets: Vec<&str> = name.split('.').collect();
+        let ip = octets.len() == 4 && octets.iter().all(|o| !o.is_empty() && o.chars().all(|c| c.is_ascii_digit()));
+        let localhost = name.eq_ignore_ascii_case("localhost");
+        let dotless = !name.contains('.');
+        if !(named && plain && port_ok) || dotless && !localhost && port.is_none() {
             return None;
         }
-        let ip = name.chars().all(|c| c.is_ascii_digit() || c == '.');
-        let local = name.eq_ignore_ascii_case("localhost") || ip || !name.contains('.');
+        let local = localhost || ip || dotless;
         format!("{}://{bar}", if local { "http" } else { "https" })
     };
     let page = without_secrets(&page);
@@ -1072,11 +1083,21 @@ mod tests {
         assert_eq!(page_of("github.com/x?q=1#top").as_deref(), Some("https://github.com/x?q=1#top"));
         assert_eq!(page_of("localhost:3000/").as_deref(), Some("http://localhost:3000/"));
         assert_eq!(page_of("192.168.1.2/a").as_deref(), Some("http://192.168.1.2/a"));
-        assert_eq!(page_of("intranet/wiki").as_deref(), Some("http://intranet/wiki"));
+        assert_eq!(page_of("intranet:8080/wiki").as_deref(), Some("http://intranet:8080/wiki"));
         // A query that could hold a secret goes as a whole, and a fragment with a value.
         assert_eq!(page_of("https://a.com/cb?x=1&Code=9#t=2").as_deref(), Some("https://a.com/cb"));
         assert_eq!(page_of("https://a.com/?q=code#access").as_deref(), Some("https://a.com/?q=code#access"));
-        for bar in ["about:blank", "edge://settings", "chrome://newtab", "rust lang", "javascript:a.b", "", "x:y.z"] {
+        for bar in [
+            "about:blank",
+            "edge://settings",
+            "chrome://newtab",
+            "rust lang",
+            "rust",
+            "intranet/wiki",
+            "javascript:a.b",
+            "",
+            "x:y.z",
+        ] {
             assert_eq!(page_of(bar), None, "{bar}");
         }
     }

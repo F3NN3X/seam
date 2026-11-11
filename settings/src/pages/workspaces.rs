@@ -187,7 +187,9 @@ fn home() -> PathBuf {
     std::env::var_os("USERPROFILE").map_or_else(|| PathBuf::from("."), PathBuf::from)
 }
 
-fn export(panel: &Panel, ws: Workspace, window: &mut Window, cx: &mut Context<Panel>) {
+fn export(panel: &Panel, mut ws: Workspace, window: &mut Window, cx: &mut Context<Panel>) {
+    // Folders and pages say where I've been, so they stay on this PC (D330).
+    ws.windows.iter_mut().for_each(|r| r.place = None);
     let refers = |id: &String| ws.windows.iter().any(|r| r.monitor == *id) || ws.zones.contains_key(id);
     let used: BTreeMap<String, ScreenInfo> = screen_infos(panel).into_iter().filter(|(id, _)| refers(id)).collect();
     let name: String = ws.name.chars().map(|c| if c.is_alphanumeric() || c == ' ' { c } else { '-' }).collect();
@@ -433,6 +435,35 @@ fn auto_apply_row(panel: &Panel, window: &mut Window, cx: &mut Context<Panel>) -
     row("Put apps in place when they open", Some(about.into()), toggle, p)
 }
 
+/// "Remember folders and pages" (D330), and while it's off with some still saved, the
+/// button that forgets them on every desk.
+fn places_rows(panel: &Panel, window: &mut Window, cx: &mut Context<Panel>) -> Vec<AnyElement> {
+    let p = palette(cx);
+    let view = cx.entity();
+    let on = panel.config.workspaces_remember_places;
+    let title = "Remember folders and pages";
+    let toggle = switch("remember-places", title, on, window, cx, move |on, window, cx| {
+        view.update(cx, |panel, cx| panel.patch(json!({ "workspaces_remember_places": on }), window, cx));
+    });
+    let about = "Explorer opens the same folder and browsers the same page when a workspace starts them";
+    let mut rows = vec![row(title, Some(about.into()), toggle, p)];
+    let saved = |panel: &Panel| -> BTreeMap<String, Vec<Value>> {
+        let desks = panel.config.desks.iter().filter(|(_, d)| workspace::has_places(&d.workspaces));
+        desks.map(|(sig, d)| (sig.clone(), workspace::without_places(&d.workspaces))).collect()
+    };
+    if !on && !saved(panel).is_empty() {
+        let forget = ui::secondary("forget-places", "Forget saved folders and pages", cx).on_click(cx.listener(
+            move |panel, _, window, cx| {
+                let desks: serde_json::Map<String, Value> =
+                    saved(panel).into_iter().map(|(sig, list)| (sig, json!({ "workspaces": list }))).collect();
+                panel.patch(json!({ "desks": desks }), window, cx);
+            },
+        ));
+        rows.push(row("Saved folders and pages", Some("Kept, but not used while this is off".into()), forget, p));
+    }
+    rows
+}
+
 fn detail(panel: &mut Panel, ws: Workspace, window: &mut Window, cx: &mut Context<Panel>) -> Div {
     let p = palette(cx);
     let summary = summary(panel, &ws);
@@ -631,6 +662,8 @@ pub fn render(panel: &mut Panel, window: &mut Window, cx: &mut Context<Panel>) -
         Some(ws) => body.child(detail(panel, ws, window, cx)),
         None => body,
     };
-    let auto_apply = card(vec![auto_apply_row(panel, window, cx)], p);
+    let mut settings = vec![auto_apply_row(panel, window, cx)];
+    settings.extend(places_rows(panel, window, cx));
+    let auto_apply = card(settings, p);
     div().flex().flex_col().gap(px(ui::SECTION_GAP)).child(header.child(capture)).child(body).child(auto_apply)
 }

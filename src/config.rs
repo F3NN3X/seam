@@ -365,6 +365,10 @@ pub struct Config {
     /// "Put apps in place when they open": a window that opens and matches a rule of
     /// the active workspace goes to its place once (§11.1). Off by default.
     pub auto_apply: bool,
+    /// "Remember folders and pages": a capture keeps the folder an Explorer window
+    /// shows and the page a browser shows, and a switch that starts the app opens it
+    /// there (D330). Off by default. Off, nothing is read and saved ones aren't used.
+    pub workspaces_remember_places: bool,
     /// "Where apps open": an app's window goes to its place whenever it opens, with
     /// or without a workspace. Raw JSON like workspaces, so an entry this build
     /// can't read is kept as it is and ignored.
@@ -410,6 +414,7 @@ impl Default for Config {
             restore_session: false,
             restore_apps: RestoreApps::Windows,
             auto_apply: false,
+            workspaces_remember_places: false,
             app_rules: Vec::new(),
             custom_layouts: Vec::new(),
             cursor_easing_asked: false,

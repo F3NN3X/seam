@@ -83,7 +83,8 @@ pub(super) fn job_screens(app: &App) -> Vec<SwitchScreen> {
 /// A capture of this desk. The apps the zones leave alone are never captured either.
 pub(super) fn capture_job(app: &App) -> CaptureJob {
     let exclude = app.cfg.zones.exclude.iter().map(|x| x.to_lowercase()).collect();
-    CaptureJob { owner: app.hwnd.0 as isize, screens: job_screens(app), gap: app.cfg.zones.gap, exclude }
+    let (screens, gap, places) = (job_screens(app), app.cfg.zones.gap, app.cfg.workspaces_remember_places);
+    CaptureJob { owner: app.hwnd.0 as isize, screens, gap, exclude, places }
 }
 
 /// Start switching to a workspace on this desk. The worker does the rest and the
@@ -115,7 +116,8 @@ pub(super) fn start_switch_job(
     let name = workspace.name.clone();
     let (owner, screens, gap) = (app.hwnd.0 as isize, job_screens(app), app.cfg.zones.gap);
     let (pins_stay, size_mode) = (app.cfg.windows.pins_stay_on_switch, app.cfg.window_size_on_move);
-    let job = SwitchJob { owner, workspace, screens, gap, arrange_for, pins_stay, size_mode, alongside };
+    let places = app.cfg.workspaces_remember_places;
+    let job = SwitchJob { owner, workspace, screens, gap, arrange_for, pins_stay, size_mode, alongside, places };
     if switcher::switch(job) {
         Ok(json!({ "ok": true }))
     } else {

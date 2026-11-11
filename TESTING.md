@@ -609,6 +609,23 @@ Turn the debug log on. Set **Save windows to the active workspace** on Shortcuts
 - [ ] **API.** `workspace.quick_save` answers `{id, created}` once the capture is saved, with the same notification. Any client may call it.
 - [ ] **Stream Deck.** Put the **Save windows** action on a key and press it: the same as the hotkey.
 
+### Remember folders and pages
+
+Turn the debug log on, and **Remember folders and pages** on at the bottom of Workspaces. Close every Explorer, Chrome and Edge window first.
+
+- [ ] **Explorer, local folder.** Open Explorer on `C:\Users\<me>\Documents` and capture a workspace. The log has `places: 1 folders and pages in N ms`, and the row in `config.json` has `"place": {"folder": "C:\\Users\\<me>\\Documents"}`. Close the window and switch to the workspace: Explorer opens on Documents, the log has `explorer: started on its saved folder or page`, and the window is put in its zone.
+- [ ] **Explorer, tabs.** Open two tabs, Documents and Downloads, with Downloads on show, and **Update from screen**: the row holds Downloads.
+- [ ] **Explorer, This PC.** Show This PC in a window that had a folder saved and **Update from screen**: the row keeps the folder it had. Capture a new workspace with Explorer on This PC, then on the Recycle Bin, then on `\\server\share`: no `place` is saved, and a switch opens Explorer as usual.
+- [ ] **Chrome and Edge, a page.** Open `https://github.com` in Chrome and `https://example.com` in Edge, and capture. Each row has its `url`, with `https://`. Close both and switch: each browser opens on its page and goes to its zone.
+- [ ] **Chrome and Edge, no page.** Capture with each on a new tab, then on `edge://settings`: no `place` is saved.
+- [ ] **Private windows.** Capture with a Chrome Incognito, an Edge InPrivate and a Firefox private window open. No `place` is saved for them, and the log has `places: chrome.exe skipped, a private window` for each one whose title says so. Note which browsers' titles didn't say so.
+- [ ] **Hung browser.** Stop a Chrome window from answering (Resource Monitor, **Suspend process** on its browser process) and capture. The capture finishes, the log has `1 browsers too slow` and a capture time under about half a second over the usual. Resume the process.
+- [ ] **Already open.** With the workspace saved on a page, browse Chrome elsewhere and switch: Chrome stays on the page you're on, and is only put in its zone. The same for Explorer.
+- [ ] **Export.** Export the workspace and open the file: no row has `place`. Add a `place` to a row in the file by hand and import it: the imported workspace has no `place`.
+- [ ] **Setting off.** Turn the setting off and capture a new workspace: no `place`, and no `places:` line in the log. Switch to the earlier workspace with its apps closed: Explorer and the browsers start as usual, not on the saved folder or page, and the saved ones are still in `config.json`.
+- [ ] **Forget.** With the setting off, the row **Saved folders and pages** shows with **Forget saved folders and pages**. Press it: every `place` is gone from `config.json`, on every desk, and the row goes. With the setting on, or with none saved, the row isn't there.
+- [ ] **Last session.** With the setting on, sign out and back in: the last session in `config.json` has no `place`.
+
 ## Settings panel
 
 - [ ] **Open.** Choose **Open Seam…** in the tray menu. The panel opens in your Windows theme on the last page you used, and the sidebar shows the current remap state.

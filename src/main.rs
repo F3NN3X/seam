@@ -26,6 +26,8 @@ mod minsize;
 #[cfg(windows)]
 mod overlay;
 #[cfg(windows)]
+mod places;
+#[cfg(windows)]
 mod showlayout;
 mod snap;
 #[cfg(windows)]

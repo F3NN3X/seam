@@ -91,6 +91,18 @@ impl Pin {
     }
 }
 
+/// What a window showed at capture, so a switch that starts its app opens it there
+/// again (D330): an Explorer window's folder, or a browser's page.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Place {
+    Folder(String),
+    Url(String),
+}
+
+/// The longest page address kept.
+const MAX_URL: usize = 2048;
+
 // Deserialize is written out below, so older files load into the new fields.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(remote = "Self", default)]
@@ -131,6 +143,10 @@ pub struct Rule {
     /// screen. Without it, the saved size decides.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub captured_on: Option<String>,
+    /// The folder or page the window showed, with "Remember folders and pages" on.
+    /// Used only when a switch starts the app, and never exported.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub place: Option<Place>,
 }
 
 impl Default for Rule {
@@ -153,6 +169,7 @@ impl Default for Rule {
             size_px: None,
             size_mm: None,
             captured_on: None,
+            place: None,
         }
     }
 }
@@ -219,6 +236,10 @@ impl Rule {
         self.size_px = from.size_px;
         self.size_mm = from.size_mm;
         self.captured_on = from.captured_on.clone();
+        // A capture that read no folder or page keeps the one saved.
+        if from.place.is_some() {
+            self.place = from.place.clone();
+        }
     }
 }
 
@@ -658,6 +679,8 @@ pub fn checked_update(old: &Workspace, mut new: Workspace, zones: &dyn Fn(&str) 
         rule.delay_ms = tame_delay(rule.delay_ms);
         // Pins belong to the last session.
         rule.pin = None;
+        // Only a capture finds a folder or page, so the editor can keep or drop one but not set one.
+        rule.place = rule.place.take().filter(|p| old.windows.iter().any(|o| o.place.as_ref() == Some(p)));
         // At most one window has the focus.
         rule.focused &= !focused;
         focused |= rule.focused;
@@ -712,6 +735,81 @@ pub fn safe_exe(exe: &str) -> bool {
         && exe.to_lowercase().ends_with(".exe")
 }
 
+/// A folder Seam may open in Explorer: an absolute path on a drive letter, with no
+/// `/`, `..`, `"` or control character. Whether it exists and isn't on a network
+/// drive is checked where it's read and where it's opened.
+pub fn safe_folder(folder: &str) -> bool {
+    let path = Path::new(folder);
+    let mut parts = path.components();
+    let on_drive = matches!(parts.next(), Some(Component::Prefix(p)) if matches!(p.kind(), Prefix::Disk(_)));
+    on_drive
+        && matches!(parts.next(), Some(Component::RootDir))
+        && !folder.contains(['/', '"'])
+        && !folder.chars().any(char::is_control)
+        && !path.components().any(|c| matches!(c, Component::ParentDir))
+}
+
+/// Explorer's argument for a folder: quoted, without a trailing `\` that would
+/// escape the quote. A drive's root has no space or comma, so it goes as it is.
+pub fn explorer_arg(folder: &str) -> String {
+    match folder.trim_end_matches('\\') {
+        root if root.len() == 2 => format!(r"{root}\"),
+        folder => format!("\"{folder}\""),
+    }
+}
+
+/// A page Seam may open in a browser: an http or https address with a host, not too
+/// long, and with no space, quote or control character, so it reaches the browser
+/// as one argument.
+pub fn safe_url(url: &str) -> bool {
+    let lower = url.to_ascii_lowercase();
+    let rest = lower.strip_prefix("https://").or_else(|| lower.strip_prefix("http://"));
+    rest.is_some_and(|r| !r.is_empty() && !r.starts_with('/'))
+        && url.len() <= MAX_URL
+        && !url.chars().any(|c| c.is_whitespace() || c.is_control() || c == '"')
+}
+
+/// The page a browser's address bar shows, or `None` for anything but an http or
+/// https page. Chromium and Firefox hide `https://`, so a bare host gets it back.
+pub fn page_of(bar: &str) -> Option<String> {
+    let bar = bar.trim();
+    let lower = bar.to_ascii_lowercase();
+    let page = if lower.starts_with("http://") || lower.starts_with("https://") {
+        bar.to_string()
+    } else {
+        let host = bar.split(['/', '?', '#']).next().unwrap_or_default();
+        let (name, port) = host.split_once(':').unwrap_or((host, "443"));
+        let named = name == "localhost" || name.contains('.') && !name.starts_with('.') && !name.ends_with('.');
+        let plain = name.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-'));
+        let port = !port.is_empty() && port.chars().all(|c| c.is_ascii_digit());
+        if !(named && plain && port) {
+            return None;
+        }
+        format!("https://{bar}")
+    };
+    safe_url(&page).then_some(page)
+}
+
+/// Whether any of these saved workspaces remembers a folder or page.
+pub fn has_places(saved: &[Value]) -> bool {
+    let rows = |ws: &Value| ws.get("windows").and_then(Value::as_array).cloned().unwrap_or_default();
+    saved.iter().any(|ws| rows(ws).iter().any(|r| r.get("place").is_some()))
+}
+
+/// "Forget saved folders and pages": the saved workspaces as stored, without them.
+pub fn without_places(saved: &[Value]) -> Vec<Value> {
+    let mut saved = saved.to_vec();
+    for ws in &mut saved {
+        let rows = ws.get_mut("windows").and_then(Value::as_array_mut);
+        for row in rows.into_iter().flatten() {
+            if let Some(fields) = row.as_object_mut() {
+                fields.remove("place");
+            }
+        }
+    }
+    saved
+}
+
 /// An AppUserModelID is letters, digits, `.`, `_` and `-`, with an optional `!` and a second such part.
 pub fn safe_aumid(aumid: &str) -> bool {
     let part = |p: &str| !p.is_empty() && p.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'));
@@ -763,6 +861,8 @@ pub fn import(file: Export, here: &BTreeMap<String, ScreenInfo>, names: &[String
             rule.exe.clear();
         }
         rule.aumid = rule.aumid.take().filter(|a| safe_aumid(a));
+        // A folder or page from a file is never opened (D98, D330).
+        rule.place = None;
     }
     workspace.launch_missing = false;
     // Close and Minimize are the user's opt-in, so a file can't arm them.
@@ -877,5 +977,28 @@ mod tests {
         let file = Export { seam_workspace: Export::VERSION, workspace: ws, screens: BTreeMap::new() };
         let imported = import(file, &here, &[], &[]);
         assert_eq!(imported.zones.keys().collect::<Vec<_>>(), ["n"]);
+    }
+
+    // A remembered folder or page is handed to Explorer or a browser, so only a local
+    // folder and an http or https page may get through, each as one argument.
+    #[test]
+    fn only_local_folders_and_web_pages_are_opened() {
+        assert!(safe_folder(r"C:\Users\me\Documents") && safe_folder(r"D:\"));
+        let refused = [r"\\server\share", r"\\?\C:\x", r"C:\a\..\b", "C:relative", "::{20D04FE0}", r#"C:\a"b"#, "C:/a"];
+        assert!(refused.iter().all(|f| !safe_folder(f)), "{refused:?}");
+        assert_eq!(explorer_arg(r"C:\My Files\"), r#""C:\My Files""#);
+        assert_eq!(explorer_arg(r"C:\"), r"C:\");
+
+        assert!(safe_url("https://example.com/a?b=c#d") && safe_url("HTTP://localhost:8080"));
+        let refused = ["file:///C:/x", "javascript:alert(1)", "https://", "https:///x", "https://a b", "https://a\"b"];
+        assert!(refused.iter().all(|u| !safe_url(u)), "{refused:?}");
+        assert!(!safe_url(&format!("https://a.com/{}", "x".repeat(MAX_URL))));
+
+        assert_eq!(page_of("https://github.com/x").as_deref(), Some("https://github.com/x"));
+        assert_eq!(page_of("github.com/x?q=1").as_deref(), Some("https://github.com/x?q=1"));
+        assert_eq!(page_of("localhost:3000/").as_deref(), Some("https://localhost:3000/"));
+        for bar in ["about:blank", "edge://settings", "chrome://newtab", "rust lang", "javascript:a.b", "", "x:y.z"] {
+            assert_eq!(page_of(bar), None, "{bar}");
+        }
     }
 }

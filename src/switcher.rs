@@ -13,7 +13,8 @@ use seam::config::WindowSize;
 use seam::desk;
 use seam::winutil;
 use seam::workspace::{
-    self, Candidate, OtherWindows, Pin, RowState, RowStatus, Rule, Shown, Target, WinState, Workspace, SESSION_ID,
+    self, Candidate, OtherWindows, Pin, Place, RowState, RowStatus, Rule, Shown, Target, WinState, Workspace,
+    SESSION_ID,
 };
 use seam::zones::{self, Rect, ZoneLayout};
 use std::collections::{BTreeMap, HashMap, HashSet};
@@ -253,6 +254,9 @@ pub struct CaptureJob {
     pub gap: u32,
     /// Lower-case exe names never captured: the zones' exclude list.
     pub exclude: Vec<String>,
+    /// "Remember folders and pages": read each Explorer window's folder and each
+    /// browser's page. Never for the last session.
+    pub places: bool,
 }
 
 /// A capture's rules, and the window each came from.
@@ -368,6 +372,12 @@ fn capture_rules(job: &CaptureJob, session: bool) -> (Vec<Rule>, Vec<isize>) {
             ..Rule::default()
         });
     }
+    if job.places && !session {
+        let places = crate::places::read(&rules, &hwnds);
+        for (rule, place) in rules.iter_mut().zip(places) {
+            rule.place = place;
+        }
+    }
     let skipped: Vec<String> = skips.iter().map(|(why, n)| format!("{why} {n}")).collect();
     let ms = started.elapsed().as_millis();
     log::info!("workspace capture: {} windows in {ms} ms, skipped {}", rules.len(), skipped.join(", "));
@@ -390,6 +400,8 @@ pub struct SwitchJob {
     pub size_mode: WindowSize,
     /// "Open alongside": leave the other windows alone this once, whatever the workspace says.
     pub alongside: bool,
+    /// "Remember folders and pages": an app this switch starts opens on its row's folder or page.
+    pub places: bool,
 }
 
 /// How a switch went: what the event says.
@@ -508,9 +520,14 @@ fn shell_open(file: &str, parameters: Option<&str>) -> bool {
 
 /// Start an app that has no window yet. A packaged app, a PWA or a Squirrel app
 /// starts through its AUMID, because the exe that was running isn't the thing to start.
-fn launch(rule: &Rule) -> Result<(), &'static str> {
+/// With `places`, a row with a folder or page opens on it (D330).
+fn launch(rule: &Rule, places: bool) -> Result<(), &'static str> {
     if rule.exe.to_lowercase().contains(r"\steamapps\") {
         return Err("steam game");
+    }
+    if rule.place.as_ref().is_some_and(|place| places && open_place(rule, place)) {
+        log::info!("{}: started on its saved folder or page", app_name(rule));
+        return Ok(());
     }
     let aumid = rule.aumid.as_deref().filter(|a| workspace::safe_aumid(a));
     if let Some(aumid) = aumid {
@@ -526,6 +543,27 @@ fn launch(rule: &Rule) -> Result<(), &'static str> {
         return Err("not installed");
     }
     shell_open(&rule.exe, None).then_some(()).ok_or("not installed")
+}
+
+/// Start an app on the folder or page its window showed: Explorer on a local folder
+/// that still exists, or the browser on an http or https page. Anything else, and
+/// the app starts as usual.
+fn open_place(rule: &Rule, place: &Place) -> bool {
+    match place {
+        Place::Folder(folder) => {
+            workspace::safe_folder(folder)
+                && !is_network_drive(folder)
+                && Path::new(folder).is_dir()
+                && shell_open(&explorer_path(), Some(&workspace::explorer_arg(folder)))
+        }
+        Place::Url(url) => {
+            workspace::safe_url(url)
+                && workspace::safe_exe(&rule.exe)
+                && !is_network_drive(&rule.exe)
+                && Path::new(&rule.exe).is_file()
+                && shell_open(&rule.exe, Some(url))
+        }
+    }
 }
 
 /// `GetDriveTypeW` answer for a network drive (`DRIVE_REMOTE`).
@@ -832,6 +870,8 @@ struct Run<'a> {
     cancelled: &'a dyn Fn() -> bool,
     /// The `Seam_ws` key the matched windows are stamped with. The last session stamps none.
     stamp: Option<u32>,
+    /// Apps started open on their row's folder or page.
+    places: bool,
 }
 
 /// Place the windows of the rules `which` that have one, then pin again what the
@@ -936,7 +976,7 @@ struct Starts {
 
 impl Starts {
     /// Start the app of row `i`, unless a switch this one replaced already did.
-    fn start(&mut self, ws: &Workspace, i: usize, mine: u64, tally: &mut Tally) {
+    fn start(&mut self, ws: &Workspace, i: usize, mine: u64, places: bool, tally: &mut Tally) {
         let rule = &ws.windows[i];
         let key = launch_key(rule);
         if let Some(at) = earlier_launch(&key, mine, &mut self.reused) {
@@ -944,7 +984,7 @@ impl Starts {
             self.waiting.push((i, at));
             return;
         }
-        match launch(rule) {
+        match launch(rule, places) {
             Ok(()) => {
                 note_launch(key, mine);
                 self.launched += 1;
@@ -1014,7 +1054,7 @@ fn run_stages(
     let finished = loop {
         let now = Instant::now();
         for (i, _) in due.iter().filter(|(_, at)| *at <= now) {
-            starts.start(ws, *i, mine, tally);
+            starts.start(ws, *i, mine, run.places, tally);
         }
         due.retain(|(_, at)| *at > now);
         // Each app's time runs from when it started.
@@ -1087,7 +1127,8 @@ fn run_switch(job: &SwitchJob, mine: u64) -> Option<Switched> {
     let ws = &job.workspace;
     let stamp = (ws.id != SESSION_ID).then(|| workspace::stamp_key(&ws.id));
     let geos = geometry(&job.screens, job.gap);
-    let run = Run { ws, geos, pins_stay: job.pins_stay, size_mode: job.size_mode, cancelled: &cancelled, stamp };
+    let (pins_stay, size_mode, places) = (job.pins_stay, job.size_mode, job.places);
+    let run = Run { ws, geos, pins_stay, size_mode, cancelled: &cancelled, stamp, places };
     let mut tally = Tally::default();
     let mut procs = Procs::new();
 
@@ -1461,7 +1502,7 @@ pub fn reopen(gone: Pinned) -> bool {
         // Only a window that wasn't there before the launch counts as the new one.
         let mut procs = Procs::new();
         let before: HashSet<isize> = snapshot(&mut procs).into_iter().map(|s| s.cand.hwnd).collect();
-        if let Err(reason) = launch(&rule) {
+        if let Err(reason) = launch(&rule, false) {
             log::info!("reopen {app}: not started ({reason})");
             return;
         }

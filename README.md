@@ -159,7 +159,9 @@ A workspace saves which app is on which screen and in which zone (or at its own 
 
 **Put apps in place when they open**, at the bottom of the page, is off until you turn it on. Then an app of the workspace in use that you open by hand goes to its place once, a moment after its window shows. A second window of it, an app the workspace doesn't have, and a window you drag away are left alone.
 
-**Export and import.** Each workspace's **...** menu has **Export...** and **Import...**. An imported workspace starts with launching off, and every app has to be ticked again, because a file from someone else shouldn't be able to start programs for you. Windows are mapped to your screens by device path, then by number and model, then by number, and any that match nothing stay where they are. Each screen's layout is mapped the same way, and one that matches no screen is left out.
+**Remember folders and pages**, also at the bottom of the page, is off until you turn it on. Then Capture, **Update from screen**, **Where it is now** and **Save windows to the active workspace** also save the folder each Explorer window shows (the tab on show, with tabs) and the page each browser shows (Chrome, Edge, Brave, Opera and Helium, and Firefox as best it can). A switch that starts the app opens that folder or page. An app that's already open is never sent anywhere. Only folders on this PC's drives that still exist and http or https pages are kept, so This PC, the Recycle Bin, network shares and private windows aren't. Each browser gets 300 ms, so a hung one can't hold up a capture. Turned off, nothing is read and saved folders and pages aren't used, and **Forget saved folders and pages** removes them all. The last session never saves them.
+
+**Export and import.** Each workspace's **...** menu has **Export...** and **Import...**. Export leaves out saved folders and pages, and Import drops any a file has. An imported workspace starts with launching off, and every app has to be ticked again, because a file from someone else shouldn't be able to start programs for you. Windows are mapped to your screens by device path, then by number and model, then by number, and any that match nothing stay where they are. Each screen's layout is mapped the same way, and one that matches no screen is left out.
 
 ### Last session
 
@@ -367,7 +369,7 @@ This builds the tray app, `target\release\seam.exe`. To include the settings pan
 - "Align Windows arrangement" refuses layouts where moving one screen would break another border (some 2x2 grids). The pointer remap still works in those layouts.
 - Windows of apps running as administrator are skipped by workspaces and zones, because Windows doesn't let Seam move them.
 - Apps that restore their own positions when they start may move after Seam places them. Seam places a window once and doesn't fight the app.
-- Workspaces don't restore browser tabs or open documents.
+- Workspaces open one folder per Explorer window and one page per browser window, with **Remember folders and pages** on. They don't restore a browser's other tabs or open documents.
 - Close only asks. Apps with unsaved work will prompt, and those windows stay open.
 - The tray icon is drawn at runtime.
 

@@ -54,6 +54,12 @@ const zones = (p) => ({
     `<line x1="17" y1="10" x2="31" y2="10" stroke="${p.line}" stroke-width="${Math.min(p.width, 1)}"/>`,
 });
 
+/** One screen cut into a grid, the way Tile fills it. */
+const tileScreen = (p) => {
+  const base = zones(p);
+  return { ...base, svg: base.svg + `<line x1="1" y1="10" x2="13" y2="10" stroke="${p.line}" stroke-width="${Math.min(p.width, 1)}"/>` };
+};
+
 const zoneStep = (dir) => (p) => {
   const base = zones(p);
   const [tail, tip, back] = dir === "next" ? [10, 22, 19] : [22, 10, 13];
@@ -186,6 +192,7 @@ const actions = {
   lineup: { draw: lineup, states: ["lit"] },
   remap: { draw: remap, states: ["idle", "lit"] },
   zones: { draw: zones, states: ["idle", "lit"] },
+  "tile-screen": { draw: tileScreen, states: ["lit"] },
   "zone-next": { draw: zoneStep("next"), states: ["lit"] },
   "zone-prev": { draw: zoneStep("prev"), states: ["lit"] },
   desk: { draw: mark, states: ["lit"] },

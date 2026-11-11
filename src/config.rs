@@ -73,6 +73,8 @@ pub struct Hotkeys {
     pub priority: Option<String>,
     /// "Switch back to the previous workspace" on this desk.
     pub switch_back: Option<String>,
+    /// "Tile this screen's windows", on the screen under the pointer.
+    pub tile_screen: Option<String>,
     /// "Focus on this window": minimize the others on its screen, and bring them back.
     pub focus_only: Option<String>,
     /// "Spotlight": dim everything but the window in use.
@@ -110,6 +112,7 @@ impl Default for Hotkeys {
             shrink: None,
             priority: None,
             switch_back: None,
+            tile_screen: None,
             focus_only: None,
             spotlight: None,
         }

@@ -36,12 +36,24 @@ pub enum Template {
     Rows,
     Grid,
     Priority,
+    /// A main zone on the left with two stacked beside it.
+    MainStack,
+    /// Two stacked zones on the left with a main one beside them.
+    StackMain,
     Custom,
 }
 
 impl Template {
-    pub const ALL: [Template; 6] =
-        [Template::None, Template::Columns, Template::Rows, Template::Grid, Template::Priority, Template::Custom];
+    pub const ALL: [Template; 8] = [
+        Template::None,
+        Template::Columns,
+        Template::Rows,
+        Template::Grid,
+        Template::Priority,
+        Template::MainStack,
+        Template::StackMain,
+        Template::Custom,
+    ];
 
     pub fn title(self) -> &'static str {
         match self {
@@ -50,6 +62,8 @@ impl Template {
             Template::Rows => "Rows",
             Template::Grid => "Grid",
             Template::Priority => "Priority",
+            Template::MainStack => "Main + stack",
+            Template::StackMain => "Stack + main",
             Template::Custom => "Custom",
         }
     }
@@ -100,6 +114,8 @@ pub fn template_tree(t: Template) -> Option<Node> {
             split(Vertical, 0.5, split(Horizontal, 0.5, leaf(), leaf()), split(Horizontal, 0.5, leaf(), leaf()))
         }
         Template::Priority => split(Vertical, 0.25, leaf(), split(Vertical, 2.0 / 3.0, leaf(), leaf())),
+        Template::MainStack => split(Vertical, 2.0 / 3.0, leaf(), split(Horizontal, 0.5, leaf(), leaf())),
+        Template::StackMain => split(Vertical, 1.0 / 3.0, split(Horizontal, 0.5, leaf(), leaf()), leaf()),
     })
 }
 

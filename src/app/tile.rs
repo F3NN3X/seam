@@ -60,13 +60,15 @@ pub(super) fn tile_finished(app: &mut App, result: Option<Result<wincontrol::til
         }
         Some(Ok(done)) => {
             let n = done.tiled;
+            // Picking another tile is its own undo when no window moved, so stay quiet.
+            if done.pick && n == 0 {
+                log::info!("zones pick screen {}: no window to move", done.number);
+                return;
+            }
             let windows = if n == 1 { "window" } else { "windows" };
             let (title, body) = if done.pick {
                 let title = format!("Screen {} has a new layout", done.number);
-                let body = match n {
-                    0 => "Click to undo".to_string(),
-                    n => format!("{n} {windows} moved to the new zones. Click to undo"),
-                };
+                let body = format!("{n} {windows} moved to the new zones. Click to undo");
                 log::info!("zones pick screen {}: {n} moved", done.number);
                 (title, body)
             } else {

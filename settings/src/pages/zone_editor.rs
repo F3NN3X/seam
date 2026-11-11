@@ -283,9 +283,14 @@ pub fn with_latest(
     then: impl FnOnce(&mut Panel, &mut Window, &mut Context<Panel>) + 'static,
 ) {
     panel.call("config.get", json!({}), window, cx, move |panel, result, window, cx| {
-        if let Some(config) = result.ok().and_then(|c| serde_json::from_value(c).ok()) {
-            panel.config = config;
-        }
+        // Building the list from an older copy could drop a layout added elsewhere.
+        let Some(config) = result.ok().and_then(|c| serde_json::from_value(c).ok()) else {
+            let note = gpui_kit::component::notification::Notification::new()
+                .message("Couldn't read your layouts, so nothing was saved. Try again");
+            window.push_notification(note, cx);
+            return;
+        };
+        panel.config = config;
         then(panel, window, cx);
     });
 }

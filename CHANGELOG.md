@@ -18,7 +18,7 @@ All notable changes to Seam. The format follows [Keep a Changelog](https://keepa
 - **Spotlight** dims everything but the window you're using. A shortcut (no key until you set one), `window.spotlight` in the API, `spotlight` in the state, and a Stream Deck key that shows whether it's on.
 - A library of custom layouts on the Zones page, shared by every desk and screen: each has a tile after the templates, and a **...** menu with Edit, Rename, Duplicate and Delete. Editing one changes every screen that uses it, and deleting one leaves those screens with their zones. **New layout** starts one. `custom_layouts` in `config.json`, and `custom` on a screen's layout.
 - **Save from windows** on the Zones page makes a library layout from where the windows on a screen are now, and snaps them into it. `zones.from_windows` in the API.
-- Picking a layout on the Zones page moves the windows snapped on that screen into the new zones, and a notification offers Undo for 8 seconds.
+- Picking a layout on the Zones page moves the windows snapped on that screen into the new zones. When windows moved, a notification offers Undo for 8 seconds.
 
 ### Changed
 

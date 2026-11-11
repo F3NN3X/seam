@@ -679,8 +679,12 @@ pub fn checked_update(old: &Workspace, mut new: Workspace, zones: &dyn Fn(&str) 
         rule.delay_ms = tame_delay(rule.delay_ms);
         // Pins belong to the last session.
         rule.pin = None;
-        // Only a capture finds a folder or page, so the editor can keep or drop one but not set one.
-        rule.place = rule.place.take().filter(|p| old.windows.iter().any(|o| o.place.as_ref() == Some(p)));
+        // Only a capture finds a folder or page, so the editor can keep or drop one but not
+        // set one, nor move one to another app's row.
+        let place = rule.place.take();
+        let same_app = |o: &Rule| o.exe == rule.exe && (rule.class.is_empty() || o.class == rule.class);
+        let kept = place.filter(|p| old.windows.iter().any(|o| same_app(o) && o.place.as_ref() == Some(p)));
+        rule.place = kept;
         // At most one window has the focus.
         rule.focused &= !focused;
         focused |= rule.focused;
@@ -760,17 +764,59 @@ pub fn explorer_arg(folder: &str) -> String {
 
 /// A page Seam may open in a browser: an http or https address with a host, not too
 /// long, and with no space, quote or control character, so it reaches the browser
-/// as one argument.
+/// as one argument. A user name or password before the host (`user@host`) is refused.
 pub fn safe_url(url: &str) -> bool {
     let lower = url.to_ascii_lowercase();
     let rest = lower.strip_prefix("https://").or_else(|| lower.strip_prefix("http://"));
-    rest.is_some_and(|r| !r.is_empty() && !r.starts_with('/'))
+    let authority = rest.and_then(|r| r.split(['/', '?', '#']).next()).unwrap_or_default();
+    !authority.is_empty()
+        && !authority.contains('@')
         && url.len() <= MAX_URL
         && !url.chars().any(|c| c.is_whitespace() || c.is_control() || c == '"')
 }
 
-/// The page a browser's address bar shows, or `None` for anything but an http or
-/// https page. Chromium and Firefox hide `https://`, so a bare host gets it back.
+/// Query parameters that can carry a sign-in or a secret. A page with any of them is
+/// kept without its query.
+const SECRET_PARAMS: [&str; 17] = [
+    "code",
+    "token",
+    "access_token",
+    "id_token",
+    "refresh_token",
+    "key",
+    "apikey",
+    "api_key",
+    "auth",
+    "session",
+    "sessionid",
+    "sig",
+    "signature",
+    "password",
+    "secret",
+    "otp",
+    "state",
+];
+
+/// A page as it's stored: without its query when a parameter could carry a secret,
+/// and without its fragment when it holds a value. Otherwise as it is.
+fn without_secrets(page: &str) -> String {
+    let (rest, fragment) = page.split_once('#').map_or((page, None), |(r, f)| (r, Some(f)));
+    let (base, query) = rest.split_once('?').map_or((rest, None), |(b, q)| (b, Some(q)));
+    let name = |param: &str| param.split('=').next().unwrap_or_default().to_string();
+    let secret = |param: &str| SECRET_PARAMS.iter().any(|s| name(param).eq_ignore_ascii_case(s));
+    let mut kept = base.to_string();
+    if let Some(query) = query.filter(|q| !q.split('&').any(secret)) {
+        kept = format!("{kept}?{query}");
+    }
+    if let Some(fragment) = fragment.filter(|f| !f.contains('=')) {
+        kept = format!("{kept}#{fragment}");
+    }
+    kept
+}
+
+/// The page a browser's address bar shows, as it's stored, or `None` for anything but
+/// an http or https page. Chromium and Firefox hide the scheme, so a bare host gets it
+/// back: `http://` for localhost, an IP address or a name with no dot, else `https://`.
 pub fn page_of(bar: &str) -> Option<String> {
     let bar = bar.trim();
     let lower = bar.to_ascii_lowercase();
@@ -778,15 +824,18 @@ pub fn page_of(bar: &str) -> Option<String> {
         bar.to_string()
     } else {
         let host = bar.split(['/', '?', '#']).next().unwrap_or_default();
-        let (name, port) = host.split_once(':').unwrap_or((host, "443"));
-        let named = name == "localhost" || name.contains('.') && !name.starts_with('.') && !name.ends_with('.');
+        let (name, port) = host.split_once(':').unwrap_or((host, "80"));
+        let named = !name.is_empty() && !name.starts_with('.') && !name.ends_with('.');
         let plain = name.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-'));
         let port = !port.is_empty() && port.chars().all(|c| c.is_ascii_digit());
         if !(named && plain && port) {
             return None;
         }
-        format!("https://{bar}")
+        let ip = name.chars().all(|c| c.is_ascii_digit() || c == '.');
+        let local = name.eq_ignore_ascii_case("localhost") || ip || !name.contains('.');
+        format!("{}://{bar}", if local { "http" } else { "https" })
     };
+    let page = without_secrets(&page);
     safe_url(&page).then_some(page)
 }
 
@@ -979,6 +1028,30 @@ mod tests {
         assert_eq!(imported.zones.keys().collect::<Vec<_>>(), ["n"]);
     }
 
+    // A saved place is opened when a switch starts the app, so the editor and the API
+    // can keep one on its own app's row, but not make one up or move it to another app.
+    #[test]
+    fn an_edit_never_adds_a_place() {
+        let (explorer, chrome) = (r"C:\Windows\explorer.exe", r"C:\Chrome\chrome.exe");
+        let docs = Some(Place::Folder(r"C:\Docs".into()));
+        let mut saved = rule(explorer, None, "CabinetWClass", "Docs");
+        saved.place = docs.clone();
+        let old = Workspace {
+            id: "w".into(),
+            windows: vec![saved.clone(), rule(chrome, None, "", "")],
+            ..Workspace::default()
+        };
+        let mut moved = rule(chrome, None, "", "");
+        moved.place = docs.clone();
+        let mut other_class = rule(explorer, None, "Other", "");
+        other_class.place = docs.clone();
+        let mut made_up = saved.clone();
+        made_up.place = Some(Place::Url("https://a.com".into()));
+        let new = Workspace { windows: vec![saved, moved, other_class, made_up], ..old.clone() };
+        let places: Vec<_> = checked_update(&old, new, &|_| 0).unwrap().windows.into_iter().map(|r| r.place).collect();
+        assert_eq!(places, vec![docs, None, None, None]);
+    }
+
     // A remembered folder or page is handed to Explorer or a browser, so only a local
     // folder and an http or https page may get through, each as one argument.
     #[test]
@@ -993,10 +1066,16 @@ mod tests {
         let refused = ["file:///C:/x", "javascript:alert(1)", "https://", "https:///x", "https://a b", "https://a\"b"];
         assert!(refused.iter().all(|u| !safe_url(u)), "{refused:?}");
         assert!(!safe_url(&format!("https://a.com/{}", "x".repeat(MAX_URL))));
+        assert!(!safe_url("https://me:pw@a.com/") && safe_url("https://a.com/@me"));
 
         assert_eq!(page_of("https://github.com/x").as_deref(), Some("https://github.com/x"));
-        assert_eq!(page_of("github.com/x?q=1").as_deref(), Some("https://github.com/x?q=1"));
-        assert_eq!(page_of("localhost:3000/").as_deref(), Some("https://localhost:3000/"));
+        assert_eq!(page_of("github.com/x?q=1#top").as_deref(), Some("https://github.com/x?q=1#top"));
+        assert_eq!(page_of("localhost:3000/").as_deref(), Some("http://localhost:3000/"));
+        assert_eq!(page_of("192.168.1.2/a").as_deref(), Some("http://192.168.1.2/a"));
+        assert_eq!(page_of("intranet/wiki").as_deref(), Some("http://intranet/wiki"));
+        // A query that could hold a secret goes as a whole, and a fragment with a value.
+        assert_eq!(page_of("https://a.com/cb?x=1&Code=9#t=2").as_deref(), Some("https://a.com/cb"));
+        assert_eq!(page_of("https://a.com/?q=code#access").as_deref(), Some("https://a.com/?q=code#access"));
         for bar in ["about:blank", "edge://settings", "chrome://newtab", "rust lang", "javascript:a.b", "", "x:y.z"] {
             assert_eq!(page_of(bar), None, "{bar}");
         }

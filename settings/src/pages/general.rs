@@ -9,17 +9,25 @@ use gpui_kit::*;
 use seam::autostart;
 use seam::config::{Config, RestoreApps, TrayClick};
 use seam::package::{self, Startup};
-use serde_json::json;
+use seam::workspace;
+use serde_json::{json, Value};
 use std::path::PathBuf;
 
 fn export(panel: &Panel, window: &mut Window, cx: &mut Context<Panel>) {
     let dir = dirs_home();
     let chosen = cx.prompt_for_new_path(&dir, Some("seam-config.json"));
     panel.call("config.get", json!({}), window, cx, move |_, result, window, cx| {
-        let config = match result {
+        let mut config = match result {
             Ok(config) => config,
             Err(e) => return window.push_notification(refusal("Settings not exported", &error_text(&e)), cx),
         };
+        // Folders and pages say where I've been, so they stay on this PC (D330).
+        let desks = config.get_mut("desks").and_then(Value::as_object_mut);
+        for desk in desks.into_iter().flat_map(|d| d.values_mut()) {
+            if let Some(list) = desk.get_mut("workspaces").and_then(Value::as_array_mut) {
+                *list = workspace::without_places(list);
+            }
+        }
         cx.spawn_in(window, async move |_, cx| {
             let Ok(Ok(Some(path))) = chosen.await else { return };
             let saved = serde_json::to_string_pretty(&config).map_err(std::io::Error::other);

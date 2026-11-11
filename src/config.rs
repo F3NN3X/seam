@@ -532,11 +532,15 @@ impl Config {
         }
     }
 
-    /// Read a file the user chose to import. Old files convert, as on load.
+    /// Read a file the user chose to import. Old files convert, as on load. A
+    /// folder or page from a file is never opened (D98, D330), so they're dropped.
     pub fn from_import(bytes: &[u8]) -> Result<Config, String> {
         let mut c: Config = serde_json::from_slice(bytes).map_err(|e| e.to_string())?;
         if c.version < CURRENT_VERSION {
             c.migrate_v1();
+        }
+        for desk in c.desks.values_mut() {
+            desk.workspaces = crate::workspace::without_places(&desk.workspaces);
         }
         Ok(c)
     }

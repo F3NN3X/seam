@@ -5,6 +5,7 @@
 //! `SWP_ASYNCWINDOWPOS`) or is skipped for a window that has stopped answering.
 
 use crate::log;
+use crate::places;
 use crate::wincontrol;
 use crate::wm::Pinned;
 use seam::api::PinKind;
@@ -373,7 +374,7 @@ fn capture_rules(job: &CaptureJob, session: bool) -> (Vec<Rule>, Vec<isize>) {
         });
     }
     if job.places && !session {
-        let places = crate::places::read(&rules, &hwnds);
+        let places = places::read(&rules, &hwnds);
         for (rule, place) in rules.iter_mut().zip(places) {
             rule.place = place;
         }
@@ -545,19 +546,22 @@ fn launch(rule: &Rule, places: bool) -> Result<(), &'static str> {
     shell_open(&rule.exe, None).then_some(()).ok_or("not installed")
 }
 
-/// Start an app on the folder or page its window showed: Explorer on a local folder
-/// that still exists, or the browser on an http or https page. Anything else, and
-/// the app starts as usual.
+/// Start an app on the folder or page its window showed: an Explorer row on a folder
+/// of a fixed or removable drive that still exists, or a browser row on an http or
+/// https page. Anything else, and the app starts as usual.
 fn open_place(rule: &Rule, place: &Place) -> bool {
+    let kind = places::kind_of(rule);
     match place {
         Place::Folder(folder) => {
-            workspace::safe_folder(folder)
-                && !is_network_drive(folder)
+            kind == Some(places::Kind::Explorer)
+                && workspace::safe_folder(folder)
+                && places::local_drive(folder)
                 && Path::new(folder).is_dir()
                 && shell_open(&explorer_path(), Some(&workspace::explorer_arg(folder)))
         }
         Place::Url(url) => {
-            workspace::safe_url(url)
+            kind == Some(places::Kind::Browser)
+                && workspace::safe_url(url)
                 && workspace::safe_exe(&rule.exe)
                 && !is_network_drive(&rule.exe)
                 && Path::new(&rule.exe).is_file()

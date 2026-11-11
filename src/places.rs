@@ -1,21 +1,23 @@
 //! "Remember folders and pages" (D330): the folder an Explorer window shows, read
 //! through the shell's window list, and the page a browser shows, read from its
-//! address bar through UI Automation. Only the capture worker reads them, and each
-//! browser window gets its own thread and at most `PAGE_WAIT`, so a hung browser
-//! can't hold up a capture.
+//! address bar through UI Automation. Only a capture asks for them. The Explorer
+//! windows and each browser window are read on threads of their own, and all of them
+//! get at most `PAGE_WAIT`, so a hung window can't hold up a capture.
 
 use crate::log;
 use seam::winutil;
 use seam::workspace::{self, Place, Rule};
 use std::collections::HashMap;
 use std::path::Path;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc::{self, Receiver};
 use std::time::{Duration, Instant};
-use windows::core::{w, Interface, BSTR};
+use windows::core::{w, Interface, BSTR, PCWSTR};
 use windows::Win32::Foundation::HWND;
+use windows::Win32::Storage::FileSystem::GetDriveTypeW;
 use windows::Win32::System::Com::{
     CoCreateInstance, CoInitializeEx, CoTaskMemFree, CoUninitialize, IServiceProvider, CLSCTX_ALL,
-    CLSCTX_INPROC_SERVER, COINIT_MULTITHREADED,
+    CLSCTX_INPROC_SERVER, COINIT_APARTMENTTHREADED, COINIT_MULTITHREADED,
 };
 use windows::Win32::System::Variant::VARIANT;
 use windows::Win32::UI::Accessibility::{
@@ -28,23 +30,34 @@ use windows::Win32::UI::Shell::{
 };
 use windows::Win32::UI::WindowsAndMessaging::FindWindowExW;
 
-/// The longest a browser window's address bar may take to read.
+/// The longest the Explorer windows, and each browser window, may take to read.
 const PAGE_WAIT: Duration = Duration::from_millis(300);
 
 /// Browsers whose address bar is read, by exe name. Chromium's first.
 const BROWSERS: [&str; 7] =
     ["chrome.exe", "msedge.exe", "brave.exe", "vivaldi.exe", "opera.exe", "helium.exe", "firefox.exe"];
 
-/// Words a private window's title carries, in Chromium, Edge, Firefox and Brave.
-const PRIVATE: [&str; 3] = ["incognito", "inprivate", "private browsing"];
+/// Bits of a private window's title, in lower case, in several languages. A false match
+/// only means its page isn't saved. `privat` covers private, (private), privata and privaten.
+const PRIVATE: [&str; 8] = ["incognito", "inkognito", "inprivate", "privat", "privad", "privé", "privée", "prywatn"];
+
+/// Page reads still running, ones that never ended included. At `MAX_READING` a
+/// capture reads no pages.
+static READING: AtomicUsize = AtomicUsize::new(0);
+const MAX_READING: usize = 8;
+
+/// `GetDriveTypeW` answers for a removable and a fixed drive.
+const DRIVE_REMOVABLE: u32 = 2;
+const DRIVE_FIXED: u32 = 3;
 
 #[derive(Clone, Copy, PartialEq)]
-enum Kind {
+pub(crate) enum Kind {
     Explorer,
     Browser,
 }
 
-fn kind_of(rule: &Rule) -> Option<Kind> {
+/// Whether a row's window is an Explorer window or a browser's, the only ones with a place.
+pub(crate) fn kind_of(rule: &Rule) -> Option<Kind> {
     let name = winutil::file_name(&rule.exe);
     if name == "explorer.exe" && rule.class == "CabinetWClass" {
         return Some(Kind::Explorer);
@@ -54,14 +67,43 @@ fn kind_of(rule: &Rule) -> Option<Kind> {
     (BROWSERS.contains(&name.as_str()) && !web_app).then_some(Kind::Browser)
 }
 
+/// Whether the path is on a fixed or removable drive of this PC, not a mapped one.
+pub(crate) fn local_drive(path: &str) -> bool {
+    let root: Vec<u16> = path.chars().take(2).chain(['\\']).map(|c| c as u16).chain([0]).collect();
+    matches!(unsafe { GetDriveTypeW(PCWSTR(root.as_ptr())) }, DRIVE_FIXED | DRIVE_REMOVABLE)
+}
+
+/// Counts a page read as running for as long as its thread lives.
+struct Reading;
+
+impl Reading {
+    fn enter() -> Reading {
+        READING.fetch_add(1, Ordering::SeqCst);
+        Reading
+    }
+}
+
+impl Drop for Reading {
+    fn drop(&mut self) {
+        READING.fetch_sub(1, Ordering::SeqCst);
+    }
+}
+
 /// The folder or page of each captured window that has one, in the rules' order.
 pub fn read(rules: &[Rule], hwnds: &[isize]) -> Vec<Option<Place>> {
     let started = Instant::now();
+    let deadline = started + PAGE_WAIT;
     let kinds: Vec<Option<Kind>> = rules.iter().map(kind_of).collect();
-    let folders = if kinds.contains(&Some(Kind::Explorer)) { explorer_folders() } else { HashMap::new() };
-    // Every browser window at once, each on its own thread.
+    let explorers = kinds.contains(&Some(Kind::Explorer));
+    let folders = if explorers { ask_folders() } else { None };
+    // Every browser window at once, each on its own thread, unless earlier reads still hang.
+    let reading = READING.load(Ordering::SeqCst);
+    if reading >= MAX_READING && kinds.contains(&Some(Kind::Browser)) {
+        log::info!("places: {reading} page reads still running, no pages this time");
+    }
     let mut pages: HashMap<usize, Receiver<Option<String>>> = HashMap::new();
-    for (i, rule) in rules.iter().enumerate().filter(|(i, _)| kinds[*i] == Some(Kind::Browser)) {
+    let browsers = rules.iter().enumerate().filter(|(i, _)| kinds[*i] == Some(Kind::Browser));
+    for (i, rule) in browsers.filter(|_| reading < MAX_READING) {
         let title = rule.title_hint.to_lowercase();
         if PRIVATE.iter().any(|w| title.contains(w)) {
             log::info!("places: {} skipped, a private window", winutil::file_name(&rule.exe));
@@ -69,11 +111,11 @@ pub fn read(rules: &[Rule], hwnds: &[isize]) -> Vec<Option<Place>> {
         }
         pages.extend(ask_page(hwnds[i]).map(|rx| (i, rx)));
     }
-    let deadline = Instant::now() + PAGE_WAIT;
+    let folders = folders.and_then(|rx| rx.recv_timeout(deadline.saturating_duration_since(Instant::now())).ok());
     let (mut found, mut late) = (0, 0);
     let places = (0..rules.len()).map(|i| {
         let place = match kinds[i] {
-            Some(Kind::Explorer) => folders.get(&hwnds[i]).cloned().map(Place::Folder),
+            Some(Kind::Explorer) => folders.as_ref().and_then(|f| f.get(&hwnds[i])).cloned().map(Place::Folder),
             Some(Kind::Browser) => pages.get(&i).and_then(|rx| {
                 let page = rx.recv_timeout(deadline.saturating_duration_since(Instant::now()));
                 late += usize::from(page.is_err());
@@ -86,12 +128,27 @@ pub fn read(rules: &[Rule], hwnds: &[isize]) -> Vec<Option<Place>> {
     });
     let places: Vec<Option<Place>> = places.collect();
     let ms = started.elapsed().as_millis();
-    log::info!("places: {found} folders and pages in {ms} ms, {late} browsers too slow");
+    let explorer = if explorers && folders.is_none() { ", Explorer too slow" } else { "" };
+    log::info!("places: {found} folders and pages in {ms} ms, {late} browsers too slow{explorer}");
     places
 }
 
+/// Start reading the Explorer windows' folders on their own thread.
+fn ask_folders() -> Option<Receiver<HashMap<isize, String>>> {
+    let (tx, rx) = mpsc::channel();
+    let spawned = std::thread::Builder::new().name("seam-folders".into()).spawn(move || {
+        unsafe {
+            let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
+        }
+        let folders = explorer_folders();
+        unsafe { CoUninitialize() };
+        let _ = tx.send(folders);
+    });
+    spawned.ok().map(|_| rx)
+}
+
 /// Each Explorer window's folder, by its top-level window. With tabs, the shown tab's.
-/// A folder that isn't on a local drive, or no longer exists, isn't kept.
+/// A folder that isn't on a fixed or removable drive, or no longer exists, isn't kept.
 fn explorer_folders() -> HashMap<isize, String> {
     let mut folders = HashMap::new();
     let Ok(windows) = (unsafe { CoCreateInstance::<_, IShellWindows>(&ShellWindows, None, CLSCTX_ALL) }) else {
@@ -108,7 +165,8 @@ fn explorer_folders() -> HashMap<isize, String> {
         if shown.is_ok_and(|s| s != tab) {
             continue;
         }
-        let local = folder.filter(|f| workspace::safe_folder(f) && Path::new(f).is_dir());
+        // The drive first, so a mapped drive that's gone is never waited on.
+        let local = folder.filter(|f| workspace::safe_folder(f) && local_drive(f) && Path::new(f).is_dir());
         folders.extend(local.map(|f| (top.0, f)));
     }
     folders
@@ -134,7 +192,10 @@ fn folder_of(browser: &IWebBrowserApp) -> Option<(HWND, Option<String>)> {
 /// Start reading a browser window's page on its own thread.
 fn ask_page(hwnd: isize) -> Option<Receiver<Option<String>>> {
     let (tx, rx) = mpsc::channel();
+    // Counted until the thread ends, or at once if it never starts.
+    let reading = Reading::enter();
     let spawned = std::thread::Builder::new().name("seam-page".into()).spawn(move || {
+        let _reading = reading;
         unsafe {
             let _ = CoInitializeEx(None, COINIT_MULTITHREADED);
         }

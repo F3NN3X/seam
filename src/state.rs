@@ -148,6 +148,8 @@ pub struct State {
     pub packaged: bool,
     pub remap: Remap,
     pub zones: Zones,
+    /// Spotlight is dimming everything but the focused window.
+    pub spotlight: bool,
     pub wm: WmState,
     pub desk: DeskRef,
     pub screens: Vec<Screen>,

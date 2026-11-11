@@ -250,6 +250,43 @@
 			]
 		},
 		{
+			"UUID": "co.f3nn3x.seam.focus-only",
+			"Name": "Focus on this window",
+			"Tooltip": "Minimize the other windows on the focused window's screen. Press again to bring them back.",
+			"Icon": "imgs/actions/focus-only/icon",
+			"Controllers": [
+				"Keypad"
+			],
+			"States": [
+				{
+					"Image": "imgs/actions/focus-only/key",
+					"Title": "Focus on this",
+					"TitleAlignment": "bottom"
+				}
+			]
+		},
+		{
+			"UUID": "co.f3nn3x.seam.spotlight",
+			"Name": "Spotlight",
+			"Tooltip": "Dim everything but the window you're using. The key follows Seam.",
+			"Icon": "imgs/actions/spotlight/icon",
+			"Controllers": [
+				"Keypad"
+			],
+			"States": [
+				{
+					"Image": "imgs/actions/spotlight/key-off",
+					"Title": "Spotlight off",
+					"TitleAlignment": "bottom"
+				},
+				{
+					"Image": "imgs/actions/spotlight/key-on",
+					"Title": "Spotlight on",
+					"TitleAlignment": "bottom"
+				}
+			]
+		},
+		{
 			"UUID": "co.f3nn3x.seam.desk",
 			"Name": "Desk",
 			"Tooltip": "Shows the name of the active desk. Press it to open the Displays page.",

@@ -150,6 +150,17 @@ pub const TOPICS: &[Topic] = &[
         opens: Some(Page::Shortcuts),
     },
     Topic {
+        title: "Focus and spotlight",
+        blocks: &[
+            List(&[
+                "**Focus on this window** minimizes the other windows on its screen, and pressing it again brings them back. Windows pinned on top or kept out of workspace switches stay, and so do the zones' excluded apps.",
+                "**Spotlight** dims everything but the window you're using, on every screen. Press it again to turn it off. With the desktop or taskbar in front, the dim is hidden.",
+            ]),
+            Text("Neither has a key until you set one on the Shortcuts page. Focus on this window leaves placing windows to another window manager if one is running, and Spotlight keeps working next to it."),
+        ],
+        opens: Some(Page::Shortcuts),
+    },
+    Topic {
         title: "Apps running as administrator",
         blocks: &[
             Text("Windows doesn't let an app move the windows of an app that runs with more rights. That's why an elevated app's window can't move with Seam."),
@@ -212,7 +223,7 @@ pub const TOPICS: &[Topic] = &[
                 "Ctrl+Shift+Alt+L lines up your screens",
                 "Ctrl+Shift+Alt+P pauses or resumes the remap",
                 "Shift+Win+Alt+arrows move the focused window, and Ctrl+Shift+Alt+arrows focus the window that way",
-                "Swap, grow, shrink, two thirds, next and previous zone, the pins, capture, Snap back, Switch back and quick save have no key until you set one",
+                "Swap, grow, shrink, two thirds, next and previous zone, the pins, capture, Snap back, Switch back, quick save, Focus on this window and Spotlight have no key until you set one",
             ]),
             Text("Each workspace can have its own shortcut too. Press **Change** on a row, then the keys. Esc keeps the old ones and Backspace clears them. Ctrl+Shift+Alt plus a number is a good choice, since Ctrl+Alt alone types characters on many keyboards."),
             Text("If another app already holds a shortcut, its keys turn red and Seam keeps running without it."),

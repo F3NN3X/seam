@@ -10,6 +10,9 @@ All notable changes to Seam. The format follows [Keep a Changelog](https://keepa
 - **Switch back to the previous workspace**: a shortcut (no key until you set one), the first item of the tray's Workspaces menu, `workspace.switch_back` in the API, and a Stream Deck action. `previous_workspace` on a desk in `config.json`.
 - **Open alongside**, on a workspace's **...** menu, switches once and leaves the other windows alone. `workspace.switch` takes `alongside`.
 
+- **Focus on this window** minimizes the other windows on its screen, and pressing it again brings them back. A shortcut (no key until you set one), `window.focus_only` in the API (`scope` `workspace` minimizes everything outside the workspace in use), and a Stream Deck action.
+- **Spotlight** dims everything but the window you're using. A shortcut (no key until you set one), `window.spotlight` in the API, `spotlight` in the state, and a Stream Deck key that shows whether it's on.
+
 ### Changed
 
 - When a window won't move because its app runs as administrator, the balloon names the app and tells it once per app instead of once per run. Clicking it opens Help, which has a new topic, "Apps running as administrator".

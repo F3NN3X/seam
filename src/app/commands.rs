@@ -144,6 +144,11 @@ pub(super) fn run_command(app: &mut App, queued: Queued) {
             start_window(app, verb, dir, Some(reply));
             return;
         }
+        Command::WindowFocusOnly(scope) => {
+            start_focus_only(app, scope, Some(reply));
+            return;
+        }
+        Command::WindowSpotlight(on) => Ok(json!({ "on": set_spotlight(app, on) })),
         Command::WindowGroup(verb) => {
             start_group(app, verb, Some(reply));
             return;

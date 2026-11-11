@@ -127,6 +127,10 @@ pub enum Command {
         active: bool,
         auto_apply: bool,
     },
+    /// Spotlight is on, so focus changes and minimizes are told to it.
+    Spotlight {
+        on: bool,
+    },
 }
 
 static DETECTED: Mutex<Option<&'static str>> = Mutex::new(None);
@@ -196,6 +200,11 @@ pub fn unwatch_shown(switch: u64) {
 /// The hooks for drift and auto-apply exist only while a workspace is in use.
 pub fn workspace(active: bool, auto_apply: bool) {
     send(Command::Workspace { active, auto_apply });
+}
+
+/// The hooks for spotlight exist only while it is on.
+pub fn spotlight(on: bool) {
+    send(Command::Spotlight { on });
 }
 
 /// Release all on a clean exit. Waits for it, but not for long.
@@ -354,6 +363,8 @@ struct Wm {
     /// A workspace is in use, and windows that open are put in place.
     workspace_active: bool,
     auto_apply: bool,
+    /// Spotlight is on.
+    spotlight: bool,
     /// Windows that were there before, or were already looked at, so showing or
     /// renaming one isn't an open. Kept while auto-apply runs.
     seen_before: HashSet<isize>,
@@ -399,12 +410,10 @@ impl Wm {
     /// Only what a feature that is on needs: focus changes for the border and for
     /// pins that apps may paint over, closed windows while anything is pinned,
     /// shown windows while a switch waits for them, moves, snaps and minimizes while a
-    /// workspace is in use, opened windows while auto-apply runs, and the refresh
-    /// timer while the first applies.
+    /// workspace is in use, opened windows while auto-apply runs, focus changes and
+    /// minimizes while spotlight is on, and the refresh timer while the first applies.
     fn sync_hooks(&mut self) {
-        let wanted = (self.focus_border && self.focus_colour.is_some())
-            || (!self.pinned.is_empty() && self.pin_colour.is_some());
-        let painting = wanted && borders_supported();
+        let painting = self.painting();
         let auto = self.auto_applying();
         if auto && self.name_hook.is_none() {
             // What is there already never counts as opening.
@@ -415,13 +424,15 @@ impl Wm {
             self.stop_settle_timer();
         }
         let (show, destroy) = (EVENT_OBJECT_SHOW, EVENT_OBJECT_DESTROY);
-        sync_hook(&mut self.foreground_hook, EVENT_SYSTEM_FOREGROUND, EVENT_SYSTEM_FOREGROUND, painting);
+        let foreground = EVENT_SYSTEM_FOREGROUND;
+        sync_hook(&mut self.foreground_hook, foreground, foreground, painting || self.spotlight);
         sync_hook(&mut self.destroy_hook, destroy, destroy, !self.pinned.is_empty() || auto);
         sync_hook(&mut self.show_hook, show, show, self.shown_to.is_some() || auto);
         sync_hook(&mut self.name_hook, EVENT_OBJECT_NAMECHANGE, EVENT_OBJECT_NAMECHANGE, auto);
         let active = self.workspace_active;
         sync_hook(&mut self.movesize_hook, EVENT_SYSTEM_MOVESIZESTART, EVENT_SYSTEM_MOVESIZEEND, active);
-        sync_hook(&mut self.minimize_hook, EVENT_SYSTEM_MINIMIZESTART, EVENT_SYSTEM_MINIMIZEEND, active);
+        let minimize = (EVENT_SYSTEM_MINIMIZESTART, EVENT_SYSTEM_MINIMIZEEND);
+        sync_hook(&mut self.minimize_hook, minimize.0, minimize.1, active || self.spotlight);
         // Win+arrow snaps and the maximize button send no drag or minimize event.
         let location = EVENT_OBJECT_LOCATIONCHANGE;
         sync_hook(&mut self.location_hook, location, location, active);
@@ -438,6 +449,13 @@ impl Wm {
             }
             _ => {}
         }
+    }
+
+    /// The focus border or a pin colour is painted, so focus changes matter to it.
+    fn painting(&self) -> bool {
+        let wanted = (self.focus_border && self.focus_colour.is_some())
+            || (!self.pinned.is_empty() && self.pin_colour.is_some());
+        wanted && borders_supported()
     }
 
     fn auto_applying(&self) -> bool {
@@ -652,6 +670,12 @@ impl Wm {
                     log::info!("wm: workspace in use {active}, auto-apply {}", self.auto_applying());
                 }
             }
+            Command::Spotlight { on } => {
+                if on != self.spotlight {
+                    self.spotlight = on;
+                    self.sync_hooks();
+                }
+            }
         }
     }
 
@@ -720,10 +744,15 @@ impl Wm {
         let started = log::enabled().then(Instant::now);
         match event {
             EVENT_SYSTEM_FOREGROUND => {
-                if self.focus_border {
-                    self.border(h);
+                if self.painting() {
+                    if self.focus_border {
+                        self.border(h);
+                    }
+                    self.focus_moved(h.0 as isize);
                 }
-                self.focus_moved(h.0 as isize);
+                if self.spotlight {
+                    crate::spotlight::reorder();
+                }
             }
             EVENT_OBJECT_DESTROY => {
                 let key = h.0 as isize;
@@ -760,7 +789,15 @@ impl Wm {
                 let key = h.0 as isize;
                 self.settling.retain(|(k, _)| *k != key);
             }
-            EVENT_SYSTEM_MOVESIZEEND | EVENT_SYSTEM_MINIMIZESTART | EVENT_SYSTEM_MINIMIZEEND => self.moved(h),
+            EVENT_SYSTEM_MOVESIZEEND => self.moved(h),
+            EVENT_SYSTEM_MINIMIZESTART | EVENT_SYSTEM_MINIMIZEEND => {
+                if self.workspace_active {
+                    self.moved(h);
+                }
+                if self.spotlight {
+                    crate::spotlight::reorder();
+                }
+            }
             EVENT_OBJECT_LOCATIONCHANGE => self.relocated(h),
             _ => {}
         }

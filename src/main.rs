@@ -14,6 +14,8 @@ mod app;
 #[cfg(windows)]
 mod arrange;
 #[cfg(windows)]
+mod focus_only;
+#[cfg(windows)]
 mod hook;
 #[cfg(windows)]
 mod identify;
@@ -26,6 +28,8 @@ mod overlay;
 #[cfg(windows)]
 mod showlayout;
 mod snap;
+#[cfg(windows)]
+mod spotlight;
 #[cfg(windows)]
 mod switcher;
 #[cfg(windows)]

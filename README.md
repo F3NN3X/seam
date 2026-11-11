@@ -91,6 +91,8 @@ Windows 11 shows its own snap layouts when you drag a window to the top of the s
 - **Shift+Win+Alt+arrows** move the focused window. A window in a zone goes to the next zone that way, and at the edge onto the nearest zone of the screen next to it. A window in no zone goes to the next screen, in the same place there.
 - **Ctrl+Shift+Alt+arrows** focus the nearest window that way.
 - **Swap** trades places with the nearest window that way, zones included. It has no key until you set one.
+- **Focus on this window** minimizes the other windows on its screen, and pressing it again brings them back. Windows pinned on top or kept out of workspace switches stay. It has no key until you set one, and `window.focus_only` with `scope` `workspace` minimizes everything outside the workspace in use instead.
+- **Spotlight** dims everything but the window you're using, on every screen. It has no key until you set one. With the desktop or taskbar in front the dim is hidden. It keeps working next to another window manager.
 - **Grow window into its neighbour** and **Shrink window** move the divider beside a window in a zone by 5% of the screen, towards the bigger neighbour first and side to side before up and down. **Give window two thirds of its group** gives it about two thirds of the screen along the layout's main split, and a second press puts the zones back. The windows in the other zones follow, and none goes below the smallest size its app allows: a divider that would squeeze one pushes the next divider along instead. A changed layout is saved and shows as Custom. These have no key until you set one.
 - **When a window moves to another screen**, in the Windows card on the Zones page, sets the size a window gets on a screen with no zones, whether Seam moved it by key, by another app, or a workspace put it back on a different screen than it was saved on:
   - **Let Windows scale it** (default) leaves it to Windows' scaling.
@@ -294,7 +296,7 @@ Yes, through the [local API](docs/api.md), which is what the Stream Deck plugin 
 | Shift+Win+Alt+arrows | Move the focused window that way on the desk |
 | Ctrl+Shift+Alt+arrows | Focus the window that way |
 | Shift (while dragging) | Show the zones. Add Ctrl to cover several zones |
-| None until you set one | Swap, grow, shrink, two thirds, next and previous zone, the three pin keys, one capture key, **Snap back to this workspace**, **Switch back to the previous workspace**, **Save windows to the active workspace**, and one key per workspace |
+| None until you set one | Swap, grow, shrink, two thirds, next and previous zone, the three pin keys, one capture key, **Snap back to this workspace**, **Switch back to the previous workspace**, **Save windows to the active workspace**, **Focus on this window**, **Spotlight**, and one key per workspace |
 
 Set these on the Shortcuts page. Ctrl+Shift+Alt plus a number is a good choice for workspaces, since Ctrl+Alt alone types characters on many keyboards.
 

@@ -287,14 +287,14 @@ fn where_it_is(panel: &mut Panel, ws: &Workspace, i: usize, window: &mut Window,
 
 /// A place a window can be sent to, as the Goes to menu lists it.
 #[derive(Clone)]
-struct Place {
-    label: String,
+pub struct Place {
+    pub label: String,
     /// The screen it's on. `None` leaves a window's screen as it was.
-    monitor: Option<String>,
-    target: Target,
+    pub monitor: Option<String>,
+    pub target: Target,
 }
 
-fn places(panel: &Panel) -> Vec<Place> {
+pub fn places(panel: &Panel) -> Vec<Place> {
     let keep =
         Place { label: "Keep where it is".into(), monitor: None, target: Target::State { state: WinState::Keep } };
     let mut places = vec![keep];
@@ -318,7 +318,7 @@ fn places(panel: &Panel) -> Vec<Place> {
 }
 
 /// Where a rule sends its window, in the words of the menu.
-fn goes_to(rule: &Rule, screens: &[Screen]) -> String {
+pub fn goes_to(rule: &Rule, screens: &[Screen]) -> String {
     let number = screens.iter().find(|s| s.id == rule.monitor).map(|s| s.number);
     match (&rule.target, number) {
         (Target::State { state: WinState::Keep }, _) => "Keep where it is".into(),
@@ -330,7 +330,7 @@ fn goes_to(rule: &Rule, screens: &[Screen]) -> String {
     }
 }
 
-fn exe_line(rule: &Rule) -> String {
+pub fn exe_line(rule: &Rule) -> String {
     let lower = rule.exe.to_lowercase();
     if rule.aumid.is_some() && (lower.is_empty() || lower.contains(r"\windowsapps\")) {
         return "Packaged app".into();
@@ -339,7 +339,7 @@ fn exe_line(rule: &Rule) -> String {
 }
 
 /// The app's icon, or its first letter while there is none.
-fn app_icon(rule: &Rule, icons: &Icons, p: Palette) -> Div {
+pub fn app_icon(rule: &Rule, icons: &Icons, p: Palette) -> Div {
     let tile =
         div().flex().flex_none().items_center().justify_center().size(px(ICON_WIDTH)).rounded(px(8.)).bg(p.raised);
     match icons.get(rule) {

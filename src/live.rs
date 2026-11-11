@@ -5,11 +5,11 @@
 //! rows. The tray thread only hands it the workspace and reads what it found.
 
 use crate::log;
-use crate::switcher::{self, LiveWorkspace};
+use crate::switcher::{self, AppRules, LiveWorkspace};
 use seam::api::Reply;
 use seam::{winutil, workspace};
 use serde_json::json;
-use std::sync::atomic::{AtomicIsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicIsize, Ordering};
 use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::{Arc, Mutex, OnceLock};
 use windows::Win32::Foundation::{HWND, LPARAM, WPARAM};
@@ -61,10 +61,17 @@ enum Job {
 
 /// The workspace in use, with what placing its windows needs, and who to tell.
 static ACTIVE: Mutex<Option<Arc<LiveWorkspace>>> = Mutex::new(None);
+static RULES: Mutex<Option<Arc<AppRules>>> = Mutex::new(None);
+/// "Put apps in place when they open" is on, so the active workspace places what opens.
+static AUTO: AtomicBool = AtomicBool::new(false);
 static OWNER: AtomicIsize = AtomicIsize::new(0);
 static DRIFT: Mutex<Option<Drift>> = Mutex::new(None);
 static DETECTED: Mutex<Option<Detected>> = Mutex::new(None);
 static WORKER: OnceLock<Option<Sender<Job>>> = OnceLock::new();
+
+fn rules() -> Option<Arc<AppRules>> {
+    RULES.lock().unwrap_or_else(|e| e.into_inner()).clone()
+}
 
 fn active() -> Option<Arc<LiveWorkspace>> {
     ACTIVE.lock().unwrap_or_else(|e| e.into_inner()).clone()
@@ -73,9 +80,17 @@ fn active() -> Option<Arc<LiveWorkspace>> {
 /// The workspace in use now, or none. The seam-wm thread hears whether to watch.
 pub fn set_active(owner: isize, live: Option<LiveWorkspace>, auto_apply: bool) {
     OWNER.store(owner, Ordering::SeqCst);
+    AUTO.store(auto_apply, Ordering::SeqCst);
     let active = live.is_some();
     *ACTIVE.lock().unwrap_or_else(|e| e.into_inner()) = live.map(Arc::new);
     crate::wm::workspace(active, auto_apply);
+}
+
+/// The app rules now, or none. The seam-wm thread hears whether to watch.
+pub fn set_rules(rules: Option<AppRules>) {
+    let any = rules.is_some();
+    *RULES.lock().unwrap_or_else(|e| e.into_inner()) = rules.map(Arc::new);
+    crate::wm::app_rules(any);
 }
 
 pub fn take_drift() -> Option<Drift> {
@@ -131,9 +146,11 @@ fn send(job: Job) {
 
 /// Jobs that came in together run as one: the stamps first, then every opened
 /// window, then one drift check. Windows that open while a switch runs wait for
-/// it to end, and then go through auto-apply like any other.
+/// it to end, and then go through auto-apply like any other. The switch owns them,
+/// so no app rule places them.
 fn work(jobs: Receiver<Job>) {
     let mut later: Vec<isize> = Vec::new();
+    let mut during_switch: Vec<isize> = Vec::new();
     while let Ok(first) = jobs.recv() {
         let batch: Vec<Job> = std::iter::once(first).chain(jobs.try_iter()).collect();
         for job in &batch {
@@ -148,19 +165,32 @@ fn work(jobs: Receiver<Job>) {
             if let Job::Opened(hwnd) = job {
                 if !later.contains(hwnd) {
                     later.push(*hwnd);
+                    if switcher::switching() {
+                        during_switch.push(*hwnd);
+                    }
                 }
             }
         }
         // The switch stamps what it waited for, so only the others are placed after it.
         let opened = if switcher::switching() { Vec::new() } else { std::mem::take(&mut later) };
-        let Some(live) = active() else { continue };
+        let (live, rules) = (active(), rules());
+        let auto = AUTO.load(Ordering::SeqCst);
         let mut placed = false;
         for hwnd in opened {
-            if let Some(what) = switcher::place_opened(&live, hwnd) {
+            let owned = during_switch.contains(&hwnd);
+            during_switch.retain(|h| *h != hwnd);
+            // The workspace's row wins; the app rule is for what it has no row for.
+            let row = live.as_ref().filter(|_| auto).and_then(|live| switcher::place_opened(live, hwnd));
+            if let (Some(what), Some(live)) = (&row, &live) {
                 log::info!("auto-apply {}: {what}", live.workspace.name);
                 placed = true;
+            } else if let Some(set) = rules.as_ref().filter(|_| !owned) {
+                if let Some(what) = switcher::place_by_rule(set, hwnd) {
+                    log::info!("app rule {what}");
+                }
             }
         }
+        let Some(live) = live else { continue };
         if placed || batch.iter().any(|j| matches!(j, Job::Drift)) {
             let drifted = workspace::drifted(&switcher::status(&live));
             *DRIFT.lock().unwrap_or_else(|e| e.into_inner()) =

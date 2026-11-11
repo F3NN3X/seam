@@ -1,5 +1,6 @@
 pub mod about;
 pub mod app_picker;
+pub mod app_rules;
 pub mod displays;
 pub mod general;
 pub mod help;

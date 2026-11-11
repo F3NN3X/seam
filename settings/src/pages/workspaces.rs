@@ -19,6 +19,7 @@ use seam::zones;
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
 use std::path::PathBuf;
+use std::rc::Rc;
 
 const LIST_WIDTH: f32 = 200.;
 
@@ -515,7 +516,10 @@ fn detail(panel: &mut Panel, ws: Workspace, window: &mut Window, cx: &mut Contex
     if states.any(|s| matches!(s, RowState::Moved | RowState::Minimized)) {
         rows.push(div().flex().px(px(16.)).py(px(12.)).child(snap_back_button(panel, &ws, cx)).into_any_element());
     }
-    let add = app_picker::button(panel, &ws, cx);
+    let id = ws.id.clone();
+    let add_app: app_picker::Add =
+        Rc::new(move |panel, rule, window, cx| workspace_editor::add_app(panel, &id, rule, window, cx));
+    let add = app_picker::button(panel, &ws.windows, "In this workspace", add_app, cx);
     rows.push(div().flex().px(px(16.)).py(px(12.)).child(add).into_any_element());
 
     let view = cx.entity();

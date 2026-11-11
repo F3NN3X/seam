@@ -1368,9 +1368,17 @@ pub fn place_opened(live: &LiveWorkspace, hwnd: isize) -> Option<String> {
     let (row, rule) = (free[hit], &ws.windows[free[hit]]);
     let app = app_name(rule);
     let geos = geometry(&live.screens, live.gap);
-    let target = destination(rule, &geos, h, live.size_mode, true);
+    let moved = move_opened(h, rule, &geos, live.size_mode);
+    winutil::set_ws_stamp(h, key, row);
+    let what = if moved { "placed" } else { "already in place" };
+    Some(format!("{app} for row {}: {what} in {} ms", row + 1, started.elapsed().as_millis()))
+}
+
+/// Move a window that just opened to where the rule puts it. Whether it moved.
+fn move_opened(h: HWND, rule: &Rule, geos: &[Geo], mode: WindowSize) -> bool {
+    let target = destination(rule, geos, h, mode, true);
     let now = target.as_ref().and_then(|(geo, ..)| now_of(h, geo.dpi));
-    let moved = match (target, now) {
+    match (target, now) {
         (Some((geo, kind, note)), Some(now)) if !in_place(&kind, &now, geo.bounds) => {
             if let Some(note) = note {
                 log::info!("{note}");
@@ -1378,15 +1386,49 @@ pub fn place_opened(live: &LiveWorkspace, hwnd: isize) -> Option<String> {
             let on_screen = geo.bounds.contains(centre(now.window).0, centre(now.window).1);
             let crosses = winutil::monitor_dpi(h) != geo.dpi;
             let (was, before, dpi) = (now.shown, now.window, geo.dpi);
-            let m = Move { hwnd, app: app.clone(), kind, was, on_screen, crosses, dpi, before };
+            let m = Move { hwnd: h.0 as isize, app: app_name(rule), kind, was, on_screen, crosses, dpi, before };
             // A switch that starts meanwhile has the last word.
             place_all(std::slice::from_ref(&m), &mut Vec::new(), &switching) > 0
         }
         _ => false,
-    };
-    winutil::set_ws_stamp(h, key, row);
+    }
+}
+
+/// The app rules, with what placing a window by one needs (D270).
+pub struct AppRules {
+    pub rules: Vec<Rule>,
+    pub screens: Vec<Screen>,
+    pub gap: u32,
+    pub pins_stay: bool,
+    /// Lower-case exe names Seam never manages: a rule doesn't apply to them.
+    pub exclude: Vec<String>,
+    pub size_mode: WindowSize,
+}
+
+/// Put a window that just opened where its app's rule puts it, once. A rule whose
+/// screen isn't connected leaves the window where it is. Returns what happened, for
+/// the log, or `None` for a window no rule applies to.
+pub fn place_by_rule(set: &AppRules, hwnd: isize) -> Option<String> {
+    let started = Instant::now();
+    let h = hwnd_of(hwnd);
+    let valid = unsafe { IsWindow(Some(h)) }.as_bool();
+    if !valid || winutil::ws_stamp(h).is_some() || winutil::is_minimized(h) || switching() {
+        return None;
+    }
+    let _com = Com::enter();
+    let seen = seen_of(h, 0, &set.exclude, &mut Procs::new(), &mut |_, _| {})?;
+    if seen.elevated || stays(seen.pin, set.pins_stay) {
+        return None;
+    }
+    let hit = workspace::assign(&set.rules, std::slice::from_ref(&seen.cand)).iter().position(Option::is_some)?;
+    let rule = &set.rules[hit];
+    let geos = geometry(&set.screens, set.gap);
+    if !geos.iter().any(|g| g.id == rule.monitor) {
+        return None;
+    }
+    let moved = move_opened(h, rule, &geos, set.size_mode);
     let what = if moved { "placed" } else { "already in place" };
-    Some(format!("{app} for row {}: {what} in {} ms", row + 1, started.elapsed().as_millis()))
+    Some(format!("{}: {what} in {} ms", app_name(rule), started.elapsed().as_millis()))
 }
 
 // ---- Reopen (D119)

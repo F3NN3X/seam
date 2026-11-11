@@ -207,6 +207,16 @@ pub const TOPICS: &[Topic] = &[
         opens: Some(Page::Workspaces),
     },
     Topic {
+        title: "Where apps open",
+        blocks: &[
+            Text("**Where apps open**, on the Zones page, sends an app's window to a place whenever it opens, with or without a workspace. **Add an app**, then pick its screen and zone, or the full screen."),
+            Text("**Put apps in place when they open** on Workspaces handles the workspace in use: a window goes where that workspace's row for the app says. An app rule is for any other time. When the workspace in use has a row for the app, the row wins."),
+            Text("A rule moves a window once, a moment after it opens. Dialogs, windows that open while a workspace switches, apps that run as administrator and apps under **Left alone** stay where they open, and so does a window whose rule's screen isn't connected."),
+            Text("**Left alone** lists the apps Seam never manages. Remove an app there to manage it again."),
+        ],
+        opens: Some(Page::Zones),
+    },
+    Topic {
         title: "Last session",
         blocks: &[
             Text("**Offer to restore my windows after I sign in** keeps a hidden last session for each desk: which apps are where, and which are pinned. It's off until you turn it on."),

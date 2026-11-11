@@ -82,6 +82,10 @@ Pick a layout for each screen (Columns, Rows, Grid or Priority), hold **Shift** 
 - **Keep windows in their zones** (experimental, off by default) moves snapped windows back into their zones after a screen, resolution or scaling change, or after the PC wakes. Windows you've moved since they snapped are left alone.
 - Layouts belong to the set of screens you have connected, so each desk keeps its own.
 
+#### Where apps open
+
+**Where apps open**, at the bottom of the Zones page, puts an app's window in a place whenever it opens, with or without a workspace. **Add an app**, pick its screen and a zone (or the full screen), and the next window of that app goes there once, a moment after it opens. **Put apps in place when they open** on Workspaces handles the workspace in use, and when that workspace has a row for the app, the row wins. Dialogs, apps that run as administrator and apps listed under **Left alone** are never moved, and a rule whose screen isn't connected does nothing. **Left alone** is the list of apps Seam never manages.
+
 Windows 11 shows its own snap layouts when you drag a window to the top of the screen. Seam leaves that alone. To turn it off, go to **Settings > System > Multitasking** and switch off "Show snap layouts when I drag a window to the top of my screen".
 
 ### Window control
@@ -139,7 +143,7 @@ A workspace saves which app is on which screen and in which zone (or at its own 
 - The rows are the start order. Drag one by its grip, or press Alt+Up and Alt+Down on it.
 - Click an app's name for its launch details: a delay of up to 30 seconds, and **Wait for this app's window before opening the next**, which shows as a "then wait" line. Apps that are already running are put in place first, and each started app as soon as its window shows.
 - **Add an app** picks one from the windows open now or from the Start menu's apps.
-- The **...** on a row removes the app, or with **Never include this app** also keeps it out of every capture and of the zones. **Never manage these apps** on General lists those apps.
+- The **...** on a row removes the app, or with **Never include this app** also keeps it out of every capture and of the zones. **Left alone** on the Zones page lists those apps.
 
 **Live status.** While the page is open, the **Now** column shows how each app is doing: in place, moved, minimized, not running (with "Will open" when the switch would start it), running in the background (apps that close to the tray), or can't be moved because it runs as administrator. When something moved or was minimized, **Put windows back** puts it back. That's Snap back, which also has a shortcut, **Snap back to this workspace**, and a Stream Deck key.
 

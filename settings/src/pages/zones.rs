@@ -1,6 +1,6 @@
 //! Zones: a layout for each screen, and how dragging a window snaps to it.
 
-use crate::pages::zone_editor;
+use crate::pages::{app_rules, zone_editor};
 use crate::panel::Panel;
 use crate::theme::{palette, Palette};
 use crate::ui::{self, card, row, section, switch};
@@ -780,6 +780,7 @@ pub fn render(panel: &mut Panel, window: &mut Window, cx: &mut Context<Panel>) -
             div().flex().flex_col().gap(px(12.)).child(snapping).child(card(vec![on_screen_row, refit_row], p)),
             p,
         ))
-        .child(section("Windows", windows_card, p));
+        .child(section("Windows", windows_card, p))
+        .child(app_rules::view(panel, cx));
     body
 }

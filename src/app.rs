@@ -228,10 +228,10 @@ struct TileUndo {
     sig: String,
     /// The screen's id.
     screen: String,
-    /// The tile gave the screen its layout, so Undo takes it away.
-    picked: bool,
-    /// Each moved window where it was.
-    back: Vec<snap::Placement>,
+    /// The layout the tile gave the screen, taken away again if it is still there.
+    picked: Option<zones::ZoneLayout>,
+    /// Each moved window, put back unless it has moved since.
+    back: Vec<wincontrol::tile::Back>,
     until: Instant,
 }
 

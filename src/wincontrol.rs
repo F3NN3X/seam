@@ -73,14 +73,16 @@ struct Planned {
     list: Vec<Placement>,
     /// A screen's layout a group command changed, saved before anything moves.
     layout: Option<(String, ZoneLayout, Option<regroup::Given>)>,
-    /// What a tile did, or why it did nothing.
-    tile: Option<Result<tile::Done, String>>,
+    /// What a tile did.
+    tile: Option<tile::Done>,
     reply: Option<Sender<Reply>>,
 }
 
 static SLOT: Mutex<Option<Job>> = Mutex::new(None);
 static WAKE: Condvar = Condvar::new();
 static PLANNED: Mutex<Option<Planned>> = Mutex::new(None);
+/// Why a tile with no API client waiting did nothing. It has its own place, so it can't cancel a move waiting in PLANNED.
+static NOTE: Mutex<Option<String>> = Mutex::new(None);
 
 fn answer(reply: Option<Sender<Reply>>, result: Reply) {
     if let Some(tx) = reply {
@@ -112,12 +114,8 @@ pub fn start(job: Job) {
 /// it can't be saved nothing moves. A tile answers with what it did, or with why it
 /// did nothing when no API client is waiting to be told.
 pub fn planned(save: impl FnOnce(&str, ZoneLayout) -> bool) -> Option<Result<tile::Done, String>> {
-    let plan = PLANNED.lock().unwrap_or_else(|e| e.into_inner()).take()?;
-    if let Some(Err(why)) = plan.tile {
-        let unheard = plan.reply.is_none();
-        answer(plan.reply, Err(RpcError::new(api::REFUSED, why.clone())));
-        return unheard.then_some(Err(why));
-    }
+    let note = NOTE.lock().unwrap_or_else(|e| e.into_inner()).take();
+    let Some(plan) = PLANNED.lock().unwrap_or_else(|e| e.into_inner()).take() else { return note.map(Err) };
     if let Some((screen, layout, keep)) = plan.layout {
         if !save(&screen, layout) {
             answer(plan.reply, Err(RpcError::new(api::BUSY, "Seam is busy, try again")));
@@ -126,7 +124,7 @@ pub fn planned(save: impl FnOnce(&str, ZoneLayout) -> bool) -> Option<Result<til
         regroup::saved(&screen, keep);
     }
     snap::place_all(plan.list);
-    let done = plan.tile.and_then(Result::ok);
+    let done = plan.tile;
     let counts = done.as_ref().map(|d| json!({ "ok": true, "tiled": d.tiled, "left": d.left }));
     answer(plan.reply, Ok(counts.unwrap_or_else(|| json!({ "ok": true }))));
     done.map(Ok)
@@ -161,11 +159,9 @@ fn work() {
             Ok(Outcome::Regroup(list, screen, layout, keep)) => Ok(Some((list, Some((screen, layout, keep)), None))),
             Ok(Outcome::Tile(plan)) => {
                 let plan = *plan;
-                Ok(Some((plan.list, plan.layout.map(|(screen, layout)| (screen, layout, None)), Some(Ok(plan.done)))))
+                Ok(Some((plan.list, plan.layout.map(|(screen, layout)| (screen, layout, None)), Some(plan.done))))
             }
             Ok(Outcome::Done) => Ok(None),
-            // A tile that did nothing is told to the screen, not only logged.
-            Err(why) if matches!(job.task, Task::Tile(_)) => Ok(Some((Vec::new(), None, Some(Err(why))))),
             Err(why) => Err(why),
         };
         match planned {
@@ -186,7 +182,15 @@ fn work() {
                     Task::Group(verb) => log::info!("window {verb:?}: {why}"),
                     Task::Tile(_) => log::info!("tile screen: {why}"),
                 }
-                answer(reply, Err(RpcError::new(api::REFUSED, why)));
+                // A tile from a key or the tray has nobody to answer, so the screen is told.
+                if matches!(job.task, Task::Tile(_)) && reply.is_none() {
+                    *NOTE.lock().unwrap_or_else(|e| e.into_inner()) = Some(why);
+                    unsafe {
+                        let _ = PostMessageW(Some(hwnd_of(job.owner)), WM_APP_WINDOW, WPARAM(0), LPARAM(0));
+                    }
+                } else {
+                    answer(reply, Err(RpcError::new(api::REFUSED, why)));
+                }
             }
         }
     }

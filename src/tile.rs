@@ -32,10 +32,18 @@ pub struct Done {
     pub left: usize,
     /// The screen's id.
     pub screen: String,
-    /// The tile gave the screen its layout, which Undo takes away again.
-    pub picked: bool,
-    /// Each moved window where it was.
-    pub back: Vec<Placement>,
+    /// The layout the tile gave the screen, which Undo takes away again if it is still there.
+    pub picked: Option<ZoneLayout>,
+    /// Each moved window, for Undo.
+    pub back: Vec<Back>,
+}
+
+/// A window the tile moved.
+pub struct Back {
+    /// Where it was.
+    pub place: Placement,
+    /// Where the tile put it, to tell whether it has moved since.
+    pub set: Rect,
 }
 
 pub struct Plan {
@@ -119,13 +127,11 @@ pub(super) fn run(job: &Job, at: At) -> Result<Outcome, String> {
             seen.push((h, rect));
         }
     }
-    let beyond = seen.len().saturating_sub(MAX_TILED);
-    seen.truncate(MAX_TILED);
 
     let existing = job.layouts.get(screens[s].mm.index).and_then(Option::as_ref);
     let layout = match existing {
         Some(layout) => layout.clone(),
-        None => groups::pick_for_count(seen.len()).ok_or("Nothing to tile")?,
+        None => groups::pick_for_count(seen.len().min(MAX_TILED)).ok_or("Nothing to tile")?,
     };
     let gap = (job.gap.min(MAX_GAP) as f32 * g.dpi as f32 / 96.0).round() as i32;
     let (zones, cells) = (zones::rects(&layout.tree, g.work, gap), zones::rects(&layout.tree, g.work, 0));
@@ -133,6 +139,7 @@ pub(super) fn run(job: &Job, at: At) -> Result<Outcome, String> {
     // Windows already in a zone keep it. The others are loose.
     let mut taken = vec![false; zones.len()];
     let mut loose: Vec<(HWND, Rect)> = Vec::new();
+    // Every window is checked before the cap, so a zone held past the ninth isn't taken as free.
     for (h, rect) in seen {
         match existing.and_then(|_| placed(job, &geo, s, h, rect)) {
             Some((a, b)) => regroup::covered(&cells, a, b).into_iter().for_each(|i| taken[i] = true),
@@ -142,6 +149,8 @@ pub(super) fn run(job: &Job, at: At) -> Result<Outcome, String> {
     if loose.is_empty() {
         return Err("Nothing to tile".into());
     }
+    let beyond = loose.len().saturating_sub(MAX_TILED);
+    loose.truncate(MAX_TILED);
     let open: Vec<usize> = (0..zones.len()).filter(|i| !taken[*i]).collect();
     if open.is_empty() {
         return Err("Every zone already has a window".into());
@@ -152,13 +161,13 @@ pub(super) fn run(job: &Job, at: At) -> Result<Outcome, String> {
     let picks = assign(&zones, open, &rects, first);
 
     let list = picks.iter().map(|(w, z)| into_zone(loose[*w].0, g, *z, *z, zones[*z])).collect();
-    let back = picks.iter().map(|(w, _)| free(loose[*w].0, g, loose[*w].1)).collect();
+    let back = picks.iter().map(|(w, z)| Back { place: free(loose[*w].0, g, loose[*w].1), set: zones[*z] }).collect();
     let done = Done {
         number: g.number,
         tiled: picks.len(),
         left: beyond + loose.len() - picks.len(),
         screen: g.id.clone(),
-        picked: existing.is_none(),
+        picked: existing.is_none().then(|| layout.clone()),
         back,
     };
     let layout = existing.is_none().then(|| (g.id.clone(), layout));

@@ -9,7 +9,9 @@ use wincontrol::tile::At;
 /// Queue a tile. The worker answers an API client; a key or the tray hears of a
 /// refusal in a notice.
 pub(super) fn start_tile(app: &mut App, at: At, reply: Option<Sender<Reply>>) {
-    let refusal = aside(app).or_else(|| (!app.cfg.zones.enabled).then(|| "Zones are off".to_string()));
+    let refusal = aside(app)
+        .or_else(|| (!app.cfg.zones.enabled).then(|| "Zones are off".to_string()))
+        .or_else(|| crate::switcher::switching().then(|| "A workspace switch is still running".to_string()));
     if let Some(why) = refusal {
         log::info!("tile screen: {why}");
         match reply {
@@ -63,22 +65,34 @@ pub(super) fn tile_finished(app: &mut App, result: Option<Result<wincontrol::til
     }
 }
 
-/// The notice was clicked: give the screen its layout back, none if the tile picked
-/// one, and put each window where it was, while that's still within 8 s.
+/// The notice was clicked: take away the layout the tile picked, if it is still the
+/// screen's, and put each window that is still where the tile set it back where it
+/// was, while that's still within 8 s. A window that was maximized comes back at its
+/// size from then, not maximized: placement has no way to maximize.
 pub(super) fn undo_tile(app: &mut App) {
     let Some(undo) = app.tile_undo.take() else { return };
     if Instant::now() > undo.until || undo.sig != app.sig {
         log::info!("tile screen: too late to undo");
         return;
     }
-    if undo.picked {
+    if let Some(picked) = undo.picked {
         if let Some(desk) = app.cfg.desks.get_mut(&app.sig) {
-            desk.zones.remove(&undo.screen);
+            let same = desk.zones.get(&undo.screen).and_then(zones::layout_of).is_some_and(|now| now == picked);
+            if same {
+                desk.zones.remove(&undo.screen);
+                persist(app);
+                snap::update(app.hwnd, &app.cfg, &app.sig, &app.mons, aside(app).as_deref());
+                publish(app);
+            }
         }
-        persist(app);
-        snap::update(app.hwnd, &app.cfg, &app.sig, &app.mons, aside(app).as_deref());
-        publish(app);
     }
-    snap::place_all(undo.back);
+    let here = |b: &wincontrol::tile::Back| {
+        let h = HWND(b.place.hwnd as *mut _);
+        let (set, sized) = (b.set, seam::winutil::is_resizable(h));
+        let near = |a: i32, b: i32| (a - b).abs() <= 4;
+        seam::winutil::visible_rect(h)
+            .is_some_and(|r| near(r.x, set.x) && near(r.y, set.y) && (!sized || (near(r.w, set.w) && near(r.h, set.h))))
+    };
+    snap::place_more(undo.back.into_iter().filter(here).map(|b| b.place).collect());
     log::info!("tile screen: undone");
 }

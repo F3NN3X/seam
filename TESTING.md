@@ -174,7 +174,7 @@ Turn the debug log on. **Where apps open** is the last card on Zones, with the c
 
 - [ ] **Add a rule.** **Add an app**, pick Notepad from **Open now**, and it gets a row with its icon and a **Goes to** choice. Set it to screen 1, zone 2. `app_rules` in `config.json` holds one entry, and Undo takes the change back. Picking Notepad again says "Already has a place" and adds nothing.
 - [ ] **Opens in place.** With **Put apps in place when they open** off and no workspace in use, close Notepad and open it: it goes to zone 2 of screen 1 once, and the log has `app rule notepad: placed`. Drag it elsewhere: it stays there.
-- [ ] **The workspace wins.** Switch to a workspace that puts Notepad on another screen, turn **Put apps in place when they open** on, close Notepad and open it: it goes where the workspace says, not to the rule's zone.
+- [ ] **The workspace owns the app.** Switch to a workspace that has a row for Notepad (placed on another screen), close Notepad and open it, with **Put apps in place when they open** on and then off: the rule never moves it. Open a second Notepad window after the row is taken: the rule still doesn't move it.
 - [ ] **Left alone.** Add Notepad to **Left alone** (**Never include this app** on a workspace row) and open it: it opens where Windows puts it, though the rule is still listed. **Remove** under **Left alone** brings the rule back into effect.
 - [ ] **Screen unplugged.** Make the rule's screen go away (unplug it or turn it off) and open Notepad: nothing moves, and there's no `app rule` line.
 - [ ] **A dialog isn't moved.** Press Ctrl+O in Notepad: the Open dialog stays where Windows puts it, while a new Notepad window still goes to the rule's zone.

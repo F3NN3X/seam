@@ -1408,7 +1408,7 @@ pub struct AppRules {
 /// Put a window that just opened where its app's rule puts it, once. A rule whose
 /// screen isn't connected leaves the window where it is. Returns what happened, for
 /// the log, or `None` for a window no rule applies to.
-pub fn place_by_rule(set: &AppRules, hwnd: isize) -> Option<String> {
+pub fn place_by_rule(set: &AppRules, owner: Option<&Workspace>, hwnd: isize) -> Option<String> {
     let started = Instant::now();
     let h = hwnd_of(hwnd);
     let valid = unsafe { IsWindow(Some(h)) }.as_bool();
@@ -1420,13 +1420,20 @@ pub fn place_by_rule(set: &AppRules, hwnd: isize) -> Option<String> {
     if seen.elevated || stays(seen.pin, set.pins_stay) {
         return None;
     }
-    let hit = workspace::assign(&set.rules, std::slice::from_ref(&seen.cand)).iter().position(Option::is_some)?;
+    // The workspace in use owns every window of an app it has a row for.
+    let cand = std::slice::from_ref(&seen.cand);
+    if owner.is_some_and(|ws| workspace::assign(&ws.windows, cand).iter().any(Option::is_some)) {
+        return None;
+    }
+    let hit = workspace::assign(&set.rules, cand).iter().position(Option::is_some)?;
     let rule = &set.rules[hit];
     let geos = geometry(&set.screens, set.gap);
     if !geos.iter().any(|g| g.id == rule.monitor) {
         return None;
     }
     let moved = move_opened(h, rule, &geos, set.size_mode);
+    // Stamped either way, so it's never placed again. No workspace has this key.
+    winutil::set_ws_stamp(h, workspace::stamp_key("app_rule"), hit);
     let what = if moved { "placed" } else { "already in place" };
     Some(format!("{}: {what} in {} ms", app_name(rule), started.elapsed().as_millis()))
 }

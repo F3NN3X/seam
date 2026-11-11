@@ -441,7 +441,12 @@ impl Wm {
         sync_hook(&mut self.show_hook, show, show, self.shown_to.is_some() || auto);
         sync_hook(&mut self.name_hook, EVENT_OBJECT_NAMECHANGE, EVENT_OBJECT_NAMECHANGE, auto);
         let active = self.workspace_active;
-        sync_hook(&mut self.movesize_hook, EVENT_SYSTEM_MOVESIZESTART, EVENT_SYSTEM_MOVESIZEEND, active);
+        sync_hook(
+            &mut self.movesize_hook,
+            EVENT_SYSTEM_MOVESIZESTART,
+            EVENT_SYSTEM_MOVESIZEEND,
+            active || self.app_rules,
+        );
         let minimize = (EVENT_SYSTEM_MINIMIZESTART, EVENT_SYSTEM_MINIMIZEEND);
         sync_hook(&mut self.minimize_hook, minimize.0, minimize.1, active || self.spotlight);
         // Win+arrow snaps and the maximize button send no drag or minimize event.
@@ -505,6 +510,10 @@ impl Wm {
             return;
         }
         self.seen_before.insert(key);
+        // A window that shows while a switch runs is the switch's, even if it settles after.
+        if crate::switcher::switching() {
+            crate::live::owned_by_switch(key);
+        }
         if winutil::is_minimized(h) || winutil::ws_stamp(h).is_some() {
             return;
         }

@@ -63,6 +63,8 @@ enum Job {
 static ACTIVE: Mutex<Option<Arc<LiveWorkspace>>> = Mutex::new(None);
 static RULES: Mutex<Option<Arc<AppRules>>> = Mutex::new(None);
 /// "Put apps in place when they open" is on, so the active workspace places what opens.
+/// Windows that showed while a switch ran, which no app rule places.
+static SWITCH_OWNED: Mutex<Vec<isize>> = Mutex::new(Vec::new());
 static AUTO: AtomicBool = AtomicBool::new(false);
 static OWNER: AtomicIsize = AtomicIsize::new(0);
 static DRIFT: Mutex<Option<Drift>> = Mutex::new(None);
@@ -100,6 +102,11 @@ pub fn take_drift() -> Option<Drift> {
 /// Look again whether the active workspace drifted.
 pub fn check_drift() {
     send(Job::Drift);
+}
+
+/// A window showed while a switch was running. Called from the seam-wm thread.
+pub fn owned_by_switch(hwnd: isize) {
+    SWITCH_OWNED.lock().unwrap_or_else(|e| e.into_inner()).push(hwnd);
 }
 
 /// A window opened and has settled. Called from the seam-wm thread, which never waits.
@@ -150,7 +157,6 @@ fn send(job: Job) {
 /// so no app rule places them.
 fn work(jobs: Receiver<Job>) {
     let mut later: Vec<isize> = Vec::new();
-    let mut during_switch: Vec<isize> = Vec::new();
     while let Ok(first) = jobs.recv() {
         let batch: Vec<Job> = std::iter::once(first).chain(jobs.try_iter()).collect();
         for job in &batch {
@@ -165,9 +171,6 @@ fn work(jobs: Receiver<Job>) {
             if let Job::Opened(hwnd) = job {
                 if !later.contains(hwnd) {
                     later.push(*hwnd);
-                    if switcher::switching() {
-                        during_switch.push(*hwnd);
-                    }
                 }
             }
         }
@@ -177,15 +180,19 @@ fn work(jobs: Receiver<Job>) {
         let auto = AUTO.load(Ordering::SeqCst);
         let mut placed = false;
         for hwnd in opened {
-            let owned = during_switch.contains(&hwnd);
-            during_switch.retain(|h| *h != hwnd);
+            let owned = {
+                let mut list = SWITCH_OWNED.lock().unwrap_or_else(|e| e.into_inner());
+                let held = list.contains(&hwnd);
+                list.retain(|h| *h != hwnd);
+                held
+            };
             // The workspace's row wins; the app rule is for what it has no row for.
             let row = live.as_ref().filter(|_| auto).and_then(|live| switcher::place_opened(live, hwnd));
             if let (Some(what), Some(live)) = (&row, &live) {
                 log::info!("auto-apply {}: {what}", live.workspace.name);
                 placed = true;
             } else if let Some(set) = rules.as_ref().filter(|_| !owned) {
-                if let Some(what) = switcher::place_by_rule(set, hwnd) {
+                if let Some(what) = switcher::place_by_rule(set, live.as_ref().map(|l| &l.workspace), hwnd) {
                     log::info!("app rule {what}");
                 }
             }

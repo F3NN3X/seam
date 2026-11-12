@@ -651,9 +651,26 @@ pub fn merge_capture(
         taken[*i as usize] = true;
     }
     let cands = as_candidates(&fresh);
-    let open: Vec<&Candidate> = cands.iter().zip(&taken).filter(|(_, t)| !**t).map(|(c, _)| c).chain(others).collect();
-    let gone: Vec<bool> =
-        old.windows.iter().zip(&found).map(|(row, hit)| removes && hit.is_none() && !app_open(row, &open)).collect();
+    let unpaired = || cands.iter().zip(&taken).filter(|(_, t)| !**t).map(|(c, _)| c);
+    // A row whose own window was closed isn't kept by another window of its app, unless
+    // that one is held by another workspace's row or is one the capture made no row of.
+    let held: Vec<&Candidate> = unpaired().filter(|c| elsewhere.contains(&c.hwnd)).chain(others).collect();
+    let open: Vec<&Candidate> = unpaired().chain(others).collect();
+    let gone: Vec<bool> = old
+        .windows
+        .iter()
+        .zip(&found)
+        .enumerate()
+        .map(|(o, (row, hit))| {
+            let wins = match bound.get(o).copied().flatten() {
+                Some(Bound::Gone) => &held,
+                // Its own window is open, though the capture took none of it.
+                Some(Bound::Alive(_)) => return false,
+                _ => &open,
+            };
+            removes && hit.is_none() && !app_open(row, wins)
+        })
+        .collect();
     // A capture that finds nothing of the workspace would only empty it.
     let gone = if gone.iter().all(|g| *g) { vec![false; gone.len()] } else { gone };
     let mut windows = Vec::with_capacity(old.windows.len());
@@ -1146,6 +1163,11 @@ mod tests {
         let merged = merge_capture(&old, vec![open], &bound, &none, &[], true);
         assert_eq!((merged.windows.len(), merged.removed, merged.from, merged.rows), (1, 1, vec![Some(1)], vec![0]));
         assert_eq!(merged.windows[0].place, old.windows[1].place);
+        // Another Explorer window nobody holds doesn't keep the closed row.
+        let extra = rule(explorer, None, "CabinetWClass", "C");
+        let both =
+            merge_capture(&old, vec![rule(explorer, None, "CabinetWClass", "B"), extra], &bound, &none, &[], true);
+        assert_eq!((both.removed, both.from), (1, vec![Some(1), None]));
 
         // Stages end at a row that waits for its window.
         let mut waits: Vec<Rule> = (0..5).map(|_| rule(ff, None, "", "")).collect();

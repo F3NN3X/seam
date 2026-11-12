@@ -258,6 +258,9 @@ pub struct CaptureJob {
     /// "Remember folders and pages": read each Explorer window's folder and each
     /// browser's page. Never for the last session.
     pub places: bool,
+    /// "Update from screen removes apps that aren't open": the capture also names the
+    /// other windows of the desk, which costs a look at their processes.
+    pub removes: bool,
 }
 
 /// A capture's rules, the window each came from, and the other windows of the desk
@@ -361,7 +364,7 @@ fn capture_rules(job: &CaptureJob, session: bool) -> Captured {
                 log::info!("capture skipped {} {}: {why}", facts.class, facts.exe_name);
             }
         }));
-        if elsewhere {
+        if elsewhere && job.removes && !session {
             away.push(h);
         }
     }
@@ -385,7 +388,9 @@ fn capture_rules(job: &CaptureJob, session: bool) -> Captured {
     // A sticky window belongs to no workspace. The last session keeps it, pinned.
     for seen in seen {
         if !session && seen.pin & winutil::PIN_STICKY != 0 {
-            others.push(seen.cand);
+            if job.removes {
+                others.push(seen.cand);
+            }
             continue;
         }
         let h = hwnd_of(seen.cand.hwnd);
@@ -396,7 +401,9 @@ fn capture_rules(job: &CaptureJob, session: bool) -> Captured {
         let placed =
             visible.and_then(|v| geos.iter().find(|g| g.bounds.contains(centre(v).0, centre(v).1)).map(|g| (v, g)));
         let Some((visible, geo)) = placed else {
-            others.push(seen.cand);
+            if job.removes && !session {
+                others.push(seen.cand);
+            }
             continue;
         };
         let visible = match shown {

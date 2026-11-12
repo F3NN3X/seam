@@ -85,7 +85,8 @@ pub(super) fn job_screens(app: &App) -> Vec<SwitchScreen> {
 pub(super) fn capture_job(app: &App) -> CaptureJob {
     let exclude = app.cfg.zones.exclude.iter().map(|x| x.to_lowercase()).collect();
     let (screens, gap, places) = (job_screens(app), app.cfg.zones.gap, app.cfg.workspaces_remember_places);
-    CaptureJob { owner: app.hwnd.0 as isize, screens, gap, exclude, places }
+    let removes = app.cfg.workspaces_update_removes_closed;
+    CaptureJob { owner: app.hwnd.0 as isize, screens, gap, exclude, places, removes }
 }
 
 /// Start switching to a workspace on this desk. The worker does the rest and the

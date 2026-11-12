@@ -91,8 +91,14 @@ struct Reading;
 impl Reading {
     /// `None` while `MAX_READING` reads still run.
     fn enter() -> Option<Reading> {
-        let taken = READING.fetch_update(Ordering::SeqCst, Ordering::SeqCst, |n| (n < MAX_READING).then_some(n + 1));
-        taken.is_ok().then_some(Reading)
+        let mut n = READING.load(Ordering::SeqCst);
+        while n < MAX_READING {
+            match READING.compare_exchange_weak(n, n + 1, Ordering::SeqCst, Ordering::SeqCst) {
+                Ok(_) => return Some(Reading),
+                Err(now) => n = now,
+            }
+        }
+        None
     }
 }
 

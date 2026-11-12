@@ -6,6 +6,7 @@ All notable changes to Seam. The format follows [Keep a Changelog](https://keepa
 
 ### Added
 
+- **Swap with the window already in a zone** on Zones, on by default: dropping a window on a zone another snapped window holds makes them trade places, instead of one lying on the other. If the dropped window was loose, the other takes its old spot and size, and a drop across several held zones sends those windows to its old zones in the same order. Off keeps the overlap. `zones.swap_on_drop` in `config.json`.
 - Dragging the edge of a window in a zone moves the windows in the zones on the other side with it, live. No window goes below the smallest size its app allows: the next divider moves instead. When you let go, the window fits its zone, the layout is saved as Custom and every window stays snapped. Esc puts everything back. **Resize neighbours with a window** on Zones, on by default, and `zones.resize_neighbours` in `config.json`.
 - **Tile this screen's windows**: puts the loose windows on the screen under the pointer into its zones. A shortcut (no key until you set one), **Tile windows** in the tray menu (a submenu of screens when you have several), `screen.tile` in the API, and a **Tile screen** Stream Deck action. A screen with no layout is given one for the number of windows, and a notification offers Undo for 8 seconds.
 - **Main + stack** and **Stack + main** layouts on the Zones page: a main zone of two thirds beside two stacked zones. An older Seam reads a screen with one of them as having no zones.

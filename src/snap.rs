@@ -25,6 +25,9 @@ mod refit;
 #[path = "edges.rs"]
 mod edges;
 
+#[path = "swap.rs"]
+mod swap;
+
 pub use refit::{display_changed, found as refit_found, line_up_ended, WM_APP_REFIT};
 
 /// A window the tray couldn't move, probably because it runs as administrator.
@@ -96,6 +99,8 @@ struct Drag {
     was_maximized: bool,
     /// The window carried a zone stamp when the drag began.
     stamped: bool,
+    /// The screen and zones it was snapped to when the drag began.
+    old_zone: Option<(String, usize, usize)>,
     /// What the window's snapped entry said when the drag began, if it was snapped.
     /// Its old size is given back at the drop, or carried to the next zone.
     was_snapped: Option<Option<Old>>,
@@ -480,7 +485,7 @@ impl Engine {
             // The work area may have moved since the overlay was last drawn. This only posts a list.
             zone_paint::build(specs(&geometry));
         }
-        let frame = if self.drags_sized() { winutil::visible_rect(hwnd) } else { None };
+        let frame = if self.drags_sized() || self.settings.swap_on_drop { winutil::visible_rect(hwnd) } else { None };
         let current = self.current(hwnd).map(|s| (s.old, (s.screen.clone(), s.from, s.to)));
         let was_snapped = current.as_ref().map(|(old, _)| *old);
         let stamped = winutil::has_zone_stamp(hwnd);
@@ -488,7 +493,7 @@ impl Engine {
         let timer = unsafe { SetTimer(None, 0, TICK_MS, Some(on_tick)) };
         let was_maximized = winutil::is_maximized(hwnd);
         let zone = current.map(|(_, zone)| zone);
-        let edges = self.edges_start(hwnd, &geometry, (zone, stamped), was_maximized);
+        let edges = self.edges_start(hwnd, &geometry, (zone.clone(), stamped), was_maximized);
         self.drag = Some(Drag {
             hwnd: key,
             phase: Phase::Waiting,
@@ -496,6 +501,7 @@ impl Engine {
             frame,
             was_maximized,
             stamped,
+            old_zone: zone,
             was_snapped,
             button,
             geometry,
@@ -682,7 +688,9 @@ impl Engine {
         };
         let g = &drag.geometry[screen];
         let rect = zones::span(g.zones[a], g.zones[b]);
+        let swap = self.swap_plan(drag, screen, (a.min(b), a.max(b)));
         self.snap_to(hwnd, g, (a.min(b), a.max(b)), rect, drag.was_snapped);
+        self.swap_start(swap);
     }
 
     /// A free drag that ended on another screen: with "Also when I drag a window to

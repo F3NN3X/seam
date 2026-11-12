@@ -172,6 +172,8 @@ pub struct ZoneSettings {
     pub edit_on_screen: bool,
     /// Dragging the edge of a window in a zone moves the windows in the zones beside it.
     pub resize_neighbours: bool,
+    /// Dropping a window into a zone another window holds swaps them instead of overlapping.
+    pub swap_on_drop: bool,
     /// Exe file names, case-insensitive.
     pub exclude: Vec<String>,
 }
@@ -187,6 +189,7 @@ impl Default for ZoneSettings {
             refit: false,
             edit_on_screen: true,
             resize_neighbours: true,
+            swap_on_drop: true,
             exclude: Vec::new(),
         }
     }

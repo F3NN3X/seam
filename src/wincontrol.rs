@@ -284,7 +284,7 @@ pub fn is_seam(h: HWND) -> bool {
 }
 
 /// A window Seam may move, or why not.
-fn movable(h: HWND, exclude: &[String]) -> Result<Rect, String> {
+pub(crate) fn movable(h: HWND, exclude: &[String]) -> Result<Rect, String> {
     if h.is_invalid() || !unsafe { IsWindow(Some(h)) }.as_bool() {
         return Err("No window has focus".into());
     }

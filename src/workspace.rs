@@ -609,65 +609,82 @@ fn pair(old: &[Rule], fresh: &[Rule], bound: &[Option<Bound>], elsewhere: &HashS
     assign_bound(old, &as_candidates(fresh), bound, elsewhere)
 }
 
+/// What "Update from screen" makes of a workspace's rows.
+pub struct Merged {
+    pub windows: Vec<Rule>,
+    /// For each row of `windows`, the row of the old workspace it kept, or `None` for
+    /// one the capture added.
+    pub from: Vec<Option<usize>>,
+    /// For each window of the capture, its row in `windows`.
+    pub rows: Vec<usize>,
+    /// How many rows were removed.
+    pub removed: usize,
+}
+
+/// Whether some window in `wins` is of the row's app: the same program, or the same AUMID.
+fn app_open(row: &Rule, wins: &[&Candidate]) -> bool {
+    wins.iter().any(|w| {
+        (!row.exe.is_empty() && w.exe.eq_ignore_ascii_case(&row.exe))
+            || row.aumid.as_ref().is_some_and(|a| w.aumid.as_ref() == Some(a))
+    })
+}
+
 /// "Update from screen": each row the capture has a window for takes where and how
 /// that window is now, and keeps its launch details and its place in the start
-/// order. A row with no window right now stays, unless `removes` (the setting
-/// "Update from screen removes apps that aren't open"), which drops it. New windows
-/// go at the end, topmost first. `bound` and `elsewhere` as `pair`.
+/// order. A row with no window right now stays. With `removes` (the setting "Update
+/// from screen removes apps that aren't open") it goes instead, unless its app still
+/// has a window the capture didn't give a row: bound elsewhere, or in `others` (windows
+/// of the desk it made no rule of, such as on another desktop). Nothing is removed
+/// when that would leave no rows of `old`. New windows go at the end, topmost first.
+/// `bound` and `elsewhere` as `pair`.
 pub fn merge_capture(
     old: &Workspace,
     fresh: Vec<Rule>,
     bound: &[Option<Bound>],
     elsewhere: &HashSet<isize>,
+    others: &[Candidate],
     removes: bool,
-) -> Vec<Rule> {
+) -> Merged {
     let found = pair(&old.windows, &fresh, bound, elsewhere);
     let mut taken = vec![false; fresh.len()];
-    let mut merged = Vec::with_capacity(old.windows.len());
-    for (row, hit) in old.windows.iter().zip(&found) {
+    for i in found.iter().flatten() {
+        taken[*i as usize] = true;
+    }
+    let cands = as_candidates(&fresh);
+    let open: Vec<&Candidate> = cands.iter().zip(&taken).filter(|(_, t)| !**t).map(|(c, _)| c).chain(others).collect();
+    let gone: Vec<bool> =
+        old.windows.iter().zip(&found).map(|(row, hit)| removes && hit.is_none() && !app_open(row, &open)).collect();
+    // A capture that finds nothing of the workspace would only empty it.
+    let gone = if gone.iter().all(|g| *g) { vec![false; gone.len()] } else { gone };
+    let mut windows = Vec::with_capacity(old.windows.len());
+    let mut from = Vec::with_capacity(old.windows.len());
+    let mut rows = vec![0; fresh.len()];
+    for (o, (row, hit)) in old.windows.iter().zip(&found).enumerate() {
+        if gone[o] {
+            continue;
+        }
         let mut row = row.clone();
         match hit {
             Some(i) => {
-                taken[*i as usize] = true;
+                rows[*i as usize] = windows.len();
                 row.take_place(&fresh[*i as usize]);
             }
-            None if removes => continue,
             // With no window, nothing says how it stacks or whether it has the focus.
             None => {
                 row.z = u32::MAX;
                 row.focused = false;
             }
         }
-        merged.push(row);
+        windows.push(row);
+        from.push(Some(o));
     }
-    merged.extend(fresh.into_iter().zip(taken).filter(|(_, t)| !t).map(|(r, _)| r));
-    merged
-}
-
-/// How many rows of `old` the capture has no window for, which `merge_capture` removes
-/// with `removes`.
-pub fn closed_rows(old: &Workspace, fresh: &[Rule], bound: &[Option<Bound>], elsewhere: &HashSet<isize>) -> usize {
-    pair(&old.windows, fresh, bound, elsewhere).iter().filter(|hit| hit.is_none()).count()
-}
-
-/// For each window of a capture, the row `merge_capture` gives it, with the same `removes`.
-pub fn capture_rows(
-    old: &Workspace,
-    fresh: &[Rule],
-    bound: &[Option<Bound>],
-    elsewhere: &HashSet<isize>,
-    removes: bool,
-) -> Vec<usize> {
-    let mut rows = vec![None; fresh.len()];
-    let mut kept = 0;
-    for hit in pair(&old.windows, fresh, bound, elsewhere) {
-        if let Some(i) = hit {
-            rows[i as usize] = Some(kept);
-        }
-        kept += usize::from(hit.is_some() || !removes);
+    for (i, rule) in fresh.into_iter().enumerate().filter(|(i, _)| !taken[*i]) {
+        rows[i] = windows.len();
+        windows.push(rule);
+        from.push(None);
     }
-    let mut next = kept..;
-    rows.into_iter().map(|row| row.or_else(|| next.next()).unwrap_or_default()).collect()
+    let removed = gone.iter().filter(|g| **g).count();
+    Merged { windows, from, rows, removed }
 }
 
 /// Where each row of `old` went in `new` after an edit reordered, removed or added
@@ -1099,18 +1116,36 @@ mod tests {
         let mut moved = rule(ff, None, "MozillaWindowClass", "Docs — Mozilla Firefox");
         moved.target = Target::Zone { zone: 2, span_to: None };
         let fresh = vec![rule("notepad.exe", None, "", ""), moved];
-        let merged = merge_capture(&old, fresh.clone(), &[], &HashSet::new(), false);
+        let none = HashSet::new();
+        let merged = merge_capture(&old, fresh.clone(), &[], &none, &[], false).windows;
         let rows: Vec<(&str, bool, u32, bool)> =
             merged.iter().map(|r| (r.exe.as_str(), r.launch, r.delay_ms, r.wait_for_window)).collect();
         assert_eq!(rows, [(ff, false, 1500, true), (spotify, true, 0, false), ("notepad.exe", true, 0, false)]);
         assert_eq!(merged[0].target, Target::Zone { zone: 2, span_to: None });
 
-        // With the setting on, the row with no window goes, and the capture's rows follow.
-        let merged = merge_capture(&old, fresh.clone(), &[], &HashSet::new(), true);
-        let exes: Vec<&str> = merged.iter().map(|r| r.exe.as_str()).collect();
-        assert_eq!(exes, [ff, "notepad.exe"]);
-        assert_eq!(capture_rows(&old, &fresh, &[], &HashSet::new(), true), [1, 0]);
-        assert_eq!(capture_rows(&old, &fresh, &[], &HashSet::new(), false), [2, 0]);
+        // With the setting on, the row with no window goes, and the others say where they were.
+        let on = merge_capture(&old, fresh.clone(), &[], &none, &[], true);
+        let exes: Vec<&str> = on.windows.iter().map(|r| r.exe.as_str()).collect();
+        assert_eq!((exes, on.removed), ([ff, "notepad.exe"].to_vec(), 1));
+        assert_eq!((on.from, on.rows), (vec![Some(0), None], vec![1, 0]));
+        // It stays when its app has a window the capture made no row of, or nothing else is left.
+        let other =
+            Candidate { hwnd: 9, exe: spotify.into(), aumid: None, class: String::new(), title: String::new(), z: 0 };
+        assert_eq!(merge_capture(&old, fresh.clone(), &[], &none, &[other], true).removed, 0);
+        assert_eq!(merge_capture(&old, vec![rule("notepad.exe", None, "", "")], &[], &none, &[], true).removed, 0);
+
+        // Two Explorer place rows, the first one's window closed: it goes, the second keeps its
+        // binding at row 0, and Undo's map gives the old row back.
+        let explorer = r"C:\Windows\explorer.exe";
+        let (mut a, mut b) = (rule(explorer, None, "CabinetWClass", "A"), rule(explorer, None, "CabinetWClass", "B"));
+        a.place = Some(Place::Folder(r"C:\A".into()));
+        b.place = Some(Place::Folder(r"C:\B".into()));
+        let old = Workspace { windows: vec![a, b], ..Workspace::default() };
+        let open = rule(explorer, None, "CabinetWClass", "B");
+        let bound = [Some(Bound::Gone), Some(Bound::Alive(0))];
+        let merged = merge_capture(&old, vec![open], &bound, &none, &[], true);
+        assert_eq!((merged.windows.len(), merged.removed, merged.from, merged.rows), (1, 1, vec![Some(1)], vec![0]));
+        assert_eq!(merged.windows[0].place, old.windows[1].place);
 
         // Stages end at a row that waits for its window.
         let mut waits: Vec<Rule> = (0..5).map(|_| rule(ff, None, "", "")).collect();

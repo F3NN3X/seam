@@ -548,6 +548,8 @@ Turn the debug log on. Close every app of a test workspace, with **Start missing
 - [ ] **Off keeps a closed app.** With the setting off, close one app of a workspace and choose **Update from screen**. Its row stays, not running.
 - [ ] **On removes it, Undo restores it.** Turn on **Update from screen removes apps that aren't open** on Workspaces. Close the middle app of three and choose **Update from screen**. Its row goes, the others keep their order and details, and a notification says "Removed 1 app that wasn't open. Click to undo". Click it within 8 seconds: the row is back in the same position with its delay, wait, place and zone.
 - [ ] **A place row.** With **Remember folders and pages** on, close the Explorer window of a row that holds a folder and choose **Update from screen**. The row goes. Click the notification: it comes back with its folder. With two such rows, the one after it still follows its own window after the removal and after Undo.
+- [ ] **Still open elsewhere.** With the setting on, move one app of the workspace to another virtual desktop and choose **Update from screen**. Its row stays. Close every app of the workspace and choose it again: nothing is removed.
+- [ ] **Undo after a change.** Remove an app with **Update from screen**, then edit a row, or choose **Update from screen** again, before clicking the first notification. Clicking it does nothing, and the log says the workspace changed.
 - [ ] **Quick save is unaffected.** With the setting on, close an app of the workspace in use and press the **Save windows to the active workspace** shortcut. The row stays. **Where it is now** and Capture don't remove anything either.
 
 ### Pinned windows and switches

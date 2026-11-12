@@ -227,6 +227,11 @@ struct QuickUndo {
     id: String,
     /// The workspace as it was, or `None` when the quick save created it.
     before: Option<Value>,
+    /// The workspace as the save wrote it. Undo only goes ahead while it is still that.
+    after: Value,
+    /// For each row now, the row of `before` it was, when an Update from screen removed
+    /// rows: the place rows' windows and the live stamps follow it back.
+    from: Option<Vec<Option<usize>>>,
     /// The workspace in use before a created one took over.
     in_use: Option<String>,
     until: Instant,

@@ -58,14 +58,15 @@ impl Engine {
             return None;
         }
         let g = &drag.geometry[screen];
-        if drag.old_zone.as_ref().is_some_and(|(id, f, t)| *id == g.id && (*f, *t) == (a, b)) {
-            return None;
-        }
         let target = zones::span(*g.zones.get(a)?, *g.zones.get(b)?);
         let dest = match &drag.old_zone {
             Some((id, from, to)) => {
                 let old = drag.geometry.iter().find(|x| x.id == *id)?;
                 let span = zones::span(*old.zones.get(*from)?, *old.zones.get(*to)?);
+                // Growing or shrinking over its own area isn't a swap.
+                if old.id == g.id && overlaps(span, target) {
+                    return None;
+                }
                 Dest::Zones(old, *from, *to, span)
             }
             None => {
@@ -85,7 +86,7 @@ impl Engine {
             }
             let h = hwnd_of(*key);
             let there = unsafe { IsWindow(Some(h)) }.as_bool() && unsafe { IsWindowVisible(h) }.as_bool();
-            if !there || winutil::is_minimized(h) {
+            if !there || winutil::is_minimized(h) || winutil::is_cloaked(h) {
                 continue;
             }
             let Some(at) = self.current(h).map(|c| c.at) else { continue };
@@ -105,17 +106,22 @@ impl Engine {
                     if alone {
                         return Placement { hwnd, target: *span, zone: zone(*from, *to), dpi: old.dpi };
                     }
-                    let mapped = map_rect(*at, target, *span);
+                    let mut mapped = map_rect(*at, target, *span);
                     match zones_of(&old.zones, mapped) {
                         Some((f, t)) => {
                             let target = zones::span(old.zones[f], old.zones[t]);
                             Placement { hwnd, target, zone: zone(f, t), dpi: old.dpi }
                         }
-                        None => Placement { hwnd, target: mapped, zone: None, dpi: old.dpi },
+                        None => {
+                            let (w, ht) = minsize::cached(*h, old.dpi);
+                            mapped.w = mapped.w.max(w);
+                            mapped.h = mapped.h.max(ht);
+                            Placement { hwnd, target: mapped, zone: None, dpi: old.dpi }
+                        }
                     }
                 }
                 Dest::Rect(frame, dpi) => {
-                    let mut mapped = map_rect(*at, target, *frame);
+                    let mut mapped = if alone { *frame } else { map_rect(*at, target, *frame) };
                     let (w, ht) = minsize::cached(*h, *dpi);
                     mapped.w = mapped.w.max(w);
                     mapped.h = mapped.h.max(ht);

@@ -326,8 +326,8 @@ impl State {
     }
 
     /// Build the handles for the zones now. The windows already made are used
-    /// again, so building them again doesn't flicker, unless one is on another
-    /// desktop: that one is made again on this one.
+    /// again, so building them again doesn't flicker, unless one was hidden or is on
+    /// another desktop: that one is made again on this one.
     fn build(&mut self) {
         if self.hidden || self.drag.is_some() {
             return;
@@ -343,7 +343,10 @@ impl State {
             }
         }
         for (i, spot) in spots.into_iter().enumerate() {
-            let reused = self.handles.get(i).map(|h| h.hwnd).filter(|h| !winutil::is_cloaked(*h));
+            // A hidden handle may not report cloaked after a desktop switch, so only one
+            // that is shown and not cloaked is used again.
+            let shown = |h: &HWND| unsafe { IsWindowVisible(*h) }.as_bool() && !winutil::is_cloaked(*h);
+            let reused = self.handles.get(i).map(|h| h.hwnd).filter(shown);
             let Some(hwnd) = reused.or_else(open) else { break };
             let handle = Handle { hwnd, spot, hovered: false, gone: false, covered: false };
             match self.handles.get_mut(i) {
@@ -722,6 +725,8 @@ fn run() {
         );
         let Ok(owner) = made else {
             log::info!("divider handles: couldn't make the thread's window");
+            // A later post may try again, unless Seam is quitting.
+            let _ = THREAD.compare_exchange(STARTED, IDLE, Ordering::SeqCst, Ordering::SeqCst);
             return;
         };
         let state = State {

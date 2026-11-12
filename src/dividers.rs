@@ -20,8 +20,8 @@ use seam::groups::{self, Edge, Side};
 use seam::winutil;
 use seam::zones::{self, Dir, Rect, ZoneLayout};
 use std::cell::RefCell;
-use std::collections::HashSet;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::collections::{HashMap, HashSet};
+use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 use windows::core::{w, PCWSTR};
@@ -101,8 +101,12 @@ pub enum Choice {
 
 /// The thread's own window, which the thread puts here once it is up, or 0.
 static WINDOW: Mutex<isize> = Mutex::new(0);
-/// The thread was started, so it isn't started again while it comes up.
-static STARTED: AtomicBool = AtomicBool::new(false);
+/// Where the thread is: not started, started (so it isn't started again while it
+/// comes up), or told to stop, which it does as soon as it is up.
+static THREAD: AtomicU8 = AtomicU8::new(IDLE);
+const IDLE: u8 = 0;
+const STARTED: u8 = 1;
+const STOPPED: u8 = 2;
 /// The latest zones from the main thread. Some(None) means no handles.
 static SCENE: Mutex<Option<Option<Scene>>> = Mutex::new(None);
 
@@ -119,9 +123,11 @@ pub fn hide() {
     post(false, WM_APP_HIDE);
 }
 
-/// Seam is quitting: the handles go with their thread.
+/// Seam is quitting: the handles go with their thread. A thread still coming up
+/// sees the flag under the same lock and ends once it is up.
 pub fn stop() {
     let mut window = WINDOW.lock().unwrap_or_else(|e| e.into_inner());
+    THREAD.store(STOPPED, Ordering::SeqCst);
     if *window != 0 {
         unsafe {
             let _ = PostMessageW(Some(hwnd_of(*window)), WM_CLOSE, WPARAM(0), LPARAM(0));
@@ -142,10 +148,10 @@ fn post(start: bool, message: u32) {
         unsafe {
             let _ = PostMessageW(Some(hwnd_of(window)), message, WPARAM(0), LPARAM(0));
         }
-    } else if start && !STARTED.swap(true, Ordering::SeqCst) {
+    } else if start && THREAD.compare_exchange(IDLE, STARTED, Ordering::SeqCst, Ordering::SeqCst).is_ok() {
         if let Err(e) = std::thread::Builder::new().name("seam-dividers".into()).spawn(run) {
             log::info!("divider handles: couldn't start: {e}");
-            STARTED.store(false, Ordering::SeqCst);
+            let _ = THREAD.compare_exchange(STARTED, IDLE, Ordering::SeqCst, Ordering::SeqCst);
         }
     }
 }
@@ -394,17 +400,21 @@ impl State {
     }
 
     /// A handle whose windows closed, were minimized or moved since hides, and the
-    /// handles are built again. One with another window showing through its gap
-    /// hides until that window goes.
+    /// handles are built again. One with another window lying over its gap, above
+    /// the lower of its two windows, hides until that window goes.
     fn check(&mut self) {
         if self.hidden || self.drag.is_some() {
             return;
         }
         let own = std::process::id();
-        let others: Vec<(isize, Rect)> = winutil::top_level_windows()
-            .into_iter()
-            .filter(|w| winutil::is_snappable(*w, own, &[]) && !winutil::is_maximized(*w))
-            .filter_map(|w| Some((w.0 as isize, winutil::visible_rect(w)?)))
+        // One pass, top first, so a window's place in it is its place in the z-order.
+        let order = winutil::top_level_windows();
+        let z: HashMap<isize, usize> = order.iter().enumerate().map(|(i, w)| (w.0 as isize, i)).collect();
+        let others: Vec<(usize, isize, Rect)> = order
+            .iter()
+            .enumerate()
+            .filter(|(_, w)| winutil::is_snappable(**w, own, &[]) && !winutil::is_maximized(**w))
+            .filter_map(|(i, w)| Some((i, w.0 as isize, winutil::visible_rect(*w)?)))
             .collect();
         let (mut stale, mut uncovered) = (false, false);
         for h in self.handles.iter_mut().filter(|h| !h.gone) {
@@ -414,7 +424,11 @@ impl State {
                 continue;
             }
             let (a, b, r) = (h.spot.a.0, h.spot.b.0, h.spot.rect);
-            let covered = others.iter().any(|(w, o)| *w != a && *w != b && meets(*o, r));
+            // Only a window above the lower of the two lies over the layout. One
+            // behind both shows through the gap but is no reason to hide.
+            let lower = z.get(&a).zip(z.get(&b)).map(|(x, y)| *x.max(y));
+            let over = |i: usize| lower.is_some_and(|l| i < l);
+            let covered = others.iter().any(|(i, w, o)| *w != a && *w != b && over(*i) && meets(*o, r));
             if covered != h.covered {
                 h.covered = covered;
                 if covered {
@@ -721,8 +735,16 @@ fn run() {
             drag: None,
         };
         STATE.with(|s| *s.borrow_mut() = Some(state));
-        // From here the main thread posts here. What it left before is read now.
-        *WINDOW.lock().unwrap_or_else(|e| e.into_inner()) = owner.0 as isize;
+        // From here the main thread posts here, unless Seam began to quit while this
+        // came up. What it left before is read now.
+        {
+            let mut window = WINDOW.lock().unwrap_or_else(|e| e.into_inner());
+            if THREAD.load(Ordering::SeqCst) == STOPPED {
+                let _ = DestroyWindow(owner);
+                return;
+            }
+            *window = owner.0 as isize;
+        }
         with_state(State::take_scene);
         menu::asked_menu();
         let mut msg = MSG::default();

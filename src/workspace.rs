@@ -6,7 +6,7 @@
 use crate::zones::{self, Rect, Template, ZoneLayout};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_json::{json, Value};
-use std::collections::{hash_map::RandomState, BTreeMap};
+use std::collections::{hash_map::RandomState, BTreeMap, HashSet};
 use std::hash::{BuildHasher, Hasher};
 use std::path::{Component, Path, Prefix};
 
@@ -91,6 +91,18 @@ impl Pin {
     }
 }
 
+/// What a window showed at capture, so a switch that starts its app opens it there
+/// again (D330): an Explorer window's folder, or a browser's page.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Place {
+    Folder(String),
+    Url(String),
+}
+
+/// The longest page address kept.
+const MAX_URL: usize = 2048;
+
 // Deserialize is written out below, so older files load into the new fields.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(remote = "Self", default)]
@@ -131,6 +143,10 @@ pub struct Rule {
     /// screen. Without it, the saved size decides.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub captured_on: Option<String>,
+    /// The folder or page the window showed, with "Remember folders and pages" on.
+    /// Used only when a switch starts the app, and never exported.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub place: Option<Place>,
 }
 
 impl Default for Rule {
@@ -153,6 +169,7 @@ impl Default for Rule {
             size_px: None,
             size_mm: None,
             captured_on: None,
+            place: None,
         }
     }
 }
@@ -219,6 +236,10 @@ impl Rule {
         self.size_px = from.size_px;
         self.size_mm = from.size_mm;
         self.captured_on = from.captured_on.clone();
+        // A capture that read no folder or page keeps the one saved.
+        if from.place.is_some() {
+            self.place = from.place.clone();
+        }
     }
 }
 
@@ -445,26 +466,78 @@ fn common_prefix(a: &str, b: &str) -> usize {
 /// prefix, then z-order. A window is claimed once.
 pub fn assign(rules: &[Rule], wins: &[Candidate]) -> Vec<Option<isize>> {
     let mut taken = vec![false; wins.len()];
-    rules
+    rules.iter().map(|r| pick(r, wins, &mut taken, |_| true)).collect()
+}
+
+/// Whether the window is one of the rule's app: by AUMID when the rule has one, else by exe.
+fn same_app(r: &Rule, w: &Candidate) -> bool {
+    match (&r.aumid, &w.aumid) {
+        (Some(a), Some(b)) => a == b,
+        (Some(_), None) => false,
+        (None, _) => r.exe.eq_ignore_ascii_case(&w.exe),
+    }
+}
+
+/// The best window not taken yet, among those `allowed`, for the rule, which then takes it.
+fn pick(r: &Rule, wins: &[Candidate], taken: &mut [bool], allowed: impl Fn(usize) -> bool) -> Option<isize> {
+    let (i, w) = wins
         .iter()
-        .map(|r| {
-            let best = wins
-                .iter()
-                .enumerate()
-                .filter(|(i, _)| !taken[*i])
-                .filter(|(_, w)| match (&r.aumid, &w.aumid) {
-                    (Some(a), Some(b)) => a == b,
-                    (Some(_), None) => false,
-                    (None, _) => r.exe.eq_ignore_ascii_case(&w.exe),
-                })
-                .max_by_key(|(_, w)| (w.class == r.class, common_prefix(&r.title_hint, &w.title), usize::MAX - w.z))
-                .map(|(i, w)| (i, w.hwnd));
-            best.map(|(i, h)| {
-                taken[i] = true;
-                h
-            })
+        .enumerate()
+        .filter(|(i, w)| !taken[*i] && allowed(*i) && same_app(r, w))
+        .max_by_key(|(_, w)| (w.class == r.class, common_prefix(&r.title_hint, &w.title), usize::MAX - w.z))?;
+    taken[i] = true;
+    Some(w.hwnd)
+}
+
+/// The window the tray remembers for a row with a saved folder or page, with
+/// "Remember folders and pages" on (D336).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Bound {
+    /// None yet: the tray started since, or the row is older.
+    Unbound,
+    /// This window, which is still open.
+    Alive(isize),
+    /// Its window was closed.
+    Gone,
+}
+
+/// `assign`, with the windows the tray remembers for place rows (D336). `bound[i]` is
+/// `None` for a row that isn't one, which matches as `assign` does but never takes a
+/// window bound to a place row here. A place row bound to an open window takes that
+/// window only, and one whose window was closed takes none, so it's started on its
+/// place. An unbound one matches by app, but never takes a window bound to a place
+/// row here or in `elsewhere` (other workspaces, or windows a launch must not take).
+pub fn assign_bound(
+    rules: &[Rule],
+    wins: &[Candidate],
+    bound: &[Option<Bound>],
+    elsewhere: &HashSet<isize>,
+) -> Vec<Option<isize>> {
+    let bound_of = |i: usize| bound.get(i).copied().flatten();
+    let mine: HashSet<isize> = (0..rules.len())
+        .filter_map(|i| match bound_of(i) {
+            Some(Bound::Alive(h)) => Some(h),
+            _ => None,
         })
-        .collect()
+        .collect();
+    let mut taken = vec![false; wins.len()];
+    let mut found = vec![None; rules.len()];
+    // Bound windows first, so no row before them in the order can take them.
+    for (i, r) in rules.iter().enumerate() {
+        if let Some(Bound::Alive(h)) = bound_of(i) {
+            found[i] = pick(r, wins, &mut taken, |w| wins[w].hwnd == h);
+        }
+    }
+    let free = |w: usize| !mine.contains(&wins[w].hwnd);
+    for (i, r) in rules.iter().enumerate() {
+        found[i] = match bound_of(i) {
+            Some(Bound::Alive(_)) => found[i],
+            Some(Bound::Gone) => None,
+            Some(Bound::Unbound) => pick(r, wins, &mut taken, |w| free(w) && !elsewhere.contains(&wins[w].hwnd)),
+            None => pick(r, wins, &mut taken, free),
+        };
+    }
+    found
 }
 
 /// `r` as fractions of `work`.
@@ -529,12 +602,24 @@ fn as_candidates(fresh: &[Rule]) -> Vec<Candidate> {
     fresh.iter().enumerate().map(cand).collect()
 }
 
+/// The capture's window, by index, for each row of `old`, paired as a switch matches.
+/// `bound` and `elsewhere` are the tray's bindings (D336) with windows as capture
+/// indices, so a place row pairs with its own window. Empty for plain matching.
+fn pair(old: &[Rule], fresh: &[Rule], bound: &[Option<Bound>], elsewhere: &HashSet<isize>) -> Vec<Option<isize>> {
+    assign_bound(old, &as_candidates(fresh), bound, elsewhere)
+}
+
 /// "Update from screen": each row the capture has a window for takes where and how
 /// that window is now, and keeps its launch details and its place in the start
 /// order. A row with no window right now stays, so a recapture never deletes an
-/// app. New windows go at the end, topmost first.
-pub fn merge_capture(old: &Workspace, fresh: Vec<Rule>) -> Vec<Rule> {
-    let found = assign(&old.windows, &as_candidates(&fresh));
+/// app. New windows go at the end, topmost first. `bound` and `elsewhere` as `pair`.
+pub fn merge_capture(
+    old: &Workspace,
+    fresh: Vec<Rule>,
+    bound: &[Option<Bound>],
+    elsewhere: &HashSet<isize>,
+) -> Vec<Rule> {
+    let found = pair(&old.windows, &fresh, bound, elsewhere);
     let mut taken = vec![false; fresh.len()];
     let mut merged = old.windows.clone();
     for (row, hit) in merged.iter_mut().zip(&found) {
@@ -555,9 +640,14 @@ pub fn merge_capture(old: &Workspace, fresh: Vec<Rule>) -> Vec<Rule> {
 }
 
 /// For each window of a capture, the row `merge_capture` gives it.
-pub fn capture_rows(old: &Workspace, fresh: &[Rule]) -> Vec<usize> {
+pub fn capture_rows(
+    old: &Workspace,
+    fresh: &[Rule],
+    bound: &[Option<Bound>],
+    elsewhere: &HashSet<isize>,
+) -> Vec<usize> {
     let mut rows = vec![None; fresh.len()];
-    for (row, hit) in assign(&old.windows, &as_candidates(fresh)).into_iter().enumerate() {
+    for (row, hit) in pair(&old.windows, fresh, bound, elsewhere).into_iter().enumerate() {
         if let Some(i) = hit {
             rows[i as usize] = Some(row);
         }
@@ -591,9 +681,17 @@ pub fn moved_rows(old: &[Rule], new: &[Rule]) -> Vec<Option<usize>> {
 
 /// "Where it is now" for one row: the place of the window a capture has for it,
 /// and which of the capture's windows that is, or `None` when the app has no window open.
-pub fn recapture_row(old: &Workspace, row: usize, fresh: &[Rule]) -> Option<(Workspace, usize)> {
+/// `bound` and `elsewhere` as `pair`, for every row of `old`.
+pub fn recapture_row(
+    old: &Workspace,
+    row: usize,
+    fresh: &[Rule],
+    bound: &[Option<Bound>],
+    elsewhere: &HashSet<isize>,
+) -> Option<(Workspace, usize)> {
     let rule = old.windows.get(row)?;
-    let hit = assign(std::slice::from_ref(rule), &as_candidates(fresh)).into_iter().next().flatten()?;
+    let bound = [bound.get(row).copied().flatten()];
+    let hit = pair(std::slice::from_ref(rule), fresh, &bound, elsewhere).into_iter().next().flatten()?;
     let from = &fresh[hit as usize];
     let mut updated = old.clone();
     if from.focused {
@@ -601,6 +699,22 @@ pub fn recapture_row(old: &Workspace, row: usize, fresh: &[Rule]) -> Option<(Wor
     }
     updated.windows[row].take_place(from);
     Some((updated, hit as usize))
+}
+
+/// "Add an app" from the windows open now: the row takes the folder or page the tray
+/// read from the one window picked, `picked`. Only a row that is still the one the
+/// panel added (its `exe` and `class`), has no place yet, and is the picked window's
+/// app and class. `None` otherwise, or when the window has none.
+pub fn take_window_place(old: &Workspace, row: usize, exe: &str, class: &str, picked: &[Rule]) -> Option<Workspace> {
+    let rule = old.windows.get(row).filter(|r| r.exe == exe && r.class == class && r.place.is_none())?;
+    let [from] = picked else { return None };
+    if from.class != rule.class {
+        return None;
+    }
+    assign(std::slice::from_ref(rule), &as_candidates(picked)).into_iter().next().flatten()?;
+    let mut updated = old.clone();
+    updated.windows[row].place = Some(from.place.clone()?);
+    Some(updated)
 }
 
 /// The rows a switch starts, in start order, cut into stages. A stage ends at a
@@ -658,6 +772,12 @@ pub fn checked_update(old: &Workspace, mut new: Workspace, zones: &dyn Fn(&str) 
         rule.delay_ms = tame_delay(rule.delay_ms);
         // Pins belong to the last session.
         rule.pin = None;
+        // Only a capture finds a folder or page, so the editor can keep or drop one but not
+        // set one, nor move one to another app's row.
+        let place = rule.place.take();
+        let same_app = |o: &Rule| o.exe == rule.exe && (rule.class.is_empty() || o.class == rule.class);
+        let kept = place.filter(|p| old.windows.iter().any(|o| same_app(o) && o.place.as_ref() == Some(p)));
+        rule.place = kept;
         // At most one window has the focus.
         rule.focused &= !focused;
         focused |= rule.focused;
@@ -712,6 +832,137 @@ pub fn safe_exe(exe: &str) -> bool {
         && exe.to_lowercase().ends_with(".exe")
 }
 
+/// A folder Seam may open in Explorer: an absolute path on a drive letter, with no
+/// `/`, `..`, `"` or control character. Whether it exists and isn't on a network
+/// drive is checked where it's read and where it's opened.
+pub fn safe_folder(folder: &str) -> bool {
+    let path = Path::new(folder);
+    let mut parts = path.components();
+    let on_drive = matches!(parts.next(), Some(Component::Prefix(p)) if matches!(p.kind(), Prefix::Disk(_)));
+    on_drive
+        && matches!(parts.next(), Some(Component::RootDir))
+        && !folder.contains(['/', '"'])
+        && !folder.chars().any(char::is_control)
+        && !path.components().any(|c| matches!(c, Component::ParentDir))
+}
+
+/// Explorer's argument for a folder: quoted, without a trailing `\` that would
+/// escape the quote. A drive's root has no space or comma, so it goes as it is.
+pub fn explorer_arg(folder: &str) -> String {
+    match folder.trim_end_matches('\\') {
+        root if root.len() == 2 => format!(r"{root}\"),
+        folder => format!("\"{folder}\""),
+    }
+}
+
+/// A page Seam may open in a browser: an http or https address with a host, not too
+/// long, and with no space, quote or control character, so it reaches the browser
+/// as one argument. A user name or password before the host (`user@host`) is refused.
+pub fn safe_url(url: &str) -> bool {
+    let lower = url.to_ascii_lowercase();
+    let rest = lower.strip_prefix("https://").or_else(|| lower.strip_prefix("http://"));
+    let authority = rest.and_then(|r| r.split(['/', '?', '#']).next()).unwrap_or_default();
+    !authority.is_empty()
+        && !authority.contains('@')
+        && url.len() <= MAX_URL
+        && !url.chars().any(|c| c.is_whitespace() || c.is_control() || c == '"')
+}
+
+/// Bits of a query parameter's name that say it can carry a sign-in or a secret. A
+/// page with any such parameter is kept without its query.
+const SECRET_PARTS: [&str; 13] =
+    ["token", "secret", "key", "pass", "sig", "auth", "code", "sess", "cred", "otp", "jwt", "sid", "state"];
+
+/// `%XX` escapes turned back into the characters they stand for.
+fn percent_decoded(text: &str) -> String {
+    let bytes = text.as_bytes();
+    let (mut out, mut i) = (Vec::with_capacity(bytes.len()), 0);
+    while i < bytes.len() {
+        let hex = bytes.get(i + 1..i + 3).and_then(|h| std::str::from_utf8(h).ok());
+        match hex.and_then(|h| u8::from_str_radix(h, 16).ok()).filter(|_| bytes[i] == b'%') {
+            Some(byte) => {
+                out.push(byte);
+                i += 3;
+            }
+            None => {
+                out.push(bytes[i]);
+                i += 1;
+            }
+        }
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
+/// A page as it's stored: without its query when a parameter's name, decoded, has a
+/// bit of `SECRET_PARTS` in it, and without its fragment when it holds a value.
+/// Otherwise as it is.
+fn without_secrets(page: &str) -> String {
+    let (rest, fragment) = page.split_once('#').map_or((page, None), |(r, f)| (r, Some(f)));
+    let (base, query) = rest.split_once('?').map_or((rest, None), |(b, q)| (b, Some(q)));
+    let name = |param: &str| percent_decoded(param.split('=').next().unwrap_or_default()).to_lowercase();
+    let secret = |param: &str| {
+        let name = name(param);
+        SECRET_PARTS.iter().any(|s| name.contains(s))
+    };
+    let mut kept = base.to_string();
+    if let Some(query) = query.filter(|q| !q.split('&').any(secret)) {
+        kept = format!("{kept}?{query}");
+    }
+    if let Some(fragment) = fragment.filter(|f| !f.contains('=')) {
+        kept = format!("{kept}#{fragment}");
+    }
+    kept
+}
+
+/// The page a browser's address bar shows, as it's stored, or `None` for anything but
+/// an http or https page. Chromium and Firefox hide the scheme, so a bare host gets it
+/// back: `http://` for localhost, an IP address, or a name with no dot and a port, and
+/// `https://` for a name with a dot. Other text with no dot, a search word, isn't a page.
+pub fn page_of(bar: &str) -> Option<String> {
+    let bar = bar.trim();
+    let lower = bar.to_ascii_lowercase();
+    let page = if lower.starts_with("http://") || lower.starts_with("https://") {
+        bar.to_string()
+    } else {
+        let host = bar.split(['/', '?', '#']).next().unwrap_or_default();
+        let (name, port) = host.split_once(':').map_or((host, None), |(n, p)| (n, Some(p)));
+        let named = !name.is_empty() && !name.starts_with('.') && !name.ends_with('.');
+        let plain = name.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-'));
+        let port_ok = port.is_none_or(|p| !p.is_empty() && p.chars().all(|c| c.is_ascii_digit()));
+        let octets: Vec<&str> = name.split('.').collect();
+        let ip = octets.len() == 4 && octets.iter().all(|o| !o.is_empty() && o.chars().all(|c| c.is_ascii_digit()));
+        let localhost = name.eq_ignore_ascii_case("localhost");
+        let dotless = !name.contains('.');
+        if !(named && plain && port_ok) || dotless && !localhost && port.is_none() {
+            return None;
+        }
+        let local = localhost || ip || dotless;
+        format!("{}://{bar}", if local { "http" } else { "https" })
+    };
+    let page = without_secrets(&page);
+    safe_url(&page).then_some(page)
+}
+
+/// Whether any of these saved workspaces remembers a folder or page.
+pub fn has_places(saved: &[Value]) -> bool {
+    let rows = |ws: &Value| ws.get("windows").and_then(Value::as_array).cloned().unwrap_or_default();
+    saved.iter().any(|ws| rows(ws).iter().any(|r| r.get("place").is_some()))
+}
+
+/// "Forget saved folders and pages": the saved workspaces as stored, without them.
+pub fn without_places(saved: &[Value]) -> Vec<Value> {
+    let mut saved = saved.to_vec();
+    for ws in &mut saved {
+        let rows = ws.get_mut("windows").and_then(Value::as_array_mut);
+        for row in rows.into_iter().flatten() {
+            if let Some(fields) = row.as_object_mut() {
+                fields.remove("place");
+            }
+        }
+    }
+    saved
+}
+
 /// An AppUserModelID is letters, digits, `.`, `_` and `-`, with an optional `!` and a second such part.
 pub fn safe_aumid(aumid: &str) -> bool {
     let part = |p: &str| !p.is_empty() && p.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'));
@@ -763,6 +1014,8 @@ pub fn import(file: Export, here: &BTreeMap<String, ScreenInfo>, names: &[String
             rule.exe.clear();
         }
         rule.aumid = rule.aumid.take().filter(|a| safe_aumid(a));
+        // A folder or page from a file is never opened (D98, D330).
+        rule.place = None;
     }
     workspace.launch_missing = false;
     // Close and Minimize are the user's opt-in, so a file can't arm them.
@@ -832,7 +1085,7 @@ mod tests {
         let mut moved = rule(ff, None, "MozillaWindowClass", "Docs — Mozilla Firefox");
         moved.target = Target::Zone { zone: 2, span_to: None };
         let fresh = vec![rule("notepad.exe", None, "", ""), moved];
-        let merged = merge_capture(&old, fresh);
+        let merged = merge_capture(&old, fresh, &[], &HashSet::new());
         let rows: Vec<(&str, bool, u32, bool)> =
             merged.iter().map(|r| (r.exe.as_str(), r.launch, r.delay_ms, r.wait_for_window)).collect();
         assert_eq!(rows, [(ff, false, 1500, true), (spotify, true, 0, false), ("notepad.exe", true, 0, false)]);
@@ -877,5 +1130,89 @@ mod tests {
         let file = Export { seam_workspace: Export::VERSION, workspace: ws, screens: BTreeMap::new() };
         let imported = import(file, &here, &[], &[]);
         assert_eq!(imported.zones.keys().collect::<Vec<_>>(), ["n"]);
+    }
+
+    // What a place row matches decides which window is moved and which app is started
+    // (D336): its own window while open, none once closed, by app when not bound yet,
+    // and no other row takes a window bound to one.
+    #[test]
+    fn place_rows_keep_their_own_windows() {
+        let chrome = r"C:\Chrome\chrome.exe";
+        // Window 2 is the topmost, so plain matching would give it to the first row.
+        let wins: Vec<Candidate> =
+            [(1, 1), (2, 0), (3, 2), (4, 3)].map(|(h, z)| win(h, chrome, None, "", "", z)).into();
+        let rules: Vec<Rule> = (0..5).map(|_| rule(chrome, None, "", "")).collect();
+        let bound = [Some(Bound::Unbound), Some(Bound::Alive(2)), Some(Bound::Gone), None, Some(Bound::Alive(9))];
+        let elsewhere = HashSet::from([1]);
+        // The unbound row goes by app but skips window 2, bound here, and window 1, bound
+        // in another workspace. Window 2 stays with its bound row. The closed one gets
+        // nothing, so it's started. The plain row doesn't steal window 2 either. One bound
+        // to a window that isn't a candidate gets none.
+        assert_eq!(assign_bound(&rules, &wins, &bound, &elsewhere), vec![Some(3), Some(2), None, Some(1), None]);
+        // With nothing bound, it's plain matching.
+        assert_eq!(assign_bound(&rules, &wins, &[None; 5], &HashSet::new()), assign(&rules, &wins));
+    }
+
+    // A saved place is opened when a switch starts the app, so the editor and the API
+    // can keep one on its own app's row, but not make one up or move it to another app.
+    #[test]
+    fn an_edit_never_adds_a_place() {
+        let (explorer, chrome) = (r"C:\Windows\explorer.exe", r"C:\Chrome\chrome.exe");
+        let docs = Some(Place::Folder(r"C:\Docs".into()));
+        let mut saved = rule(explorer, None, "CabinetWClass", "Docs");
+        saved.place = docs.clone();
+        let old = Workspace {
+            id: "w".into(),
+            windows: vec![saved.clone(), rule(chrome, None, "", "")],
+            ..Workspace::default()
+        };
+        let mut moved = rule(chrome, None, "", "");
+        moved.place = docs.clone();
+        let mut other_class = rule(explorer, None, "Other", "");
+        other_class.place = docs.clone();
+        let mut made_up = saved.clone();
+        made_up.place = Some(Place::Url("https://a.com".into()));
+        let new = Workspace { windows: vec![saved, moved, other_class, made_up], ..old.clone() };
+        let places: Vec<_> = checked_update(&old, new, &|_| 0).unwrap().windows.into_iter().map(|r| r.place).collect();
+        assert_eq!(places, vec![docs, None, None, None]);
+    }
+
+    // A remembered folder or page is handed to Explorer or a browser, so only a local
+    // folder and an http or https page may get through, each as one argument.
+    #[test]
+    fn only_local_folders_and_web_pages_are_opened() {
+        assert!(safe_folder(r"C:\Users\me\Documents") && safe_folder(r"D:\"));
+        let refused = [r"\\server\share", r"\\?\C:\x", r"C:\a\..\b", "C:relative", "::{20D04FE0}", r#"C:\a"b"#, "C:/a"];
+        assert!(refused.iter().all(|f| !safe_folder(f)), "{refused:?}");
+        assert_eq!(explorer_arg(r"C:\My Files\"), r#""C:\My Files""#);
+        assert_eq!(explorer_arg(r"C:\"), r"C:\");
+
+        assert!(safe_url("https://example.com/a?b=c#d") && safe_url("HTTP://localhost:8080"));
+        let refused = ["file:///C:/x", "javascript:alert(1)", "https://", "https:///x", "https://a b", "https://a\"b"];
+        assert!(refused.iter().all(|u| !safe_url(u)), "{refused:?}");
+        assert!(!safe_url(&format!("https://a.com/{}", "x".repeat(MAX_URL))));
+        assert!(!safe_url("https://me:pw@a.com/") && safe_url("https://a.com/@me"));
+
+        assert_eq!(page_of("https://github.com/x").as_deref(), Some("https://github.com/x"));
+        assert_eq!(page_of("github.com/x?q=1#top").as_deref(), Some("https://github.com/x?q=1#top"));
+        assert_eq!(page_of("localhost:3000/").as_deref(), Some("http://localhost:3000/"));
+        assert_eq!(page_of("192.168.1.2/a").as_deref(), Some("http://192.168.1.2/a"));
+        assert_eq!(page_of("intranet:8080/wiki").as_deref(), Some("http://intranet:8080/wiki"));
+        // A query that could hold a secret goes as a whole, and a fragment with a value.
+        assert_eq!(page_of("https://a.com/cb?x=1&Code=9#t=2").as_deref(), Some("https://a.com/cb"));
+        assert_eq!(page_of("https://a.com/?q=code#access").as_deref(), Some("https://a.com/?q=code#access"));
+        for bar in [
+            "about:blank",
+            "edge://settings",
+            "chrome://newtab",
+            "rust lang",
+            "rust",
+            "intranet/wiki",
+            "javascript:a.b",
+            "",
+            "x:y.z",
+        ] {
+            assert_eq!(page_of(bar), None, "{bar}");
+        }
     }
 }

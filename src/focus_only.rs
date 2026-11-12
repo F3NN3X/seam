@@ -30,6 +30,8 @@ pub struct Job {
     pub screens: Vec<Rect>,
     /// Lower-case exe names the zones leave alone.
     pub exclude: Vec<String>,
+    /// "Remember folders and pages", so the workspace scope matches as a switch does.
+    pub places: bool,
     /// The workspace in use, for the workspace scope.
     pub workspace: Option<Workspace>,
     /// From the API, which has no right to take focus until it sends input.
@@ -158,7 +160,9 @@ fn run(job: &Job, held: &mut Held) -> Result<Value, String> {
         FocusScope::Workspace => job.screens.clone(),
     };
     let candidates: Vec<HWND> = match (job.scope, &job.workspace) {
-        (FocusScope::Workspace, Some(ws)) => switcher::outside(ws, &job.exclude)?.into_iter().map(hwnd_of).collect(),
+        (FocusScope::Workspace, Some(ws)) => {
+            switcher::outside(ws, &job.exclude, job.places)?.into_iter().map(hwnd_of).collect()
+        }
         (FocusScope::Workspace, None) => return Err("No workspace is in use on this desk".into()),
         (FocusScope::Screen, _) => {
             let own = std::process::id();

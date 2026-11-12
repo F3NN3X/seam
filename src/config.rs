@@ -368,6 +368,10 @@ pub struct Config {
     /// "Put apps in place when they open": a window that opens and matches a rule of
     /// the active workspace goes to its place once (§11.1). Off by default.
     pub auto_apply: bool,
+    /// "Remember folders and pages": a capture keeps the folder an Explorer window
+    /// shows and the page a browser shows, and a switch that starts the app opens it
+    /// there (D330). Off by default. Off, nothing is read and saved ones aren't used.
+    pub workspaces_remember_places: bool,
     /// "Where apps open": an app's window goes to its place whenever it opens, with
     /// or without a workspace. Raw JSON like workspaces, so an entry this build
     /// can't read is kept as it is and ignored.
@@ -413,6 +417,7 @@ impl Default for Config {
             restore_session: false,
             restore_apps: RestoreApps::Windows,
             auto_apply: false,
+            workspaces_remember_places: false,
             app_rules: Vec::new(),
             custom_layouts: Vec::new(),
             cursor_easing_asked: false,
@@ -530,11 +535,19 @@ impl Config {
         }
     }
 
-    /// Read a file the user chose to import. Old files convert, as on load.
+    /// Read a file the user chose to import. Old files convert, as on load. A
+    /// folder or page from a file is never opened (D98, D330), so they're dropped.
     pub fn from_import(bytes: &[u8]) -> Result<Config, String> {
         let mut c: Config = serde_json::from_slice(bytes).map_err(|e| e.to_string())?;
         if c.version < CURRENT_VERSION {
             c.migrate_v1();
+        }
+        for desk in c.desks.values_mut() {
+            desk.workspaces = crate::workspace::without_places(&desk.workspaces);
+            // The last session never saves them, so one in a file is dropped too.
+            if let Some(session) = desk.last_session.take() {
+                desk.last_session = crate::workspace::without_places(&[session]).pop();
+            }
         }
         Ok(c)
     }

@@ -84,7 +84,8 @@ pub(super) fn job_screens(app: &App) -> Vec<SwitchScreen> {
 /// A capture of this desk. The apps the zones leave alone are never captured either.
 pub(super) fn capture_job(app: &App) -> CaptureJob {
     let exclude = app.cfg.zones.exclude.iter().map(|x| x.to_lowercase()).collect();
-    CaptureJob { owner: app.hwnd.0 as isize, screens: job_screens(app), gap: app.cfg.zones.gap, exclude }
+    let (screens, gap, places) = (job_screens(app), app.cfg.zones.gap, app.cfg.workspaces_remember_places);
+    CaptureJob { owner: app.hwnd.0 as isize, screens, gap, exclude, places }
 }
 
 /// Start switching to a workspace on this desk. The worker does the rest and the
@@ -116,7 +117,9 @@ pub(super) fn start_switch_job(
     let name = workspace.name.clone();
     let (owner, screens, gap) = (app.hwnd.0 as isize, job_screens(app), app.cfg.zones.gap);
     let (pins_stay, size_mode) = (app.cfg.windows.pins_stay_on_switch, app.cfg.window_size_on_move);
-    let job = SwitchJob { owner, workspace, screens, gap, arrange_for, pins_stay, size_mode, alongside };
+    // The last session never saves a folder or page, so it never opens one either.
+    let places = app.cfg.workspaces_remember_places && workspace.id != SESSION_ID;
+    let job = SwitchJob { owner, workspace, screens, gap, arrange_for, pins_stay, size_mode, alongside, places };
     if switcher::switch(job) {
         Ok(json!({ "ok": true }))
     } else {
@@ -212,6 +215,7 @@ pub(super) fn start_focus_only(app: &App, scope: FocusScope, reply: Option<Sende
         hwnd: unsafe { GetForegroundWindow() }.0 as isize,
         screens: app.mons.iter().map(|m| m.rect).collect(),
         exclude: app.cfg.zones.exclude.iter().map(|x| x.to_lowercase()).collect(),
+        places: app.cfg.workspaces_remember_places,
         workspace,
         // A hotkey gives the tray the right to take focus. The API has to earn it.
         from_api: reply.is_some(),
@@ -344,7 +348,8 @@ pub(super) fn active_workspace(app: &App) -> Option<Workspace> {
 pub(super) fn live_of(app: &App, workspace: Workspace) -> LiveWorkspace {
     let exclude = app.cfg.zones.exclude.iter().map(|x| x.to_lowercase()).collect();
     let (screens, gap, pins_stay) = (job_screens(app), app.cfg.zones.gap, app.cfg.windows.pins_stay_on_switch);
-    LiveWorkspace { workspace, screens, gap, pins_stay, exclude, size_mode: app.cfg.window_size_on_move }
+    let (size_mode, places) = (app.cfg.window_size_on_move, app.cfg.workspaces_remember_places);
+    LiveWorkspace { workspace, screens, gap, pins_stay, exclude, size_mode, places }
 }
 
 /// Hand the workspace in use to the live worker, and tell the seam-wm thread what to
@@ -368,7 +373,8 @@ fn app_rules_of(app: &App) -> Option<AppRules> {
     }
     let exclude = app.cfg.zones.exclude.iter().map(|x| x.to_lowercase()).collect();
     let (screens, gap, pins_stay) = (job_screens(app), app.cfg.zones.gap, app.cfg.windows.pins_stay_on_switch);
-    Some(AppRules { rules, screens, gap, pins_stay, exclude, size_mode: app.cfg.window_size_on_move })
+    let (size_mode, places) = (app.cfg.window_size_on_move, app.cfg.workspaces_remember_places);
+    Some(AppRules { rules, screens, gap, pins_stay, exclude, size_mode, places })
 }
 
 /// The workspace in use changed: remember it for this desk, so a restart shows it again.
@@ -389,6 +395,10 @@ pub(super) fn set_in_use(app: &mut App, id: Option<String>) {
 /// whether the config changed.
 pub(super) fn forget_deleted(app: &mut App) -> bool {
     let ids: Vec<String> = desk_workspaces(app).into_iter().map(|w| w.id).collect();
+    // A deleted workspace's rows remember no windows (D336). Other desks' keep theirs.
+    let everywhere: Vec<String> =
+        app.cfg.desks.values().flat_map(|d| workspace::list(&d.workspaces)).map(|w| w.id).collect();
+    switcher::keep_bindings(&everywhere);
     let gone = |id: &Option<String>| id.as_ref().is_some_and(|id| !ids.contains(id));
     if gone(&app.workspace) {
         app.workspace = None;
@@ -517,10 +527,14 @@ pub(super) fn start_capture(
     name: Option<String>,
     into: Option<String>,
     row: Option<usize>,
+    pick: Option<api::Pick>,
     reply: Option<Sender<Reply>>,
 ) -> Option<Reply> {
     if app.capturing.is_some() {
         return Some(busy("Already capturing"));
+    }
+    if pick.is_some() && !app.cfg.workspaces_remember_places {
+        return Some(refused("Remember folders and pages is off"));
     }
     let target = into.as_ref().map(|into| desk_workspaces(app).into_iter().find(|w| w.id == *into));
     if matches!(target, Some(None)) {
@@ -529,8 +543,13 @@ pub(super) fn start_capture(
     if row.is_some_and(|row| target.flatten().is_none_or(|w| row >= w.windows.len())) {
         return Some(Err(RpcError::new(api::NOT_FOUND, "no such row in that workspace")));
     }
-    app.capturing = Some(Capturing { reply, name, into, row, sig: app.sig.clone(), quick: false });
-    if switcher::capture(capture_job(app)) {
+    let hwnd = pick.as_ref().map(|p| p.hwnd);
+    app.capturing = Some(Capturing { reply, name, into, row, pick, sig: app.sig.clone(), quick: false });
+    let started = match hwnd {
+        Some(hwnd) => switcher::capture_window(capture_job(app), hwnd),
+        None => switcher::capture(capture_job(app)),
+    };
+    if started {
         return None;
     }
     app.capturing = None;
@@ -542,7 +561,7 @@ pub(super) fn start_capture(
 /// Returns an answer only if it can't start.
 pub(super) fn quick_save(app: &mut App, reply: Option<Sender<Reply>>) -> Option<Reply> {
     let into = active_workspace(app).map(|w| w.id);
-    let refusal = start_capture(app, None, into, None, reply);
+    let refusal = start_capture(app, None, into, None, None, reply);
     if let Some(job) = app.capturing.as_mut().filter(|_| refusal.is_none()) {
         job.quick = true;
     }
@@ -607,6 +626,7 @@ pub(super) fn captured(app: &mut App) {
             let _ = tx.send(r);
         }
     };
+    let remember = app.cfg.workspaces_remember_places;
     let Some(desk) = app.cfg.desks.get_mut(&job.sig) else { return answer(refused("That desk is gone")) };
     // Every screen of the desk, with the layout it has now.
     let layouts: Vec<(String, Option<zones::ZoneLayout>)> =
@@ -623,18 +643,27 @@ pub(super) fn captured(app: &mut App) {
             let Some(old) = existing.iter().find(|w| w.id == *into) else {
                 return answer(Err(RpcError::new(api::NOT_FOUND, "no such workspace on this desk")));
             };
-            let updated = match job.row {
-                Some(row) => match workspace::recapture_row(old, row, &rules) {
+            // A place row pairs with the window it remembers, as in a switch (D336).
+            let (bound, elsewhere) = switcher::capture_bindings(old, &hwnds, remember);
+            let updated = match (job.row, &job.pick) {
+                // "Add an app": only the picked window's folder or page, read here.
+                (Some(row), Some(pick)) => match workspace::take_window_place(old, row, &pick.exe, &pick.class, &rules)
+                {
+                    Some(updated) => updated,
+                    None => return answer(refused("That window has no folder or page to remember")),
+                },
+                (Some(row), None) => match workspace::recapture_row(old, row, &rules, &bound, &elsewhere) {
                     Some((updated, hit)) => {
                         stamps = Some(vec![(hwnds[hit], row)]);
                         updated
                     }
                     None => return answer(refused("That app isn't open, so where it goes stays as it was")),
                 },
-                None => {
-                    rows = Some(workspace::capture_rows(old, &rules));
+                (None, _) => {
+                    rows = Some(workspace::capture_rows(old, &rules, &bound, &elsewhere));
                     let zones = workspace::capture_zones(&old.zones, &layouts);
-                    Workspace { windows: workspace::merge_capture(old, rules), zones, ..old.clone() }
+                    let windows = workspace::merge_capture(old, rules, &bound, &elsewhere);
+                    Workspace { windows, zones, ..old.clone() }
                 }
             };
             let same = |v: &&mut Value| workspace::parse(v).is_some_and(|w| w.id == *into);
@@ -661,6 +690,17 @@ pub(super) fn captured(app: &mut App) {
         }
     };
     persist(app);
+    // A row with a place remembers the window it was read from (D336).
+    if app.cfg.workspaces_remember_places {
+        let binds: Vec<(isize, usize)> = match (&job.pick, job.row, &rows, &stamps) {
+            (Some(pick), Some(row), _, _) => vec![(pick.hwnd, row)],
+            (_, _, Some(rows), _) => hwnds.iter().copied().zip(rows.iter().copied()).collect(),
+            (_, _, _, Some(windows)) => windows.clone(),
+            _ if job.into.is_none() => hwnds.iter().copied().zip(0..).collect(),
+            _ => Vec::new(),
+        };
+        switcher::bind_rows(&saved, &binds);
+    }
     // The saved windows hold their rows, as after a switch, so drift and auto-apply see them at once.
     let key = workspace::stamp_key(&saved.id);
     if let Some(rows) = rows {
@@ -731,6 +771,8 @@ pub(super) fn update_workspace(app: &mut App, id: &str, sent: Value) -> Reply {
     // and the next switch stamps everything again.
     let unmoved = moves.len() == checked.windows.len() && moves.iter().enumerate().all(|(i, m)| *m == Some(i));
     if reply.is_ok() && !unmoved {
+        // The windows place rows remember follow their rows the same way (D336).
+        switcher::rebind(id, &moves);
         live::restamp(workspace::stamp_key(id), moves);
     }
     reply

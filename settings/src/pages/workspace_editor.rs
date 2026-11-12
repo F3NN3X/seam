@@ -234,10 +234,36 @@ fn remove_row(panel: &mut Panel, id: &str, i: usize, window: &mut Window, cx: &m
     });
 }
 
-/// Add an app the picker offered, at the end of the start order.
-pub fn add_app(panel: &mut Panel, id: &str, rule: Rule, window: &mut Window, cx: &mut Context<Panel>) {
+/// Add an app the picker offered, at the end of the start order. One picked from the
+/// windows open now, with "Remember folders and pages" on, then has the tray read that
+/// window's folder or page into the new row (D330). Only the tray reads it.
+pub fn add_app(
+    panel: &mut Panel,
+    id: &str,
+    rule: Rule,
+    hwnd: Option<isize>,
+    window: &mut Window,
+    cx: &mut Context<Panel>,
+) {
     let title = app_title(&rule);
-    update(panel, id, Some(format!("Added {title}")), window, cx, |ws| ws.windows.push(rule));
+    let Some(before) = by_id(panel, id) else { return };
+    let row = before.windows.len();
+    // The tray checks the row is still this app's before it takes the place.
+    let (exe, class) = (rule.exe.clone(), rule.class.clone());
+    let mut after = before.clone();
+    after.windows.push(rule);
+    let read = hwnd.filter(|_| panel.config.workspaces_remember_places).map(|hwnd| -> Then {
+        let params = json!({ "into": id, "row": row, "hwnd": hwnd, "exe": exe, "class": class });
+        // A window with no folder or page to remember is no news, so the answer only reloads.
+        Box::new(move |panel, window, cx| {
+            panel.call("workspace.capture", params, window, cx, |panel, _, window, cx| panel.reload_config(window, cx))
+        })
+    });
+    send(panel, after, read, window, cx);
+    let undo = move |panel: &mut Panel, window: &mut Window, cx: &mut Context<Panel>| {
+        send(panel, before.clone(), None, window, cx)
+    };
+    panel.offer_undo(format!("Added {title}"), undo, window, cx);
 }
 
 /// The exe name the "Never manage" list holds for this row, if it has one. A Store

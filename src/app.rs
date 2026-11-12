@@ -210,6 +210,8 @@ struct Capturing {
     into: Option<String>,
     /// Only this row of `into` takes its window's place ("Where it is now").
     row: Option<usize>,
+    /// The window "Add an app" picked: the row only takes its folder or page.
+    pick: Option<api::Pick>,
     /// The desk it was started on.
     sig: String,
     /// A quick save (§7): it says so, can be undone, and a new workspace becomes the one in use.
@@ -683,7 +685,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                     }
                 }
                 HOTKEY_CAPTURE => {
-                    with_app(|a| start_capture(a, None, None, None, None));
+                    with_app(|a| start_capture(a, None, None, None, None, None));
                 }
                 id @ (HOTKEY_PIN_TOP | HOTKEY_PIN_STICKY) => {
                     let kind = if id == HOTKEY_PIN_TOP { PinKind::Top } else { PinKind::Sticky };

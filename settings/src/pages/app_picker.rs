@@ -25,8 +25,8 @@ pub struct Picker {
     tab: usize,
     search: Entity<InputState>,
     query: SharedString,
-    /// `None` while they're being read.
-    open_now: Option<Vec<Rule>>,
+    /// `None` while they're being read. Each window open now comes with its handle.
+    open_now: Option<Vec<(Rule, isize)>>,
     installed: Option<Vec<Rule>>,
     /// The Start menu's list is read once per panel.
     asked_installed: bool,
@@ -96,8 +96,9 @@ fn label(rule: &Rule, installed: bool) -> String {
     }
 }
 
-/// What the picker hands an app to once it's picked.
-pub type Add = Rc<dyn Fn(&mut Panel, Rule, &mut Window, &mut Context<Panel>)>;
+/// What the picker hands an app to once it's picked, with the window it was picked
+/// from on Open now.
+pub type Add = Rc<dyn Fn(&mut Panel, Rule, Option<isize>, &mut Window, &mut Context<Panel>)>;
 
 /// The apps already there already have a row or a rule for this app.
 fn already(taken: &[Rule], rule: &Rule) -> bool {
@@ -106,14 +107,19 @@ fn already(taken: &[Rule], rule: &Rule) -> bool {
     taken.iter().any(|r| same_exe(r) || same_aumid(r))
 }
 
-/// One entry: the app as it would be added, whether it's there already, and its icon.
-type Entry = (Rule, bool, Option<Arc<Image>>);
+/// One entry: the app as it would be added, whether it's there already, its icon, and
+/// on Open now its window.
+type Entry = (Rule, bool, Option<Arc<Image>>, Option<isize>);
 
 /// The entries of the tab on show that match the search.
 fn entries(panel: &mut Panel, taken: &[Rule], cx: &mut Context<Panel>) -> Option<Vec<Entry>> {
     let picker = &panel.editing.picker;
     let installed = picker.tab == 1;
-    let list = if installed { picker.installed.clone() } else { picker.open_now.clone() }?;
+    let list: Vec<(Rule, Option<isize>)> = if installed {
+        picker.installed.clone()?.into_iter().map(|r| (r, None)).collect()
+    } else {
+        picker.open_now.clone()?.into_iter().map(|(r, h)| (r, Some(h))).collect()
+    };
     let query = picker.query.trim().to_lowercase();
     let matches = |r: &Rule| {
         query.is_empty()
@@ -121,9 +127,10 @@ fn entries(panel: &mut Panel, taken: &[Rule], cx: &mut Context<Panel>) -> Option
             || r.title_hint.to_lowercase().contains(&query)
             || r.exe.rsplit('\\').next().unwrap_or_default().to_lowercase().contains(&query)
     };
-    let shown: Vec<Rule> = list.into_iter().filter(|r| matches(r)).collect();
+    let (shown, hwnds): (Vec<Rule>, Vec<Option<isize>>) = list.into_iter().filter(|(r, _)| matches(r)).unzip();
     icons::request(panel, &shown, cx);
-    Some(shown.into_iter().map(|r| (already(taken, &r), panel.icons.get(&r), r)).map(|(a, i, r)| (r, a, i)).collect())
+    let entry = |(r, h): (Rule, Option<isize>)| (already(taken, &r), panel.icons.get(&r), r, h);
+    Some(shown.into_iter().zip(hwnds).map(entry).map(|(a, i, r, h)| (r, a, i, h)).collect())
 }
 
 /// "Add an app" and its popover. `taken` are the apps already there, which the list
@@ -160,8 +167,8 @@ pub fn button(panel: &mut Panel, taken: &[Rule], there: &'static str, add: Add, 
             Some(found) if found.is_empty() && !installed => note("No app windows are open".into()).into_any_element(),
             Some(found) if found.is_empty() => note("No apps found in the Start menu".into()).into_any_element(),
             Some(found) => {
-                let items = found.iter().enumerate().map(|(n, (rule, already, icon))| {
-                    let (view, add, rule) = (view.clone(), add.clone(), rule.clone());
+                let items = found.iter().enumerate().map(|(n, (rule, already, icon, hwnd))| {
+                    let (view, add, rule, hwnd) = (view.clone(), add.clone(), rule.clone(), *hwnd);
                     let name = label(&rule, installed);
                     // A window says which one it is. An app already there can be added again, for a second window.
                     let detail = match (already, installed) {
@@ -198,7 +205,7 @@ pub fn button(panel: &mut Panel, taken: &[Rule], there: &'static str, add: Add, 
                             let (rule, add) = (rule.clone(), add.clone());
                             view.update(cx, |panel, cx| {
                                 panel.editing.picker.open = false;
-                                add(panel, Rule { launch: true, ..rule }, window, cx);
+                                add(panel, Rule { launch: true, ..rule }, hwnd, window, cx);
                             });
                         })
                         .into_any_element()

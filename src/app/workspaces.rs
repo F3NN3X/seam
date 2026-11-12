@@ -589,6 +589,18 @@ pub(super) fn quick_saved(app: &mut App, saved: &Workspace, before: Option<Value
     notify(app, &format!("Saved {}", saved.name), &body, BalloonAction::UndoQuickSave);
 }
 
+/// Update from screen removed `closed` rows: say so, and keep the workspace as it was
+/// for Undo, which is a click on the notification as with a quick save.
+fn update_removed(app: &mut App, saved: &Workspace, before: Option<Value>, closed: usize) {
+    let until = Instant::now() + QUICK_UNDO_FOR;
+    let in_use = app.workspace.clone();
+    app.quick_undo = Some(QuickUndo { sig: app.sig.clone(), id: saved.id.clone(), before, in_use, until });
+    let apps = if closed == 1 { "app" } else { "apps" };
+    log::info!("update from screen: {closed} {apps} removed from {}", saved.name);
+    let body = format!("Removed {closed} {apps} that weren't open. Click to undo");
+    notify(app, &format!("Updated {}", saved.name), &body, BalloonAction::UndoQuickSave);
+}
+
 /// The quick save's notification was clicked: put the workspace back as it was, or
 /// remove the one it created, while that's still within 8 s.
 pub(super) fn undo_quick_save(app: &mut App) {
@@ -599,9 +611,14 @@ pub(super) fn undo_quick_save(app: &mut App) {
     }
     let Some(desk) = app.cfg.desks.get_mut(&undo.sig) else { return };
     let same = |v: &Value| workspace::parse(v).is_some_and(|w| w.id == undo.id);
+    let mut moves = None;
     match undo.before {
         Some(before) => {
             if let Some(slot) = desk.workspaces.iter_mut().find(|v| same(v)) {
+                // Rows an Update from screen removed come back, so the others move again.
+                if let (Some(now), Some(back)) = (workspace::parse(slot), workspace::parse(&before)) {
+                    moves = Some(workspace::moved_rows(&now.windows, &back.windows));
+                }
                 *slot = before;
             }
         }
@@ -614,6 +631,10 @@ pub(super) fn undo_quick_save(app: &mut App) {
     }
     log::info!("quick save: undone");
     persist(app);
+    if let Some(moves) = moves {
+        switcher::rebind(&undo.id, &moves);
+        live::restamp(workspace::stamp_key(&undo.id), moves);
+    }
     sync_live(app);
     publish(app);
 }
@@ -627,6 +648,9 @@ pub(super) fn captured(app: &mut App) {
         }
     };
     let remember = app.cfg.workspaces_remember_places;
+    // Only Update from screen removes rows. A quick save goes through the same
+    // capture, so it is told apart here.
+    let removes = app.cfg.workspaces_update_removes_closed && !job.quick;
     let Some(desk) = app.cfg.desks.get_mut(&job.sig) else { return answer(refused("That desk is gone")) };
     // Every screen of the desk, with the layout it has now.
     let layouts: Vec<(String, Option<zones::ZoneLayout>)> =
@@ -638,6 +662,8 @@ pub(super) fn captured(app: &mut App) {
     let mut rows = None;
     // "Where it is now" stamps its one window.
     let mut stamps = None;
+    // Rows Update from screen removed: where the others went, and how many.
+    let mut removal = None;
     let saved = match &job.into {
         Some(into) => {
             let Some(old) = existing.iter().find(|w| w.id == *into) else {
@@ -660,9 +686,13 @@ pub(super) fn captured(app: &mut App) {
                     None => return answer(refused("That app isn't open, so where it goes stays as it was")),
                 },
                 (None, _) => {
-                    rows = Some(workspace::capture_rows(old, &rules, &bound, &elsewhere));
+                    rows = Some(workspace::capture_rows(old, &rules, &bound, &elsewhere, removes));
                     let zones = workspace::capture_zones(&old.zones, &layouts);
-                    let windows = workspace::merge_capture(old, rules, &bound, &elsewhere);
+                    let closed = if removes { workspace::closed_rows(old, &rules, &bound, &elsewhere) } else { 0 };
+                    let windows = workspace::merge_capture(old, rules, &bound, &elsewhere, removes);
+                    if closed > 0 {
+                        removal = Some((workspace::moved_rows(&old.windows, &windows), closed));
+                    }
                     Workspace { windows, zones, ..old.clone() }
                 }
             };
@@ -690,6 +720,10 @@ pub(super) fn captured(app: &mut App) {
         }
     };
     persist(app);
+    // The rows left follow their places in the list, as after an edit (D336).
+    if let Some((moves, _)) = &removal {
+        switcher::rebind(&saved.id, moves);
+    }
     // A row with a place remembers the window it was read from (D336).
     if app.cfg.workspaces_remember_places {
         let binds: Vec<(isize, usize)> = match (&job.pick, job.row, &rows, &stamps) {
@@ -721,6 +755,9 @@ pub(super) fn captured(app: &mut App) {
         live::check_drift();
     }
     publish(app);
+    if let Some((_, closed)) = removal {
+        update_removed(app, &saved, before, closed);
+    }
     if job.reply.is_some() {
         return answer(Ok(json!({ "id": saved.id })));
     }

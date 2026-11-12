@@ -611,48 +611,62 @@ fn pair(old: &[Rule], fresh: &[Rule], bound: &[Option<Bound>], elsewhere: &HashS
 
 /// "Update from screen": each row the capture has a window for takes where and how
 /// that window is now, and keeps its launch details and its place in the start
-/// order. A row with no window right now stays, so a recapture never deletes an
-/// app. New windows go at the end, topmost first. `bound` and `elsewhere` as `pair`.
+/// order. A row with no window right now stays, unless `removes` (the setting
+/// "Update from screen removes apps that aren't open"), which drops it. New windows
+/// go at the end, topmost first. `bound` and `elsewhere` as `pair`.
 pub fn merge_capture(
     old: &Workspace,
     fresh: Vec<Rule>,
     bound: &[Option<Bound>],
     elsewhere: &HashSet<isize>,
+    removes: bool,
 ) -> Vec<Rule> {
     let found = pair(&old.windows, &fresh, bound, elsewhere);
     let mut taken = vec![false; fresh.len()];
-    let mut merged = old.windows.clone();
-    for (row, hit) in merged.iter_mut().zip(&found) {
+    let mut merged = Vec::with_capacity(old.windows.len());
+    for (row, hit) in old.windows.iter().zip(&found) {
+        let mut row = row.clone();
         match hit {
             Some(i) => {
                 taken[*i as usize] = true;
                 row.take_place(&fresh[*i as usize]);
             }
+            None if removes => continue,
             // With no window, nothing says how it stacks or whether it has the focus.
             None => {
                 row.z = u32::MAX;
                 row.focused = false;
             }
         }
+        merged.push(row);
     }
     merged.extend(fresh.into_iter().zip(taken).filter(|(_, t)| !t).map(|(r, _)| r));
     merged
 }
 
-/// For each window of a capture, the row `merge_capture` gives it.
+/// How many rows of `old` the capture has no window for, which `merge_capture` removes
+/// with `removes`.
+pub fn closed_rows(old: &Workspace, fresh: &[Rule], bound: &[Option<Bound>], elsewhere: &HashSet<isize>) -> usize {
+    pair(&old.windows, fresh, bound, elsewhere).iter().filter(|hit| hit.is_none()).count()
+}
+
+/// For each window of a capture, the row `merge_capture` gives it, with the same `removes`.
 pub fn capture_rows(
     old: &Workspace,
     fresh: &[Rule],
     bound: &[Option<Bound>],
     elsewhere: &HashSet<isize>,
+    removes: bool,
 ) -> Vec<usize> {
     let mut rows = vec![None; fresh.len()];
-    for (row, hit) in pair(&old.windows, fresh, bound, elsewhere).into_iter().enumerate() {
+    let mut kept = 0;
+    for hit in pair(&old.windows, fresh, bound, elsewhere) {
         if let Some(i) = hit {
-            rows[i as usize] = Some(row);
+            rows[i as usize] = Some(kept);
         }
+        kept += usize::from(hit.is_some() || !removes);
     }
-    let mut next = old.windows.len()..;
+    let mut next = kept..;
     rows.into_iter().map(|row| row.or_else(|| next.next()).unwrap_or_default()).collect()
 }
 
@@ -1085,11 +1099,18 @@ mod tests {
         let mut moved = rule(ff, None, "MozillaWindowClass", "Docs — Mozilla Firefox");
         moved.target = Target::Zone { zone: 2, span_to: None };
         let fresh = vec![rule("notepad.exe", None, "", ""), moved];
-        let merged = merge_capture(&old, fresh, &[], &HashSet::new());
+        let merged = merge_capture(&old, fresh.clone(), &[], &HashSet::new(), false);
         let rows: Vec<(&str, bool, u32, bool)> =
             merged.iter().map(|r| (r.exe.as_str(), r.launch, r.delay_ms, r.wait_for_window)).collect();
         assert_eq!(rows, [(ff, false, 1500, true), (spotify, true, 0, false), ("notepad.exe", true, 0, false)]);
         assert_eq!(merged[0].target, Target::Zone { zone: 2, span_to: None });
+
+        // With the setting on, the row with no window goes, and the capture's rows follow.
+        let merged = merge_capture(&old, fresh.clone(), &[], &HashSet::new(), true);
+        let exes: Vec<&str> = merged.iter().map(|r| r.exe.as_str()).collect();
+        assert_eq!(exes, [ff, "notepad.exe"]);
+        assert_eq!(capture_rows(&old, &fresh, &[], &HashSet::new(), true), [1, 0]);
+        assert_eq!(capture_rows(&old, &fresh, &[], &HashSet::new(), false), [2, 0]);
 
         // Stages end at a row that waits for its window.
         let mut waits: Vec<Rule> = (0..5).map(|_| rule(ff, None, "", "")).collect();

@@ -492,6 +492,10 @@ impl Engine {
     /// Hand the divider handles the zones as they are now, or none with zones off,
     /// stepping aside or the handles turned off. Their thread builds them a moment later.
     fn sync_dividers(&self) {
+        // The handles stay hidden until the drag ends, which hands them the zones then.
+        if self.drag.is_some() {
+            return;
+        }
         let on = self.active() && self.settings.divider_handles && self.screens.iter().any(|s| s.layout.is_some());
         dividers::show(on.then(|| self.scene()));
     }

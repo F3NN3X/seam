@@ -41,6 +41,7 @@ pub(super) fn apply_hotkeys(app: &mut App) {
         (HOTKEY_QUICK_LAYOUT, "quick_layout".to_string(), keys.quick_layout.clone()),
         (HOTKEY_FOCUS_ONLY, "focus_only".to_string(), keys.focus_only.clone()),
         (HOTKEY_SPOTLIGHT, "spotlight".to_string(), keys.spotlight.clone()),
+        (HOTKEY_DIVIDER_MENU, "divider_menu".to_string(), keys.divider_menu.clone()),
     ];
     for (id, (verb, dir, combo)) in (HOTKEY_WINDOW..).zip(keys.directional()) {
         wanted.push((id, format!("{verb}_{dir}"), combo.cloned()));

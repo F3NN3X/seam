@@ -6,8 +6,8 @@
 
 use super::{close, direction, geometry, hwnd_of, into_zone, movable, stamped_in, zone_of, Job, Outcome, MAX_GAP};
 use crate::{minsize, snap};
-use seam::api::GroupVerb;
-use seam::groups::{self, Stash};
+use seam::api::{Axis, GroupVerb};
+use seam::groups::{self, Side, Stash};
 use seam::winutil;
 use seam::zones::{self, Node, Rect, Template, ZoneLayout};
 use std::collections::HashMap;
@@ -68,12 +68,26 @@ pub fn group_members(
     known: &[snap::Zoned],
     exclude: &[String],
 ) -> Vec<(HWND, usize, usize)> {
-    let own = std::process::id();
     let mut members = vec![first];
+    members.extend(screen_members(screen, bounds, placed, known, exclude).into_iter().filter(|(h, ..)| *h != first.0));
+    members
+}
+
+/// Every window in one screen's zones, as `group_members` finds them. The divider
+/// handles are built from these. Worker only, the same way.
+pub fn screen_members(
+    screen: &str,
+    bounds: Rect,
+    placed: &[Rect],
+    known: &[snap::Zoned],
+    exclude: &[String],
+) -> Vec<(HWND, usize, usize)> {
+    let own = std::process::id();
+    let mut members: Vec<(HWND, usize, usize)> = Vec::new();
     for m in known {
         let (id, a, b) = &m.zone;
         let (h, fits) = (hwnd_of(m.hwnd), id == screen && *a <= *b && *b < placed.len());
-        if fits && h != first.0 && still_there(h, own, exclude, m.at, m.moving) {
+        if fits && !members.iter().any(|(x, ..)| *x == h) && still_there(h, own, exclude, m.at, m.moving) {
             members.push((h, *a, *b));
         }
     }
@@ -104,6 +118,38 @@ pub fn group_mins(tree: &Node, work: Rect, gap: i32, dpi: u32, members: &[(HWND,
     groups::leaf_mins(tree, work, gap, &sizes)
 }
 
+/// The zones across `side` of the zones `leaves` covers, and how long they are along
+/// that axis: those of the window there that lies most alongside, or with no window
+/// there the zones themselves.
+fn beside(cells: &[Rect], leaves: &[usize], side: Side, members: &[(HWND, usize, usize)]) -> Option<(Vec<usize>, i32)> {
+    let own = leaves.iter().filter_map(|i| cells.get(*i).copied()).reduce(zones::span)?;
+    // How much of `c` lies alongside, when it starts on the far side of `own`'s `side`.
+    let touching = |c: Rect| {
+        let (meets, (a, b), (p, q)) = match side {
+            Side::Left => (c.x + c.w == own.x, (c.y, c.y + c.h), (own.y, own.y + own.h)),
+            Side::Right => (c.x == own.x + own.w, (c.y, c.y + c.h), (own.y, own.y + own.h)),
+            Side::Top => (c.y + c.h == own.y, (c.x, c.x + c.w), (own.x, own.x + own.w)),
+            Side::Bottom => (c.y == own.y + own.h, (c.x, c.x + c.w), (own.x, own.x + own.w)),
+        };
+        let along = b.min(q) - a.max(p);
+        (meets && along > 0).then_some(along)
+    };
+    let length = |c: Rect| if matches!(side, Side::Left | Side::Right) { c.w } else { c.h };
+    let window = members
+        .iter()
+        .filter_map(|(_, a, b)| {
+            let c = zones::span(*cells.get(*a)?, *cells.get(*b)?);
+            Some((covered(cells, *a, *b), c, touching(c)?))
+        })
+        .max_by_key(|(.., along)| *along);
+    if let Some((other, c, _)) = window {
+        return Some((other, length(c)));
+    }
+    let other: Vec<usize> = (0..cells.len()).filter(|i| touching(cells[*i]).is_some()).collect();
+    let c = other.iter().map(|i| cells[*i]).reduce(zones::span)?;
+    Some((other, length(c)))
+}
+
 pub(super) fn run(job: &Job, verb: GroupVerb) -> Result<Outcome, String> {
     let screens = direction::desk_screens(&job.mons, &job.links);
     let source = hwnd_of(job.hwnd);
@@ -131,6 +177,24 @@ pub(super) fn run(job: &Job, verb: GroupVerb) -> Result<Outcome, String> {
         GroupVerb::Shrink(step) => {
             let solved =
                 groups::shrink(&layout.tree, g.work, leaves, step, &mins).ok_or("That window can't get any smaller")?;
+            (groups::relabel(layout.template, solved.tree), None)
+        }
+        GroupVerb::Share { axis, fraction, side } => {
+            let cells = zones::rects(&layout.tree, g.work, 0);
+            let sides = match axis {
+                Axis::Width => [Side::Right, Side::Left],
+                Axis::Height => [Side::Bottom, Side::Top],
+            };
+            // The divider asked for, or the one towards the bigger neighbour.
+            let found = sides.into_iter().filter(|s| side.is_none_or(|x| x == *s)).filter_map(|s| {
+                let edge = groups::edge_of(&layout.tree, g.work, leaves, s)?;
+                let (other, room) = beside(&cells, leaves, s, &members)?;
+                Some((edge, other, room))
+            });
+            let (edge, other, _) =
+                found.max_by_key(|(.., room)| *room).ok_or("That window has no zone beside it that way")?;
+            let solved = groups::share(&layout.tree, g.work, &edge, (leaves, &other), fraction, &mins)
+                .ok_or("That window has no zone beside it that way")?;
             (groups::relabel(layout.template, solved.tree), None)
         }
         GroupVerb::Priority => match earlier {

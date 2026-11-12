@@ -2,6 +2,7 @@
 //! the protocol and the blocking client; the server is in the tray.
 
 use crate::direction;
+use crate::groups::Side;
 use crate::log;
 use crate::process;
 use crate::state::Snapshot;
@@ -22,6 +23,9 @@ pub const API_VERSION: u32 = 1;
 pub const MAX_LINE: usize = 1 << 20;
 /// Largest `step` `window.resize` takes, in pixels.
 pub const MAX_STEP_PX: i32 = 10_000;
+/// The share `window.share` takes, as in the layout's ratio clamp.
+pub const MIN_SHARE: f64 = 0.1;
+pub const MAX_SHARE: f64 = 0.9;
 /// Events a client may fall behind by before it's dropped.
 pub const MAX_QUEUED_EVENTS: usize = 256;
 
@@ -75,12 +79,22 @@ impl WindowVerb {
 }
 
 /// What `window.resize` and `window.priority` do to the focused window's group of zones.
-/// Grow and shrink carry a step in pixels, or None for the default.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+/// Grow and shrink carry a step in pixels, or None for the default. Share gives the
+/// window `fraction` of the span of itself and the zones beside it along `axis`,
+/// across the divider on `side`, or the one towards the bigger neighbour.
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub enum GroupVerb {
     Grow(Option<i32>),
     Shrink(Option<i32>),
     Priority,
+    Share { axis: Axis, fraction: f32, side: Option<Side> },
+}
+
+/// Which way `window.share` divides.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Axis {
+    Width,
+    Height,
 }
 
 /// Which pin `window.pin` sets (D106).
@@ -168,6 +182,16 @@ pub enum Command {
     ZoneMove(Dir),
     Window(WindowVerb, direction::Dir),
     WindowGroup(GroupVerb),
+    /// `window.share`: a window, or the focused one, gets a share of it and its neighbour.
+    WindowShare {
+        hwnd: Option<isize>,
+        axis: Axis,
+        fraction: f32,
+    },
+    /// `window.ungroup`: a window, or the focused one, leaves its zones.
+    WindowUngroup {
+        hwnd: Option<isize>,
+    },
     /// `on` is None to toggle.
     WindowPin {
         kind: PinKind,
@@ -231,6 +255,18 @@ fn screen_param(params: &Value) -> Result<Option<u32>, RpcError> {
             .and_then(|n| u32::try_from(n).ok())
             .map(Some)
             .ok_or_else(|| RpcError::new(INVALID_PARAMS, "number must be a screen number")),
+    }
+}
+
+/// An optional `hwnd`, a window handle.
+fn hwnd_param(params: &Value) -> Result<Option<isize>, RpcError> {
+    match params.get("hwnd") {
+        None | Some(Value::Null) => Ok(None),
+        Some(v) => v
+            .as_i64()
+            .and_then(|n| isize::try_from(n).ok())
+            .map(Some)
+            .ok_or_else(|| RpcError::new(INVALID_PARAMS, "hwnd must be a window handle")),
     }
 }
 
@@ -345,6 +381,21 @@ fn command(method: &str, p: &Value) -> Result<Command, RpcError> {
             }
         }
         "window.priority" => Command::WindowGroup(GroupVerb::Priority),
+        "window.share" => Command::WindowShare {
+            hwnd: hwnd_param(p)?,
+            axis: match p.get("axis").and_then(Value::as_str) {
+                Some("width") => Axis::Width,
+                Some("height") => Axis::Height,
+                _ => return Err(RpcError::new(INVALID_PARAMS, "axis must be width or height")),
+            },
+            fraction: p
+                .get("fraction")
+                .and_then(Value::as_f64)
+                .filter(|f| (MIN_SHARE..=MAX_SHARE).contains(f))
+                .ok_or_else(|| RpcError::new(INVALID_PARAMS, "fraction must be 0.1 to 0.9"))?
+                as f32,
+        },
+        "window.ungroup" => Command::WindowUngroup { hwnd: hwnd_param(p)? },
         "window.pin" => {
             let kind = match p.get("kind").and_then(Value::as_str) {
                 Some("top") => PinKind::Top,

@@ -23,11 +23,11 @@ static NEXT: AtomicU64 = AtomicU64::new(1);
 /// The worker's answer, for the drag with that number.
 static ANSWER: Mutex<Option<(u64, Group)>> = Mutex::new(None);
 
-/// A window in the zones beside the dragged one.
-struct Member {
-    hwnd: isize,
-    from: usize,
-    to: usize,
+/// A window in the zones beside the dragged one, or beside a dragged divider handle.
+pub(crate) struct Member {
+    pub(crate) hwnd: isize,
+    pub(crate) from: usize,
+    pub(crate) to: usize,
     /// Its window rect and visible frame when the drag began. They give the invisible
     /// border once, so a tick reads no frame, and the window rect is where Esc puts it.
     window: Rect,
@@ -43,6 +43,28 @@ struct Member {
 }
 
 impl Member {
+    /// The window `h` in zones `from` to `to`, whose rect with the gap is `cell`. None
+    /// when it is hung or runs as administrator, so it can't follow. Worker only.
+    pub(crate) fn of(h: HWND, from: usize, to: usize, cell: Rect) -> Option<Member> {
+        if winutil::is_hung(h) || winutil::is_elevated_over_us(h) {
+            return None;
+        }
+        let (window, visible) = (winutil::window_rect(h)?, winutil::visible_rect(h)?);
+        let sized = winutil::is_resizable(h);
+        Some(Member {
+            hwnd: h.0 as isize,
+            from,
+            to,
+            window,
+            visible,
+            cell,
+            sized,
+            sent: window,
+            at: None,
+            dropped: false,
+        })
+    }
+
     /// The window rect that puts its visible frame on `frame`. Its own zones give back
     /// exactly where it was.
     fn rect_for(&self, frame: Rect) -> Rect {
@@ -60,8 +82,29 @@ impl Member {
         }
     }
 
+    /// Its last place, sent whatever the pace, unless it never moved and stays.
+    pub(crate) fn land(&self, frame: Rect) {
+        let r = self.rect_for(frame);
+        if r != self.window || self.sent != self.window {
+            self.put(r);
+        }
+    }
+
+    /// Still there to land: not hung during the drag, and not closed or minimized since.
+    pub(crate) fn here(&self, exclude: &[String]) -> bool {
+        let h = hwnd_of(self.hwnd);
+        !self.dropped && unsafe { IsWindow(Some(h)) }.as_bool() && winutil::is_snappable(h, std::process::id(), exclude)
+    }
+
+    /// Back where it was, if it moved.
+    pub(crate) fn back(&self) {
+        if !self.dropped && self.sent != self.window {
+            self.put(self.window);
+        }
+    }
+
     /// The latest place wins. It's sent once the last one landed, or after `PACE`.
-    fn follow(&mut self, frame: Rect) {
+    pub(crate) fn follow(&mut self, frame: Rect) {
         let want = self.rect_for(frame);
         if self.dropped || want == self.sent {
             return;
@@ -89,8 +132,8 @@ pub(super) struct Group {
 impl Group {
     /// Esc, or a drag cut short: every neighbour that moved goes back.
     fn restore(&self) {
-        for m in self.members.iter().filter(|m| !m.dropped && m.sent != m.window) {
-            m.put(m.window);
+        for m in &self.members {
+            m.back();
         }
     }
 }
@@ -191,24 +234,7 @@ impl Ask {
             wincontrol::group_members(first, &self.screen, self.bounds, &self.placed, &self.known, &self.exclude);
         let mins = wincontrol::group_mins(&self.tree, self.work, self.gap, self.dpi, &list);
         let member = |(h, from, to): (HWND, usize, usize)| {
-            if winutil::is_hung(h) || winutil::is_elevated_over_us(h) {
-                return None;
-            }
-            let (window, visible) = (winutil::window_rect(h)?, winutil::visible_rect(h)?);
-            let cell = zones::span(self.placed[from], self.placed[to]);
-            let sized = winutil::is_resizable(h);
-            Some(Member {
-                hwnd: h.0 as isize,
-                from,
-                to,
-                window,
-                visible,
-                cell,
-                sized,
-                sent: window,
-                at: None,
-                dropped: false,
-            })
+            Member::of(h, from, to, zones::span(self.placed[from], self.placed[to]))
         };
         let members = list.into_iter().skip(1).filter_map(member).collect();
         let mut answer = ANSWER.lock().unwrap_or_else(|e| e.into_inner());
@@ -327,19 +353,10 @@ impl Engine {
             return now == Some(drag.start);
         };
         let placed = zones::rects(&tree, edges.area, edges.gap);
-        let own = std::process::id();
-        // A neighbour closed or minimized since the drag began is left out.
-        let here = |m: &&Member| {
-            let h = hwnd_of(m.hwnd);
-            !m.dropped && unsafe { IsWindow(Some(h)) }.as_bool() && winutil::is_snappable(h, own, &self.exclude)
-        };
-        let members: Vec<&Member> = group.members.iter().filter(here).collect();
+        let members: Vec<&Member> = group.members.iter().filter(|m| m.here(&self.exclude)).collect();
         for m in members {
             let at = zones::span(placed[m.from], placed[m.to]);
-            let r = m.rect_for(at);
-            if r != m.window || m.sent != m.window {
-                m.put(r);
-            }
+            m.land(at);
             self.keep_snapped(m.hwnd, &edges.screen, (m.from, m.to), at);
         }
         // The usual placement, which also takes back any overshoot past a neighbour's minimum.
@@ -354,7 +371,7 @@ impl Engine {
 
     /// The window is in the same zones, at a new place. Its size from before it was
     /// snapped stays what it was.
-    fn keep_snapped(&mut self, key: isize, screen: &str, (from, to): (usize, usize), at: Rect) {
+    pub(super) fn keep_snapped(&mut self, key: isize, screen: &str, (from, to): (usize, usize), at: Rect) {
         let entry = self.snapped.entry(key).or_insert(Snapped { old: None, screen: screen.to_string(), from, to, at });
         (entry.screen, entry.from, entry.to, entry.at) = (screen.to_string(), from, to, at);
     }

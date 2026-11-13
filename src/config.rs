@@ -415,8 +415,8 @@ pub struct Config {
     pub hotkeys: Hotkeys,
     pub zones: ZoneSettings,
     pub windows: WindowSettings,
-    /// Some desk offers its last session at sign-in (D120). Off saves no session and
-    /// deletes the saved ones. The tray sets it from each desk's `sign_in`.
+    /// Some desk offers its last session at sign-in (D120). Written for older builds,
+    /// and read only to migrate a file from before each desk's `sign_in`.
     pub restore_session: bool,
     /// Who reopens the last session's apps (D128).
     pub restore_apps: RestoreApps,
@@ -549,24 +549,35 @@ pub(crate) fn write_atomic(path: &Path, contents: &str) -> std::io::Result<()> {
 }
 
 impl Desk {
-    /// What happens at sign-in on this desk. A desk with no choice yet reads the old
-    /// `restore_session` switch, and the last session needs that switch on.
-    pub fn sign_in_or(&self, restore_session: bool) -> SignIn {
-        match &self.sign_in {
-            Some(chosen) if chosen.mode == SignInMode::LastSession && !restore_session => {
-                SignIn { mode: SignInMode::Nothing, ..chosen.clone() }
-            }
-            Some(chosen) => chosen.clone(),
-            None if restore_session => SignIn { mode: SignInMode::LastSession, ..SignIn::default() },
-            None => SignIn::default(),
-        }
+    /// What happens at sign-in on this desk. A desk seen after the migration has no
+    /// choice yet, which is Nothing.
+    pub fn choice(&self) -> SignIn {
+        self.sign_in.clone().unwrap_or_default()
     }
 }
 
 impl Config {
     /// Whether the desk keeps a last session.
     pub fn keeps_session(&self, sig: &str) -> bool {
-        self.desks.get(sig).is_some_and(|d| d.sign_in_or(self.restore_session).mode == SignInMode::LastSession)
+        self.desks.get(sig).is_some_and(|d| d.choice().mode == SignInMode::LastSession)
+    }
+
+    /// Whether any desk keeps a last session.
+    pub fn any_keeps_session(&self) -> bool {
+        self.desks.values().any(|d| d.choice().mode == SignInMode::LastSession)
+    }
+
+    /// Once, for a file from before "When I sign in": each desk takes its choice from
+    /// the old `restore_session` switch. A file where some desk already has one is
+    /// left alone, so a desk seen later never inherits anything.
+    pub fn migrate_sign_in(&mut self) {
+        if self.desks.values().any(|d| d.sign_in.is_some()) {
+            return;
+        }
+        let mode = if self.restore_session { SignInMode::LastSession } else { SignInMode::Nothing };
+        for desk in self.desks.values_mut() {
+            desk.sign_in = Some(SignIn { mode, ..SignIn::default() });
+        }
     }
 
     /// This config with a merge patch applied. A patch's null deletes a key,
@@ -582,22 +593,21 @@ impl Config {
         let mut config: Config = serde_json::from_value(merged)?;
         config.windows.focus_color = palette::normalise(&config.windows.focus_color, palette::FOCUS_DEFAULT);
         config.windows.pin_color = palette::normalise(&config.windows.pin_color, palette::PIN_DEFAULT);
-        let sign_in_patched = patch
-            .get("desks")
-            .and_then(|d| d.as_object())
-            .is_some_and(|desks| desks.values().any(|desk| desk.get("sign_in").is_some()));
-        if sign_in_patched && patch.get("restore_session").is_none() {
-            // A desk that never chose reads the old switch, so write that down before it changes.
-            let was = config.restore_session;
-            for desk in config.desks.values_mut().filter(|d| d.sign_in.is_none() && was) {
-                desk.sign_in = Some(SignIn { mode: SignInMode::LastSession, ..SignIn::default() });
+        // An older client sets the old switch: that is every desk's choice, stated outright.
+        if let Some(on) = patch.get("restore_session").and_then(|v| v.as_bool()) {
+            let mode = if on { SignInMode::LastSession } else { SignInMode::Nothing };
+            for desk in config.desks.values_mut() {
+                desk.sign_in = Some(SignIn { mode, ..desk.choice() });
             }
-            config.restore_session = config.desks.values().any(|d| d.sign_in_or(true).mode == SignInMode::LastSession);
         }
-        let restore = config.restore_session;
-        for desk in config.desks.values_mut().filter(|d| d.sign_in_or(restore).mode != SignInMode::LastSession) {
-            desk.last_session = None;
+        // A desk that stops keeping its session by a change loses the saved one.
+        for (sig, desk) in config.desks.iter_mut() {
+            if self.keeps_session(sig) && desk.choice().mode != SignInMode::LastSession {
+                desk.last_session = None;
+            }
         }
+        // Only older builds read it.
+        config.restore_session = config.any_keeps_session();
         crate::library::follow(&self.custom_layouts, &mut config);
         Ok(config)
     }
@@ -619,6 +629,7 @@ impl Config {
                     keep_v1_copy(p, &bytes);
                     c.migrate_v1();
                 }
+                c.migrate_sign_in();
                 c
             }
             Err(_) => {
@@ -636,6 +647,7 @@ impl Config {
         if c.version < CURRENT_VERSION {
             c.migrate_v1();
         }
+        c.migrate_sign_in();
         for desk in c.desks.values_mut() {
             desk.workspaces = crate::workspace::without_places(&desk.workspaces);
             // The last session never saves them, so one in a file is dropped too.
@@ -687,17 +699,23 @@ mod tests {
     use super::*;
     use crate::desk::{Mon, note_active};
     use crate::geom::Rect;
+    use serde_json::json;
 
     #[test]
-    fn sign_in_reads_the_old_switch_until_a_choice_is_made() {
-        let desk = Desk::default();
-        assert_eq!(desk.sign_in_or(false).mode, SignInMode::Nothing);
-        assert_eq!(desk.sign_in_or(true).mode, SignInMode::LastSession);
-        let chosen = Desk { sign_in: Some(SignIn { mode: SignInMode::LastSession, ..SignIn::default() }), ..desk };
-        assert_eq!(chosen.sign_in_or(false).mode, SignInMode::Nothing);
-        let workspace = Desk { sign_in: Some(SignIn { mode: SignInMode::Workspace, ..SignIn::default() }), ..chosen };
-        assert_eq!(workspace.sign_in_or(true).mode, SignInMode::Workspace);
-        assert!(workspace.sign_in_or(true).ask);
+    fn sign_in_migrates_once_and_patches_merge() {
+        let mut config = Config { restore_session: true, ..Config::default() };
+        config.desks.insert("a".into(), Desk::default());
+        config.migrate_sign_in();
+        assert!(config.keeps_session("a"));
+        // A desk seen later starts at Nothing, and a second migration leaves the first alone.
+        config.desks.insert("b".into(), Desk::default());
+        config.migrate_sign_in();
+        assert!(!config.keeps_session("b"));
+        // A partial patch keeps the mode, and the old switch states every desk's mode.
+        let asked = config.patched(&json!({ "desks": { "a": { "sign_in": { "ask": false } } } })).unwrap();
+        assert!(asked.keeps_session("a") && !asked.desks["a"].choice().ask);
+        let off = config.patched(&json!({ "restore_session": false })).unwrap();
+        assert!(!off.keeps_session("a") && !off.restore_session);
     }
 
     fn border(a: &str, b: &str, side: Side, s: f64, o: f64) -> SavedBorder {

@@ -177,11 +177,8 @@ pub fn render(panel: &mut Panel, window: &mut Window, cx: &mut Context<Panel>) -
         setter(|on| json!({ "ask_new_desks": on })),
     );
     let sig = desk_sig(panel);
-    let sign_in = panel.config.desks.get(&sig).map(|d| d.sign_in_or(panel.config.restore_session)).unwrap_or_default();
+    let sign_in = panel.config.desks.get(&sig).map(|d| d.choice()).unwrap_or_default();
     let workspaces = all(panel);
-    // Picking the workspace mode keeps the workspace chosen before, else takes the first.
-    let keep = sign_in.workspace.clone().filter(|id| workspaces.iter().any(|w| w.id == *id));
-    let pick = keep.or_else(|| workspaces.first().map(|w| w.id.clone()));
     let mode_at = match sign_in.mode {
         SignInMode::Nothing => 0,
         SignInMode::LastSession => 1,
@@ -198,10 +195,7 @@ pub fn render(panel: &mut Panel, window: &mut Window, cx: &mut Context<Panel>) -
             let (view, sig) = (view.clone(), sig.clone());
             move |i, window, cx| {
                 let mode = ["nothing", "last_session", "workspace"][i.min(2)];
-                let mut chosen = json!({ "mode": mode });
-                if i == 2 {
-                    chosen["workspace"] = json!(pick);
-                }
+                let chosen = json!({ "mode": mode });
                 if !sig.is_empty() {
                     let patch = json!({ "desks": { sig.clone(): { "sign_in": chosen } } });
                     view.update(cx, |panel, cx| panel.patch(patch, window, cx));
@@ -331,7 +325,19 @@ pub fn render(panel: &mut Panel, window: &mut Window, cx: &mut Context<Panel>) -
     let mut startup_rows = vec![
         row("Start with Windows", Some(start_about.into()), start_with_windows, p),
         row("Offer to line up new screens", Some("Asks once when screens Seam hasn't seen connect".into()), offer, p),
-        row("When I sign in", Some("What Seam does on this desk when it starts at sign-in".into()), when, p),
+        row(
+            "When I sign in",
+            Some(
+                if sig.is_empty() {
+                    "Waiting for Seam to report this desk"
+                } else {
+                    "What Seam does on this desk when it starts at sign-in"
+                }
+                .into(),
+            ),
+            div().opacity(if sig.is_empty() { 0.5 } else { 1. }).child(when),
+            p,
+        ),
     ];
     match sign_in.mode {
         SignInMode::Nothing => {}

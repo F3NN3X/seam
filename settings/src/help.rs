@@ -347,7 +347,7 @@ pub const TOPICS: &[Topic] = &[
                 "**Offer my last session** keeps a hidden last session for each desk: which apps are where, and which are pinned. At sign-in Seam asks whether to restore it. A click puts the windows back in their zones and pins them again. Nothing starts without the click.",
             ),
             Text(
-                "**Open a workspace** switches to the workspace you pick, like any workspace switch. **Ask first** is on by default: Seam shows \"Open <workspace>? Click to open\" and waits for the click. Off, it switches once Windows is ready. If a full-screen app is in front it waits, and a pause by hand cancels it.",
+                "**Open a workspace** switches to the workspace you pick, like any workspace switch. **Ask first** is on by default: Seam shows \"Open <workspace>? Click to open\" and waits for the click. Off, it switches about 10 seconds after the taskbar is up. If a full-screen app is in front it waits, up to 3 minutes after Seam starts. A pause by hand or a change of desk cancels it.",
             ),
             Text(
                 "**Who reopens the apps** picks **Windows reopens them**, where Seam puts each window back as it appears, or **Seam reopens them**, where Seam starts the missing apps itself.",

@@ -102,7 +102,7 @@ pub(super) fn restore_session(app: &mut App, session: Workspace) -> Reply {
 
 /// Seam reopens the apps, so Windows' Restart apps would open them a second time.
 pub(super) fn holds_restart_apps(cfg: &Config) -> bool {
-    cfg.restore_session && cfg.restore_apps == RestoreApps::Seam
+    cfg.any_keeps_session() && cfg.restore_apps == RestoreApps::Seam
 }
 
 /// Turn Windows' Restart apps off while Seam reopens the apps, keeping the value it

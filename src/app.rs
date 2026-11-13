@@ -47,7 +47,7 @@ use session::{
     check_restart_apps, end_session, offer_session, pin_closed, query_end_session, reopen_closed, restore_session,
     saved_session, session_captured, start_session_capture, sync_restart_apps, windows_changed,
 };
-use signin::{open_offered, sign_in_tick};
+use signin::{SignInRun, begin, cancel_sign_in, open_offered, sign_in_tick};
 use std::cell::RefCell;
 use std::os::windows::process::CommandExt;
 use std::sync::Mutex;
@@ -331,7 +331,9 @@ struct App {
     session_offer: Option<Workspace>,
     session_offer_tries: u8,
     /// The workspace offered at sign-in, for the notice's click.
-    sign_in_offer: Option<String>,
+    sign_in_offer: Option<(String, String)>,
+    /// The sign-in action of this start, while it waits.
+    sign_in_run: Option<SignInRun>,
     /// A last-session capture is running, for the desk it started on.
     session_capture: Option<String>,
     /// Windows asked whether the session may end, and the capture for it has started.
@@ -1191,6 +1193,7 @@ pub fn run() {
             session_offer: None,
             session_offer_tries: 0,
             sign_in_offer: None,
+            sign_in_run: None,
             session_capture: None,
             session_ending: false,
             restart_apps: false,
@@ -1232,6 +1235,7 @@ pub fn run() {
         }
         // After a sign-in, do what I chose once the desktop has settled (D120).
         if login {
+            with_app(begin);
             SetTimer(Some(hwnd), TIMER_SESSION_OFFER, SESSION_OFFER_AFTER_MS, None);
         }
         if line_up {

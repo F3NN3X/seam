@@ -174,9 +174,9 @@ A workspace saves which app is on which screen and in which zone (or at its own 
 
 **Offer my last session** keeps a hidden last session for each desk: which apps are where, and which are pinned. Seam saves it 30 seconds after it last snapped, pinned or switched, and again when you sign out or shut down. At sign-in it asks "Restore your last session? Click to restore". A click works like a workspace switch that leaves other windows alone: windows go back to their zones, and pins come back. Nothing starts without the click.
 
-**Open a workspace** lists the desk's workspaces. With **Ask first** on, the default, Seam shows "Open <workspace>? Click to open" and switches on the click, and nothing starts without it. With it off, Seam switches once Windows is ready. It's a normal workspace switch, so the workspace's launch settings, stages and Other windows apply. If the workspace has been deleted or isn't for the desk you're on, nothing opens and the log says so. If a full-screen app is in front, Seam waits until it's gone, and pausing Seam by hand cancels it.
+**Open a workspace** lists the desk's workspaces. With **Ask first** on, the default, Seam shows "Open <workspace>? Click to open" and switches on the click, and nothing starts without it. With it off, Seam switches about 10 seconds after the taskbar is up. Until you pick a workspace, nothing opens. It's a normal workspace switch, so the workspace's launch settings, stages and Other windows apply. If the workspace has been deleted or isn't for the desk you're on, nothing opens and the log says so. If a full-screen app is in front, Seam waits until it's gone. Seam waits at most 3 minutes after it starts, and gives up if you change desk or pause Seam by hand.
 
-Config files from before this keep working: `restore_session` on reads as **Offer my last session** until you choose.
+Config files from before this keep working: `restore_session` on becomes **Offer my last session** on every desk the first time Seam starts, and a desk Seam sees later starts at **Do nothing**.
 
 **Who reopens the apps** picks between Windows' Restart apps (Seam starts nothing and puts each window back as it appears, for up to a minute) and Seam (it starts the missing apps, and turns Windows' Restart apps off until you switch back or turn restore off).
 

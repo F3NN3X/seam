@@ -18,8 +18,39 @@ enum Dest<'a> {
     Rect(Rect, u32),
 }
 
+/// Why a drop doesn't swap, for the log.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum Skip {
+    /// "Swap with the window already in a zone" is off.
+    Off,
+    /// No place to send them: the old zones or the old frame aren't known.
+    NoPlace,
+    /// The window was dropped over its own zones.
+    OwnSpan,
+    NoOccupants,
+    /// The snapping has windows in those zones, but none is still mostly there.
+    NotCurrent,
+    /// One of them can't be moved or isn't responding.
+    Refused,
+}
+
+/// How far each rect is shrunk before two count as overlapping, so zones that
+/// only share an edge, or round a pixel into each other, don't.
+const EDGE_SLOP: i32 = 2;
+
 fn overlaps(a: Rect, b: Rect) -> bool {
-    a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h
+    let shrink = |r: Rect| Rect { x: r.x + EDGE_SLOP, y: r.y + EDGE_SLOP, w: r.w - 2 * EDGE_SLOP, h: r.h - 2 * EDGE_SLOP };
+    let (a, b) = (shrink(a), shrink(b));
+    a.w > 0 && a.h > 0 && b.w > 0 && b.h > 0 && a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h
+}
+
+/// Whether at least half of `r` lies inside `zone`. A window an app keeps a few
+/// pixels off its zones, or bigger than them for its minimum size, still counts.
+fn mostly_inside(r: Rect, zone: Rect) -> bool {
+    let w = (r.x + r.w).min(zone.x + zone.w) - r.x.max(zone.x);
+    let h = (r.y + r.h).min(zone.y + zone.h) - r.y.max(zone.y);
+    let area = |w: i32, h: i32| i64::from(w.max(0)) * i64::from(h.max(0));
+    area(r.w, r.h) > 0 && 2 * area(w, h) >= area(r.w, r.h)
 }
 
 /// Where `r`, the part of it inside `from`, lands when `from` is stretched over `to`.
@@ -45,16 +76,26 @@ fn zones_of(placed: &[Rect], r: Rect) -> Option<(usize, usize)> {
 }
 
 impl Engine {
-    /// The snapped windows still in zones of `g` that overlap `target`, and where
-    /// each is. None when one of them can't be moved or is hung, which leaves the
-    /// drop as it always was.
+    /// The snapped windows in zones of `g` that overlap `target`, and where each was
+    /// put. A window counts while at least half of it is still inside its zones.
+    /// None when one of them can't be moved or is hung, which leaves the drop as it
+    /// always was.
     pub(super) fn occupants(&self, drag: &Drag, g: &Placed, target: Rect) -> Option<Vec<(HWND, Rect)>> {
-        let mut occupants = Vec::new();
+        match self.held_in(drag, g, target) {
+            Ok(list) => Some(list),
+            Err(Skip::NoOccupants | Skip::NotCurrent) => Some(Vec::new()),
+            Err(_) => None,
+        }
+    }
+
+    fn held_in(&self, drag: &Drag, g: &Placed, target: Rect) -> Result<Vec<(HWND, Rect)>, Skip> {
+        let (mut occupants, mut gone) = (Vec::new(), 0);
         for (key, s) in &self.snapped {
             if *key == drag.hwnd || s.screen != g.id || s.from.max(s.to) >= g.zones.len() {
                 continue;
             }
-            if !overlaps(zones::span(g.zones[s.from], g.zones[s.to]), target) {
+            let zones = zones::span(g.zones[s.from], g.zones[s.to]);
+            if !overlaps(zones, target) {
                 continue;
             }
             let h = hwnd_of(*key);
@@ -62,48 +103,58 @@ impl Engine {
             if !there || winutil::is_minimized(h) || winutil::is_cloaked(h) {
                 continue;
             }
-            let Some(at) = self.current(h).map(|c| c.at) else { continue };
-            wincontrol::movable(h, &self.exclude).ok()?;
-            occupants.push((h, at));
+            if !winutil::visible_rect(h).is_some_and(|r| mostly_inside(r, zones)) {
+                gone += 1;
+                continue;
+            }
+            wincontrol::movable(h, &self.exclude).map_err(|_| Skip::Refused)?;
+            occupants.push((h, s.at));
         }
-        Some(occupants)
+        match (occupants.is_empty(), gone) {
+            (true, 0) => Err(Skip::NoOccupants),
+            (true, _) => Err(Skip::NotCurrent),
+            _ => Ok(occupants),
+        }
     }
 
     /// The moves that give the windows in the zones `(a, b)` of screen `screen` the
     /// dropped window's old place, and whether it was snapped. None when nothing
     /// swaps, and the drop is as it always was.
-    pub(super) fn swap_plan(
+    pub(super) fn swap_plan(&self, drag: &Drag, screen: usize, ab: (usize, usize)) -> Option<(Vec<Placement>, bool)> {
+        self.swap_why(drag, screen, ab).ok()
+    }
+
+    /// `swap_plan`, or why there is no swap.
+    pub(super) fn swap_why(
         &self,
         drag: &Drag,
         screen: usize,
         (a, b): (usize, usize),
-    ) -> Option<(Vec<Placement>, bool)> {
+    ) -> Result<(Vec<Placement>, bool), Skip> {
         if !self.settings.swap_on_drop {
-            return None;
+            return Err(Skip::Off);
         }
         let g = &drag.geometry[screen];
-        let target = zones::span(*g.zones.get(a)?, *g.zones.get(b)?);
+        let zone = |z: &Placed, i: usize| z.zones.get(i).copied().ok_or(Skip::NoPlace);
+        let target = zones::span(zone(g, a)?, zone(g, b)?);
         let dest = match &drag.old_zone {
             Some((id, from, to)) => {
-                let old = drag.geometry.iter().find(|x| x.id == *id)?;
-                let span = zones::span(*old.zones.get(*from)?, *old.zones.get(*to)?);
+                let old = drag.geometry.iter().find(|x| x.id == *id).ok_or(Skip::NoPlace)?;
+                let span = zones::span(zone(old, *from)?, zone(old, *to)?);
                 // Growing or shrinking over its own area isn't a swap.
                 if old.id == g.id && overlaps(span, target) {
-                    return None;
+                    return Err(Skip::OwnSpan);
                 }
                 Dest::Zones(old, *from, *to, span)
             }
             None => {
-                let frame = drag.frame.filter(|_| !drag.was_maximized)?;
+                let frame = drag.frame.filter(|_| !drag.was_maximized).ok_or(Skip::NoPlace)?;
                 let (x, y) = (frame.x + frame.w / 2, frame.y + frame.h / 2);
-                let on = self.screens.iter().find(|s| s.bounds.contains(x, y))?;
-                Dest::Rect(frame, work_area(on.bounds)?.1)
+                let on = self.screens.iter().find(|s| s.bounds.contains(x, y)).ok_or(Skip::NoPlace)?;
+                Dest::Rect(frame, work_area(on.bounds).ok_or(Skip::NoPlace)?.1)
             }
         };
-        let occupants = self.occupants(drag, g, target)?;
-        if occupants.is_empty() {
-            return None;
-        }
+        let occupants = self.held_in(drag, g, target)?;
         let alone = occupants.len() == 1;
         let place = |(h, at): &(HWND, Rect)| {
             let hwnd = h.0 as isize;
@@ -136,7 +187,7 @@ impl Engine {
                 }
             }
         };
-        Some((occupants.iter().map(place).collect(), drag.old_zone.is_some()))
+        Ok((occupants.iter().map(place).collect(), drag.old_zone.is_some()))
     }
 
     /// Start the moves `swap_plan` made, once the dropped window has been sent to its zones.
@@ -165,6 +216,17 @@ mod tests {
         // What sticks out of the span is cut to it.
         let m = map_rect(r(-100, 0, 600, 500), r(0, 0, 1000, 500), r(0, 0, 400, 200));
         assert_eq!(m, r(0, 0, 200, 200));
+    }
+
+    #[test]
+    fn zones_that_share_an_edge_dont_overlap() {
+        // Two rows at gap 0, and a pixel of rounding into each other.
+        assert!(!overlaps(r(0, 0, 1000, 500), r(0, 500, 1000, 500)));
+        assert!(!overlaps(r(0, 0, 1000, 501), r(0, 500, 1000, 500)));
+        assert!(overlaps(r(0, 0, 1000, 600), r(0, 500, 1000, 500)));
+        // A window a few pixels off, or taller for its minimum, is still in its zone.
+        assert!(mostly_inside(r(3, -7, 1000, 520), r(0, 0, 1000, 500)));
+        assert!(!mostly_inside(r(0, 400, 1000, 500), r(0, 0, 1000, 500)));
     }
 
     #[test]

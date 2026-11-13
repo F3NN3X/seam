@@ -875,6 +875,13 @@ impl Engine {
             self.split_drop(drag, hwnd, screen, split);
             return;
         }
+        if out.swap.is_none() {
+            if let Err(why) = self.swap_why(drag, screen, (a.min(b), a.max(b))) {
+                if why != swap::Skip::Off {
+                    log::info!("zone swap: skipped, {why:?}");
+                }
+            }
+        }
         let g = &drag.geometry[screen];
         self.snap_to(hwnd, g, (a.min(b), a.max(b)), out.rect, drag.was_snapped);
         self.swap_start(out.swap);

@@ -856,6 +856,18 @@ pub fn render(panel: &mut Panel, window: &mut Window, cx: &mut Context<Panel>) -
         neighbours,
         p,
     );
+    let handles = switch("zone-handles", "Handles between snapped windows", zones_cfg.divider_handles, window, cx, {
+        let view = view.clone();
+        move |on, window, cx| {
+            view.update(cx, |panel, cx| panel.patch(json!({ "zones": { "divider_handles": on } }), window, cx))
+        }
+    });
+    let handles_row = row(
+        "Handles between snapped windows",
+        Some("Drag one to resize both sides. Right-click for sizes".into()),
+        handles,
+        p,
+    );
     let on_screen_row = row(
         "Edit layouts on the screen",
         Some("Off shows a live view on the screen, and you edit in the preview here".into()),
@@ -1191,7 +1203,7 @@ pub fn render(panel: &mut Panel, window: &mut Window, cx: &mut Context<Panel>) -
                 .flex_col()
                 .gap(px(12.))
                 .child(snapping)
-                .child(card(vec![neighbours_row, on_screen_row, refit_row], p)),
+                .child(card(vec![neighbours_row, handles_row, on_screen_row, refit_row], p)),
             p,
         ))
         .child(section("Windows", windows_card, p))

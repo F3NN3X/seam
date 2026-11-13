@@ -2,6 +2,7 @@
 
 mod commands;
 mod session;
+mod share;
 mod tile;
 mod tray_icon;
 mod update;
@@ -23,7 +24,8 @@ use crate::switcher::{
 use crate::tray::{CLASS, WM_APP_API, WM_APP_LINEUP, WM_APP_WINDOWS_CHANGED};
 use crate::wm::{Pinned, WM_APP_WS_MOVED};
 use crate::{
-    arrange, ease, focus_only, hotkey, identify, live, overlay, quicklayout, showlayout, spotlight, wincontrol, wm,
+    arrange, dividers, ease, focus_only, hotkey, identify, live, overlay, quicklayout, showlayout, spotlight,
+    wincontrol, wm,
 };
 use commands::{align_finished, busy, drain_api, patch_config, refused};
 use seam::api::{self, Client, Command, FocusScope, GroupVerb, PinKind, Reply, RpcError, WindowVerb};
@@ -82,6 +84,8 @@ const WM_APP_UPDATE: u32 = WM_APP + 13;
 const TIMER_REFRESH: usize = 1;
 /// Retries the quick layout overlay's picks the app was too busy for (menu open).
 const TIMER_QUICK: usize = 40;
+/// Retries a divider menu's choice the app was too busy for (menu open).
+const TIMER_DIVIDER: usize = 41;
 /// Windows silently removes low-level hooks that ever time out, so re-arm periodically.
 const TIMER_REARM: usize = 2;
 /// Retries API commands the app was too busy for (menu open).
@@ -141,6 +145,8 @@ const HOTKEY_TILE_SCREEN: i32 = 50;
 const HOTKEY_QUICK_LAYOUT: i32 = 55;
 const HOTKEY_FOCUS_ONLY: i32 = 40;
 const HOTKEY_SPOTLIGHT: i32 = 41;
+/// The size menu: share or take out the focused snapped window.
+const HOTKEY_DIVIDER_MENU: i32 = 60;
 /// One hotkey id per workspace on the desk, from here up.
 const HOTKEY_WORKSPACE: i32 = 100;
 const NIN_KEYSELECT: u32 = NIN_SELECT | NINF_KEY;
@@ -724,6 +730,11 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                 HOTKEY_TILE_SCREEN => {
                     with_app(|a| start_tile(a, tile::pointer(), None));
                 }
+                HOTKEY_DIVIDER_MENU => {
+                    if let Err(why) = snap::size_menu(GetForegroundWindow()) {
+                        log::info!("size menu hotkey: {why}");
+                    }
+                }
                 HOTKEY_QUICK_LAYOUT => {
                     if let Some(Err(why)) = with_app(|a| tile::open_quick_layout(a, None, false)) {
                         log::info!("quick layout hotkey: {why}");
@@ -847,6 +858,18 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
         WM_TIMER if wparam.0 == TIMER_QUICK => {
             if with_app(tile::apply_quick).is_some() {
                 let _ = KillTimer(Some(hwnd), TIMER_QUICK);
+            }
+            LRESULT(0)
+        }
+        dividers::WM_APP_DIVIDER => {
+            if with_app(share::divider_choice).is_none() {
+                SetTimer(Some(hwnd), TIMER_DIVIDER, 50, None);
+            }
+            LRESULT(0)
+        }
+        WM_TIMER if wparam.0 == TIMER_DIVIDER => {
+            if with_app(share::divider_choice).is_some() {
+                let _ = KillTimer(Some(hwnd), TIMER_DIVIDER);
             }
             LRESULT(0)
         }

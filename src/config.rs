@@ -81,6 +81,8 @@ pub struct Hotkeys {
     pub focus_only: Option<String>,
     /// "Spotlight": dim everything but the window in use.
     pub spotlight: Option<String>,
+    /// "Size menu": share or take out the focused snapped window.
+    pub divider_menu: Option<String>,
 }
 
 impl Default for Hotkeys {
@@ -118,6 +120,7 @@ impl Default for Hotkeys {
             quick_layout: None,
             focus_only: None,
             spotlight: None,
+            divider_menu: None,
         }
     }
 }
@@ -172,6 +175,8 @@ pub struct ZoneSettings {
     pub edit_on_screen: bool,
     /// Dragging the edge of a window in a zone moves the windows in the zones beside it.
     pub resize_neighbours: bool,
+    /// Thin handles in the gap between snapped windows, to drag or right-click.
+    pub divider_handles: bool,
     /// Exe file names, case-insensitive.
     pub exclude: Vec<String>,
 }
@@ -187,6 +192,7 @@ impl Default for ZoneSettings {
             refit: false,
             edit_on_screen: true,
             resize_neighbours: true,
+            divider_handles: true,
             exclude: Vec::new(),
         }
     }

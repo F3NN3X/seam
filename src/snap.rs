@@ -4,7 +4,7 @@
 //! mouse hook (D7).
 
 use crate::tray::WM_APP_WINDOWS_CHANGED;
-use crate::{log, minsize, overlay, zone_paint};
+use crate::{dividers, log, minsize, overlay, wincontrol, zone_paint};
 use seam::config::{Config, WindowSize, ZoneSettings};
 use seam::desk::{self, Mon};
 use seam::geom;
@@ -25,6 +25,7 @@ mod refit;
 #[path = "edges.rs"]
 mod edges;
 
+pub(crate) use edges::Member;
 pub use refit::{display_changed, found as refit_found, line_up_ended, WM_APP_REFIT};
 
 /// A window the tray couldn't move, probably because it runs as administrator.
@@ -259,17 +260,47 @@ pub fn update(owner: HWND, cfg: &Config, sig: &str, mons: &[Mon], aside: Option<
         }
         e.sync_hook();
         e.sync_overlay();
+        e.sync_dividers();
     });
 }
 
 /// The work area changed (a moved taskbar, a scaling change), so the zones' pixels did.
 pub fn work_area_changed() {
-    with_engine(Engine::sync_overlay);
+    with_engine(|e| {
+        e.sync_overlay();
+        e.sync_dividers();
+    });
 }
 
-/// The tray is quitting: free the overlay's windows and bitmaps.
+/// The tray is quitting: free the overlay's windows and bitmaps, and the divider handles.
 pub fn shutdown() {
     zone_paint::clear();
+    dividers::stop();
+}
+
+/// Windows a divider drag moved: still in the same zones, at their new places.
+pub fn keep_all(list: Vec<Zoned>) {
+    if list.is_empty() {
+        return;
+    }
+    with_engine(|e| {
+        for z in list {
+            let (screen, from, to) = z.zone;
+            e.keep_snapped(z.hwnd, &screen, (from, to), z.at);
+        }
+        e.sync_dividers();
+    });
+}
+
+/// Take a window out of its zones: it gets its size from before it was snapped,
+/// centred on the zones it was in, and the layout and the other windows stay.
+pub fn take_out(hwnd: HWND) -> Result<(), String> {
+    with_engine(|e| e.take_out(hwnd)).unwrap_or_else(|| Err("Seam is busy, try again".into()))
+}
+
+/// Open the size menu for a window in its zones, at its centre.
+pub fn size_menu(hwnd: HWND) -> Result<(), String> {
+    with_engine(|e| e.size_menu(hwnd)).unwrap_or_else(|| Err("Seam is busy, try again".into()))
 }
 
 fn specs(geometry: &[Placed]) -> Vec<zone_paint::ScreenSpec> {
@@ -447,6 +478,85 @@ impl Engine {
         close(here, snapped.at, winutil::is_resizable(hwnd)).then_some(snapped)
     }
 
+    /// What the divider handles and the size menu need to know about the zones now.
+    fn scene(&self) -> dividers::Scene {
+        let screen = |g: Placed| {
+            let layout = self.screens.iter().find(|s| s.id == g.id)?.layout.clone()?;
+            let gap = (self.settings.gap.min(MAX_GAP) as f32 * g.dpi as f32 / 96.0).round() as i32;
+            Some(dividers::Screen { id: g.id, bounds: g.bounds, work: g.work, dpi: g.dpi, gap, layout })
+        };
+        let screens = self.geometry().into_iter().filter_map(screen).collect();
+        dividers::Scene { owner: self.owner, screens, known: self.zoned(), exclude: self.exclude.clone() }
+    }
+
+    /// Hand the divider handles the zones as they are now, or none with zones off,
+    /// stepping aside or the handles turned off. Their thread builds them a moment later.
+    fn sync_dividers(&self) {
+        // The handles stay hidden until the drag ends, which hands them the zones then.
+        if self.drag.is_some() {
+            return;
+        }
+        let on = self.active() && self.settings.divider_handles && self.screens.iter().any(|s| s.layout.is_some());
+        dividers::show(on.then(|| self.scene()));
+    }
+
+    /// Why a window can't be sized in its zones, or its visible frame.
+    fn sizable(&self, hwnd: HWND) -> Result<Rect, String> {
+        if let Some(why) = &self.aside {
+            return Err(why.clone());
+        }
+        if !self.enabled {
+            return Err("Zones are off".into());
+        }
+        wincontrol::movable(hwnd, &self.exclude)
+    }
+
+    /// The zones a window is in, and its size from before it was snapped: the
+    /// snapping's own record, or after a restart of the tray the stamp on the window.
+    fn zone_here(&self, hwnd: HWND, frame: Rect) -> Option<(String, usize, usize, Option<Old>)> {
+        if let Some(s) = self.current(hwnd) {
+            return Some((s.screen.clone(), s.from, s.to, s.old));
+        }
+        let geometry = self.geometry();
+        let g = geometry.iter().find(|g| g.bounds.contains(frame.x + frame.w / 2, frame.y + frame.h / 2))?;
+        let (from, to, _) = wincontrol::stamped_in(hwnd, frame, &g.zones)?;
+        Some((g.id.clone(), from, to, None))
+    }
+
+    fn take_out(&mut self, hwnd: HWND) -> Result<(), String> {
+        let frame = self.sizable(hwnd)?;
+        let (screen, from, to, old) = self.zone_here(hwnd, frame).ok_or("That window isn't in a zone")?;
+        let geometry = self.geometry();
+        let g = geometry.iter().find(|g| g.id == screen && to < g.zones.len()).ok_or("That window isn't in a zone")?;
+        let zone = zones::span(g.zones[from], g.zones[to]);
+        let (w, h) = match old {
+            _ if !winutil::is_resizable(hwnd) => (frame.w, frame.h),
+            Some((w, h, dpi)) => {
+                // The old size is a window rect, so its invisible borders come off.
+                let k = winutil::monitor_dpi(hwnd).max(1) as f32 / dpi.max(1) as f32;
+                let window = winutil::window_rect(hwnd).unwrap_or(frame);
+                (
+                    (w as f32 * k).round() as i32 - (window.w - frame.w),
+                    (h as f32 * k).round() as i32 - (window.h - frame.h),
+                )
+            }
+            // Maximized before it was snapped, or snapped before the tray started.
+            None => (zone.w * 2 / 3, zone.h * 2 / 3),
+        };
+        let (w, h) = (w.max(1), h.max(1));
+        let target = Rect { x: zone.x + (zone.w - w) / 2, y: zone.y + (zone.h - h) / 2, w, h };
+        self.place(hwnd, target, false, false);
+        self.unsnap(hwnd, winutil::has_zone_stamp(hwnd));
+        Ok(())
+    }
+
+    fn size_menu(&self, hwnd: HWND) -> Result<(), String> {
+        let frame = self.sizable(hwnd)?;
+        let (screen, from, to, _) = self.zone_here(hwnd, frame).ok_or("That window isn't in a zone")?;
+        dividers::menu(hwnd.0 as isize, (screen, from, to), self.scene());
+        Ok(())
+    }
+
     fn drag_start(&mut self, hwnd: HWND) {
         self.cancel_drag();
         // A drag takes over from window control's moves still waiting.
@@ -489,6 +599,8 @@ impl Engine {
         let was_maximized = winutil::is_maximized(hwnd);
         let zone = current.map(|(_, zone)| zone);
         let edges = self.edges_start(hwnd, &geometry, (zone, stamped), was_maximized);
+        // The handles stay out of the way of any drag, and come back at its end.
+        dividers::hide();
         self.drag = Some(Drag {
             hwnd: key,
             phase: Phase::Waiting,
@@ -638,6 +750,7 @@ impl Engine {
         self.hide_all();
         let hwnd = hwnd_of(drag.hwnd);
         self.finish_drag(&drag, dropped, hwnd);
+        self.sync_dividers();
         // A re-fit that had to wait for this drag can go now.
         self.refit_resume();
     }
@@ -713,6 +826,7 @@ impl Engine {
         if stamped {
             winutil::clear_zone_stamp(hwnd);
         }
+        self.sync_dividers();
     }
 
     fn snap_to(&mut self, hwnd: HWND, g: &Placed, (from, to): (usize, usize), rect: Rect, was: Option<Option<Old>>) {
@@ -740,6 +854,7 @@ impl Engine {
                 self.snapped.clear();
             }
         }
+        self.sync_dividers();
     }
 
     /// Put the window's visible frame on `target`, a step at a time with the

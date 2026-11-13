@@ -14,6 +14,8 @@ mod app;
 #[cfg(windows)]
 mod arrange;
 #[cfg(windows)]
+mod dividers;
+#[cfg(windows)]
 mod focus_only;
 #[cfg(windows)]
 mod hook;

@@ -270,6 +270,27 @@ Set up first: Priority zones on screen 1, Grid on screen 2, none on the U3477. O
 - [ ] **Focus and spotlight API and Stream Deck.** `window.spotlight` with `{}` toggles and answers `{"on":true}`, then `{"on":false}`; `state.get` shows `spotlight`. A Stream Deck "Spotlight" key follows it and "Focus on this window" minimizes and restores.
 - [ ] **Hook timings unchanged.** Note `hook stats`, then use every move, focus and swap key and the API calls for 30 s while moving the pointer across the borders. `own max` and `avg` match a run without them, crossings still remap, and `SPI_SETFOREGROUNDLOCKTIMEOUT` is unchanged (`SystemParametersInfo` reads the same before and after).
 
+### Divider handles
+
+Pick Columns on screen 1 with the gap at 8 px. Turn on the debug log.
+
+- [ ] **Hover.** Snap Notepad into the left zone and a browser into the middle one. Move the pointer into the gap between them: a slim grey bar shows along it and the pointer becomes the side-to-side arrows. Move away: the bar goes. With Rows, the bar is across and the pointer is the up-and-down arrows.
+- [ ] **Drag between two.** Drag that handle to the right: both windows follow live, with no gap or overlap, and the bar moves with the pointer. Let go: both stay snapped, the Zones page shows Changed for screen 1, and the log has one `divider handles: ... built in ...ms` line once things settle, not one per move.
+- [ ] **Drag between three.** Snap a third window into the right zone. Drag the handle between the middle and right windows: only those two change, the left one stays.
+- [ ] **Minimum sizes push.** Snap Steam into the middle zone and drag the left handle far to the right: Steam shrinks to its minimum, then the next divider moves and the right window gets smaller. Let go: no overlap.
+- [ ] **Esc.** Start dragging a handle, then press Esc before letting go: every window goes back and `config.json` doesn't change. The Esc also reaches the app that has focus, as Seam doesn't take it from there; that is expected.
+- [ ] **Right-click shares.** Right-click the left handle: the menu says "Notepad gets 1/2, 1/3, 2/3, 1/4, 3/4", then Take out for each. Pick 2/3: Notepad takes two thirds of the two zones, the right zone doesn't change, and the layout is Changed. Two windows of the same app say Left and the left window instead.
+- [ ] **Take out.** Right-click a handle and pick Take out Notepad: Notepad leaves its zone with the size it had before it was snapped, centred on that zone, and the other windows and the layout stay.
+- [ ] **A window over the gap.** Drag an unsnapped window so it lies across the gap, in front of the snapped windows, and click into it right over the handle: the click goes to that window, and no bar shows. Within a moment the handle hides. Move that window away: hover the gap again and the bar shows. Now leave a loose window behind both snapped windows, showing through the gap: the handle stays, and hovering the gap shows the bar. A maximized window behind doesn't hide the handles either.
+- [ ] **Topmost neighbour.** Pin one of the two windows on top: the handle sits just above the other window. Pin both: no handle shows.
+- [ ] **Focus stays.** Type in Notepad, hover and drag a handle: Notepad keeps the keyboard. Right-click and press Esc: focus goes back to where it was.
+- [ ] **Gap 0, key and API.** Set the gap to 0: no handles. Record a key for **Size menu** on Shortcuts and press it on the middle window: a menu at its centre with Width: 1/2 to 3/4 and Take out (and Height with Grid). Width: 1/3 changes the divider towards the bigger neighbour. `window.share` with `{"axis":"width","fraction":0.5}` and `window.ungroup` with `{}` do the same for the focused window, and with `hwnd` for another one. Both answer error 3 with zones off or on a window in no zone.
+- [ ] **Hidden during a drag.** Drag a snapped window with Shift, and drag a window's edge: the handles are gone while the drag lasts and back once it ends.
+- [ ] **Windows come and go.** Minimize the middle window: its handles go within a moment. Restore it and snap it again: they come back. Switch to another desktop and back: the handles show only where both windows are on the desktop shown.
+- [ ] **Display change.** Change screen 1's scaling, or unplug and plug in a screen: the handles are built again for the new zones and sit in the gaps.
+- [ ] **Zones off.** Turn zones off, or turn off **Handles between snapped windows**, or turn on **Another window manager handles my windows**: every handle goes. Turn it back: they come back.
+- [ ] **Administrator neighbour.** Snap Task Manager running as administrator beside Notepad: no handle between them.
+
 ## Pin, border and Release all
 
 Set up first: record keys for **Pin window on top**, **Keep window out of workspace switches** and **Release pinned windows** on Shortcuts. Turn on the debug log.

@@ -117,6 +117,12 @@ const ENTRIES: &[Entry] = &[
         "Windows in the zones next to it follow its edge",
         "resize neighbour edge follow",
     ),
+    entry(
+        Page::Zones,
+        "Handles between snapped windows",
+        "Drag one to resize both sides. Right-click for sizes",
+        "divider handle gap drag share half third quarter take out",
+    ),
     entry(Page::Zones, "Focus border", "Colour the border of the window that has focus", "windows highlight active"),
     entry(
         Page::Zones,
@@ -242,6 +248,12 @@ const ENTRIES: &[Entry] = &[
         "Quick layout",
         "Pick this screen's layout from the keyboard",
         "hotkey keyboard layout zones overlay switch screen",
+    ),
+    entry(
+        Page::Shortcuts,
+        "Size menu",
+        "Share or take out the focused snapped window",
+        "hotkey keyboard divider share half third quarter take out zone resize",
     ),
     entry(Page::Shortcuts, "Pin window on top", "Global shortcut", "hotkey keyboard topmost always"),
     entry(Page::Shortcuts, "Keep window out of workspace switches", "Global shortcut", "hotkey keyboard sticky pin"),

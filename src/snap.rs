@@ -728,7 +728,11 @@ impl Engine {
                     if drag.keys.cycle_at != Some((screen, zone)) {
                         drag.keys.cycle = 0;
                     }
-                    // An arrow's side holds in its zone; elsewhere the side follows the pointer.
+                    // An arrow's side holds in its zone, or the first zone the pointer enters
+                    // after it; elsewhere the side follows the pointer.
+                    if drag.keys.side.is_some() && drag.keys.side_at.is_none() {
+                        drag.keys.side_at = Some((screen, zone));
+                    }
                     if drag.keys.side_at != Some((screen, zone)) {
                         drag.keys.side = None;
                     }
@@ -823,7 +827,7 @@ impl Engine {
         }
         self.hide_all();
         if drag.keys.hooked {
-            dragkeys::stop();
+            dragkeys::release();
         }
         if !drag.keys.used.is_empty() {
             log::info!("drag keys: {}", drag.keys.used.join(", "));

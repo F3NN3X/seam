@@ -279,9 +279,10 @@ impl Engine {
                 (drag.keys.side, drag.keys.side_at) = (Some(side), at);
             }
             Key::Cancel | Key::Button => {
-                // This drop doesn't snap, so the keys go back to the apps.
+                // This drop doesn't snap, so the keys go back to the apps, once the
+                // release of this press has been swallowed too.
                 drag.keys.off = true;
-                dragkeys::stop();
+                dragkeys::release();
             }
         }
         self.tick();

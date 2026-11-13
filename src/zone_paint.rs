@@ -271,8 +271,8 @@ impl Overlay {
             match command {
                 Command::Build(generation, specs) => self.build(generation, specs),
                 Command::Preview(id, lit, part, others, hint) => {
-                    self.show(&id, lit);
-                    self.share(&id, part);
+                    let raised = self.show(&id, lit);
+                    self.share(&id, part, raised);
                     self.outline(&id, others);
                     self.strip(&id, hint);
                 }
@@ -282,7 +282,7 @@ impl Overlay {
                     }
                     // Outlines can sit on any screen, and belong to the preview this hides.
                     self.outline("", Vec::new());
-                    self.share("", None);
+                    self.share("", None, false);
                     if self.hint.as_ref().is_some_and(|(on, ..)| *on == id) {
                         self.strip(&id, None);
                     }
@@ -290,7 +290,7 @@ impl Overlay {
                 Command::HideAll => {
                     self.screens.values_mut().for_each(Screen::hide);
                     self.outline("", Vec::new());
-                    self.share("", None);
+                    self.share("", None, false);
                     self.strip("", None);
                 }
                 Command::Clear => self.clear(),
@@ -301,7 +301,7 @@ impl Overlay {
 
     fn clear(&mut self) {
         self.outline("", Vec::new());
-        self.share("", None);
+        self.share("", None, false);
         self.strip("", None);
         self.todo.clear();
         for (_, screen) in self.screens.drain() {
@@ -390,18 +390,22 @@ impl Overlay {
         }
     }
 
-    fn show(&mut self, id: &str, lit: Option<Rect>) {
+    /// Whether it raised a lit window, which the share then goes back over.
+    fn show(&mut self, id: &str, lit: Option<Rect>) -> bool {
         let started = log::enabled().then(Instant::now);
-        let Some(screen) = self.screens.get_mut(id) else { return };
+        let Some(screen) = self.screens.get_mut(id) else { return false };
         let Some(base) = screen.base else {
             // Not drawn yet: show it when it is.
             screen.want = Some(lit);
-            return;
+            return false;
         };
-        // Every preview puts the base back on top, then what is lit over it, so the
-        // other zones stay in view whatever was shown over them since.
-        show_on_top(base);
-        screen.base_shown = true;
+        if !screen.base_shown {
+            unsafe {
+                let _ = ShowWindow(base, SW_SHOWNOACTIVATE);
+            }
+            screen.base_shown = true;
+        }
+        let mut raised = false;
         let wanted = lit.as_ref().map(key);
         let mut made = false;
         if screen.shown != wanted {
@@ -416,37 +420,50 @@ impl Overlay {
                         made = true;
                     }
                 }
+                if let Some(window) = screen.lit.get(&k) {
+                    show_on_top(*window);
+                    raised = true;
+                }
             }
             screen.shown = wanted;
-        }
-        if let Some(window) = screen.shown.and_then(|k| screen.lit.get(&k)) {
-            show_on_top(*window);
         }
         if let Some(started) = started {
             let us = started.elapsed().as_secs_f64() * 1e6;
             log::info!("zone overlay: worker show {us:.0}us, lit window drawn: {made}");
         }
+        raised
     }
 
     /// The share of the lit zone the window takes, in the lit style over it, so it
     /// shows stronger inside the whole zone. Kept while it is the same rect.
-    fn share(&mut self, id: &str, part: Option<Rect>) {
-        if self.part.as_ref().map(|(k, _)| *k) == part.as_ref().map(key) {
-            if let Some((_, window)) = self.part {
-                show_on_top(window);
+    /// A new rect redraws the same window there rather than making another, and it
+    /// is raised only when it is new or `raised` put a lit zone over it.
+    fn share(&mut self, id: &str, part: Option<Rect>, raised: bool) {
+        let Some(rect) = part else {
+            if let Some((_, window)) = self.part.take() {
+                unsafe {
+                    let _ = DestroyWindow(window);
+                }
             }
             return;
-        }
-        if let Some((_, window)) = self.part.take() {
-            unsafe {
-                let _ = DestroyWindow(window);
-            }
-        }
-        let Some(rect) = part else { return };
+        };
         let s = self.screens.get(id).map_or(1., |screen| screen.spec.scale);
-        if let Some(window) = lit_window(rect, s) {
-            show_on_top(window);
-            self.part = Some((key(&rect), window));
+        match self.part.as_mut() {
+            Some((k, window)) => {
+                if *k != key(&rect) {
+                    paint_lit(*window, rect, s);
+                    *k = key(&rect);
+                }
+                if raised {
+                    show_on_top(*window);
+                }
+            }
+            None => {
+                if let Some(window) = lit_window(rect, s) {
+                    show_on_top(window);
+                    self.part = Some((key(&rect), window));
+                }
+            }
         }
     }
 
@@ -455,7 +472,6 @@ impl Overlay {
     fn outline(&mut self, id: &str, rects: Vec<Rect>) {
         let keys: Vec<Key> = rects.iter().map(key).collect();
         if self.others.iter().map(|(k, _)| *k).eq(keys.iter().copied()) {
-            self.others.iter().for_each(|(_, window)| show_on_top(*window));
             return;
         }
         for (_, window) in self.others.drain(..) {
@@ -475,9 +491,6 @@ impl Overlay {
     /// The key strip at the bottom of screen `id`, or none.
     fn strip(&mut self, id: &str, text: Option<String>) {
         if self.hint.as_ref().map(|(on, t, _)| (on.as_str(), t)) == text.as_ref().map(|t| (id, t)) {
-            if let Some((_, _, window)) = &self.hint {
-                show_on_top(*window);
-            }
             return;
         }
         if let Some((_, _, window)) = self.hint.take() {
@@ -668,11 +681,16 @@ fn render(hwnd: HWND, area: Rect, draw: impl FnOnce(&mut Canvas)) {
 /// A hidden window holding the lit look of `zone`.
 fn lit_window(zone: Rect, s: f32) -> Option<HWND> {
     let hwnd = create()?;
+    paint_lit(hwnd, zone, s);
+    Some(hwnd)
+}
+
+/// Give `hwnd` the lit look of `zone`, there.
+fn paint_lit(hwnd: HWND, zone: Rect, s: f32) {
     render(hwnd, zone, |canvas| {
         let area = Rect { x: 0, y: 0, ..zone };
         canvas.rounded(area, RADIUS, pm(AMBER, 0.1), Some((pm(AMBER, 1.), OUTLINE)), s);
     });
-    Some(hwnd)
 }
 
 /// A hidden window with a muted outline around `rect`, where another window will land.

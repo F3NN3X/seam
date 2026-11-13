@@ -38,6 +38,10 @@ const WHEEL_NEXT: u32 = 0x1001;
 const WHEEL_BACK: u32 = 0x1002;
 const OTHER_BUTTON: u32 = 0x1003;
 
+/// The generation of a hook whose drag is over but which still owes a release:
+/// it takes itself out once nothing it swallowed the press of is still down.
+static ENDING: AtomicU64 = AtomicU64::new(0);
+
 thread_local! {
     /// The generation of the hook on this thread.
     static MINE: Cell<u64> = const { Cell::new(0) };
@@ -220,26 +224,42 @@ unsafe extern "system" fn key_proc(code: i32, wparam: WPARAM, lparam: LPARAM) ->
         let slot = &DOWN[(key.vkCode & 0xFF) as usize];
         let up = matches!(wparam.0 as u32, WM_KEYUP | WM_SYSKEYUP);
         if up && slot.swap(false, Ordering::Relaxed) {
+            released();
             return LRESULT(1);
         }
         let live = LIVE.load(Ordering::Relaxed);
-        if !up && live != 0 && live == MINE.get() && key_of(key.vkCode).is_some() {
-            let pressed = |vk: VIRTUAL_KEY| GetAsyncKeyState(i32::from(vk.0)) < 0;
-            let other = (pressed(VK_CONTROL) && !CTRL_OK.load(Ordering::Relaxed))
-                || (pressed(VK_MENU) && !ALT_OK.load(Ordering::Relaxed))
-                || pressed(VK_LWIN)
-                || pressed(VK_RWIN);
-            if !other {
-                // A held key repeats its press: swallow it, but it steers only once.
-                if !slot.swap(true, Ordering::Relaxed) {
-                    let owner = HWND(OWNER.load(Ordering::Relaxed) as *mut _);
-                    let _ = PostMessageW(Some(owner), WM_APP_DRAG_KEY, WPARAM(key.vkCode as usize), LPARAM(0));
-                }
-                return LRESULT(1);
+        if !up && live != 0 && live == MINE.get() && key_of(key.vkCode).is_some() && !foreign_modifier() {
+            // A held key repeats its press: swallow it, but it steers only once.
+            if !slot.swap(true, Ordering::Relaxed) {
+                let owner = HWND(OWNER.load(Ordering::Relaxed) as *mut _);
+                let _ = PostMessageW(Some(owner), WM_APP_DRAG_KEY, WPARAM(key.vkCode as usize), LPARAM(0));
             }
+            return LRESULT(1);
         }
     }
     CallNextHookEx(None, code, wparam, lparam)
+}
+
+/// Ctrl, Alt or Win is held and isn't the drag's own show or span key, so what
+/// comes with it is the app's: Alt+Tab, Ctrl+wheel zoom.
+unsafe fn foreign_modifier() -> bool {
+    let pressed = |vk: VIRTUAL_KEY| GetAsyncKeyState(i32::from(vk.0)) < 0;
+    (pressed(VK_CONTROL) && !CTRL_OK.load(Ordering::Relaxed))
+        || (pressed(VK_MENU) && !ALT_OK.load(Ordering::Relaxed))
+        || pressed(VK_LWIN)
+        || pressed(VK_RWIN)
+}
+
+/// A swallowed release came. A hook whose drag is over ends once it owes none.
+unsafe fn released() {
+    let ending = ENDING.load(Ordering::Relaxed);
+    if ending != 0 && ending == MINE.get() && !owes() {
+        PostQuitMessage(0);
+    }
+}
+
+fn owes() -> bool {
+    DOWN.iter().chain(&BUTTONS).any(|d| d.load(Ordering::Relaxed))
 }
 
 /// Swallow the wheel and the other button's press and release while zones show,
@@ -255,11 +275,13 @@ unsafe extern "system" fn mouse_proc(code: i32, wparam: WPARAM, lparam: LPARAM) 
             _ => None,
         };
         if matches!(msg, WM_LBUTTONUP | WM_RBUTTONUP) && button.is_some_and(|b| b.swap(false, Ordering::Relaxed)) {
+            released();
             return LRESULT(1);
         }
         let live = LIVE.load(Ordering::Relaxed);
         if live != 0 && live == MINE.get() {
             let what = match msg {
+                WM_MOUSEWHEEL if foreign_modifier() => None,
                 WM_MOUSEWHEEL => {
                     let info = &*(lparam.0 as *const MSLLHOOKSTRUCT);
                     let delta = (info.mouseData >> 16) as u16 as i16;
@@ -347,7 +369,19 @@ pub fn set_live(on: bool) {
     LIVE.store(if on { WANTED.load(Ordering::SeqCst) } else { 0 }, Ordering::SeqCst);
 }
 
-/// The drag ended, or the tray is quitting: take the hook out.
+/// The drag ended, or won't snap: nothing more is swallowed or posted, and the
+/// hook stays only until the releases of what it swallowed come, so no app gets a
+/// lone release (a right-button release opens a context menu). The cap still holds.
+pub fn release() {
+    let generation = WANTED.load(Ordering::SeqCst);
+    LIVE.store(0, Ordering::SeqCst);
+    ENDING.store(generation, Ordering::SeqCst);
+    if !owes() {
+        stop();
+    }
+}
+
+/// A new drag, or the tray is quitting: take the hook out now.
 pub fn stop() {
     LIVE.store(0, Ordering::SeqCst);
     WANTED.fetch_add(1, Ordering::SeqCst);

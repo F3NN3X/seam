@@ -16,7 +16,7 @@ use windows::Win32::UI::Input::KeyboardAndMouse::*;
 use windows::Win32::UI::WindowsAndMessaging::*;
 
 /// A key for the drag, with its virtual-key code in wparam, or 0 when the hook
-/// took itself out at the cap.
+/// took itself out at the cap, with its generation in lparam.
 pub const WM_APP_DRAG_KEY: u32 = WM_APP + 32;
 /// The hook takes itself out after this long, even if the drag never ends.
 const CAP_MS: u32 = 60_000;
@@ -123,6 +123,8 @@ pub struct Steer {
     pub off: bool,
     /// The hook is in for this drag.
     pub hooked: bool,
+    /// The generation `start` gave this drag's hook.
+    pub generation: u64,
     /// The hook took itself out at the cap, so it isn't put back for this drag.
     pub capped: bool,
     /// The screen and zone Tab's choice is for. Another zone starts again from the zone itself.
@@ -221,6 +223,8 @@ fn run(generation: u64) {
         let _ = PeekMessageW(&mut msg, None, 0, 0, PM_NOREMOVE);
         OPEN.store(id, Ordering::SeqCst);
         MINE.set(generation);
+        // A press swallowed under an earlier hook may never have had its release seen.
+        clear_down();
         if WANTED.load(Ordering::SeqCst) == generation {
             match SetWindowsHookExW(WH_KEYBOARD_LL, Some(key_proc), None, 0) {
                 Ok(hook) => {
@@ -230,13 +234,14 @@ fn run(generation: u64) {
                             log::info!("drag keys: the hook took itself out after 60 s");
                             // The drag hears of it, so its strip goes and the hook isn't put back.
                             let owner = HWND(OWNER.load(Ordering::SeqCst) as *mut _);
-                            let _ = PostMessageW(Some(owner), WM_APP_DRAG_KEY, WPARAM(0), LPARAM(0));
+                            let _ = PostMessageW(Some(owner), WM_APP_DRAG_KEY, WPARAM(0), LPARAM(generation as isize));
                             break;
                         }
                         let _ = TranslateMessage(&msg);
                         DispatchMessageW(&msg);
                     }
                     let _ = UnhookWindowsHookEx(hook);
+                    clear_down();
                 }
                 Err(e) => log::info!("drag keys: no keyboard hook: {e}"),
             }
@@ -246,10 +251,14 @@ fn run(generation: u64) {
     }
 }
 
+fn clear_down() {
+    DOWN.iter().for_each(|d| d.store(false, Ordering::Relaxed));
+}
+
 /// Put the hook in for a drag, its keys going to `owner`. `ctrl` and `alt` say
 /// whether those are the drag's show or span key. It passes every key through
-/// until `set_live` says zones show.
-pub fn start(owner: isize, ctrl: bool, alt: bool) {
+/// until `set_live` says zones show. Returns its generation, which the cap's message carries.
+pub fn start(owner: isize, ctrl: bool, alt: bool) -> u64 {
     stop();
     OWNER.store(owner, Ordering::SeqCst);
     CTRL_OK.store(ctrl, Ordering::SeqCst);
@@ -258,6 +267,7 @@ pub fn start(owner: isize, ctrl: bool, alt: bool) {
     if let Err(e) = std::thread::Builder::new().name("seam-dragkeys".into()).spawn(move || run(generation)) {
         log::info!("drag keys: couldn't start: {e}");
     }
+    generation
 }
 
 /// Whether zones show, so the drag's keys are swallowed. One atomic store.

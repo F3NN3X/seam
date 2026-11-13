@@ -864,7 +864,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
             LRESULT(0)
         }
         crate::dragkeys::WM_APP_DRAG_KEY => {
-            snap::drag_key(wparam.0 as u32);
+            snap::drag_key(wparam.0 as u32, lparam.0 as u64);
             LRESULT(0)
         }
         dividers::WM_APP_DIVIDER => {

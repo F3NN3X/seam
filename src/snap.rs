@@ -337,9 +337,10 @@ pub fn rezone(list: Vec<Zoned>) {
     }
 }
 
-/// A key the drag's keyboard hook passed on, by virtual-key code.
-pub fn drag_key(vk: u32) {
-    with_engine(|e| e.drag_key(vk));
+/// A key the drag's keyboard hook passed on, by virtual-key code, or 0 with the
+/// generation of a hook that took itself out at the cap.
+pub fn drag_key(vk: u32, generation: u64) {
+    with_engine(|e| e.drag_key(vk, generation));
 }
 
 /// Move the foreground window to the next or previous zone, across screens.
@@ -768,8 +769,10 @@ impl Engine {
         }
         // The keys are the drag's from the first time zones show, until it ends or Esc.
         if view.is_some() && !drag.keys.hooked && !drag.keys.off && !drag.keys.capped {
-            let own = |key: &str| self.settings.show_key == key || self.settings.span_key == key;
-            dragkeys::start(self.owner, own("ctrl"), own("alt"));
+            let show_key = key_code(&self.settings.show_key).unwrap_or(VK_SHIFT);
+            let span_key = key_code(&self.settings.span_key);
+            let own = |vk: VIRTUAL_KEY| show_key == vk || span_key == Some(vk);
+            drag.keys.generation = dragkeys::start(self.owner, own(VK_CONTROL), own(VK_MENU));
             drag.keys.hooked = true;
         }
         if drag.keys.hooked && !drag.keys.off {

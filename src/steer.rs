@@ -213,10 +213,15 @@ impl Engine {
 
     /// A key from the drag's hook, while zones show: it changes what the drop does,
     /// and the overlay follows on the spot.
-    pub(super) fn drag_key(&mut self, vk: u32) {
+    pub(super) fn drag_key(&mut self, vk: u32, generation: u64) {
         if vk == 0 {
             // The hook took itself out at the cap: the strip goes, and the keys are the apps'.
+            // A late one from an earlier drag's hook is about nothing now.
             let Some(mut drag) = self.drag.take() else { return };
+            if !drag.keys.hooked || drag.keys.generation != generation {
+                self.drag = Some(drag);
+                return;
+            }
             (drag.keys.hooked, drag.keys.capped) = (false, true);
             let view = drag.shown;
             if view.is_some() {

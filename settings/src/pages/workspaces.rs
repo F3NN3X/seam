@@ -464,6 +464,24 @@ fn places_rows(panel: &Panel, window: &mut Window, cx: &mut Context<Panel>) -> V
     rows
 }
 
+/// "Update from screen removes apps that aren't open": off keeps the rows of closed apps.
+fn removes_row(panel: &Panel, window: &mut Window, cx: &mut Context<Panel>) -> AnyElement {
+    let p = palette(cx);
+    let view = cx.entity();
+    let title = "Update from screen removes apps that aren't open";
+    let toggle = switch(
+        "update-removes",
+        title,
+        panel.config.workspaces_update_removes_closed,
+        window,
+        cx,
+        move |on, window, cx| {
+            view.update(cx, |panel, cx| panel.patch(json!({ "workspaces_update_removes_closed": on }), window, cx));
+        },
+    );
+    row(title, Some("Off keeps them, so a closed app still starts when you switch".into()), toggle, p)
+}
+
 fn detail(panel: &mut Panel, ws: Workspace, window: &mut Window, cx: &mut Context<Panel>) -> Div {
     let p = palette(cx);
     let summary = summary(panel, &ws);
@@ -664,6 +682,7 @@ pub fn render(panel: &mut Panel, window: &mut Window, cx: &mut Context<Panel>) -
     };
     let mut settings = vec![auto_apply_row(panel, window, cx)];
     settings.extend(places_rows(panel, window, cx));
+    settings.push(removes_row(panel, window, cx));
     let auto_apply = card(settings, p);
     div().flex().flex_col().gap(px(ui::SECTION_GAP)).child(header.child(capture)).child(body).child(auto_apply)
 }

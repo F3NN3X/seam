@@ -323,6 +323,33 @@ pub fn edge_of(tree: &Node, area: Rect, leaves: &[usize], side: Side) -> Option<
     found.map(|path| Edge { path })
 }
 
+/// Move `edge` so the zones `own` covers get `fraction` of the span from their far
+/// side to the far side of `other`, the zones across that divider from them, along
+/// its axis. Through `solve`, so the minimums and the ratio clamp still hold. None
+/// when `edge` isn't a divider of the tree or doesn't lie between the two.
+pub fn share(
+    tree: &Node,
+    area: Rect,
+    edge: &Edge,
+    (own, other): (&[usize], &[usize]),
+    fraction: f32,
+    mins: &[(i32, i32)],
+) -> Option<Solved> {
+    let d = zones::dividers(tree, area).into_iter().find(|d| d.path == edge.path)?;
+    let at = divider_at(d.area, d.dir, d.ratio);
+    let cells = zones::rects(tree, area, 0);
+    let (own, other) = (span_of(cover(&cells, own)?, d.dir), span_of(cover(&cells, other)?, d.dir));
+    let (own_end, other_end) = (own.0 + own.1, other.0 + other.1);
+    let target = if own_end == at && other.0 == at {
+        own.0 + ((other_end - own.0) as f32 * fraction).round() as i32
+    } else if other_end == at && own.0 == at {
+        own_end - ((own_end - other.0) as f32 * fraction).round() as i32
+    } else {
+        return None;
+    };
+    Some(solve(tree, area, edge, target - at, mins))
+}
+
 /// The default grow and shrink step for a group `len` pixels along the axis.
 pub fn step(len: i32) -> i32 {
     ((len as f32 * STEP_SHARE).round() as i32).max(MIN_STEP_PX)
@@ -567,6 +594,20 @@ mod tests {
         // Grow takes the right-hand divider on a tie, by 5% of the width.
         let g = grow(&columns(), AREA, &[1], None, &[]).unwrap();
         assert_eq!(xs(&g.cells), vec![(0, 600), (600, 690), (1290, 510)]);
+    }
+
+    #[test]
+    fn a_share_puts_the_divider_at_that_part_of_the_two_zones() {
+        // Three quarters of the left two columns, asked from either side.
+        let left = share(&columns(), AREA, &edge(&[]), (&[0], &[1]), 0.75, &[]).unwrap();
+        assert_eq!(xs(&left.cells), vec![(0, 900), (900, 300), (1200, 600)]);
+        let right = share(&columns(), AREA, &edge(&[]), (&[1], &[0]), 0.25, &[]).unwrap();
+        assert_eq!(right.cells, left.cells);
+        // The middle window can't go below 400 px, so the next divider gives way.
+        let pushed = share(&columns(), AREA, &edge(&[]), (&[0], &[1]), 0.75, &[(0, 0), (400, 0), (0, 0)]).unwrap();
+        assert_eq!(xs(&pushed.cells), vec![(0, 900), (900, 400), (1300, 500)]);
+        // That divider isn't between the two.
+        assert_eq!(share(&columns(), AREA, &edge(&[true]), (&[0], &[1]), 0.5, &[]), None);
     }
 
     #[test]

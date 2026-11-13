@@ -31,7 +31,7 @@ mod regroup;
 #[path = "tile.rs"]
 pub mod tile;
 
-pub use regroup::{group_members, group_mins};
+pub use regroup::{group_members, group_mins, screen_members};
 
 /// The worker has moves for the main thread to start.
 pub const WM_APP_WINDOW: u32 = WM_APP + 18;
@@ -91,8 +91,9 @@ struct Planned {
 static SLOT: Mutex<Option<Job>> = Mutex::new(None);
 static WAKE: Condvar = Condvar::new();
 static PLANNED: Mutex<Option<Planned>> = Mutex::new(None);
-/// Layouts edge drags changed, waiting to be saved in order.
-static DRAGGED: Mutex<Vec<(String, ZoneLayout)>> = Mutex::new(Vec::new());
+/// Layouts edge and divider drags changed, waiting to be saved in order, with the
+/// windows a divider drag moved, which stay snapped at their new places.
+static DRAGGED: Mutex<Vec<(String, ZoneLayout, Vec<snap::Zoned>)>> = Mutex::new(Vec::new());
 /// Why a tile with no API client waiting did nothing. It has its own place, so it can't cancel a move waiting in PLANNED.
 static NOTE: Mutex<Option<String>> = Mutex::new(None);
 
@@ -129,7 +130,9 @@ pub fn start(job: Job) {
 /// waiting to be told. `save`'s flag says the layout is new to the library, from Save from windows.
 pub fn planned(mut save: impl FnMut(&str, ZoneLayout, bool) -> bool) -> Option<Result<tile::Done, String>> {
     let dragged = std::mem::take(&mut *DRAGGED.lock().unwrap_or_else(|e| e.into_inner()));
-    for (screen, layout) in dragged {
+    for (screen, layout, moved) in dragged {
+        // They are where the drag left them either way, as with an edge drag.
+        snap::keep_all(moved);
         if save(&screen, layout, false) {
             regroup::saved(&screen, None);
         } else {
@@ -161,7 +164,13 @@ pub fn planned(mut save: impl FnMut(&str, ZoneLayout, bool) -> bool) -> Option<R
 /// behind a group command's plan rather than replacing it. Nothing moves here, as
 /// the drag has put the windows already.
 pub fn save_layout(owner: isize, screen: String, layout: ZoneLayout) {
-    DRAGGED.lock().unwrap_or_else(|e| e.into_inner()).push((screen, layout));
+    save_moved(owner, screen, layout, Vec::new());
+}
+
+/// The same for a drag of a divider's handle, from its own thread: `moved` are the
+/// windows it put in new places, which the snapping keeps as snapped there.
+pub fn save_moved(owner: isize, screen: String, layout: ZoneLayout, moved: Vec<snap::Zoned>) {
+    DRAGGED.lock().unwrap_or_else(|e| e.into_inner()).push((screen, layout, moved));
     unsafe {
         let _ = PostMessageW(Some(hwnd_of(owner)), WM_APP_WINDOW, WPARAM(0), LPARAM(0));
     }
@@ -284,7 +293,7 @@ pub fn is_seam(h: HWND) -> bool {
 }
 
 /// A window Seam may move, or why not.
-pub(crate) fn movable(h: HWND, exclude: &[String]) -> Result<Rect, String> {
+pub fn movable(h: HWND, exclude: &[String]) -> Result<Rect, String> {
     if h.is_invalid() || !unsafe { IsWindow(Some(h)) }.as_bool() {
         return Err("No window has focus".into());
     }
@@ -319,7 +328,7 @@ fn others(source: HWND, screens: &[Screen]) -> Vec<(HWND, Rect)> {
     rects.filter(|(h, _)| !is_seam(*h)).collect()
 }
 
-fn close(a: Rect, b: Rect, sized: bool) -> bool {
+pub fn close(a: Rect, b: Rect, sized: bool) -> bool {
     let size = [(a.w, b.w), (a.h, b.h)];
     let sides = [(a.x, b.x), (a.y, b.y)].into_iter().chain(size.into_iter().filter(|_| sized));
     sides.into_iter().all(|(p, q)| (p - q).abs() <= CLOSE_ENOUGH)

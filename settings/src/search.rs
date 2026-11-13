@@ -119,6 +119,12 @@ const ENTRIES: &[Entry] = &[
     ),
     entry(
         Page::Zones,
+        "Handles between snapped windows",
+        "Drag one to resize both sides. Right-click for sizes",
+        "divider handle gap drag share half third quarter take out",
+    ),
+    entry(
+        Page::Zones,
         "Swap with the window already in a zone",
         "Off lets windows overlap in a zone",
         "swap exchange trade overlap drop occupied",
@@ -187,6 +193,12 @@ const ENTRIES: &[Entry] = &[
     ),
     entry(
         Page::Workspaces,
+        "Update from screen removes apps that aren't open",
+        "Off keeps them, so a closed app still starts when you switch",
+        "update capture remove closed delete keep",
+    ),
+    entry(
+        Page::Workspaces,
         "Put windows back",
         "Moved or minimized windows go back where the workspace puts them",
         "snap back drift status moved",
@@ -242,6 +254,12 @@ const ENTRIES: &[Entry] = &[
         "Quick layout",
         "Pick this screen's layout from the keyboard",
         "hotkey keyboard layout zones overlay switch screen",
+    ),
+    entry(
+        Page::Shortcuts,
+        "Size menu",
+        "Share or take out the focused snapped window",
+        "hotkey keyboard divider share half third quarter take out zone resize",
     ),
     entry(Page::Shortcuts, "Pin window on top", "Global shortcut", "hotkey keyboard topmost always"),
     entry(Page::Shortcuts, "Keep window out of workspace switches", "Global shortcut", "hotkey keyboard sticky pin"),

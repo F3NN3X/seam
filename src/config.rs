@@ -81,6 +81,8 @@ pub struct Hotkeys {
     pub focus_only: Option<String>,
     /// "Spotlight": dim everything but the window in use.
     pub spotlight: Option<String>,
+    /// "Size menu": share or take out the focused snapped window.
+    pub divider_menu: Option<String>,
 }
 
 impl Default for Hotkeys {
@@ -118,6 +120,7 @@ impl Default for Hotkeys {
             quick_layout: None,
             focus_only: None,
             spotlight: None,
+            divider_menu: None,
         }
     }
 }
@@ -172,6 +175,8 @@ pub struct ZoneSettings {
     pub edit_on_screen: bool,
     /// Dragging the edge of a window in a zone moves the windows in the zones beside it.
     pub resize_neighbours: bool,
+    /// Thin handles in the gap between snapped windows, to drag or right-click.
+    pub divider_handles: bool,
     /// Dropping a window into a zone another window holds swaps them instead of overlapping.
     pub swap_on_drop: bool,
     /// Exe file names, case-insensitive.
@@ -189,6 +194,7 @@ impl Default for ZoneSettings {
             refit: false,
             edit_on_screen: true,
             resize_neighbours: true,
+            divider_handles: true,
             swap_on_drop: true,
             exclude: Vec::new(),
         }
@@ -375,6 +381,10 @@ pub struct Config {
     /// shows and the page a browser shows, and a switch that starts the app opens it
     /// there (D330). Off by default. Off, nothing is read and saved ones aren't used.
     pub workspaces_remember_places: bool,
+    /// "Update from screen removes apps that aren't open": the rows a capture has no
+    /// window for are removed from the workspace, with Undo. Off keeps them. Only
+    /// Update from screen; a quick save never removes a row.
+    pub workspaces_update_removes_closed: bool,
     /// "Where apps open": an app's window goes to its place whenever it opens, with
     /// or without a workspace. Raw JSON like workspaces, so an entry this build
     /// can't read is kept as it is and ignored.
@@ -421,6 +431,7 @@ impl Default for Config {
             restore_apps: RestoreApps::Windows,
             auto_apply: false,
             workspaces_remember_places: false,
+            workspaces_update_removes_closed: false,
             app_rules: Vec::new(),
             custom_layouts: Vec::new(),
             cursor_easing_asked: false,

@@ -182,6 +182,11 @@ pub(super) fn run_command(app: &mut App, queued: Queued) {
             start_group(app, verb, Some(reply));
             return;
         }
+        Command::WindowShare { hwnd, axis, fraction } => {
+            share::start_share(app, hwnd, GroupVerb::Share { axis, fraction, side: None }, Some(reply));
+            return;
+        }
+        Command::WindowUngroup { hwnd } => share::take_out(hwnd),
         Command::WindowPin { kind, on } => {
             wm::pin(kind, on, unsafe { GetForegroundWindow() }.0 as isize, Some(reply));
             return;

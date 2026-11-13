@@ -780,18 +780,20 @@ impl Engine {
         }
         if let Some(view) = view {
             let g = &drag.geometry[view.screen];
-            let (lit, others) = match view.hit {
-                Some(hit) => {
-                    let out = self.outcome(drag, view.screen, hit, view.cut);
-                    (Some(out.rect), out.others())
+            // The whole span stays lit, and a share of it from the keys is lit again inside it.
+            let (lit, part, others) = match view.hit {
+                Some((a, b)) => {
+                    let out = self.outcome(drag, view.screen, (a, b), view.cut);
+                    let part = out.split.is_some().then_some(out.rect);
+                    (Some(zones::span(g.zones[a], g.zones[b])), part, out.others())
                 }
-                None => (None, Vec::new()),
+                None => (None, None, Vec::new()),
             };
             let hint = (drag.keys.hooked && self.settings.drag_hints).then(|| {
                 let back = key_code(&self.settings.show_key).unwrap_or(VK_SHIFT) != VK_SHIFT;
                 dragkeys::hint(back, g.zones.len() > 1, view.cut.is_some())
             });
-            zone_paint::preview(&g.id, lit, others, hint);
+            zone_paint::preview(&g.id, lit, part, others, hint);
         }
         drag.shown = view;
         if let Some(started) = started {

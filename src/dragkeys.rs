@@ -133,22 +133,14 @@ pub struct Steer {
     pub used: Vec<&'static str>,
 }
 
-/// The spans Tab steps through under the pointer: the zone, the zone with its
-/// neighbour on the side the pointer leans to, and the whole screen, none twice.
+/// The spans Tab steps through under the pointer: the zone, the zone with a
+/// neighbour, and the whole screen, none twice. The neighbour is the one on the
+/// side the pointer leans to, else on the other axis it leans along, else any.
 /// `cells` are the zones with no gap.
-pub fn candidates(cells: &[Rect], zone: usize, (x, y): (i32, i32)) -> Vec<(usize, usize)> {
+pub fn candidates(cells: &[Rect], zone: usize, pt: (i32, i32)) -> Vec<(usize, usize)> {
     let mut list = vec![(zone, zone)];
-    if let Some(c) = cells.get(zone) {
-        let dx = (x - (c.x + c.w / 2)) as f32 / c.w.max(1) as f32;
-        let dy = (y - (c.y + c.h / 2)) as f32 / c.h.max(1) as f32;
-        let (px, py) = if dx.abs() >= dy.abs() {
-            (if dx >= 0. { c.x + c.w } else { c.x - 1 }, y)
-        } else {
-            (x, if dy >= 0. { c.y + c.h } else { c.y - 1 })
-        };
-        if let Some(n) = zones::zone_at(cells, px, py) {
-            list.push((zone.min(n), zone.max(n)));
-        }
+    if let Some(n) = cells.get(zone).and_then(|c| neighbour(cells, zone, *c, pt)) {
+        list.push((zone.min(n), zone.max(n)));
     }
     list.push((0, cells.len().saturating_sub(1)));
     let mut seen = Vec::new();
@@ -158,6 +150,33 @@ pub fn candidates(cells: &[Rect], zone: usize, (x, y): (i32, i32)) -> Vec<(usize
         new
     });
     list
+}
+
+/// The zone across one side of `c`, trying the sides in the order the point leans.
+/// Each side is probed just past its edge, level with the point where it can be,
+/// else at the side's middle.
+fn neighbour(cells: &[Rect], zone: usize, c: Rect, (x, y): (i32, i32)) -> Option<usize> {
+    let dx = (x - (c.x + c.w / 2)) as f32 / c.w.max(1) as f32;
+    let dy = (y - (c.y + c.h / 2)) as f32 / c.h.max(1) as f32;
+    let (h, v) = (if dx >= 0. { Side::Right } else { Side::Left }, if dy >= 0. { Side::Bottom } else { Side::Top });
+    let opposite = |s: Side| match s {
+        Side::Left => Side::Right,
+        Side::Right => Side::Left,
+        Side::Top => Side::Bottom,
+        Side::Bottom => Side::Top,
+    };
+    let order = if dx.abs() >= dy.abs() { [h, v, opposite(v), opposite(h)] } else { [v, h, opposite(h), opposite(v)] };
+    let (y, x) = (y.clamp(c.y, c.y + c.h - 1), x.clamp(c.x, c.x + c.w - 1));
+    let probes = |side: Side| match side {
+        Side::Left => [(c.x - 1, y), (c.x - 1, c.y + c.h / 2)],
+        Side::Right => [(c.x + c.w, y), (c.x + c.w, c.y + c.h / 2)],
+        Side::Top => [(x, c.y - 1), (c.x + c.w / 2, c.y - 1)],
+        Side::Bottom => [(x, c.y + c.h), (c.x + c.w / 2, c.y + c.h)],
+    };
+    order
+        .into_iter()
+        .flat_map(probes)
+        .find_map(|(px, py)| zones::zone_at(cells, px, py).filter(|n| *n != zone))
 }
 
 /// The side of `r` nearest the point.

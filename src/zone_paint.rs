@@ -65,8 +65,9 @@ pub struct ScreenSpec {
 
 enum Command {
     Build(u64, Vec<ScreenSpec>),
-    /// A screen, its lit rect, outlines where other windows land, and the key strip's text.
-    Preview(String, Option<Rect>, Vec<Rect>, Option<String>),
+    /// A screen, its lit rect, the share of it the window takes, outlines where other
+    /// windows land, and the key strip's text.
+    Preview(String, Option<Rect>, Option<Rect>, Vec<Rect>, Option<String>),
     Hide(String),
     HideAll,
     Clear,
@@ -125,11 +126,11 @@ pub fn build(screens: Vec<ScreenSpec>) {
     send(Command::Build(generation, screens));
 }
 
-/// Show the overlay of screen `id`, with `lit` lit, muted outlines on `others`,
-/// and `hint` in a strip at its bottom. If the screen's drawing isn't ready it shows
-/// when it is. Returns at once.
-pub fn preview(id: &str, lit: Option<Rect>, others: Vec<Rect>, hint: Option<String>) {
-    send(Command::Preview(id.to_string(), lit, others, hint));
+/// Show the overlay of screen `id`, with `lit` lit and `part` of it lit once more,
+/// muted outlines on `others`, and `hint` in a strip at its bottom. If the screen's
+/// drawing isn't ready it shows when it is. Returns at once.
+pub fn preview(id: &str, lit: Option<Rect>, part: Option<Rect>, others: Vec<Rect>, hint: Option<String>) {
+    send(Command::Preview(id.to_string(), lit, part, others, hint));
 }
 
 pub fn hide(id: &str) {
@@ -173,6 +174,8 @@ struct Overlay {
     masks: HashMap<MaskKey, Vec<u8>>,
     /// The outlines shown now, by rect.
     others: Vec<(Key, HWND)>,
+    /// The share of the lit zone shown now.
+    part: Option<(Key, HWND)>,
     /// The key strip shown now: its screen, text and window.
     hint: Option<(String, String, HWND)>,
 }
@@ -267,8 +270,9 @@ impl Overlay {
         for command in commands {
             match command {
                 Command::Build(generation, specs) => self.build(generation, specs),
-                Command::Preview(id, lit, others, hint) => {
+                Command::Preview(id, lit, part, others, hint) => {
                     self.show(&id, lit);
+                    self.share(&id, part);
                     self.outline(&id, others);
                     self.strip(&id, hint);
                 }
@@ -278,6 +282,7 @@ impl Overlay {
                     }
                     // Outlines can sit on any screen, and belong to the preview this hides.
                     self.outline("", Vec::new());
+                    self.share("", None);
                     if self.hint.as_ref().is_some_and(|(on, ..)| *on == id) {
                         self.strip(&id, None);
                     }
@@ -285,6 +290,7 @@ impl Overlay {
                 Command::HideAll => {
                     self.screens.values_mut().for_each(Screen::hide);
                     self.outline("", Vec::new());
+                    self.share("", None);
                     self.strip("", None);
                 }
                 Command::Clear => self.clear(),
@@ -295,6 +301,7 @@ impl Overlay {
 
     fn clear(&mut self) {
         self.outline("", Vec::new());
+        self.share("", None);
         self.strip("", None);
         self.todo.clear();
         for (_, screen) in self.screens.drain() {
@@ -391,12 +398,10 @@ impl Overlay {
             screen.want = Some(lit);
             return;
         };
-        if !screen.base_shown {
-            unsafe {
-                let _ = ShowWindow(base, SW_SHOWNOACTIVATE);
-            }
-            screen.base_shown = true;
-        }
+        // Every preview puts the base back on top, then what is lit over it, so the
+        // other zones stay in view whatever was shown over them since.
+        show_on_top(base);
+        screen.base_shown = true;
         let wanted = lit.as_ref().map(key);
         let mut made = false;
         if screen.shown != wanted {
@@ -411,15 +416,37 @@ impl Overlay {
                         made = true;
                     }
                 }
-                if let Some(window) = screen.lit.get(&k) {
-                    show_on_top(*window);
-                }
             }
             screen.shown = wanted;
+        }
+        if let Some(window) = screen.shown.and_then(|k| screen.lit.get(&k)) {
+            show_on_top(*window);
         }
         if let Some(started) = started {
             let us = started.elapsed().as_secs_f64() * 1e6;
             log::info!("zone overlay: worker show {us:.0}us, lit window drawn: {made}");
+        }
+    }
+
+    /// The share of the lit zone the window takes, in the lit style over it, so it
+    /// shows stronger inside the whole zone. Kept while it is the same rect.
+    fn share(&mut self, id: &str, part: Option<Rect>) {
+        if self.part.as_ref().map(|(k, _)| *k) == part.as_ref().map(key) {
+            if let Some((_, window)) = self.part {
+                show_on_top(window);
+            }
+            return;
+        }
+        if let Some((_, window)) = self.part.take() {
+            unsafe {
+                let _ = DestroyWindow(window);
+            }
+        }
+        let Some(rect) = part else { return };
+        let s = self.screens.get(id).map_or(1., |screen| screen.spec.scale);
+        if let Some(window) = lit_window(rect, s) {
+            show_on_top(window);
+            self.part = Some((key(&rect), window));
         }
     }
 
@@ -428,6 +455,7 @@ impl Overlay {
     fn outline(&mut self, id: &str, rects: Vec<Rect>) {
         let keys: Vec<Key> = rects.iter().map(key).collect();
         if self.others.iter().map(|(k, _)| *k).eq(keys.iter().copied()) {
+            self.others.iter().for_each(|(_, window)| show_on_top(*window));
             return;
         }
         for (_, window) in self.others.drain(..) {
@@ -447,6 +475,9 @@ impl Overlay {
     /// The key strip at the bottom of screen `id`, or none.
     fn strip(&mut self, id: &str, text: Option<String>) {
         if self.hint.as_ref().map(|(on, t, _)| (on.as_str(), t)) == text.as_ref().map(|t| (id, t)) {
+            if let Some((_, _, window)) = &self.hint {
+                show_on_top(*window);
+            }
             return;
         }
         if let Some((_, _, window)) = self.hint.take() {

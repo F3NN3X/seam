@@ -249,6 +249,15 @@ impl Overlay {
                     let _ = TranslateMessage(&msg);
                     DispatchMessageW(&msg);
                 }
+                // A wake-up posted after `drain` took the queue was eaten by the loop
+                // above, and the commands it was for would wait for the next window
+                // message, while every later `send` saw a full queue and posted none.
+                // So look at the queue before sleeping: a post after this look stays queued.
+                let waiting =
+                    SHARED.get().is_some_and(|s| !s.queue.lock().unwrap_or_else(|e| e.into_inner()).is_empty());
+                if waiting {
+                    continue;
+                }
                 if self.todo.is_empty() {
                     // Asleep until the main thread posts, or a window message comes.
                     if !GetMessageW(&mut msg, None, 0, 0).as_bool() {

@@ -194,6 +194,10 @@ pub enum Command {
     WindowUngroup {
         hwnd: Option<isize>,
     },
+    /// `window.fit`: a window's group, or the focused one's, fills its screen.
+    WindowFit {
+        hwnd: Option<isize>,
+    },
     /// `on` is None to toggle.
     WindowPin {
         kind: PinKind,
@@ -409,6 +413,7 @@ fn command(method: &str, p: &Value) -> Result<Command, RpcError> {
                 as f32,
         },
         "window.ungroup" => Command::WindowUngroup { hwnd: hwnd_param(p)? },
+        "window.fit" => Command::WindowFit { hwnd: hwnd_param(p)? },
         "window.pin" => {
             let kind = match p.get("kind").and_then(Value::as_str) {
                 Some("top") => PinKind::Top,
@@ -795,6 +800,7 @@ mod tests {
             ),
             (request("window.ungroup", "{}"), anyone, Command::WindowUngroup { hwnd: None }),
             (request("window.ungroup", r#"{"hwnd":1234}"#), anyone, Command::WindowUngroup { hwnd: Some(1234) }),
+            (request("window.fit", r#"{"hwnd":1234}"#), anyone, Command::WindowFit { hwnd: Some(1234) }),
             (request("screen.identify", r#"{"number":3}"#), anyone, Command::ScreenIdentify(3)),
             (request("panel.open", r#"{"page":"about"}"#), anyone, Command::PanelOpen(Some("about".into()))),
             (

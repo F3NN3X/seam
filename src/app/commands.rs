@@ -196,6 +196,10 @@ pub(super) fn run_command(app: &mut App, queued: Queued) {
             return;
         }
         Command::WindowUngroup { hwnd } => share::take_out(hwnd),
+        Command::WindowFit { hwnd } => {
+            fit_group(app, hwnd, Some(reply));
+            return;
+        }
         Command::WindowPin { kind, on } => {
             wm::pin(kind, on, unsafe { GetForegroundWindow() }.0 as isize, Some(reply));
             return;

@@ -854,6 +854,14 @@ pub fn render(panel: &mut Panel, window: &mut Window, cx: &mut Context<Panel>) -
     });
     let swap_row =
         row("Swap with the window already in a zone", Some("Off lets windows overlap in a zone".into()), swap, p);
+    let beside = switch("zone-beside", "Snap beside a window", zones_cfg.snap_beside, window, cx, {
+        let view = view.clone();
+        move |on, window, cx| {
+            view.update(cx, |panel, cx| panel.patch(json!({ "zones": { "snap_beside": on } }), window, cx))
+        }
+    });
+    let beside_row =
+        row("Snap beside a window", Some("Drop on a window's edge to put the two side by side".into()), beside, p);
     let pause = switch("zone-pause", "Pause to snap", zones_cfg.pause_to_snap, window, cx, {
         let view = view.clone();
         move |on, window, cx| {
@@ -1223,7 +1231,7 @@ pub fn render(panel: &mut Panel, window: &mut Window, cx: &mut Context<Panel>) -
         .child(section(
             "Snapping",
             div().flex().flex_col().gap(px(12.)).child(snapping).child(card(
-                vec![swap_row, pause_row, hints_row, neighbours_row, handles_row, on_screen_row, refit_row],
+                vec![swap_row, beside_row, pause_row, hints_row, neighbours_row, handles_row, on_screen_row, refit_row],
                 p,
             )),
             p,

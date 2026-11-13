@@ -52,7 +52,7 @@ use std::sync::Mutex;
 use std::sync::mpsc::{Sender, channel};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
-use tile::{start_tile, tile_finished, undo_tile};
+use tile::{fit_group, start_tile, tile_finished, undo_tile};
 use tray_icon::{add_icon, make_icon, notify, show_menu, tray_data, update_tip};
 use update::{
     arm_auto_install, auto_install, check_for_updates, clean_up_after_update, read_update_state, update_read,
@@ -152,6 +152,8 @@ const HOTKEY_SPOTLIGHT: i32 = 41;
 const HOTKEY_DIVIDER_MENU: i32 = 60;
 /// Pause or resume everything Seam does.
 const HOTKEY_PAUSE_SEAM: i32 = 65;
+/// Stretch the focused window's group to fill its screen.
+const HOTKEY_FIT_GROUP: i32 = 66;
 /// One hotkey id per workspace on the desk, from here up.
 const HOTKEY_WORKSPACE: i32 = 100;
 const NIN_KEYSELECT: u32 = NIN_SELECT | NINF_KEY;
@@ -261,6 +263,8 @@ struct TileUndo {
     back: Vec<wincontrol::tile::Back>,
     /// Windows a split renumbered, given their old zone numbers back.
     keep: Vec<snap::Zoned>,
+    /// The ad-hoc group Fit group to screen stretched, and its area before.
+    group: Option<(u64, zones::Rect)>,
     until: Instant,
 }
 
@@ -756,6 +760,9 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                     }
                     HOTKEY_TILE_SCREEN => {
                         with_app(|a| start_tile(a, tile::pointer(), None));
+                    }
+                    HOTKEY_FIT_GROUP => {
+                        with_app(|a| fit_group(a, None, None));
                     }
                     HOTKEY_DIVIDER_MENU => {
                         if let Err(why) = snap::size_menu(GetForegroundWindow()) {

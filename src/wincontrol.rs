@@ -133,6 +133,10 @@ pub fn start(job: Job) {
 pub fn planned(mut save: impl FnMut(&str, ZoneLayout, bool) -> bool) -> Option<Result<tile::Done, String>> {
     let dragged = std::mem::take(&mut *DRAGGED.lock().unwrap_or_else(|e| e.into_inner()));
     for (screen, layout, moved) in dragged {
+        // A divider of an ad-hoc group: the group keeps its tree in memory, and nothing is saved.
+        if snap::adhoc_dragged(&screen, &layout.tree) {
+            continue;
+        }
         // They are where the drag left them either way, as with an edge drag.
         snap::keep_all(moved);
         if save(&screen, layout, false) {

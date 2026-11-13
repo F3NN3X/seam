@@ -57,7 +57,7 @@ fn area(r: Rect) -> i64 {
 
 /// At least 60% of `r` inside `span`, and covering at least 60% of it, so a window
 /// over two zones isn't taken for one of them.
-fn fits_mutually(r: Rect, span: Rect) -> bool {
+pub(super) fn fits_mutually(r: Rect, span: Rect) -> bool {
     let shared = shared_area(r, span);
     area(r) > 0 && area(span) > 0 && 5 * shared >= 3 * area(r) && 5 * shared >= 3 * area(span)
 }

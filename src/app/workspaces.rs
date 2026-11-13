@@ -43,6 +43,7 @@ pub(super) fn apply_hotkeys(app: &mut App) {
         (HOTKEY_SPOTLIGHT, "spotlight".to_string(), keys.spotlight.clone()),
         (HOTKEY_DIVIDER_MENU, "divider_menu".to_string(), keys.divider_menu.clone()),
         (HOTKEY_PAUSE_SEAM, "pause_seam".to_string(), keys.pause_seam.clone()),
+        (HOTKEY_FIT_GROUP, "fit_group".to_string(), keys.fit_group.clone()),
     ];
     for (id, (verb, dir, combo)) in (HOTKEY_WINDOW..).zip(keys.directional()) {
         wanted.push((id, format!("{verb}_{dir}"), combo.cloned()));

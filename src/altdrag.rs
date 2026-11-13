@@ -82,6 +82,8 @@ static OWING: AtomicBool = AtomicBool::new(false);
 /// life, so nothing expires: an entry goes when its process does. The worker fills it
 /// ahead of use, and the hook only tries the lock.
 static VERDICTS: Mutex<Vec<Verdict>> = Mutex::new(Vec::new());
+/// Counts changes of the exclude list, so a look begun before one isn't kept.
+static EXCLUDED_AT: AtomicU64 = AtomicU64::new(0);
 
 struct Verdict {
     pid: u32,
@@ -130,6 +132,7 @@ pub fn configure(owner: isize, on: bool, key: &str, exclude: &[String]) {
     let mut kept = EXCLUDE.write().unwrap_or_else(|e| e.into_inner());
     if *kept != exclude {
         *kept = exclude;
+        EXCLUDED_AT.fetch_add(1, Ordering::SeqCst);
         VERDICTS.lock().unwrap_or_else(|e| e.into_inner()).clear();
     }
     drop(kept);
@@ -168,8 +171,9 @@ pub fn stop() {
     }
 }
 
-/// The tray is quitting. A drag still going ends now, and the hook waits a moment
-/// for its release before it goes, so the app doesn't get a lone one.
+/// The tray is quitting. The worker ends a drag still going, and this waits up to
+/// 200 ms for its release so the hook can swallow it. A release after that reaches
+/// the app, as the hook goes with the process.
 pub fn shutdown() {
     stop();
     if !OWING.load(Ordering::SeqCst) {
@@ -428,13 +432,17 @@ fn look(h: HWND) {
     if known(&VERDICTS.lock().unwrap_or_else(|e| e.into_inner())) {
         return;
     }
-    let ok = {
-        let exclude = EXCLUDE.read().unwrap_or_else(|e| e.into_inner());
-        !wincontrol::is_seam(h)
-            && !winutil::is_elevated_over_us(h)
-            && (exclude.is_empty() || winutil::exe_name(h).is_none_or(|name| !exclude.contains(&name)))
-    };
+    // A copy, so no lock is held while the process is opened.
+    let at = EXCLUDED_AT.load(Ordering::SeqCst);
+    let exclude = EXCLUDE.read().unwrap_or_else(|e| e.into_inner()).clone();
+    let ok = !wincontrol::is_seam(h)
+        && !winutil::is_elevated_over_us(h)
+        && (exclude.is_empty() || winutil::exe_name(h).is_none_or(|name| !exclude.contains(&name)));
     let mut list = VERDICTS.lock().unwrap_or_else(|e| e.into_inner());
+    // The exclude list changed meanwhile, so this answer is for the old one.
+    if EXCLUDED_AT.load(Ordering::SeqCst) != at {
+        return;
+    }
     // A process gone, its id now another's.
     list.retain(|v| v.pid != pid);
     list.push(Verdict { pid, created, ok });
@@ -451,8 +459,15 @@ fn sweep() {
     if !gone.is_empty() {
         VERDICTS.lock().unwrap_or_else(|e| e.into_inner()).retain(|v| !gone.contains(&v.pid));
     }
-    let shown = winutil::top_level_windows().into_iter().filter(|h| unsafe { IsWindowVisible(*h) }.as_bool());
-    shown.for_each(look);
+    // What is left is alive and checked just now, so a known pid needs no second look.
+    let mut seen: Vec<u32> = VERDICTS.lock().unwrap_or_else(|e| e.into_inner()).iter().map(|v| v.pid).collect();
+    for h in winutil::top_level_windows() {
+        let pid = winutil::process_id(h);
+        if !seen.contains(&pid) && unsafe { IsWindowVisible(h) }.as_bool() {
+            seen.push(pid);
+            look(h);
+        }
+    }
 }
 
 /// When the process started, which tells it from a later one given the same id.

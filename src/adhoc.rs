@@ -541,7 +541,8 @@ impl Engine {
             return Err(FILLS.into());
         }
         let screen = s.id.clone();
-        let back = vec![Back { place: Placement { hwnd: key, target: frame, zone: None, dpi }, set: work }];
+        let back =
+            vec![Back { place: Placement { hwnd: key, target: frame, zone: None, dpi }, set: work, pulled: None }];
         self.queued.push_back(Placement { hwnd: key, target: work, zone: None, dpi });
         self.window_pump();
         log::info!("fit group: a loose window on screen {}", number + 1);
@@ -575,7 +576,7 @@ impl Engine {
         for &(k, leaf) in &a.members {
             let (Some(was), Some(set)) = (before.get(leaf).copied(), after.get(leaf).copied()) else { continue };
             self.queued.push_back(Placement { hwnd: k, target: set, zone: None, dpi });
-            back.push(Back { place: Placement { hwnd: k, target: was, zone: None, dpi }, set });
+            back.push(Back { place: Placement { hwnd: k, target: was, zone: None, dpi }, set, pulled: None });
         }
         let (group, screen, n) = (Some((a.id, a.area)), a.screen.clone(), a.members.len());
         self.adhoc[i].area = work;

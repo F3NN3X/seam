@@ -293,6 +293,23 @@ pub fn merge_leaf(tree: &Node, index: usize) -> Option<(Node, usize)> {
     }
 }
 
+/// Take zone `index` out of the tree: its sibling, a zone or a whole part, takes the
+/// place of the split they shared. None for a tree of one zone or an index past the end.
+pub fn remove_leaf(tree: &Node, index: usize) -> Option<Node> {
+    let Node::Split { split, ratio, a, b } = tree else { return None };
+    let first = leaf_count(a);
+    if index >= first + leaf_count(b) {
+        return None;
+    }
+    let (split, ratio) = (*split, *ratio);
+    match (&**a, &**b) {
+        (Node::Leaf(_), _) if index == 0 => Some((**b).clone()),
+        (_, Node::Leaf(_)) if index == first => Some((**a).clone()),
+        _ if index < first => Some(Node::Split { split, ratio, a: Box::new(remove_leaf(a, index)?), b: b.clone() }),
+        _ => Some(Node::Split { split, ratio, a: a.clone(), b: Box::new(remove_leaf(b, index - first)?) }),
+    }
+}
+
 /// A line between two parts of the tree, which the editor lets you drag.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Divider {
@@ -393,5 +410,25 @@ mod tests {
         let visible = Rect { x: 100, y: 100, w: 800, h: 600 }; // 7 px left/right/bottom, 0 top
         let got = frame_adjust(Rect { x: 0, y: 0, w: 960, h: 1040 }, window, visible);
         assert_eq!(got, Rect { x: -7, y: 0, w: 974, h: 1047 });
+    }
+
+    #[test]
+    fn remove_leaf_hands_the_space_to_the_sibling() {
+        let l = || Node::Leaf(LeafTag::Leaf);
+        let split = |dir, a, b| Node::Split { split: dir, ratio: 0.5, a: Box::new(a), b: Box::new(b) };
+        // A leaf with a leaf sibling: the sibling is the whole tree.
+        let two = split(Dir::Vertical, l(), l());
+        assert_eq!(remove_leaf(&two, 0), Some(l()));
+        assert_eq!(remove_leaf(&two, 1), Some(l()));
+        // A leaf with a subtree sibling: the subtree takes the split's place.
+        let sub = split(Dir::Horizontal, l(), l());
+        let three = split(Dir::Vertical, l(), sub.clone());
+        assert_eq!(remove_leaf(&three, 0), Some(sub.clone()));
+        assert_eq!(remove_leaf(&split(Dir::Vertical, sub.clone(), l()), 2), Some(sub));
+        // Deeper, the rest of the tree stays.
+        assert_eq!(remove_leaf(&three, 1), Some(split(Dir::Vertical, l(), l())));
+        // The last zone, and one that isn't there.
+        assert_eq!(remove_leaf(&l(), 0), None);
+        assert_eq!(remove_leaf(&two, 2), None);
     }
 }

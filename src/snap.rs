@@ -142,6 +142,8 @@ struct Drag {
     tried: Option<(adhoc::Beside, Option<usize>, Option<Option<View>>)>,
     /// Windows looked at as targets, and whether Seam may move each.
     allowed: Vec<(isize, bool)>,
+    /// It began in `altdrag`, from anywhere in the window.
+    alt: bool,
 }
 
 struct Snapped {
@@ -186,6 +188,8 @@ struct Engine {
     /// The size a free drag to another screen gives the window: Windows' own unless
     /// "Also when I drag a window to another screen" is on and nothing steps aside.
     drag_size: WindowSize,
+    /// The key for dragging from anywhere in a window includes Ctrl, so Ctrl is held for the whole drag.
+    alt_holds_ctrl: bool,
     screens: Vec<Screen>,
     hook: Option<HWINEVENTHOOK>,
     drag: Option<Drag>,
@@ -273,6 +277,7 @@ pub fn update(owner: HWND, cfg: &Config, sig: &str, mons: &[Mon], aside: Option<
     let standing_by = crate::standby::reason().is_some();
     let on_drag = cfg.window_size_on_drag && aside.is_none() && !standing_by;
     let drag_size = if on_drag { cfg.window_size_on_move } else { WindowSize::Windows };
+    let alt_holds_ctrl = cfg.windows.alt_drag.on && cfg.windows.alt_drag.key == "ctrl_alt";
     let exclude: Vec<String> = cfg.zones.exclude.iter().map(|x| x.to_lowercase()).collect();
     with_engine(|e| {
         // A change that isn't about zones mustn't cut a drag short.
@@ -283,6 +288,7 @@ pub fn update(owner: HWND, cfg: &Config, sig: &str, mons: &[Mon], aside: Option<
             && e.settings == cfg.zones
             && e.exclude == exclude
             && e.drag_size == drag_size
+            && e.alt_holds_ctrl == alt_holds_ctrl
             && e.screens == screens;
         if same {
             return;
@@ -295,6 +301,7 @@ pub fn update(owner: HWND, cfg: &Config, sig: &str, mons: &[Mon], aside: Option<
         e.settings = cfg.zones.clone();
         e.exclude = exclude;
         e.drag_size = drag_size;
+        e.alt_holds_ctrl = alt_holds_ctrl;
         e.screens = screens;
         // An ad-hoc group is for a screen with no zones, as it was when it was made.
         e.adhoc_screens_changed();
@@ -383,6 +390,7 @@ pub fn alt_drag(hwnd: HWND, started: bool) {
         e.drag_start(hwnd);
         if let Some(drag) = e.drag.as_mut() {
             drag.button = None;
+            drag.alt = true;
         }
     });
 }
@@ -439,6 +447,12 @@ pub fn place_more(list: Vec<Placement>) {
         e.queued.extend(list);
         e.window_pump();
     });
+}
+
+/// Undo of a pull-out: the window goes back in its zone with the size it had before
+/// it was snapped, if it still exists, isn't minimized or maximized and is on that screen.
+pub fn put_back(place: Placement, old: Option<Old>) {
+    with_engine(|e| e.put_back(place, old));
 }
 
 unsafe extern "system" fn on_event(_: HWINEVENTHOOK, event: u32, hwnd: HWND, object: i32, _: i32, _: u32, _: u32) {
@@ -725,6 +739,7 @@ impl Engine {
             beside: None,
             tried: None,
             allowed: Vec::new(),
+            alt: false,
         });
     }
 
@@ -944,6 +959,11 @@ impl Engine {
         self.refit_resume();
     }
 
+    /// Ctrl is the show key, so it can be held for a drag that never meant a pull-out.
+    fn ctrl_is_a_key(&self) -> bool {
+        key_code(&self.settings.show_key) == Some(VK_CONTROL)
+    }
+
     fn finish_drag(&mut self, drag: &Drag, dropped: bool, hwnd: HWND) {
         // Dragged away, a window leaves its ad-hoc group.
         if drag.phase == Phase::Moving {
@@ -977,6 +997,10 @@ impl Engine {
         }
         let lit = drag.shown.and_then(|view| Some((view.screen, view.hit?, view.cut)));
         let Some((screen, (a, b), cut)) = lit else {
+            // With Ctrl held, a window alone in its zone leaves the layout, and the others close the gap.
+            if held(VK_CONTROL) && !(drag.alt && self.alt_holds_ctrl) && !self.ctrl_is_a_key() {
+                self.pull_out(drag);
+            }
             // Dropped outside every zone, so a snapped window gets its old size back.
             let mut restored = false;
             if let (Some(Some(old)), true) = (drag.was_snapped, self.settings.restore_size)
@@ -1157,6 +1181,28 @@ impl Engine {
             _ => self.unsnap(h, winutil::has_zone_stamp(h)),
         }
         Some((p.hwnd, p.target))
+    }
+
+    fn put_back(&mut self, p: Placement, old: Option<Old>) {
+        let hwnd = hwnd_of(p.hwnd);
+        let Some((id, from, to)) = p.zone else { return };
+        if !unsafe { IsWindow(Some(hwnd)) }.as_bool() || winutil::is_minimized(hwnd) || winutil::is_maximized(hwnd) {
+            return;
+        }
+        let geometry = self.geometry();
+        let Some(g) = geometry.iter().find(|g| g.id == id && to < g.zones.len()) else { return };
+        let on = winutil::visible_rect(hwnd).is_some_and(|r| g.bounds.contains(r.x + r.w / 2, r.y + r.h / 2));
+        let held = self
+            .snapped
+            .iter()
+            .any(|(k, x)| *k != p.hwnd && x.screen == id && refit::covered(&g.cells, x.from, x.to).contains(&from));
+        if held {
+            log::info!("pull out: Undo left the window where it is, another window holds its zone");
+            return;
+        }
+        if on {
+            self.snap_to(hwnd, g, (from, to), p.target, Some(old));
+        }
     }
 
     /// Start one of window control's moves, recorded where it goes: snapped in its

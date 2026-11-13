@@ -135,6 +135,10 @@ pub(super) fn run_command(app: &mut App, queued: Queued) {
             tile::pick_layout(app, number, layout, None, reply);
             return;
         }
+        Command::ZonesApply { number, layout } => {
+            tile::apply_layout(app, number, layout, reply);
+            return;
+        }
         Command::ZonesFromWindows(number) => {
             let at = number.map_or_else(tile::pointer, |n| At::Screen(n as usize));
             tile::start_from_windows(app, at, reply);

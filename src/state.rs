@@ -56,6 +56,11 @@ pub struct Screen {
     pub primary: bool,
     #[serde(default)]
     pub rect: ScreenRect,
+    /// The id of the layout the screen has on this desk, as `zones.layouts` names it:
+    /// a library id, a template's name or "none". None for a custom tree not in the
+    /// library. It is here so a change of layout is a change of the state.
+    #[serde(default)]
+    pub layout: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]

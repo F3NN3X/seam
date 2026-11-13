@@ -3,6 +3,7 @@ import { seam } from "./seam.js";
 import {
 	LineUp,
 	NextZone,
+	PauseSeam,
 	PreviousZone,
 	PinOnTop,
 	QuickLayout,
@@ -17,6 +18,7 @@ import {
 	TileScreen,
 	Zones,
 } from "./actions/simple.js";
+import { ApplyLayout } from "./actions/apply-layout.js";
 import { FocusWindow, MoveWindow } from "./actions/window.js";
 import { SwitchWorkspace } from "./actions/workspace.js";
 
@@ -28,6 +30,8 @@ streamDeck.actions.registerAction(new SwitchBack());
 streamDeck.actions.registerAction(new SaveWindows());
 streamDeck.actions.registerAction(new TileScreen());
 streamDeck.actions.registerAction(new QuickLayout());
+streamDeck.actions.registerAction(new ApplyLayout());
+streamDeck.actions.registerAction(new PauseSeam());
 streamDeck.actions.registerAction(new LineUp());
 streamDeck.actions.registerAction(new Remap());
 streamDeck.actions.registerAction(new Zones());

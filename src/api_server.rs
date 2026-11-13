@@ -13,7 +13,7 @@ use crate::log;
 use crate::tray::WM_APP_API;
 use seam::api::{
     API_VERSION, BUSY, Command, DISABLED, MAX_LINE, MAX_QUEUED_EVENTS, Peer, Reply, RpcError, desks_list, error_line,
-    event_line, parse_request, pipe_name, result_line, topic_of, workspaces_list,
+    event_line, parse_request, pipe_name, result_line, topic_of, workspaces_list, zones_layouts,
 };
 use seam::process;
 use seam::state::Snapshot;
@@ -39,7 +39,7 @@ use windows::Win32::System::Pipes::{
 use windows::Win32::System::Threading::{
     CreateEventW, GetCurrentProcess, ResetEvent, SetEvent, WaitForMultipleObjects, WaitForSingleObject,
 };
-use windows::Win32::UI::WindowsAndMessaging::PostMessageW;
+use windows::Win32::UI::WindowsAndMessaging::{GetCursorPos, PostMessageW};
 use windows::core::PCWSTR;
 
 const MAX_CLIENTS: u32 = 8;
@@ -331,6 +331,13 @@ impl Session {
             Command::ConfigGet => Ok(read_snapshot(shared).config.clone()),
             Command::DesksList => Ok(desks_list(&read_snapshot(shared))),
             Command::WorkspacesList { desk } => workspaces_list(&read_snapshot(shared), desk.as_deref()),
+            Command::ZonesLayouts(number) => {
+                let mut pt = POINT::default();
+                unsafe {
+                    let _ = GetCursorPos(&mut pt);
+                }
+                zones_layouts(&read_snapshot(shared), number, (pt.x, pt.y))
+            }
             command => run_on_main_thread(shared, command, self.panel),
         }
     }

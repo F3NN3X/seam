@@ -102,6 +102,17 @@ pub(super) fn tile_finished(app: &mut App, result: Option<Result<wincontrol::til
     }
 }
 
+/// A screen's index from its Line Up number, or the one under the pointer.
+fn screen_index(app: &App, number: Option<u32>) -> Option<usize> {
+    match number {
+        Some(n) => n.checked_sub(1).map(|i| i as usize),
+        None => {
+            let At::Point(x, y) = pointer() else { return None };
+            Some(app.mons.iter().position(|m| m.rect.contains(x, y)).unwrap_or(0))
+        }
+    }
+}
+
 /// Open the quick layout overlay on a screen, by Line Up number or the one under
 /// the pointer. With zones off, or with another window manager running, it still
 /// opens and says so, since a pick is saved either way.
@@ -110,13 +121,7 @@ pub(super) fn open_quick_layout(app: &mut App, number: Option<u32>, from_api: bo
     if !from_api && quicklayout::close_for_key() {
         return Ok(());
     }
-    let at = match number {
-        Some(n) => n.checked_sub(1).map(|i| i as usize),
-        None => {
-            let At::Point(x, y) = pointer() else { return Err("No such screen".into()) };
-            Some(app.mons.iter().position(|m| m.rect.contains(x, y)).unwrap_or(0))
-        }
-    };
+    let at = screen_index(app, number);
     let mon = at.and_then(|i| app.mons.get(i)).ok_or("No such screen")?;
     let desk = app.cfg.desks.get(&app.sig).ok_or("This desk isn't saved yet")?;
     let now = desk.zones.get(&mon.id).and_then(zones::layout_of);
@@ -161,6 +166,33 @@ pub(super) fn apply_quick(app: &mut App) {
         let actual = app.cfg.desks.get(&app.sig).and_then(|d| d.zones.get(&screen)).and_then(zones::layout_of);
         quicklayout::settled(&screen, stamp, actual);
     }
+}
+
+/// `zones.apply`: a pick of a layout the API names, by id or name, which has to be in
+/// the library for the screen or a template. No name is no zones. A pick is a pick,
+/// so zones off or another window manager only saves it.
+pub(super) fn apply_layout(app: &mut App, number: Option<u32>, wanted: Option<String>, reply: Sender<Reply>) {
+    let Some(at) = screen_index(app, number).filter(|i| *i < app.mons.len()) else {
+        let _ = reply.send(Err(RpcError::new(api::NOT_FOUND, "no such screen")));
+        return;
+    };
+    let Some(desk) = app.cfg.desks.get(&app.sig) else {
+        let _ = reply.send(refused("This desk isn't saved yet"));
+        return;
+    };
+    let device = &app.mons[at].id;
+    let now = desk.zones.get(device).and_then(zones::layout_of);
+    let offers = seam::library::offers(&app.cfg.custom_layouts, device, now.as_ref());
+    let offer = match &wanted {
+        None => offers.iter().find(|o| o.layout.is_none()),
+        Some(wanted) => seam::library::find_offer(&offers, wanted),
+    };
+    let Some(offer) = offer else {
+        let _ = reply.send(refused("no such layout for this screen"));
+        return;
+    };
+    let layout = offer.layout.as_ref().map(|l| json!(l));
+    pick_layout(app, at as u32 + 1, layout, None, reply);
 }
 
 /// A layout picked on the Zones page. With zones on, the screen's snapped windows

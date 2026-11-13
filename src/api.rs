@@ -3,9 +3,11 @@
 
 use crate::direction;
 use crate::groups::Side;
+use crate::library;
 use crate::log;
 use crate::process;
 use crate::state::Snapshot;
+use crate::zones;
 use serde::Serialize;
 use serde_json::{Value, json};
 use std::fs::{File, OpenOptions};
@@ -219,6 +221,15 @@ pub enum Command {
         number: u32,
         layout: Option<Value>,
     },
+    /// `zones.apply`: give a screen a layout from the library or a template, by id or
+    /// name (None for no zones), as a pick does. The screen is a Line Up number, or the
+    /// one under the pointer.
+    ZonesApply {
+        number: Option<u32>,
+        layout: Option<String>,
+    },
+    /// `zones.layouts`: what a screen can be given, and what it has. Read from the snapshot.
+    ZonesLayouts(Option<u32>),
     LayoutShow(LayoutView),
     PanelOpen(Option<String>),
     EventsSubscribe(Vec<String>),
@@ -447,6 +458,15 @@ fn command(method: &str, p: &Value) -> Result<Command, RpcError> {
                 Some(_) => return Err(RpcError::new(INVALID_PARAMS, "layout must be a layout or null")),
             },
         },
+        "zones.apply" => Command::ZonesApply {
+            number: screen_param(p)?,
+            layout: match p.get("layout") {
+                Some(Value::Null) => None,
+                Some(Value::String(s)) => Some(s.clone()),
+                _ => return Err(RpcError::new(INVALID_PARAMS, "layout must be a layout id or name, or null")),
+            },
+        },
+        "zones.layouts" => Command::ZonesLayouts(screen_param(p)?),
         "layout.show" => match p.get("view").and_then(Value::as_str) {
             Some("seam") => Command::LayoutShow(LayoutView::Seam),
             Some("windows") => Command::LayoutShow(LayoutView::Windows),
@@ -558,6 +578,33 @@ pub fn workspaces_list(snapshot: &Snapshot, desk: Option<&str>) -> Reply {
         })
     });
     Ok(Value::Array(workspaces.collect()))
+}
+
+/// `zones.layouts`: the layouts a screen can be given, with the id of the one it has.
+/// Without a `number` it's the screen `pointer` is on, or the first.
+pub fn zones_layouts(snapshot: &Snapshot, number: Option<u32>, pointer: (i32, i32)) -> Reply {
+    let screens = &snapshot.state.screens;
+    let screen = match number {
+        Some(n) => n.checked_sub(1).and_then(|i| screens.get(i as usize)),
+        None => screens
+            .iter()
+            .find(|s| {
+                let (x, y) = pointer;
+                x >= s.rect.x && x < s.rect.x + s.rect.w && y >= s.rect.y && y < s.rect.y + s.rect.h
+            })
+            .or(screens.first()),
+    };
+    let Some(screen) = screen else { return Err(RpcError::new(NOT_FOUND, "no such screen")) };
+    let Some(desk) = snapshot.config["desks"].get(&snapshot.state.desk.sig) else {
+        return Err(RpcError::new(REFUSED, "This desk isn't saved yet"));
+    };
+    let now = desk["zones"].get(&screen.id).and_then(zones::layout_of);
+    let saved = snapshot.config["custom_layouts"].as_array().map_or(&[][..], Vec::as_slice);
+    let layouts: Vec<Value> = library::offers(saved, &screen.id, now.as_ref())
+        .into_iter()
+        .map(|o| json!({ "id": o.id, "name": o.name, "kind": o.kind }))
+        .collect();
+    Ok(json!({ "number": screen.number, "current": library::layout_id(now.as_ref()), "layouts": layouts }))
 }
 
 /// `\\.\pipe\seam-<username>`. Clients derive it, so no discovery file is needed.
@@ -756,6 +803,13 @@ mod tests {
                 Command::WorkspaceSwitch { id: None, name: Some("Coding".into()), alongside: false },
             ),
             (request("workspace.status", r#"{"id":"ws_1"}"#), anyone, Command::WorkspaceStatus { id: "ws_1".into() }),
+            (
+                request("zones.apply", r#"{"number":2,"layout":"Grid"}"#),
+                anyone,
+                Command::ZonesApply { number: Some(2), layout: Some("Grid".into()) },
+            ),
+            (request("zones.apply", r#"{"layout":null}"#), anyone, Command::ZonesApply { number: None, layout: None }),
+            (request("zones.layouts", "{}"), anyone, Command::ZonesLayouts(None)),
             (request("workspace.snap_back", "{}"), anyone, Command::WorkspaceSnapBack),
             (request("workspace.switch_back", "{}"), anyone, Command::WorkspaceSwitchBack),
             (request("workspace.quick_save", "{}"), anyone, Command::WorkspaceQuickSave),
@@ -812,6 +866,9 @@ mod tests {
             (request("window.ungroup", r#"{"hwnd":"x"}"#), anyone, INVALID_PARAMS),
             (request("screen.identify", r#"{"number":-1}"#), anyone, INVALID_PARAMS),
             (request("workspace.switch", "{}"), anyone, INVALID_PARAMS),
+            (request("zones.apply", "{}"), anyone, INVALID_PARAMS),
+            (request("zones.apply", r#"{"layout":{"template":"grid"}}"#), anyone, INVALID_PARAMS),
+            (request("zones.layouts", r#"{"number":"2"}"#), anyone, INVALID_PARAMS),
             (request("workspace.status", "{}"), anyone, INVALID_PARAMS),
             (request("autoapply.set", "{}"), anyone, INVALID_PARAMS),
             (request("config.patch", r#"{"patch":3}"#), panel, INVALID_PARAMS),

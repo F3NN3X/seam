@@ -10,7 +10,8 @@ import { fileURLToPath } from "node:url";
 import { NOT_FOUND, seam, SeamError, type SeamState } from "../seam.js";
 import { SeamAction } from "./seam-action.js";
 
-type Settings = { id?: string; name?: string };
+/** `alongside`: switch once and leave the other windows alone. */
+type Settings = { id?: string; name?: string; alongside?: boolean };
 
 /**
  * The lit key with an amber dot in its corner: in use, but a window of it moved. Sent
@@ -77,14 +78,18 @@ export class SwitchWorkspace extends SeamAction<Settings> {
 		if (!settings.id && !settings.name) {
 			throw new Error("no workspace chosen");
 		}
+		const alongside = settings.alongside === true;
 		try {
-			await seam.call("workspace.switch", settings.id ? { id: settings.id } : { name: settings.name });
+			await seam.call(
+				"workspace.switch",
+				settings.id ? { id: settings.id, alongside } : { name: settings.name, alongside },
+			);
 		} catch (error) {
 			// The id is gone, say after the workspace was deleted and captured again. Try its name.
 			if (!(error instanceof SeamError) || error.code !== NOT_FOUND || !settings.id || !settings.name) {
 				throw error;
 			}
-			await seam.call("workspace.switch", { name: settings.name });
+			await seam.call("workspace.switch", { name: settings.name, alongside });
 		}
 	}
 

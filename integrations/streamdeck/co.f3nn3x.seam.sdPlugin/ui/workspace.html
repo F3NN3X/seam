@@ -16,6 +16,9 @@
 				align-items: center;
 				gap: 12px;
 			}
+			label + label {
+				margin-top: 8px;
+			}
 			span {
 				width: 70px;
 				flex: none;
@@ -30,6 +33,9 @@
 				border: 1px solid #1d1d1d;
 				border-radius: 3px;
 			}
+			input[type="checkbox"] {
+				margin: 0;
+			}
 		</style>
 	</head>
 
@@ -40,6 +46,11 @@
 				<option>Loading workspaces</option>
 			</select>
 		</label>
+		<label>
+			<span></span>
+			<input id="alongside" type="checkbox" />
+			Open alongside, leaving other windows alone
+		</label>
 
 		<script>
 			// Stream Deck gives the inspector a socket to the app. The plugin
@@ -49,6 +60,7 @@
 			let action;
 			let settings = {};
 			const select = document.getElementById("workspace");
+			const alongside = document.getElementById("alongside");
 
 			const send = (message) => socket.send(JSON.stringify(message));
 
@@ -71,11 +83,17 @@
 				send({ event: "setSettings", context: uuid, payload: settings });
 			});
 
+			alongside.addEventListener("change", () => {
+				settings = { ...settings, alongside: alongside.checked };
+				send({ event: "setSettings", context: uuid, payload: settings });
+			});
+
 			window.connectElgatoStreamDeckSocket = (port, inUuid, registerEvent, _info, actionInfo) => {
 				uuid = inUuid;
 				const info = JSON.parse(actionInfo);
 				action = info.action;
 				settings = info.payload?.settings ?? {};
+				alongside.checked = settings.alongside === true;
 				socket = new WebSocket(`ws://127.0.0.1:${port}`);
 				socket.onopen = () => {
 					send({ event: registerEvent, uuid });

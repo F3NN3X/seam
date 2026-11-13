@@ -629,7 +629,8 @@ impl Engine {
         let timer = unsafe { SetTimer(None, 0, TICK_MS, Some(on_tick)) };
         let was_maximized = winutil::is_maximized(hwnd);
         let zone = current.map(|(_, zone)| zone);
-        let edges = self.edges_start(hwnd, &geometry, (zone.clone(), stamped), was_maximized);
+        let old_zone = if geometry.is_empty() { zone.clone() } else { self.zones_held(hwnd, &geometry, frame) };
+        let edges = self.edges_start(hwnd, &geometry, (zone, stamped), was_maximized);
         // The handles stay out of the way of any drag, and come back at its end.
         dividers::hide();
         self.drag = Some(Drag {
@@ -639,7 +640,7 @@ impl Engine {
             frame,
             was_maximized,
             stamped,
-            old_zone: zone,
+            old_zone,
             was_snapped,
             button,
             geometry,
@@ -884,7 +885,14 @@ impl Engine {
         }
         if out.swap.is_none() {
             if let Err(why) = self.swap_why(drag, screen, (a.min(b), a.max(b))) {
-                if why != swap::Skip::Off {
+                if why == swap::Skip::NoOccupants {
+                    let g = &drag.geometry[screen];
+                    let target = zones::span(g.zones[a], g.zones[b]);
+                    let (known, loose) = self.around(drag, g, target);
+                    log::info!(
+                        "zone swap: skipped, NoOccupants ({known} snapped on that screen, {loose} loose over the zone)"
+                    );
+                } else if why != swap::Skip::Off {
                     log::info!("zone swap: skipped, {why:?}");
                 }
             }
@@ -1049,6 +1057,15 @@ impl Engine {
                     // Still bigger than its place after the retries: that's as small as the app goes.
                     if let (false, true, Some(v)) = (landed, sized, visible) {
                         minsize::observed(hwnd, v, p.target, CLOSE_ENOUGH);
+                    }
+                    // Off its place after the retries: the snapping records where it is,
+                    // so it still counts as in its zones.
+                    if let (false, Some(v)) = (landed, visible) {
+                        if let Some(s) = self.snapped.get_mut(&p.hwnd).filter(|s| s.at == p.target) {
+                            let (dx, dy, dw, dh) = (v.x - s.at.x, v.y - s.at.y, v.w - s.at.w, v.h - s.at.h);
+                            log::info!("zone place: landed {dx},{dy} px off its zones, {dw}x{dh} px in size");
+                            s.at = v;
+                        }
                     }
                     return;
                 }

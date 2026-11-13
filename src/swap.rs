@@ -47,7 +47,7 @@ fn overlaps(a: Rect, b: Rect) -> bool {
 
 /// Whether at least half of `r` lies inside `zone`. A window an app keeps a few
 /// pixels off its zones, or bigger than them for its minimum size, still counts.
-fn mostly_inside(r: Rect, zone: Rect) -> bool {
+pub(super) fn mostly_inside(r: Rect, zone: Rect) -> bool {
     let w = (r.x + r.w).min(zone.x + zone.w) - r.x.max(zone.x);
     let h = (r.y + r.h).min(zone.y + zone.h) - r.y.max(zone.y);
     let area = |w: i32, h: i32| i64::from(w.max(0)) * i64::from(h.max(0));
@@ -123,6 +123,61 @@ impl Engine {
     /// swaps, and the drop is as it always was.
     pub(super) fn swap_plan(&self, drag: &Drag, screen: usize, ab: (usize, usize)) -> Option<(Vec<Placement>, bool)> {
         self.swap_why(drag, screen, ab).ok()
+    }
+
+    /// The zones the dragged window was in when the drag began, for the swap: its
+    /// entry in the snapping while at least half of it is still inside those zones,
+    /// as for an occupant. Otherwise, as after a restart of the tray, the zones on its
+    /// screen its frame mostly fills and is mostly inside, its stamp's first.
+    pub(super) fn zones_held(
+        &self,
+        hwnd: HWND,
+        geometry: &[Placed],
+        frame: Option<Rect>,
+    ) -> Option<(String, usize, usize)> {
+        let frame = frame?;
+        if let Some(s) = self.snapped.get(&(hwnd.0 as isize)) {
+            let g = geometry.iter().find(|g| g.id == s.screen && s.from.max(s.to) < g.zones.len());
+            if let Some(g) = g.filter(|g| mostly_inside(frame, zones::span(g.zones[s.from], g.zones[s.to]))) {
+                if !close(frame, s.at, winutil::is_resizable(hwnd)) {
+                    let (dx, dy, dw, dh) = (frame.x - s.at.x, frame.y - s.at.y, frame.w - s.at.w, frame.h - s.at.h);
+                    log::info!("zone drag: the window is {dx},{dy} px off where it was put, {dw}x{dh} px in size");
+                }
+                return Some((g.id.clone(), s.from, s.to));
+            }
+            log::info!("zone drag: the window's zones no longer hold most of it");
+        }
+        let (x, y) = (frame.x + frame.w / 2, frame.y + frame.h / 2);
+        let g = geometry.iter().find(|g| g.bounds.contains(x, y))?;
+        if let Some((from, to, _)) = wincontrol::stamped_in(hwnd, frame, &g.zones) {
+            return Some((g.id.clone(), from, to));
+        }
+        let n = g.zones.len();
+        let fits = |(i, j): &(usize, usize)| {
+            let span = zones::span(g.zones[*i], g.zones[*j]);
+            mostly_inside(frame, span) && mostly_inside(span, frame)
+        };
+        let (from, to) = (0..n).flat_map(|i| (i..n).map(move |j| (i, j))).find(fits)?;
+        Some((g.id.clone(), from, to))
+    }
+
+    /// For a skip with no occupants: the snapping's entries on screen `g`, and the
+    /// windows it doesn't know that overlap `target`. For the log only.
+    pub(super) fn around(&self, drag: &Drag, g: &Placed, target: Rect) -> (usize, usize) {
+        let known = self.snapped.values().filter(|s| s.screen == g.id).count();
+        let own = std::process::id();
+        let loose = winutil::top_level_windows()
+            .into_iter()
+            .filter(|h| {
+                let key = h.0 as isize;
+                key != drag.hwnd
+                    && !self.snapped.contains_key(&key)
+                    && winutil::is_snappable(*h, own, &self.exclude)
+                    && !winutil::is_minimized(*h)
+                    && winutil::visible_rect(*h).is_some_and(|r| overlaps(r, target))
+            })
+            .count();
+        (known, loose)
     }
 
     /// `swap_plan`, or why there is no swap.

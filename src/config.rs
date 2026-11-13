@@ -577,6 +577,9 @@ impl Config {
         let mode = if self.restore_session { SignInMode::LastSession } else { SignInMode::Nothing };
         for desk in self.desks.values_mut() {
             desk.sign_in = Some(SignIn { mode, ..SignIn::default() });
+            if mode == SignInMode::Nothing {
+                desk.last_session = None;
+            }
         }
     }
 
@@ -593,11 +596,16 @@ impl Config {
         let mut config: Config = serde_json::from_value(merged)?;
         config.windows.focus_color = palette::normalise(&config.windows.focus_color, palette::FOCUS_DEFAULT);
         config.windows.pin_color = palette::normalise(&config.windows.pin_color, palette::PIN_DEFAULT);
-        // An older client sets the old switch: that is every desk's choice, stated outright.
-        if let Some(on) = patch.get("restore_session").and_then(|v| v.as_bool()) {
+        // An older client changes the old switch: that is every desk's choice, stated outright,
+        // except a desk the same patch gives its own. An unchanged value says nothing.
+        let switched =
+            patch.get("restore_session").and_then(|v| v.as_bool()).filter(|on| *on != self.any_keeps_session());
+        if let Some(on) = switched {
             let mode = if on { SignInMode::LastSession } else { SignInMode::Nothing };
-            for desk in config.desks.values_mut() {
-                desk.sign_in = Some(SignIn { mode, ..desk.choice() });
+            for (sig, desk) in config.desks.iter_mut() {
+                if patch.pointer(&format!("/desks/{}/sign_in", sig.replace('~', "~0").replace('/', "~1"))).is_none() {
+                    desk.sign_in = Some(SignIn { mode, ..desk.choice() });
+                }
             }
         }
         // A desk that stops keeping its session by a change loses the saved one.

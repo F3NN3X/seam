@@ -12,30 +12,25 @@ const SHELL_SETTLE: Duration = Duration::from_secs(10);
 /// The sign-in action of this start, while it's waiting.
 pub(super) struct SignInRun {
     started: Instant,
-    /// The desk at the start. A different one cancels the action.
-    sig: String,
     /// When the taskbar was first seen.
     shell_up: Option<Instant>,
 }
 
 /// The tray started at sign-in: begin the clock for what I chose.
 pub(super) fn begin(app: &mut App) {
-    app.sign_in_run = Some(SignInRun { started: Instant::now(), sig: app.sig.clone(), shell_up: None });
+    app.sign_in_run = Some(SignInRun { started: Instant::now(), shell_up: None });
 }
 
 /// One tick of the sign-in timer, for the mode of this desk. Returns whether that's
 /// settled, done, cancelled or with nothing to do.
 pub(super) fn sign_in_tick(app: &mut App) -> bool {
     let Some(run) = &app.sign_in_run else { return true };
-    if run.sig != app.sig {
-        log::info!("sign-in: the desk changed, so nothing opens");
-        app.sign_in_run = None;
-        return true;
-    }
+    // Screens settle in the first minute, so the desk that is current now is the one that counts.
     let settled = match app.cfg.desks.get(&app.sig).map(Desk::choice) {
         None => waiting(app, "the desk isn't known yet"),
         Some(chosen) => match chosen.mode {
-            SignInMode::Nothing => true,
+            // Another desk may still take its place, so wait out the time.
+            SignInMode::Nothing => run.started.elapsed() >= SIGN_IN_WINDOW,
             SignInMode::LastSession => offer_session(app),
             SignInMode::Workspace => open_workspace(app, &chosen),
         },

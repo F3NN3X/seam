@@ -809,12 +809,12 @@ Set up first: turn on **Start with Windows** and **When I sign in** on General s
 
 Set up first: turn on **Start with Windows** and the debug log. Have at least two workspaces on the desk, and one app that isn't running in the one you choose.
 
-- [ ] **Do nothing.** On a fresh config General shows **When I sign in** as **Do nothing**, and `config.json` has no `sign_in` under the desk. Sign out and in: nothing opens, nothing is offered.
+- [ ] **Do nothing.** On a fresh config General shows **When I sign in** as **Do nothing**, and `config.json` has `"sign_in": {"mode": "nothing", "ask": true}` under each desk Seam has seen. Sign out and in: nothing opens, nothing is offered.
 - [ ] **Offer my last session.** Pick it. **Who reopens the apps** shows, `restore_session` is `true` and the desk has `"sign_in": {"mode": "last_session", "ask": true}`. Sign out and in: the last-session offer shows as before.
 - [ ] **Open a workspace, Ask first on.** Pick **Open a workspace**: a **Workspace** picker and **Ask first** (on) show, **Who reopens the apps** doesn't, and the picker holds this desk's workspaces. Until you choose one the picker says **Choose a workspace** and a sign-in does nothing, and the log says `none is chosen`. Choose one, then sign out and in. A notice "Open <name>? Click to open" shows for up to 3 minutes of retries. Nothing starts or moves until the click, and the click switches as a normal switch (launch settings, stages and Other windows apply). Let it go once: nothing happens.
 - [ ] **Ask first off.** Turn **Ask first** off, sign out and in. About 10 s after the taskbar is up the workspace switches with no notice, and the log says `switching to workspace <name>`.
 - [ ] **Deleted workspace.** Choose a workspace, delete it on Workspaces, sign out and in. Nothing opens, Seam retries for 3 minutes, and the log then has one `sign-in workspace: gave up after 3 minutes, the workspace isn't on this desk` line.
-- [ ] **Other desk.** Unplug to a desk that doesn't have that workspace and sign out and in. The same, and a click on an old notice after switching desks logs `the desk changed` and does nothing.
+- [ ] **Other desk.** Unplug to a desk that doesn't have that workspace and sign out and in. The same. Switching desks within the first minute makes the new desk's choice count, and a click on a notice made for another desk logs `the desk changed` and does nothing.
 - [ ] **By hand.** Quit Seam and start it from the Start menu, or `seam.exe --updated-from x`: nothing opens and nothing is offered, in every mode.
 - [ ] **Full-screen app.** With Ask first off, have a full-screen video in front at sign-in. Nothing opens until you leave it, then the workspace switches.
 - [ ] **Paused.** Pause Seam from the tray right after sign-in, before the switch: the log says `Seam was paused, so nothing opens` at once, and resuming does not open it. With Ask first on, pause after the notice shows and click it: nothing switches.

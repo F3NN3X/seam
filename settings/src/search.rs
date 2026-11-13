@@ -180,6 +180,12 @@ const ENTRIES: &[Entry] = &[
     ),
     entry(
         Page::Zones,
+        "Move and resize from anywhere in a window",
+        "Hold Alt and drag to move, or right-drag to resize",
+        "alt drag altsnap winscreen move resize anywhere win key right-drag",
+    ),
+    entry(
+        Page::Zones,
         "When a window moves to another screen",
         "Let Windows scale it, keep its pixel size or keep its real size",
         "size pixels scale scaling dpi real move screen",

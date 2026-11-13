@@ -8,6 +8,8 @@
 use seam::{config, desk, ease, geom, hotkey, layout, log, monitors, tray};
 
 #[cfg(windows)]
+mod altdrag;
+#[cfg(windows)]
 mod api_server;
 #[cfg(windows)]
 mod app;

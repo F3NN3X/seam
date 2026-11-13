@@ -233,6 +233,17 @@ pub struct WindowSettings {
     /// "Pinned windows stay when I switch workspaces": a switch leaves a window
     /// pinned on top alone, as it does a sticky one. Capture still saves it.
     pub pins_stay_on_switch: bool,
+    /// "Move and resize from anywhere in a window".
+    pub alt_drag: AltDrag,
+}
+
+/// Hold a key and drag anywhere in a window to move it, or right-drag to resize it.
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default)]
+pub struct AltDrag {
+    pub on: bool,
+    /// "alt", "win" or "ctrl_alt". Anything else reads as "alt".
+    pub key: String,
 }
 
 impl Default for WindowSettings {
@@ -244,6 +255,7 @@ impl Default for WindowSettings {
             pin_color: palette::PIN_DEFAULT.into(),
             notify_pinned_close: false,
             pins_stay_on_switch: false,
+            alt_drag: AltDrag { on: false, key: "alt".into() },
         }
     }
 }

@@ -226,6 +226,9 @@ pub const TOPICS: &[Topic] = &[
                 "**When a window moves to another screen**, on the Zones page, sets the size a window gets there: **Let Windows scale it**, **Keep its pixel size** or **Keep its real size**. **Also when I drag a window to another screen** does the same for a window you drop with the mouse.",
             ),
             Text(
+                "**Move and resize from anywhere in a window**, on the Zones page, lets you hold Alt and drag anywhere in a window to move it, or right-drag to resize it from the nearest edge or corner. A maximized window comes back to its normal size under the pointer. Hold the show key as well and the window snaps into zones as with any drag. Some apps use Alt+click themselves, such as VS Code for an extra cursor, so you can pick Win or Ctrl+Alt as the key instead. Full-screen apps, excluded apps and apps running as administrator get the click as usual.",
+            ),
+            Text(
                 "Seam leaves alone the windows of apps running as administrator, windows that aren't responding, and its own.",
             ),
             Text(

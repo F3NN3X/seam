@@ -372,6 +372,21 @@ pub fn drag_key(vk: u32, generation: u64) {
     with_engine(|e| e.drag_key(vk, generation));
 }
 
+/// A drag from anywhere in a window (`altdrag`) started or ended. It is a drag like
+/// any other from here on. Its press never reached Windows, so only its end counts.
+pub fn alt_drag(hwnd: HWND, started: bool) {
+    with_engine(|e| {
+        if !started {
+            e.drag_end(hwnd);
+            return;
+        }
+        e.drag_start(hwnd);
+        if let Some(drag) = e.drag.as_mut() {
+            drag.button = None;
+        }
+    });
+}
+
 /// Move the foreground window to the next or previous zone, across screens.
 pub fn move_foreground(next: bool) -> Result<(), String> {
     with_engine(|e| e.move_foreground(next)).unwrap_or_else(|| Err("Seam is busy, try again".into()))

@@ -101,6 +101,11 @@ jobs:
         shell: bash
         run: echo "SEAM_BUILD=${GITHUB_SHA::7}" >> "$GITHUB_ENV"
 
+      # The runner image can lag a Rust release by weeks, and Cargo.toml asks
+      # for 1.100, so take the newest stable first.
+      - name: Latest stable Rust
+        run: rustup update stable --no-self-update
+
       - run: cargo build --release --workspace
 
       # A cross build on this x64 runner. ring compiles for ARM64 with clang only,

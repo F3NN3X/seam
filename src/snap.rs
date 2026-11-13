@@ -124,6 +124,9 @@ struct Drag {
     keys: dragkeys::Steer,
     /// Pause to snap: where the pointer came to rest, where it was last tick, and since when.
     rest: Option<(POINT, POINT, Instant)>,
+    /// The other windows a drop could swap with, topmost first, and where each was
+    /// when the drag began: one look at the windows, for every preview.
+    others: Vec<(isize, Rect)>,
     /// The pointer rested, so zones show as if the show key were held.
     paused: bool,
 }
@@ -601,12 +604,13 @@ impl Engine {
         // Moves still waiting land now, where they were going, and are recorded there:
         // dropping them left a swap half done, its other window still in its old zone
         // under the dropped one, and the snapping's records no longer what is on screen.
-        // The dragged window's own is dropped, as the drag takes it.
-        for p in std::mem::take(&mut self.queued) {
-            if p.hwnd != key {
-                self.place_queued(p);
-            }
-        }
+        // The dragged window's own is dropped, as the drag takes it. Each is only
+        // posted, so a slow app can't hold up the drag.
+        let landed: Vec<(isize, Rect)> = std::mem::take(&mut self.queued)
+            .into_iter()
+            .filter(|p| p.hwnd != key)
+            .filter_map(|p| self.land_now(p))
+            .collect();
         let wanted = self.active() || self.drags_sized();
         if !wanted || !winutil::is_snappable(hwnd, std::process::id(), &self.exclude) {
             return;
@@ -639,6 +643,7 @@ impl Engine {
         let old_zone =
             if geometry.is_empty() { zone.clone() } else { self.zones_held(&geometry, frame, was_maximized) };
         let edges = self.edges_start(hwnd, &geometry, (zone, stamped), was_maximized);
+        let others = if geometry.is_empty() { Vec::new() } else { self.snapshot(key, &landed) };
         // The handles stay out of the way of any drag, and come back at its end.
         dividers::hide();
         self.drag = Some(Drag {
@@ -659,6 +664,7 @@ impl Engine {
             keys: dragkeys::Steer::default(),
             rest: None,
             paused: false,
+            others,
         });
     }
 
@@ -842,6 +848,10 @@ impl Engine {
             log::info!("drag keys: {}", drag.keys.used.join(", "));
         }
         let hwnd = hwnd_of(drag.hwnd);
+        let mut drag = drag;
+        if dropped {
+            self.refresh(&mut drag);
+        }
         self.finish_drag(&drag, dropped, hwnd);
         self.sync_dividers();
         // A re-fit that had to wait for this drag can go now.
@@ -1015,6 +1025,31 @@ impl Engine {
             let Some(p) = self.queued.pop_front() else { break };
             self.place_queued(p);
         }
+    }
+
+    /// One of window control's moves, posted at once without the steps between, and
+    /// recorded where it goes. Returns the window and its frame's new place.
+    fn land_now(&mut self, p: Placement) -> Option<(isize, Rect)> {
+        let h = hwnd_of(p.hwnd);
+        if !unsafe { IsWindow(Some(h)) }.as_bool() {
+            return None;
+        }
+        let window = winutil::window_rect(h)?;
+        let visible = winutil::visible_rect(h).unwrap_or(window);
+        let r = zones::frame_adjust(p.target, window, visible);
+        let size = if winutil::is_resizable(h) { SWP_NOACTIVATE } else { SWP_NOACTIVATE | SWP_NOSIZE };
+        unsafe {
+            let _ = SetWindowPos(h, None, r.x, r.y, r.w, r.h, SWP_ASYNCWINDOWPOS | SWP_NOZORDER | size);
+        }
+        let geometry = self.geometry();
+        match p.zone.and_then(|(id, from, to)| Some((geometry.iter().find(|g| g.id == id)?, from, to))) {
+            Some((g, from, to)) if to < g.zones.len() => {
+                self.keep_snapped(p.hwnd, &g.id, (from, to), p.target);
+                winutil::stamp_zones(h, &refit::covered(&g.cells, from, to));
+            }
+            _ => self.unsnap(h, winutil::has_zone_stamp(h)),
+        }
+        Some((p.hwnd, p.target))
     }
 
     /// Start one of window control's moves, recorded where it goes: snapped in its

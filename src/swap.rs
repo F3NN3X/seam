@@ -55,10 +55,11 @@ fn area(r: Rect) -> i64 {
     i64::from(r.w.max(0)) * i64::from(r.h.max(0))
 }
 
-/// At least half of `r` inside `span`, and covering at least half of it.
+/// At least 60% of `r` inside `span`, and covering at least 60% of it, so a window
+/// over two zones isn't taken for one of them.
 fn fits_mutually(r: Rect, span: Rect) -> bool {
     let shared = shared_area(r, span);
-    area(r) > 0 && area(span) > 0 && 2 * shared >= area(r) && 2 * shared >= area(span)
+    area(r) > 0 && area(span) > 0 && 5 * shared >= 3 * area(r) && 5 * shared >= 3 * area(span)
 }
 
 /// The area `a` and `b` have in common.
@@ -102,26 +103,73 @@ impl Engine {
         }
     }
 
-    /// Every visible top-level window but the dragged one and Seam's own that fits
-    /// the target, snapped or not: at least half of it inside the target and covering
-    /// at least half of it, or the same with one of the target's zones.
+    /// The windows from the drag's look at the screen that fit the target, snapped or
+    /// not, or one of the target's zones: the topmost for each, as the ones under it
+    /// can't be seen. One that can't be moved is passed over, unless the snapping put
+    /// it there, which leaves the drop as it always was.
     fn held_in(&self, drag: &Drag, g: &Placed, target: Rect) -> Result<Vec<(HWND, Rect)>, Skip> {
-        let inner: Vec<Rect> = g.zones.iter().copied().filter(|z| shared_area(*z, target) == area(*z)).collect();
-        let fits = |r: Rect| fits_mutually(r, target) || inner.iter().any(|z| fits_mutually(r, *z));
-        let own = std::process::id();
+        let inner = g.zones.iter().copied().filter(|z| shared_area(*z, target) == area(*z));
+        let spans: Vec<Rect> = std::iter::once(target).chain(inner).collect();
+        let mut taken = vec![false; spans.len()];
         let mut occupants = Vec::new();
-        for h in winutil::top_level_windows() {
-            if h.0 as isize == drag.hwnd || !winutil::is_snappable(h, own, &[]) {
+        for &(key, r) in &drag.others {
+            let Some(i) = spans.iter().position(|s| fits_mutually(r, *s)) else { continue };
+            if std::mem::replace(&mut taken[i], true) {
                 continue;
             }
-            let Some(r) = winutil::visible_rect(h).filter(|r| fits(*r)) else { continue };
-            wincontrol::movable(h, &self.exclude).map_err(|_| Skip::Refused)?;
+            let h = hwnd_of(key);
+            if wincontrol::movable(h, &self.exclude).is_err() {
+                let placed = self.snapped.get(&key).is_some_and(|s| {
+                    s.screen == g.id
+                        && s.from.max(s.to) < g.zones.len()
+                        && overlaps(zones::span(g.zones[s.from], g.zones[s.to]), target)
+                });
+                if placed {
+                    return Err(Skip::Refused);
+                }
+                continue;
+            }
             occupants.push((h, r));
         }
         if occupants.is_empty() {
             return Err(Skip::NoOccupants);
         }
         Ok(occupants)
+    }
+
+    /// The look at the screen a drag starts with: every window a drop could swap
+    /// with, topmost first, and where each is. `landed` were just sent elsewhere.
+    pub(super) fn snapshot(&self, dragged: isize, landed: &[(isize, Rect)]) -> Vec<(isize, Rect)> {
+        let started = log::enabled().then(Instant::now);
+        let own = std::process::id();
+        let list: Vec<(isize, Rect)> = winutil::top_level_windows()
+            .into_iter()
+            .filter(|h| h.0 as isize != dragged && winutil::is_snappable(*h, own, &self.exclude))
+            .filter_map(|h| {
+                let key = h.0 as isize;
+                let at = landed.iter().find(|(k, _)| *k == key).map(|(_, r)| *r);
+                Some((key, at.or_else(|| winutil::visible_rect(h))?))
+            })
+            .collect();
+        if let Some(started) = started {
+            let us = started.elapsed().as_secs_f64() * 1e6;
+            log::info!("zone swap: looked at {} windows at drag start in {us:.0}us", list.len());
+        }
+        list
+    }
+
+    /// At the drop: where the windows on the screen it was dropped on are now, as
+    /// they may have moved during the drag. Only those few are read again.
+    pub(super) fn refresh(&self, drag: &mut Drag) {
+        let Some(view) = drag.shown else { return };
+        let bounds = drag.geometry[view.screen].bounds;
+        for (key, r) in drag.others.iter_mut() {
+            if overlaps(*r, bounds) {
+                if let Some(now) = winutil::visible_rect(hwnd_of(*key)) {
+                    *r = now;
+                }
+            }
+        }
     }
 
     /// The zones the dragged window was in when the drag began, from where it was:
@@ -151,10 +199,7 @@ impl Engine {
     pub(super) fn audit(&self, drag: &Drag, screen: usize, (a, b): (usize, usize)) {
         let g = &drag.geometry[screen];
         let target = zones::span(g.zones[a], g.zones[b]);
-        let started = Instant::now();
         let found = self.held_in(drag, g, target);
-        let us = started.elapsed().as_secs_f64() * 1e6;
-        log::info!("zone swap: looked at the windows on screen in {us:.0}us");
         let record = |key: isize| self.snapped.get(&key).map(|s| (s.screen == g.id, s.from, s.to, s.at));
         let had = record(drag.hwnd).map(|(_, f, t, at)| (f, t, at));
         let shows = drag.old_zone.as_ref().map(|(_, f, t)| (*f, *t));

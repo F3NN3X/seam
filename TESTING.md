@@ -329,6 +329,23 @@ Pick Columns on screen 1 with the gap at 8 px. Turn on the debug log.
 - [ ] **Zones off.** Turn zones off, or turn off **Handles between snapped windows**, or turn on **Another window manager handles my windows**: every handle goes. Turn it back: they come back.
 - [ ] **Administrator neighbour.** Snap Task Manager running as administrator beside Notepad: no handle between them.
 
+### Snap beside a window
+
+Columns on screen 1 and no layout on screen 2, gap 8 px, **Snap beside a window** on. Turn on the debug log.
+
+- [ ] **Beside on a layout screen, split and Undo.** Snap Notepad into the middle zone. Drag a browser with Shift and point at the inner 15% of Notepad's right edge: the right half of the middle zone lights amber and a grey outline shows Notepad in the left half. Let go: the browser takes the right half, Notepad the left, the Zones page shows Changed, a "Split the zone" notice offers Undo, and the log has one `snap beside: zone split on screen 1, 1/2 Right` line. Click the notice within 8 s: the layout and both windows go back. A window that holds no zone (dragged loose over two zones): pointing at its edge splits the zone under the pointer instead.
+- [ ] **Beside on a no-layout screen.** On screen 2, drag a browser with Shift onto the left edge band of Notepad: an amber outline shows the browser in Notepad's left half, a grey one Notepad in its right half. Let go: the two share Notepad's old place with an 8 px gap, and the log has `snap beside: ad-hoc group on screen 2, 1/2 Left, 2 windows`. Nothing is written to `config.json`.
+- [ ] **Edge resize together.** Drag Notepad's left edge (the one beside the browser): the browser follows live. Let go: both stay side by side.
+- [ ] **Handles.** Hover the gap between the two: the slim bar shows. Drag it: both follow. Right-click it: no menu.
+- [ ] **A third window.** Drop a third window on the bottom edge band of the browser: the browser takes the top half of its place, the third window the bottom, and the log says 3 windows. Dragging the edge between Notepad and the other two moves both of them.
+- [ ] **Leaving the group.** Drag the third window away: it leaves, the browser grows back over its room, and the log says 2 stay. Minimize the browser and start a drag of Notepad's edge: it is resized on its own, as the group is gone. Close or maximize a member, or drag the outer edge of the group: the same, and the log says so. Restart Seam: no groups are left.
+- [ ] **The wheel share.** While pointing at an edge band, scroll the wheel down: the outline steps from 1/2 to 1/3 to 2/3 and stops; up steps back. 1, 2 and 3 do the same. Tab and the arrows change nothing there.
+- [ ] **The middle of a zone still swaps.** On screen 1, drop a window in the middle of the zone Notepad holds: they swap as before (#78). Only the edge band splits.
+- [ ] **Fit group to screen.** Record a key for **Fit group to screen**. Press it on a member of the group on screen 2: the group stretches over the work area with the same shares and order, a notice offers Undo, and clicking it puts the windows back. Press it on Notepad snapped on screen 1: a notice says "Already fills its screen". Press it on a loose window: it fills the work area without being maximized, with Undo. `window.fit` with `{}` and with `hwnd` does the same, answering error 3 with the reason.
+- [ ] **While paused.** Pause Seam: an edge band does nothing during a Shift drag, and the Fit key is given back to the app. `window.fit` still works. Resume: snap beside works again.
+- [ ] **An elevated window.** Point at the edge of Task Manager running as administrator: no beside outline, the zones show as usual. A group member that runs as administrator stops Fit with the reason.
+- [ ] **Turned off.** Turn off **Snap beside a window**: an edge band shows the zones as usual and nothing groups. Search for "beside" finds the row, and "fit" finds the shortcut.
+
 ## Pin, border and Release all
 
 Set up first: record keys for **Pin window on top**, **Keep window out of workspace switches** and **Release pinned windows** on Shortcuts. Turn on the debug log.

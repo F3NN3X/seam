@@ -95,6 +95,7 @@ fn caption(action: &str) -> Option<&'static str> {
         "quick_layout" => Some("Pick this screen's layout from the keyboard"),
         "divider_menu" => Some("Share or take out the focused snapped window"),
         "pause_seam" => Some("Pause or resume everything Seam does"),
+        "fit_group" => Some("Stretch the focused window's group to fill its screen"),
         _ => None,
     }
 }
@@ -180,6 +181,7 @@ pub fn render(panel: &mut Panel, _: &mut Window, cx: &mut Context<Panel>) -> imp
         row("Tile this screen's windows", "tile_screen", keys.tile_screen.as_ref(), 920),
         row("Quick layout", "quick_layout", keys.quick_layout.as_ref(), 930),
         row("Size menu", "divider_menu", keys.divider_menu.as_ref(), 940),
+        row("Fit group to screen", "fit_group", keys.fit_group.as_ref(), 960),
     ]);
     window_rows.extend([
         row("Pin window on top", "pin_top", keys.pin_top.as_ref(), 17),

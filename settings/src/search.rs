@@ -137,6 +137,12 @@ const ENTRIES: &[Entry] = &[
     ),
     entry(
         Page::Zones,
+        "Snap beside a window",
+        "Drop on a window's edge to put the two side by side",
+        "beside next to edge pair group split half side by side ad-hoc",
+    ),
+    entry(
+        Page::Zones,
         "Pause to snap",
         "Hold still while dragging to show zones, no key needed",
         "pause rest hold still wait drag show zones without key",
@@ -284,6 +290,12 @@ const ENTRIES: &[Entry] = &[
         "Size menu",
         "Share or take out the focused snapped window",
         "hotkey keyboard divider share half third quarter take out zone resize",
+    ),
+    entry(
+        Page::Shortcuts,
+        "Fit group to screen",
+        "Stretch the focused window's group to fill its screen",
+        "hotkey keyboard fit fill stretch group beside work area full screen",
     ),
     entry(Page::Shortcuts, "Pin window on top", "Global shortcut", "hotkey keyboard topmost always"),
     entry(Page::Shortcuts, "Keep window out of workspace switches", "Global shortcut", "hotkey keyboard sticky pin"),

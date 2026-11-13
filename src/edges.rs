@@ -149,6 +149,8 @@ pub(super) struct Edges {
     to: usize,
     /// The divider along its left, right, top and bottom, or None at the screen's edge.
     sides: [Option<Edge>; 4],
+    /// The ad-hoc group it is in, rather than a screen's zones.
+    adhoc: Option<u64>,
     /// None until the worker answers. Until then the drag is a hand resize.
     group: Option<Group>,
     /// The window rect the last tick solved for, and the layout it gave.
@@ -219,15 +221,21 @@ struct Ask {
     dpi: u32,
     known: Vec<Zoned>,
     exclude: Vec<String>,
+    /// The members when they are known already, the dragged window first: an ad-hoc group's.
+    given: Option<Vec<(isize, usize, usize)>>,
 }
 
 impl Ask {
     /// The members, as grow and shrink find them, and the minimums. A neighbour that
     /// is hung or runs as administrator can't follow, so it stays out.
-    fn run(self) {
+    fn run(mut self) {
         let first = (hwnd_of(self.hwnd), self.from, self.to);
-        let list =
-            wincontrol::group_members(first, &self.screen, self.bounds, &self.placed, &self.known, &self.exclude);
+        let list = match self.given.take() {
+            Some(given) => given.into_iter().map(|(h, from, to)| (hwnd_of(h), from, to)).collect(),
+            None => {
+                wincontrol::group_members(first, &self.screen, self.bounds, &self.placed, &self.known, &self.exclude)
+            }
+        };
         let mins = wincontrol::group_mins(&self.tree, self.work, self.gap, self.dpi, &list);
         let member = |(h, from, to): (HWND, usize, usize)| {
             Member::of(h, from, to, zones::span(self.placed[from], self.placed[to]))
@@ -274,17 +282,9 @@ impl Engine {
         if from > to || to >= g.zones.len() {
             return None;
         }
-        let leaves = refit::covered(&g.cells, from, to);
-        let sides = [Side::Left, Side::Right, Side::Top, Side::Bottom]
-            .map(|side| groups::edge_of(&layout.tree, g.work, &leaves, side));
-        // A window alone on its screen has no neighbours to follow it.
-        if sides.iter().all(Option::is_none) {
-            return None;
-        }
         let gap = (self.settings.gap.min(MAX_GAP) as f32 * g.dpi as f32 / 96.0).round() as i32;
-        let id = NEXT.fetch_add(1, Ordering::Relaxed);
         let ask = Ask {
-            id,
+            id: 0,
             hwnd: hwnd.0 as isize,
             from,
             to,
@@ -297,26 +297,73 @@ impl Engine {
             dpi: g.dpi,
             known: self.zoned(),
             exclude: self.exclude.clone(),
+            given: None,
+        };
+        self.follow(ask, layout.template, None)
+    }
+
+    /// A drag began on a window in an ad-hoc group: its members follow it the same
+    /// way, over the group's area, and the worker is told who they are.
+    pub(super) fn adhoc_edges_start(&self, hwnd: HWND, was_maximized: bool) -> Option<Edges> {
+        if !self.active() || !self.settings.resize_neighbours || was_maximized || !winutil::is_resizable(hwnd) {
+            return None;
+        }
+        let key = hwnd.0 as isize;
+        let (i, leaf) = self.adhoc_of(key)?;
+        let a = &self.adhoc[i];
+        let dpi = self.screens.iter().find(|s| s.id == a.screen).and_then(|s| work_area(s.bounds))?.1;
+        let mut given = vec![(key, leaf, leaf)];
+        given.extend(a.members.iter().filter(|(k, _)| *k != key).map(|(k, l)| (*k, *l, *l)));
+        let ask = Ask {
+            id: 0,
+            hwnd: key,
+            from: leaf,
+            to: leaf,
+            screen: a.key(),
+            bounds: a.area,
+            placed: a.cells(),
+            tree: a.tree.clone(),
+            work: a.area,
+            gap: a.gap,
+            dpi,
+            known: Vec::new(),
+            exclude: self.exclude.clone(),
+            given: Some(given),
+        };
+        self.follow(ask, Template::Custom, Some(a.id))
+    }
+
+    /// The dividers along the window's sides, and a worker to find who follows them.
+    /// None when no side has one: a window alone has no neighbours to follow it.
+    fn follow(&self, mut ask: Ask, template: Template, adhoc: Option<u64>) -> Option<Edges> {
+        let leaves = refit::covered(&zones::rects(&ask.tree, ask.work, 0), ask.from, ask.to);
+        let sides = [Side::Left, Side::Right, Side::Top, Side::Bottom]
+            .map(|side| groups::edge_of(&ask.tree, ask.work, &leaves, side));
+        if sides.iter().all(Option::is_none) {
+            return None;
+        }
+        ask.id = NEXT.fetch_add(1, Ordering::Relaxed);
+        let edges = Edges {
+            id: ask.id,
+            screen: ask.screen.clone(),
+            template,
+            tree: ask.tree.clone(),
+            area: ask.work,
+            gap: ask.gap,
+            from: ask.from,
+            to: ask.to,
+            sides,
+            adhoc,
+            group: None,
+            solved: None,
+            ticks: 0,
+            longest: Duration::ZERO,
         };
         if std::thread::Builder::new().name("seam-edges".into()).spawn(move || ask.run()).is_err() {
             log::info!("zone edges: couldn't start the worker");
             return None;
         }
-        Some(Edges {
-            id,
-            screen: g.id.clone(),
-            template: layout.template,
-            tree: layout.tree,
-            area: g.work,
-            gap,
-            from,
-            to,
-            sides,
-            group: None,
-            solved: None,
-            ticks: 0,
-            longest: Duration::ZERO,
-        })
+        Some(edges)
     }
 
     /// The resize is over, or `ended` is false because it was cut short while Windows
@@ -338,6 +385,7 @@ impl Engine {
         if !ended {
             group.restore();
             self.unsnap(hwnd, drag.stamped);
+            self.leave_adhoc(drag.hwnd);
             return true;
         }
         let now = winutil::window_rect(hwnd);
@@ -353,11 +401,18 @@ impl Engine {
         for m in members {
             let at = zones::span(placed[m.from], placed[m.to]);
             m.land(at);
-            self.keep_snapped(m.hwnd, &edges.screen, (m.from, m.to), at);
+            if edges.adhoc.is_none() {
+                self.keep_snapped(m.hwnd, &edges.screen, (m.from, m.to), at);
+            }
         }
         // The usual placement, which also takes back any overshoot past a neighbour's minimum.
         let at = zones::span(placed[edges.from], placed[edges.to]);
         self.place(hwnd, at, false, false);
+        // An ad-hoc group keeps its tree in memory, and nothing is saved.
+        if let Some(id) = edges.adhoc {
+            self.adhoc_set_tree(id, tree);
+            return true;
+        }
         self.keep_snapped(drag.hwnd, &edges.screen, (edges.from, edges.to), at);
         if tree != edges.tree {
             wincontrol::save_layout(self.owner, edges.screen.clone(), groups::relabel(edges.template, tree));

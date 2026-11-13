@@ -92,6 +92,7 @@ pub(super) fn tile_finished(app: &mut App, result: Option<Result<wincontrol::til
                 changed: done.changed,
                 back: done.back,
                 keep: done.keep,
+                group: None,
                 until,
             });
             // With the overlay up, Ctrl+Z is the undo, and a notice would only get in its way.
@@ -286,5 +287,49 @@ pub(super) fn undo_tile(app: &mut App) {
             .is_some_and(|r| near(r.x, set.x) && near(r.y, set.y) && (!sized || (near(r.w, set.w) && near(r.h, set.h))))
     };
     snap::place_more(undo.back.into_iter().filter(here).map(|b| b.place).collect());
+    if let Some((id, area)) = undo.group {
+        snap::adhoc_area(id, area);
+    }
     log::info!("tile screen: undone");
+}
+
+/// Fit group to screen, for a window or the focused one: an ad-hoc group stretches
+/// over its screen's work area, a loose window takes the work area, and a window in
+/// zones fills its screen already. A notice offers Undo, as a tile's does; a key
+/// hears of a refusal in a notice too.
+pub(super) fn fit_group(app: &mut App, hwnd: Option<isize>, reply: Option<Sender<Reply>>) {
+    let hwnd = hwnd.map_or_else(|| unsafe { GetForegroundWindow() }, |h| HWND(h as *mut _));
+    let fitted = match aside(app).map_or_else(|| snap::fit(hwnd), Err) {
+        Ok(fitted) => fitted,
+        Err(why) => {
+            log::info!("fit group: {why}");
+            match reply {
+                Some(tx) => {
+                    let _ = tx.send(refused(why));
+                }
+                None => {
+                    notify(app, "Fit group to screen", &why, BalloonAction::None);
+                }
+            }
+            return;
+        }
+    };
+    let n = fitted.back.len();
+    let windows = if n == 1 { "window" } else { "windows" };
+    let title = format!("Fitted {n} {windows} to screen {}", fitted.number);
+    app.tile_undo = Some(TileUndo {
+        sig: app.sig.clone(),
+        screen: fitted.screen,
+        changed: None,
+        back: fitted.back,
+        keep: Vec::new(),
+        group: fitted.group,
+        until: Instant::now() + QUICK_UNDO_FOR,
+    });
+    if !quicklayout::is_open() {
+        notify(app, &title, "Click to undo", BalloonAction::UndoTile);
+    }
+    if let Some(tx) = reply {
+        let _ = tx.send(Ok(json!({ "ok": true })));
+    }
 }

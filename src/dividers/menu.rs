@@ -28,6 +28,10 @@ impl State {
     fn handle_items(&self, hwnd: HWND) -> Option<(Vec<Item>, isize)> {
         let h = self.handles.get(self.handle(hwnd).filter(|_| self.drag.is_none())?)?;
         let scene = self.scene.as_ref()?;
+        // Shares and Take out work on a screen's zones, so an ad-hoc group's handle has no menu.
+        if scene.screens.get(h.spot.screen).is_none_or(|s| crate::snap::is_adhoc(&s.id)) {
+            return None;
+        }
         let (a, b) = (h.spot.a.0, h.spot.b.0);
         let (axis, side, sides) = match h.spot.dir {
             Dir::Vertical => (Axis::Width, Side::Right, ("Left", "right", "left")),

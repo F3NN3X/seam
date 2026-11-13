@@ -874,7 +874,7 @@ pub fn render(panel: &mut Panel, window: &mut Window, cx: &mut Context<Panel>) -
     });
     let hints_row = row(
         "Show keys while dragging",
-        Some("A strip on the screen lists what Tab, 1, 2, 3 and Esc do".into()),
+        Some("A strip on the screen names the wheel, right-click and the keys".into()),
         hints,
         p,
     );

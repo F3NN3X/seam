@@ -1,9 +1,11 @@
-//! Keys while a snap drag is moving: Tab, 1, 2, 3, 0, the arrows and Esc steer
-//! where the window lands. A low-level keyboard hook on a thread of its own, put in
-//! when a drag first shows zones and taken out when it ends, or after a minute
-//! whatever happens (the D204 pattern). It swallows only those keys, only while
-//! zones show, and does nothing but post each one to the tray. The snapping works
-//! out what a key means on the main thread. Every other key passes through.
+//! Keys and the mouse wheel while a snap drag is moving: the wheel, Tab, 1, 2, 3, 0
+//! and the arrows steer where the window lands, and Esc or the other mouse button
+//! drops it without a zone. Low-level keyboard and mouse hooks on a thread of their
+//! own, put in when a drag first shows zones and taken out when it ends, or after a
+//! minute whatever happens (the D204 pattern). They swallow only those keys, the
+//! wheel and the other button, only while zones show, and do nothing but post each
+//! one to the tray. The snapping works out what it means on the main thread.
+//! Every other key, the drag's own button and every move pass through.
 
 use crate::log;
 use seam::groups::Side;
@@ -28,6 +30,13 @@ static CTRL_OK: AtomicBool = AtomicBool::new(false);
 static ALT_OK: AtomicBool = AtomicBool::new(false);
 /// Keys whose press was swallowed, so their release is too, and a repeat posts nothing.
 static DOWN: [AtomicBool; 256] = [const { AtomicBool::new(false) }; 256];
+/// The left and right mouse buttons, when their press was swallowed.
+static BUTTONS: [AtomicBool; 2] = [const { AtomicBool::new(false) }; 2];
+
+/// What the mouse hook posts in place of a virtual-key code, past every real one.
+const WHEEL_NEXT: u32 = 0x1001;
+const WHEEL_BACK: u32 = 0x1002;
+const OTHER_BUTTON: u32 = 0x1003;
 
 thread_local! {
     /// The generation of the hook on this thread.
@@ -77,10 +86,22 @@ pub enum Key {
     Side(Side),
     /// Esc: this drop doesn't snap.
     Cancel,
+    /// The wheel: the next step of whole zone, 1/2, 1/3, 2/3, zone and neighbour,
+    /// whole screen, or the one before.
+    Scroll(bool),
+    /// The other mouse button: this drop doesn't snap.
+    Button,
 }
 
-/// The keys a drag takes, by virtual-key code.
+/// The keys a drag takes, by virtual-key code, and what the mouse hook posts.
 pub fn key_of(vk: u32) -> Option<Key> {
+    match vk {
+        WHEEL_NEXT => return Some(Key::Scroll(true)),
+        WHEEL_BACK => return Some(Key::Scroll(false)),
+        OTHER_BUTTON => return Some(Key::Button),
+        0x100.. => return None,
+        _ => {}
+    }
     let vk = VIRTUAL_KEY(vk as u16);
     Some(match vk {
         VK_TAB => Key::Next,
@@ -108,6 +129,8 @@ pub fn name(key: Key) -> &'static str {
         Key::Side(Side::Top) => "Up",
         Key::Side(Side::Bottom) => "Down",
         Key::Cancel => "Esc",
+        Key::Scroll(_) => "Wheel",
+        Key::Button => "Right-click",
     }
 }
 
@@ -129,6 +152,8 @@ pub struct Steer {
     pub capped: bool,
     /// The screen and zone Tab's choice is for. Another zone starts again from the zone itself.
     pub cycle_at: Option<(usize, usize)>,
+    /// The screen and zone an arrow picked the side in. Another zone follows the pointer again.
+    pub side_at: Option<(usize, usize)>,
     /// The keys pressed, each once, for the log.
     pub used: Vec<&'static str>,
 }
@@ -173,10 +198,7 @@ fn neighbour(cells: &[Rect], zone: usize, c: Rect, (x, y): (i32, i32)) -> Option
         Side::Top => [(x, c.y - 1), (c.x + c.w / 2, c.y - 1)],
         Side::Bottom => [(x, c.y + c.h), (c.x + c.w / 2, c.y + c.h)],
     };
-    order
-        .into_iter()
-        .flat_map(probes)
-        .find_map(|(px, py)| zones::zone_at(cells, px, py).filter(|n| *n != zone))
+    order.into_iter().flat_map(probes).find_map(|(px, py)| zones::zone_at(cells, px, py).filter(|n| *n != zone))
 }
 
 /// The side of `r` nearest the point.
@@ -186,22 +208,8 @@ pub fn nearest_side(r: Rect, (x, y): (i32, i32)) -> Side {
     sides.into_iter().min_by_key(|(d, _)| *d).map_or(Side::Left, |(_, side)| side)
 }
 
-/// The strip's text: the keys that do something now.
-pub fn hint(back: bool, tab: bool, cut: bool) -> String {
-    let mut items = Vec::new();
-    if tab {
-        items.push("Tab next");
-        if back {
-            items.push("Shift+Tab back");
-        }
-    }
-    items.extend(["1 half", "2 third", "3 two thirds", "0 whole"]);
-    if cut {
-        items.push("Arrows side");
-    }
-    items.push("Esc don't snap");
-    items.join("  ")
-}
+/// The strip's text.
+pub const HINT: &str = "Scroll to change  Right-click don't snap  Tab/1/2/3/0/Esc";
 
 /// Swallow the drag's keys while zones show, and post each press to the tray.
 /// A release is swallowed only when its press was. A press with Ctrl, Alt or Win
@@ -234,6 +242,44 @@ unsafe extern "system" fn key_proc(code: i32, wparam: WPARAM, lparam: LPARAM) ->
     CallNextHookEx(None, code, wparam, lparam)
 }
 
+/// Swallow the wheel and the other button's press and release while zones show,
+/// and post each turn or press to the tray. The button held for the drag was down
+/// before the hook went in, so a press seen now is always the other one. A release
+/// is swallowed only when its press was. Moves are let through at once.
+unsafe extern "system" fn mouse_proc(code: i32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
+    let msg = wparam.0 as u32;
+    if code >= 0 && msg != WM_MOUSEMOVE {
+        let button = match msg {
+            WM_LBUTTONDOWN | WM_LBUTTONUP => Some(&BUTTONS[0]),
+            WM_RBUTTONDOWN | WM_RBUTTONUP => Some(&BUTTONS[1]),
+            _ => None,
+        };
+        if matches!(msg, WM_LBUTTONUP | WM_RBUTTONUP) && button.is_some_and(|b| b.swap(false, Ordering::Relaxed)) {
+            return LRESULT(1);
+        }
+        let live = LIVE.load(Ordering::Relaxed);
+        if live != 0 && live == MINE.get() {
+            let what = match msg {
+                WM_MOUSEWHEEL => {
+                    let info = &*(lparam.0 as *const MSLLHOOKSTRUCT);
+                    let delta = (info.mouseData >> 16) as u16 as i16;
+                    Some(if delta < 0 { WHEEL_NEXT } else { WHEEL_BACK })
+                }
+                WM_LBUTTONDOWN | WM_RBUTTONDOWN => {
+                    button.filter(|b| !b.swap(true, Ordering::Relaxed)).map(|_| OTHER_BUTTON)
+                }
+                _ => None,
+            };
+            if let Some(what) = what {
+                let owner = HWND(OWNER.load(Ordering::Relaxed) as *mut _);
+                let _ = PostMessageW(Some(owner), WM_APP_DRAG_KEY, WPARAM(what as usize), LPARAM(0));
+                return LRESULT(1);
+            }
+        }
+    }
+    CallNextHookEx(None, code, wparam, lparam)
+}
+
 fn run(generation: u64) {
     unsafe {
         let id = GetCurrentThreadId();
@@ -247,6 +293,10 @@ fn run(generation: u64) {
         if WANTED.load(Ordering::SeqCst) == generation {
             match SetWindowsHookExW(WH_KEYBOARD_LL, Some(key_proc), None, 0) {
                 Ok(hook) => {
+                    let mouse = SetWindowsHookExW(WH_MOUSE_LL, Some(mouse_proc), None, 0);
+                    if let Err(e) = &mouse {
+                        log::info!("drag keys: no mouse hook: {e}");
+                    }
                     SetTimer(None, 0, CAP_MS, None);
                     while WANTED.load(Ordering::SeqCst) == generation && GetMessageW(&mut msg, None, 0, 0).as_bool() {
                         if msg.message == WM_TIMER && msg.hwnd.is_invalid() {
@@ -260,6 +310,9 @@ fn run(generation: u64) {
                         DispatchMessageW(&msg);
                     }
                     let _ = UnhookWindowsHookEx(hook);
+                    if let Ok(mouse) = mouse {
+                        let _ = UnhookWindowsHookEx(mouse);
+                    }
                     clear_down();
                 }
                 Err(e) => log::info!("drag keys: no keyboard hook: {e}"),
@@ -271,7 +324,7 @@ fn run(generation: u64) {
 }
 
 fn clear_down() {
-    DOWN.iter().for_each(|d| d.store(false, Ordering::Relaxed));
+    DOWN.iter().chain(&BUTTONS).for_each(|d| d.store(false, Ordering::Relaxed));
 }
 
 /// Put the hook in for a drag, its keys going to `owner`. `ctrl` and `alt` say

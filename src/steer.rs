@@ -7,6 +7,9 @@
 use super::*;
 use crate::wincontrol::tile::{Back, Change, Done};
 use dragkeys::{Key, Part};
+
+/// A step of the wheel: Tab's choice of span under the pointer, and the share of it.
+type Step = (usize, Option<Part>);
 use seam::groups;
 use seam::zones::MIN_ZONE_PX;
 use std::time::Duration;
@@ -250,9 +253,32 @@ impl Engine {
                 drag.keys.cycle = if back { (now + n - 1) % n } else { (now + 1) % n };
                 drag.keys.cycle_at = at;
             }
+            Key::Scroll(next) => {
+                let mut pt = POINT::default();
+                let view = drag.shown.filter(|_| unsafe { GetCursorPos(&mut pt) }.is_ok());
+                let Some(cells) = view.map(|v| &drag.geometry[v.screen].cells) else { return };
+                let Some(zone) = zones::zone_at(cells, pt.x, pt.y) else { return };
+                let list = dragkeys::candidates(cells, zone, (pt.x, pt.y));
+                let at = view.map(|v| (v.screen, zone));
+                let shares = [None, Some(Part::Half), Some(Part::Third), Some(Part::TwoThirds)];
+                let mut steps: Vec<Step> = shares.into_iter().map(|part| (0, part)).collect();
+                steps.extend((1..list.len()).map(|i| (i, None)));
+                let cycle = if drag.keys.cycle_at == at { drag.keys.cycle.min(list.len() - 1) } else { 0 };
+                let now = (cycle, if cycle == 0 { drag.keys.part } else { None });
+                let i = steps.iter().position(|s| *s == now).unwrap_or(0);
+                // The ends stop the wheel rather than wrap, so a long turn can't overshoot.
+                let i = if next { (i + 1).min(steps.len() - 1) } else { i.saturating_sub(1) };
+                (drag.keys.cycle, drag.keys.part, drag.keys.cycle_at) = (steps[i].0, steps[i].1, at);
+            }
             Key::Part(part) => drag.keys.part = part,
-            Key::Side(side) => drag.keys.side = Some(side),
-            Key::Cancel => {
+            Key::Side(side) => {
+                let mut pt = POINT::default();
+                let view = drag.shown.filter(|_| unsafe { GetCursorPos(&mut pt) }.is_ok());
+                let at =
+                    view.and_then(|v| Some((v.screen, zones::zone_at(&drag.geometry[v.screen].cells, pt.x, pt.y)?)));
+                (drag.keys.side, drag.keys.side_at) = (Some(side), at);
+            }
+            Key::Cancel | Key::Button => {
                 // This drop doesn't snap, so the keys go back to the apps.
                 drag.keys.off = true;
                 dragkeys::stop();

@@ -39,7 +39,8 @@ pub(super) enum Skip {
 const EDGE_SLOP: i32 = 2;
 
 fn overlaps(a: Rect, b: Rect) -> bool {
-    let shrink = |r: Rect| Rect { x: r.x + EDGE_SLOP, y: r.y + EDGE_SLOP, w: r.w - 2 * EDGE_SLOP, h: r.h - 2 * EDGE_SLOP };
+    let shrink =
+        |r: Rect| Rect { x: r.x + EDGE_SLOP, y: r.y + EDGE_SLOP, w: r.w - 2 * EDGE_SLOP, h: r.h - 2 * EDGE_SLOP };
     let (a, b) = (shrink(a), shrink(b));
     a.w > 0 && a.h > 0 && b.w > 0 && b.h > 0 && a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h
 }

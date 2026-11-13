@@ -728,6 +728,10 @@ impl Engine {
                     if drag.keys.cycle_at != Some((screen, zone)) {
                         drag.keys.cycle = 0;
                     }
+                    // An arrow's side holds in its zone; elsewhere the side follows the pointer.
+                    if drag.keys.side_at != Some((screen, zone)) {
+                        drag.keys.side = None;
+                    }
                     if drag.keys.cycle > 0 {
                         let list = dragkeys::candidates(&drag.geometry[screen].cells, zone, (pt.x, pt.y));
                         return list[drag.keys.cycle.min(list.len() - 1)];
@@ -789,10 +793,7 @@ impl Engine {
                 }
                 None => (None, None, Vec::new()),
             };
-            let hint = (drag.keys.hooked && self.settings.drag_hints).then(|| {
-                let back = key_code(&self.settings.show_key).unwrap_or(VK_SHIFT) != VK_SHIFT;
-                dragkeys::hint(back, g.zones.len() > 1, view.cut.is_some())
-            });
+            let hint = (drag.keys.hooked && self.settings.drag_hints).then(|| dragkeys::HINT.to_string());
             zone_paint::preview(&g.id, lit, part, others, hint);
         }
         drag.shown = view;

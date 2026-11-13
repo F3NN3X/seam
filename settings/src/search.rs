@@ -138,8 +138,8 @@ const ENTRIES: &[Entry] = &[
     entry(
         Page::Zones,
         "Show keys while dragging",
-        "A strip on the screen lists what Tab, 1, 2, 3 and Esc do",
-        "hints keys strip tab half third split esc drag keyboard",
+        "A strip on the screen names the wheel, right-click and the keys",
+        "hints keys strip wheel scroll right-click tab half third split esc drag keyboard",
     ),
     entry(Page::Zones, "Focus border", "Colour the border of the window that has focus", "windows highlight active"),
     entry(

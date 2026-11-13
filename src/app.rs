@@ -861,6 +861,10 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
             }
             LRESULT(0)
         }
+        crate::dragkeys::WM_APP_DRAG_KEY => {
+            snap::drag_key(wparam.0 as u32);
+            LRESULT(0)
+        }
         dividers::WM_APP_DIVIDER => {
             if with_app(share::divider_choice).is_none() {
                 SetTimer(Some(hwnd), TIMER_DIVIDER, 50, None);

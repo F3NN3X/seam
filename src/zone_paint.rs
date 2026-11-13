@@ -9,7 +9,9 @@
 //! screen with every zone and number, and a small lit window per zone. Showing
 //! a zone is then a show of windows that already exist. A zone or span that
 //! wasn't drawn yet is drawn when asked for, and a screen whose base isn't
-//! ready yet shows as soon as it is, with nobody waiting for it.
+//! ready yet shows as soon as it is, with nobody waiting for it. A preview adds
+//! outlines where other windows will land and, while the drag's keys are live, a
+//! strip naming them, drawn when asked for and gone when the drag ends.
 
 use crate::{log, overlay};
 use seam::zones::Rect;
@@ -35,6 +37,13 @@ const INK: (u8, u8, u8) = (0xF3, 0xF3, 0xF3);
 const SHADE: (u8, u8, u8) = (0x20, 0x20, 0x20);
 /// The seam colour, `#FFB020`.
 const AMBER: (u8, u8, u8) = (0xFF, 0xB0, 0x20);
+/// Where other windows will land, in the muted text colour `#949494`.
+const MUTED: (u8, u8, u8) = (0x94, 0x94, 0x94);
+/// The key strip: its text size, height, padding and distance from the bottom of the work area, at 96 DPI.
+const HINT_TEXT: f32 = 13.;
+const HINT_HEIGHT: f32 = 32.;
+const HINT_PAD: f32 = 16.;
+const HINT_BOTTOM: f32 = 24.;
 const WM_APP_WAKE: u32 = WM_APP + 1;
 
 type Key = (i32, i32, i32, i32);
@@ -56,7 +65,8 @@ pub struct ScreenSpec {
 
 enum Command {
     Build(u64, Vec<ScreenSpec>),
-    Show(String, Option<Rect>),
+    /// A screen, its lit rect, outlines where other windows land, and the key strip's text.
+    Preview(String, Option<Rect>, Vec<Rect>, Option<String>),
     Hide(String),
     HideAll,
     Clear,
@@ -115,10 +125,11 @@ pub fn build(screens: Vec<ScreenSpec>) {
     send(Command::Build(generation, screens));
 }
 
-/// Show the overlay of screen `id`, with `lit` lit. If its drawing isn't ready
-/// it shows when it is. Returns at once.
-pub fn show(id: &str, lit: Option<Rect>) {
-    send(Command::Show(id.to_string(), lit));
+/// Show the overlay of screen `id`, with `lit` lit, muted outlines on `others`,
+/// and `hint` in a strip at its bottom. If the screen's drawing isn't ready it shows
+/// when it is. Returns at once.
+pub fn preview(id: &str, lit: Option<Rect>, others: Vec<Rect>, hint: Option<String>) {
+    send(Command::Preview(id.to_string(), lit, others, hint));
 }
 
 pub fn hide(id: &str) {
@@ -160,6 +171,10 @@ struct Overlay {
     todo: VecDeque<Unit>,
     /// Digit coverage by label, glyph size and mask size.
     masks: HashMap<MaskKey, Vec<u8>>,
+    /// The outlines shown now, by rect.
+    others: Vec<(Key, HWND)>,
+    /// The key strip shown now: its screen, text and window.
+    hint: Option<(String, String, HWND)>,
 }
 
 unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
@@ -252,13 +267,24 @@ impl Overlay {
         for command in commands {
             match command {
                 Command::Build(generation, specs) => self.build(generation, specs),
-                Command::Show(id, lit) => self.show(&id, lit),
+                Command::Preview(id, lit, others, hint) => {
+                    self.show(&id, lit);
+                    self.outline(&id, others);
+                    self.strip(&id, hint);
+                }
                 Command::Hide(id) => {
                     if let Some(screen) = self.screens.get_mut(&id) {
                         screen.hide();
                     }
+                    if self.hint.as_ref().is_some_and(|(on, ..)| *on == id) {
+                        self.strip(&id, None);
+                    }
                 }
-                Command::HideAll => self.screens.values_mut().for_each(Screen::hide),
+                Command::HideAll => {
+                    self.screens.values_mut().for_each(Screen::hide);
+                    self.outline("", Vec::new());
+                    self.strip("", None);
+                }
                 Command::Clear => self.clear(),
             }
         }
@@ -266,6 +292,8 @@ impl Overlay {
     }
 
     fn clear(&mut self) {
+        self.outline("", Vec::new());
+        self.strip("", None);
         self.todo.clear();
         for (_, screen) in self.screens.drain() {
             screen.destroy();
@@ -390,6 +418,45 @@ impl Overlay {
         if let Some(started) = started {
             let us = started.elapsed().as_secs_f64() * 1e6;
             log::info!("zone overlay: worker show {us:.0}us, lit window drawn: {made}");
+        }
+    }
+
+    /// Muted outlines on `rects`, drawn at the scale of screen `id`. The ones
+    /// already up stay when the list is the same.
+    fn outline(&mut self, id: &str, rects: Vec<Rect>) {
+        let keys: Vec<Key> = rects.iter().map(key).collect();
+        if self.others.iter().map(|(k, _)| *k).eq(keys.iter().copied()) {
+            return;
+        }
+        for (_, window) in self.others.drain(..) {
+            unsafe {
+                let _ = DestroyWindow(window);
+            }
+        }
+        let s = self.screens.get(id).map_or(1., |screen| screen.spec.scale);
+        for (rect, k) in rects.into_iter().zip(keys) {
+            if let Some(window) = outline_window(rect, s) {
+                show_on_top(window);
+                self.others.push((k, window));
+            }
+        }
+    }
+
+    /// The key strip at the bottom of screen `id`, or none.
+    fn strip(&mut self, id: &str, text: Option<String>) {
+        if self.hint.as_ref().map(|(on, t, _)| (on.as_str(), t)) == text.as_ref().map(|t| (id, t)) {
+            return;
+        }
+        if let Some((_, _, window)) = self.hint.take() {
+            unsafe {
+                let _ = DestroyWindow(window);
+            }
+        }
+        let Some(text) = text else { return };
+        let Some(spec) = self.screens.get(id).map(|screen| &screen.spec) else { return };
+        if let Some(window) = hint_window(spec.work, &text, spec.scale) {
+            show_on_top(window);
+            self.hint = Some((id.to_string(), text, window));
         }
     }
 }
@@ -571,6 +638,47 @@ fn lit_window(zone: Rect, s: f32) -> Option<HWND> {
     render(hwnd, zone, |canvas| {
         let area = Rect { x: 0, y: 0, ..zone };
         canvas.rounded(area, RADIUS, pm(AMBER, 0.1), Some((pm(AMBER, 1.), OUTLINE)), s);
+    });
+    Some(hwnd)
+}
+
+/// A hidden window with a muted outline around `rect`, where another window will land.
+fn outline_window(rect: Rect, s: f32) -> Option<HWND> {
+    let hwnd = create()?;
+    render(hwnd, rect, |canvas| {
+        let area = Rect { x: 0, y: 0, ..rect };
+        canvas.rounded(area, RADIUS, 0, Some((pm(MUTED, 1.), OUTLINE)), s);
+    });
+    Some(hwnd)
+}
+
+/// A hidden window with `text` in a strip, centred at the bottom of `work`. The
+/// text is drawn as wide as the screen allows and the strip is cut to its ink.
+fn hint_window(work: Rect, text: &str, s: f32) -> Option<HWND> {
+    let px = |v: f32| (v * s).round() as i32;
+    let (size, h, pad) = (px(HINT_TEXT), px(HINT_HEIGHT), px(HINT_PAD));
+    let room = work.w - 4 * pad;
+    if room <= 0 {
+        return None;
+    }
+    let mask = glyph_mask(text, size, room, h)?;
+    let inked = |x: i32| (0..h).any(|y| mask[(y * room + x) as usize] > 0);
+    let first = (0..room).find(|x| inked(*x))?;
+    let last = (0..room).rev().find(|x| inked(*x))?;
+    let w = last - first + 1 + 2 * pad;
+    let at = Rect { x: work.x + (work.w - w) / 2, y: work.y + work.h - h - px(HINT_BOTTOM), w, h };
+    let hwnd = create()?;
+    render(hwnd, at, |canvas| {
+        canvas.rounded(Rect { x: 0, y: 0, w, h }, RADIUS, pm(SHADE, 0.9), Some((pm(INK, 0.4), OUTLINE)), s);
+        let ink = pm(INK, 1.);
+        for y in 0..h {
+            for x in first..=last {
+                let cover = mask[(y * room + x) as usize];
+                if cover > 0 {
+                    canvas.blend(pad + x - first, y, scale(ink, cover as f32 / 255.));
+                }
+            }
+        }
     });
     Some(hwnd)
 }

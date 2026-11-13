@@ -45,7 +45,7 @@ pub struct Change {
     pub before: Option<ZoneLayout>,
 }
 
-/// What a tile or a pick did, for the notice, the answer and Undo.
+/// What a tile, a pick or a split did, for the notice, the answer and Undo.
 pub struct Done {
     /// Line Up number.
     pub number: usize,
@@ -61,6 +61,8 @@ pub struct Done {
     pub back: Vec<Back>,
     /// A layout picked on the Zones page rather than a tile.
     pub pick: bool,
+    /// A drop that split a zone with the drag's keys rather than a tile.
+    pub split: bool,
 }
 
 /// A window the tile moved.
@@ -241,6 +243,7 @@ pub(super) fn run(job: &Job, at: At) -> Result<Outcome, String> {
         changed: existing.is_none().then(|| Change { now: Some(layout.clone()), before: None }),
         back,
         pick: false,
+        split: false,
     };
     let layout = existing.is_none().then(|| (g.id.clone(), layout));
     Ok(Outcome::Tile(Box::new(Plan { list, layout, done })))
@@ -293,6 +296,7 @@ pub(super) fn pick(job: &Job, p: &Pick) -> Result<Outcome, String> {
         changed: Some(Change { now: Some(p.layout.clone()), before: p.before.clone() }),
         back,
         pick: true,
+        split: false,
     };
     Ok(Outcome::Tile(Box::new(Plan { list, layout: Some((p.screen.clone(), p.layout.clone())), done })))
 }

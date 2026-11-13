@@ -179,6 +179,10 @@ pub struct ZoneSettings {
     pub divider_handles: bool,
     /// Dropping a window into a zone another window holds swaps them instead of overlapping.
     pub swap_on_drop: bool,
+    /// Holding the pointer still during a window drag shows the zones, as the show key does.
+    pub pause_to_snap: bool,
+    /// A strip on the lit screen lists the keys a drag takes while zones show.
+    pub drag_hints: bool,
     /// Exe file names, case-insensitive.
     pub exclude: Vec<String>,
 }
@@ -196,6 +200,8 @@ impl Default for ZoneSettings {
             resize_neighbours: true,
             divider_handles: true,
             swap_on_drop: true,
+            pause_to_snap: false,
+            drag_hints: false,
             exclude: Vec::new(),
         }
     }

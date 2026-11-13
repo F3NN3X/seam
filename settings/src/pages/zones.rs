@@ -858,6 +858,26 @@ pub fn render(panel: &mut Panel, window: &mut Window, cx: &mut Context<Panel>) -
     });
     let swap_row =
         row("Swap with the window already in a zone", Some("Off lets windows overlap in a zone".into()), swap, p);
+    let pause = switch("zone-pause", "Pause to snap", zones_cfg.pause_to_snap, window, cx, {
+        let view = view.clone();
+        move |on, window, cx| {
+            view.update(cx, |panel, cx| panel.patch(json!({ "zones": { "pause_to_snap": on } }), window, cx))
+        }
+    });
+    let pause_row =
+        row("Pause to snap", Some("Hold still while dragging to show zones, no key needed".into()), pause, p);
+    let hints = switch("zone-hints", "Show keys while dragging", zones_cfg.drag_hints, window, cx, {
+        let view = view.clone();
+        move |on, window, cx| {
+            view.update(cx, |panel, cx| panel.patch(json!({ "zones": { "drag_hints": on } }), window, cx))
+        }
+    });
+    let hints_row = row(
+        "Show keys while dragging",
+        Some("A strip on the screen lists what Tab, 1, 2, 3 and Esc do".into()),
+        hints,
+        p,
+    );
     let neighbours_row = row(
         "Resize neighbours with a window",
         Some("Windows in the zones next to it follow its edge".into()),
@@ -1206,12 +1226,10 @@ pub fn render(panel: &mut Panel, window: &mut Window, cx: &mut Context<Panel>) -
         .child(picker)
         .child(section(
             "Snapping",
-            div()
-                .flex()
-                .flex_col()
-                .gap(px(12.))
-                .child(snapping)
-                .child(card(vec![swap_row, neighbours_row, handles_row, on_screen_row, refit_row], p)),
+            div().flex().flex_col().gap(px(12.)).child(snapping).child(card(
+                vec![swap_row, pause_row, hints_row, neighbours_row, handles_row, on_screen_row, refit_row],
+                p,
+            )),
             p,
         ))
         .child(section("Windows", windows_card, p))

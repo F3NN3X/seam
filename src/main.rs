@@ -16,6 +16,8 @@ mod arrange;
 #[cfg(windows)]
 mod dividers;
 #[cfg(windows)]
+mod dragkeys;
+#[cfg(windows)]
 mod focus_only;
 #[cfg(windows)]
 mod hook;

@@ -45,6 +45,30 @@ fn zones_of(placed: &[Rect], r: Rect) -> Option<(usize, usize)> {
 }
 
 impl Engine {
+    /// The snapped windows still in zones of `g` that overlap `target`, and where
+    /// each is. None when one of them can't be moved or is hung, which leaves the
+    /// drop as it always was.
+    pub(super) fn occupants(&self, drag: &Drag, g: &Placed, target: Rect) -> Option<Vec<(HWND, Rect)>> {
+        let mut occupants = Vec::new();
+        for (key, s) in &self.snapped {
+            if *key == drag.hwnd || s.screen != g.id || s.from.max(s.to) >= g.zones.len() {
+                continue;
+            }
+            if !overlaps(zones::span(g.zones[s.from], g.zones[s.to]), target) {
+                continue;
+            }
+            let h = hwnd_of(*key);
+            let there = unsafe { IsWindow(Some(h)) }.as_bool() && unsafe { IsWindowVisible(h) }.as_bool();
+            if !there || winutil::is_minimized(h) || winutil::is_cloaked(h) {
+                continue;
+            }
+            let Some(at) = self.current(h).map(|c| c.at) else { continue };
+            wincontrol::movable(h, &self.exclude).ok()?;
+            occupants.push((h, at));
+        }
+        Some(occupants)
+    }
+
     /// The moves that give the windows in the zones `(a, b)` of screen `screen` the
     /// dropped window's old place, and whether it was snapped. None when nothing
     /// swaps, and the drop is as it always was.
@@ -76,24 +100,7 @@ impl Engine {
                 Dest::Rect(frame, work_area(on.bounds)?.1)
             }
         };
-        let mut occupants = Vec::new();
-        for (key, s) in &self.snapped {
-            if *key == drag.hwnd || s.screen != g.id || s.from.max(s.to) >= g.zones.len() {
-                continue;
-            }
-            if !overlaps(zones::span(g.zones[s.from], g.zones[s.to]), target) {
-                continue;
-            }
-            let h = hwnd_of(*key);
-            let there = unsafe { IsWindow(Some(h)) }.as_bool() && unsafe { IsWindowVisible(h) }.as_bool();
-            if !there || winutil::is_minimized(h) || winutil::is_cloaked(h) {
-                continue;
-            }
-            let Some(at) = self.current(h).map(|c| c.at) else { continue };
-            // One that can't be moved, or is hung, leaves the drop as it always was.
-            wincontrol::movable(h, &self.exclude).ok()?;
-            occupants.push((h, at));
-        }
+        let occupants = self.occupants(drag, g, target)?;
         if occupants.is_empty() {
             return None;
         }

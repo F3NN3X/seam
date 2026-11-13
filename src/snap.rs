@@ -4,10 +4,11 @@
 //! mouse hook (D7).
 
 use crate::tray::WM_APP_WINDOWS_CHANGED;
-use crate::{dividers, log, minsize, overlay, wincontrol, zone_paint};
+use crate::{dividers, dragkeys, log, minsize, overlay, wincontrol, zone_paint};
 use seam::config::{Config, WindowSize, ZoneSettings};
 use seam::desk::{self, Mon};
 use seam::geom;
+use seam::groups::Side;
 use seam::winutil::{self, work_area};
 use seam::zones::{self, Rect, ZoneLayout};
 use std::cell::RefCell;
@@ -26,6 +27,8 @@ mod refit;
 mod edges;
 
 pub(crate) use edges::Member;
+#[path = "steer.rs"]
+mod steer;
 #[path = "swap.rs"]
 mod swap;
 
@@ -74,11 +77,13 @@ struct Placed {
     zones: Vec<Rect>,
 }
 
-/// What the overlay shows: a screen, and the zones lit on it.
+/// What the overlay shows: a screen, the zones lit on it, and the part of them the
+/// drag's keys give the window, on which side.
 #[derive(Clone, Copy, PartialEq)]
 struct View {
     screen: usize,
     hit: Option<(usize, usize)>,
+    cut: Option<(dragkeys::Part, Side)>,
 }
 
 /// A drag is only a move once the window has moved without changing size.
@@ -115,6 +120,12 @@ struct Drag {
     timer: usize,
     /// The windows that follow its edges, when it's a window in a group of zones.
     edges: Option<edges::Edges>,
+    /// What the keys pressed during the drag chose.
+    keys: dragkeys::Steer,
+    /// Pause to snap: where the pointer came to rest, where it was last tick, and since when.
+    rest: Option<(POINT, POINT, Instant)>,
+    /// The pointer rested, so zones show as if the show key were held.
+    paused: bool,
 }
 
 struct Snapped {
@@ -279,6 +290,7 @@ pub fn work_area_changed() {
 
 /// The tray is quitting: free the overlay's windows and bitmaps, and the divider handles.
 pub fn shutdown() {
+    dragkeys::stop();
     zone_paint::clear();
     dividers::stop();
 }
@@ -316,6 +328,11 @@ fn specs(geometry: &[Placed]) -> Vec<zone_paint::ScreenSpec> {
         zones: g.zones.clone(),
     };
     geometry.iter().map(spec).collect()
+}
+
+/// A key the drag's keyboard hook passed on, by virtual-key code.
+pub fn drag_key(vk: u32) {
+    with_engine(|e| e.drag_key(vk));
 }
 
 /// Move the foreground window to the next or previous zone, across screens.
@@ -595,7 +612,8 @@ impl Engine {
             // The work area may have moved since the overlay was last drawn. This only posts a list.
             zone_paint::build(specs(&geometry));
         }
-        let frame = if self.drags_sized() || self.settings.swap_on_drop { winutil::visible_rect(hwnd) } else { None };
+        // A swap, or Undo of a split by the drag's keys, puts windows where this one was.
+        let frame = (self.drags_sized() || !geometry.is_empty()).then(|| winutil::visible_rect(hwnd)).flatten();
         let current = self.current(hwnd).map(|s| (s.old, (s.screen.clone(), s.from, s.to)));
         let was_snapped = current.as_ref().map(|(old, _)| *old);
         let stamped = winutil::has_zone_stamp(hwnd);
@@ -621,6 +639,9 @@ impl Engine {
             shown: None,
             timer,
             edges,
+            keys: dragkeys::Steer::default(),
+            rest: None,
+            paused: false,
         });
     }
 
@@ -687,12 +708,18 @@ impl Engine {
         }
         let show_key = key_code(&self.settings.show_key).unwrap_or(VK_SHIFT);
         let span_key = key_code(&self.settings.span_key).filter(|k| *k != show_key);
-        let show = held(show_key);
+        let pressed = held(show_key);
+        self.pause(&mut drag, pt, pressed);
+        let show = (pressed || drag.paused) && !drag.keys.off;
         let span = show && span_key.is_some_and(held);
         let view =
             show.then(|| drag.geometry.iter().position(|g| g.bounds.contains(pt.x, pt.y))).flatten().map(|screen| {
                 let cell = zones::zone_at(&drag.geometry[screen].cells, pt.x, pt.y);
                 let hit = cell.map(|zone| {
+                    if drag.keys.cycle > 0 {
+                        let list = dragkeys::candidates(&drag.geometry[screen].cells, zone, (pt.x, pt.y));
+                        return list[drag.keys.cycle % list.len()];
+                    }
                     if !span {
                         drag.anchor = None;
                         return (zone, zone);
@@ -705,7 +732,12 @@ impl Engine {
                         }
                     }
                 });
-                View { screen, hit }
+                let g = &drag.geometry[screen];
+                let cut = hit.zip(drag.keys.part).map(|((a, b), part)| {
+                    let r = zones::span(g.zones[a.min(b)], g.zones[a.max(b)]);
+                    (part, drag.keys.side.unwrap_or_else(|| dragkeys::nearest_side(r, (pt.x, pt.y))))
+                });
+                View { screen, hit, cut }
             });
         // Repaint only when what is lit changes.
         if view != drag.shown {
@@ -723,10 +755,28 @@ impl Engine {
         if let Some(previous) = drag.shown.filter(|p| view.is_none_or(|v| v.screen != p.screen)) {
             zone_paint::hide(&drag.geometry[previous.screen].id);
         }
+        // The keys are the drag's from the first time zones show, until it ends or Esc.
+        if view.is_some() && !drag.keys.hooked && !drag.keys.off {
+            dragkeys::start(self.owner);
+            drag.keys.hooked = true;
+        }
+        if drag.keys.hooked && !drag.keys.off {
+            dragkeys::set_live(view.is_some());
+        }
         if let Some(view) = view {
             let g = &drag.geometry[view.screen];
-            let lit = view.hit.map(|(a, b)| zones::span(g.zones[a], g.zones[b]));
-            zone_paint::show(&g.id, lit);
+            let (lit, others) = match view.hit {
+                Some(hit) => {
+                    let out = self.outcome(drag, view.screen, hit, view.cut);
+                    (Some(out.rect), out.others())
+                }
+                None => (None, Vec::new()),
+            };
+            let hint = (drag.keys.hooked && self.settings.drag_hints).then(|| {
+                let back = key_code(&self.settings.show_key).unwrap_or(VK_SHIFT) != VK_SHIFT;
+                dragkeys::hint(back, g.zones.len() > 1, view.cut.is_some())
+            });
+            zone_paint::preview(&g.id, lit, others, hint);
         }
         drag.shown = view;
         if let Some(started) = started {
@@ -754,6 +804,12 @@ impl Engine {
             let _ = KillTimer(None, drag.timer);
         }
         self.hide_all();
+        if drag.keys.hooked {
+            dragkeys::stop();
+        }
+        if !drag.keys.used.is_empty() {
+            log::info!("drag keys: {}", drag.keys.used.join(", "));
+        }
         let hwnd = hwnd_of(drag.hwnd);
         self.finish_drag(&drag, dropped, hwnd);
         self.sync_dividers();
@@ -783,8 +839,8 @@ impl Engine {
             self.unsnap(hwnd, drag.stamped);
             return;
         }
-        let lit = drag.shown.and_then(|view| Some((view.screen, view.hit?)));
-        let Some((screen, (a, b))) = lit else {
+        let lit = drag.shown.and_then(|view| Some((view.screen, view.hit?, view.cut)));
+        let Some((screen, (a, b), cut)) = lit else {
             // Dropped outside every zone, so a snapped window gets its old size back.
             let mut restored = false;
             if let (Some(Some(old)), true) = (drag.was_snapped, self.settings.restore_size) {
@@ -799,11 +855,14 @@ impl Engine {
             }
             return;
         };
+        let out = self.outcome(drag, screen, (a, b), cut);
+        if let Some(split) = out.split {
+            self.split_drop(drag, hwnd, screen, split);
+            return;
+        }
         let g = &drag.geometry[screen];
-        let rect = zones::span(g.zones[a], g.zones[b]);
-        let swap = self.swap_plan(drag, screen, (a.min(b), a.max(b)));
-        self.snap_to(hwnd, g, (a.min(b), a.max(b)), rect, drag.was_snapped);
-        self.swap_start(swap);
+        self.snap_to(hwnd, g, (a.min(b), a.max(b)), out.rect, drag.was_snapped);
+        self.swap_start(out.swap);
     }
 
     /// A free drag that ended on another screen: with "Also when I drag a window to

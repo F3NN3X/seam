@@ -129,6 +129,18 @@ const ENTRIES: &[Entry] = &[
         "Off lets windows overlap in a zone",
         "swap exchange trade overlap drop occupied",
     ),
+    entry(
+        Page::Zones,
+        "Pause to snap",
+        "Hold still while dragging to show zones, no key needed",
+        "pause rest hold still wait drag show zones without key",
+    ),
+    entry(
+        Page::Zones,
+        "Show keys while dragging",
+        "A strip on the screen lists what Tab, 1, 2, 3 and Esc do",
+        "hints keys strip tab half third split esc drag keyboard",
+    ),
     entry(Page::Zones, "Focus border", "Colour the border of the window that has focus", "windows highlight active"),
     entry(
         Page::Zones,

@@ -94,6 +94,8 @@ static PLANNED: Mutex<Option<Planned>> = Mutex::new(None);
 /// Layouts edge and divider drags changed, waiting to be saved in order, with the
 /// windows a divider drag moved, which stay snapped at their new places.
 static DRAGGED: Mutex<Vec<(String, ZoneLayout, Vec<snap::Zoned>)>> = Mutex::new(Vec::new());
+/// What the last split by a drag's keys did, for its notice and Undo once its layout is saved.
+static SPLIT: Mutex<Option<tile::Done>> = Mutex::new(None);
 /// Why a tile with no API client waiting did nothing. It has its own place, so it can't cancel a move waiting in PLANNED.
 static NOTE: Mutex<Option<String>> = Mutex::new(None);
 
@@ -139,8 +141,11 @@ pub fn planned(mut save: impl FnMut(&str, ZoneLayout, bool) -> bool) -> Option<R
             log::info!("zone edges: Seam was busy, so the new layout wasn't saved");
         }
     }
+    let split = SPLIT.lock().unwrap_or_else(|e| e.into_inner()).take();
     let note = NOTE.lock().unwrap_or_else(|e| e.into_inner()).take();
-    let Some(plan) = PLANNED.lock().unwrap_or_else(|e| e.into_inner()).take() else { return note.map(Err) };
+    let Some(plan) = PLANNED.lock().unwrap_or_else(|e| e.into_inner()).take() else {
+        return split.map(Ok).or(note.map(Err));
+    };
     if let Some((screen, layout, keep)) = plan.layout {
         if !save(&screen, layout, plan.fresh.is_some()) {
             answer(plan.reply, Err(RpcError::new(api::BUSY, "Seam is busy, try again")));
@@ -156,7 +161,7 @@ pub fn planned(mut save: impl FnMut(&str, ZoneLayout, bool) -> bool) -> Option<R
     let counts = done.as_ref().filter(|d| !d.pick).map(|d| json!({ "ok": true, "tiled": d.tiled, "left": d.left }));
     let made = plan.fresh.map(|id| json!({ "ok": true, "id": id }));
     answer(plan.reply, Ok(counts.or(made).unwrap_or_else(|| json!({ "ok": true }))));
-    done.map(Ok)
+    done.or(split).map(Ok)
 }
 
 /// A drag of a window's edge changed a screen's layout: save it the way a group
@@ -174,6 +179,13 @@ pub fn save_moved(owner: isize, screen: String, layout: ZoneLayout, moved: Vec<s
     unsafe {
         let _ = PostMessageW(Some(hwnd_of(owner)), WM_APP_WINDOW, WPARAM(0), LPARAM(0));
     }
+}
+
+/// A drop split a zone with the drag's keys: save the layout as an edge drag's is,
+/// then offer Undo with what `done` says.
+pub fn save_split(owner: isize, screen: String, layout: ZoneLayout, done: tile::Done) {
+    *SPLIT.lock().unwrap_or_else(|e| e.into_inner()) = Some(done);
+    save_layout(owner, screen, layout);
 }
 
 /// What a command came to.

@@ -2,30 +2,47 @@
 //! another full-screen app is in front. Every feature asks `reason`, so this is
 //! the one place to read it. Pause is runtime state and never saved.
 //!
-//! The full-screen answer is kept up to date from the tray thread, on a foreground
-//! change (the existing WinEvent kind, no polling), and again when the full-screen
-//! window closes or minimizes. A callback only posts `WM_APP_STANDBY`, and the tray
-//! calls `check` when it arrives.
+//! The full-screen answer is kept up to date from the tray thread: on a foreground
+//! change, when the foreground window moves or resizes (F11 sends no foreground
+//! change), and when the full-screen window closes or minimizes. A callback only
+//! posts or sets a timer, and the tray calls `check` when it arrives.
 
 use crate::log;
 use seam::winutil;
 use std::cell::RefCell;
 use std::sync::atomic::{AtomicBool, AtomicIsize, Ordering};
 use windows::Win32::Foundation::*;
+use windows::Win32::Graphics::Gdi::*;
 use windows::Win32::UI::Accessibility::*;
 use windows::Win32::UI::Shell::*;
 use windows::Win32::UI::WindowsAndMessaging::*;
 
-/// The foreground changed, or the full-screen window went: look again with `check`.
+/// The foreground changed: look again with `check`.
 pub const WM_APP_STANDBY: u32 = WM_APP + 33;
-/// The shell's own full-screen windows: the desktop, the taskbar, Task View and Alt+Tab.
-const SHELL_CLASSES: [&str; 6] = [
+/// Looks again with `check`, after a move, a resize or the full-screen window going.
+pub const TIMER_STANDBY: usize = 12;
+/// A foreground window that moves or resizes in a burst is looked at once, this long after.
+const LOOK_AFTER_MS: u32 = 200;
+/// A closed or minimized full-screen window is looked at soon.
+const GONE_AFTER_MS: u32 = 50;
+/// How far from the screen's edge a window may sit and still cover it.
+const EDGE_SLACK: i32 = 3;
+/// Windows that come and go over the app in use: the shell's own, menus and toasts.
+/// They leave the answer as it was.
+const TRANSIENT_CLASSES: [&str; 13] = [
     "Progman",
     "WorkerW",
     "Shell_TrayWnd",
     "Shell_SecondaryTrayWnd",
     "MultitaskingViewFrame",
     "XamlExplorerHostIslandWindow",
+    "Windows.UI.Core.CoreWindow",
+    "ForegroundStaging",
+    "TaskSwitcherWnd",
+    "TaskSwitcherOverlayWnd",
+    "NativeHWNDHost",
+    "#32768",
+    "NotifyIconOverflowWindow",
 ];
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -36,14 +53,12 @@ pub enum Standby {
     FullScreen,
 }
 
-impl Standby {
-    /// The reason in the words a refusal or a status line uses.
-    pub fn why(self) -> &'static str {
-        match self {
-            Standby::Paused => "Seam is paused",
-            Standby::FullScreen => "A full-screen app is in front, so Seam steps aside",
-        }
-    }
+/// What the foreground window says.
+enum Seen {
+    Full(&'static str),
+    Not,
+    /// A transient window: nothing changed.
+    Keep,
 }
 
 static PAUSED: AtomicBool = AtomicBool::new(false);
@@ -54,11 +69,17 @@ static WATCHING: AtomicBool = AtomicBool::new(false);
 static OWNER: AtomicIsize = AtomicIsize::new(0);
 /// The full-screen window being followed, 0 for none.
 static WATCHED: AtomicIsize = AtomicIsize::new(0);
+/// The foreground window whose moves are followed, 0 for none.
+static FOLLOWED: AtomicIsize = AtomicIsize::new(0);
+/// The watched window closed or minimized, so it is no longer full screen.
+static GONE: AtomicBool = AtomicBool::new(false);
 
 #[derive(Default)]
 struct Hooks {
     foreground: Option<HWINEVENTHOOK>,
-    /// The close and minimize of the watched window, filtered to its process.
+    /// Moves and resizes of the foreground window, for its thread only.
+    followed: Option<HWINEVENTHOOK>,
+    /// The close and minimize of the watched window, for its thread only.
     watched: Vec<HWINEVENTHOOK>,
 }
 
@@ -86,7 +107,7 @@ pub fn set_paused(on: bool) {
 }
 
 /// Follow the foreground while "Step aside for games and full-screen apps" is on, and
-/// look now. Does nothing again for the same setting. Returns whether the answer changed.
+/// look now. Returns whether the answer changed.
 pub fn configure(owner: HWND, on: bool) -> bool {
     OWNER.store(owner.0 as isize, Ordering::SeqCst);
     WATCHING.store(on, Ordering::SeqCst);
@@ -110,7 +131,12 @@ pub fn configure(owner: HWND, on: bool) -> bool {
             _ => {}
         }
     });
-    if on { check() } else { leave() }
+    if on {
+        check()
+    } else {
+        follow(None);
+        leave()
+    }
 }
 
 /// Look at what is in front. Returns whether the full-screen answer changed, and
@@ -120,12 +146,21 @@ pub fn check() -> bool {
         return false;
     }
     let foreground = unsafe { GetForegroundWindow() };
+    // The window that was full screen closed or minimized: it is gone whatever the
+    // foreground still says for a moment.
+    if GONE.swap(false, Ordering::SeqCst)
+        && (foreground.is_invalid() || foreground.0 as isize == WATCHED.load(Ordering::SeqCst))
+    {
+        return leave();
+    }
     // Between two windows there is none for a moment. That says nothing.
     if foreground.is_invalid() {
         return false;
     }
     match look(foreground) {
-        Some(why) => {
+        Seen::Keep => false,
+        Seen::Full(why) => {
+            follow(Some(foreground));
             watch(Some(foreground));
             let changed = !FULL_SCREEN.swap(true, Ordering::SeqCst);
             if changed {
@@ -133,7 +168,10 @@ pub fn check() -> bool {
             }
             changed
         }
-        None => leave(),
+        Seen::Not => {
+            follow(Some(foreground));
+            leave()
+        }
     }
 }
 
@@ -147,24 +185,75 @@ fn leave() -> bool {
     changed
 }
 
-/// What makes the foreground window a full-screen app: the shell's own word for a
-/// game, a busy or presenting user, or the window itself covering its whole screen.
-fn look(foreground: HWND) -> Option<&'static str> {
-    if let Ok(state) = unsafe { SHQueryUserNotificationState() } {
-        match state {
-            QUNS_RUNNING_D3D_FULL_SCREEN => return Some("Direct3D full screen"),
-            QUNS_BUSY => return Some("shell reports a full-screen app"),
-            QUNS_PRESENTATION_MODE => return Some("presentation mode"),
-            _ => {}
+/// The window covers the whole of the screen it is on, give or take a few pixels.
+fn covers_screen(h: HWND) -> bool {
+    let Some(window) = winutil::window_rect(h) else { return false };
+    let mut info = MONITORINFO { cbSize: std::mem::size_of::<MONITORINFO>() as u32, ..Default::default() };
+    unsafe {
+        let monitor = MonitorFromWindow(h, MONITOR_DEFAULTTONEAREST);
+        if !GetMonitorInfoW(monitor, &mut info).as_bool() || IsIconic(h).as_bool() {
+            return false;
         }
     }
-    let shell = unsafe { foreground == GetDesktopWindow() || foreground == GetShellWindow() }
-        || SHELL_CLASSES.contains(&winutil::class_name(foreground).as_str());
-    let ours = winutil::process_id(foreground) == std::process::id();
-    (!shell && !ours && winutil::is_full_screen(foreground)).then_some("window covers its screen")
+    let screen = info.rcMonitor;
+    (window.x - screen.left).abs() <= EDGE_SLACK
+        && (window.y - screen.top).abs() <= EDGE_SLACK
+        && (window.x + window.w - screen.right).abs() <= EDGE_SLACK
+        && (window.y + window.h - screen.bottom).abs() <= EDGE_SLACK
 }
 
-/// Follow this window's close and minimize, or none. The hooks are for its process only.
+/// Whether the foreground window is a full-screen app. Only a window that covers its
+/// whole screen counts, so a game on another screen changes nothing. Windows' own word
+/// for a Direct3D or presenting app confirms one that has a frame or a maximized look.
+fn look(foreground: HWND) -> Seen {
+    let transient = unsafe { foreground == GetDesktopWindow() || foreground == GetShellWindow() }
+        || winutil::process_id(foreground) == std::process::id()
+        || TRANSIENT_CLASSES.contains(&winutil::class_name(foreground).as_str());
+    if transient {
+        return Seen::Keep;
+    }
+    if !covers_screen(foreground) {
+        return Seen::Not;
+    }
+    if winutil::is_full_screen(foreground) {
+        return Seen::Full("window covers its screen");
+    }
+    match unsafe { SHQueryUserNotificationState() } {
+        Ok(QUNS_RUNNING_D3D_FULL_SCREEN) => Seen::Full("Direct3D full screen"),
+        Ok(QUNS_PRESENTATION_MODE) => Seen::Full("presentation mode"),
+        _ => Seen::Not,
+    }
+}
+
+fn thread_of(h: HWND) -> u32 {
+    unsafe { GetWindowThreadProcessId(h, None) }
+}
+
+/// Follow the moves and resizes of the foreground window, for its thread only: a
+/// browser's F11 changes its size without changing the foreground.
+fn follow(window: Option<HWND>) {
+    let key = window.map_or(0, |h| h.0 as isize);
+    if FOLLOWED.swap(key, Ordering::SeqCst) == key {
+        return;
+    }
+    HOOKS.with(|hooks| {
+        let mut hooks = hooks.borrow_mut();
+        if let Some(hook) = hooks.followed.take() {
+            let _ = unsafe { UnhookWinEvent(hook) };
+        }
+        let Some(window) = window else { return };
+        let flags = WINEVENT_OUTOFCONTEXT | WINEVENT_SKIPOWNPROCESS;
+        let event = EVENT_OBJECT_LOCATIONCHANGE;
+        let hook = unsafe { SetWinEventHook(event, event, None, Some(on_followed), 0, thread_of(window), flags) };
+        if hook.0.is_null() {
+            log::info!("standby: window hook {event:#x} not installed");
+        } else {
+            hooks.followed = Some(hook);
+        }
+    });
+}
+
+/// Follow this window's close and minimize, or none. The hooks are for its thread only.
 fn watch(window: Option<HWND>) {
     let key = window.map_or(0, |h| h.0 as isize);
     if WATCHED.swap(key, Ordering::SeqCst) == key {
@@ -176,10 +265,10 @@ fn watch(window: Option<HWND>) {
             let _ = unsafe { UnhookWinEvent(hook) };
         }
         let Some(window) = window else { return };
-        let pid = winutil::process_id(window);
+        let thread = thread_of(window);
         let flags = WINEVENT_OUTOFCONTEXT | WINEVENT_SKIPOWNPROCESS;
         for event in [EVENT_OBJECT_DESTROY, EVENT_SYSTEM_MINIMIZESTART] {
-            let hook = unsafe { SetWinEventHook(event, event, None, Some(on_watched), pid, 0, flags) };
+            let hook = unsafe { SetWinEventHook(event, event, None, Some(on_watched), 0, thread, flags) };
             if hook.0.is_null() {
                 log::info!("standby: window hook {event:#x} not installed");
             } else {
@@ -189,24 +278,35 @@ fn watch(window: Option<HWND>) {
     });
 }
 
-fn tell_tray() {
+fn owner() -> Option<HWND> {
     let owner = OWNER.load(Ordering::SeqCst);
-    if owner != 0 {
-        unsafe {
-            let _ = PostMessageW(Some(HWND(owner as *mut _)), WM_APP_STANDBY, WPARAM(0), LPARAM(0));
-        }
-    }
+    (owner != 0).then_some(HWND(owner as *mut _))
 }
 
 /// Runs on the tray thread. It only posts, so the work happens in the message loop.
 unsafe extern "system" fn on_foreground(_: HWINEVENTHOOK, _: u32, _: HWND, object: i32, _: i32, _: u32, _: u32) {
-    if object == OBJID_WINDOW.0 {
-        tell_tray();
+    if let (true, Some(owner)) = (object == OBJID_WINDOW.0, owner()) {
+        unsafe {
+            let _ = PostMessageW(Some(owner), WM_APP_STANDBY, WPARAM(0), LPARAM(0));
+        }
     }
 }
 
+/// The foreground window moved or resized. A burst of them is looked at once.
+unsafe extern "system" fn on_followed(_: HWINEVENTHOOK, _: u32, hwnd: HWND, object: i32, _: i32, _: u32, _: u32) {
+    if let (true, Some(owner)) =
+        (object == OBJID_WINDOW.0 && hwnd.0 as isize == FOLLOWED.load(Ordering::SeqCst), owner())
+    {
+        unsafe { SetTimer(Some(owner), TIMER_STANDBY, LOOK_AFTER_MS, None) };
+    }
+}
+
+/// The full-screen window closed or minimized: it is gone, and that is looked at soon.
 unsafe extern "system" fn on_watched(_: HWINEVENTHOOK, _: u32, hwnd: HWND, object: i32, _: i32, _: u32, _: u32) {
-    if object == OBJID_WINDOW.0 && hwnd.0 as isize == WATCHED.load(Ordering::SeqCst) {
-        tell_tray();
+    if let (true, Some(owner)) =
+        (object == OBJID_WINDOW.0 && hwnd.0 as isize == WATCHED.load(Ordering::SeqCst), owner())
+    {
+        GONE.store(true, Ordering::SeqCst);
+        unsafe { SetTimer(Some(owner), TIMER_STANDBY, GONE_AFTER_MS, None) };
     }
 }

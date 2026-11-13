@@ -146,18 +146,11 @@ pub(super) fn aside(app: &App) -> Option<String> {
     }
 }
 
-/// Why snapping steps aside: another window manager has the windows (D110), or Seam
-/// is paused or waiting for a full-screen app (D390). Window commands asked for by
-/// hand or the API only step aside for the first.
-pub(super) fn snap_aside(app: &App) -> Option<String> {
-    aside(app).or_else(|| standby::reason().map(|why| why.why().to_string()))
-}
-
 /// The seam-wm thread found another window manager start or stop.
 pub(super) fn other_wm_changed(app: &mut App) {
     app.other_wm = wm::detected();
     log::info!("other window manager: {}", app.other_wm.unwrap_or("none"));
-    snap::update(app.hwnd, &app.cfg, &app.sig, &app.mons, snap_aside(app).as_deref());
+    snap::update(app.hwnd, &app.cfg, &app.sig, &app.mons, aside(app).as_deref());
     sync_live(app);
     publish(app);
 }
@@ -278,7 +271,7 @@ pub(super) fn set_screen_layout(app: &mut App, screen: &str, layout: Option<zone
         return false;
     }
     persist(app);
-    snap::update(app.hwnd, &app.cfg, &app.sig, &app.mons, snap_aside(app).as_deref());
+    snap::update(app.hwnd, &app.cfg, &app.sig, &app.mons, aside(app).as_deref());
     publish(app);
     true
 }
@@ -332,7 +325,7 @@ fn apply_zones(app: &mut App, workspace: &Workspace) {
     if stored > 0 {
         log::info!("workspace {}: {stored} screen layouts changed", workspace.name);
         persist(app);
-        snap::update(app.hwnd, &app.cfg, &app.sig, &app.mons, snap_aside(app).as_deref());
+        snap::update(app.hwnd, &app.cfg, &app.sig, &app.mons, aside(app).as_deref());
         publish(app);
     }
 }

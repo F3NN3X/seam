@@ -74,8 +74,8 @@ use windows::core::{PCWSTR, w};
 use workspaces::{
     apply_hotkeys, aside, capture_job, captured, choose_in_use, desk_workspaces, detected_in_use, drift_checked,
     drift_due, forget_deleted, live_of, migrate_hotkeys, other_wm_changed, quick_save, set_default, set_spotlight,
-    show_spotlight, snap_aside, snap_back, start_capture, start_focus_only, start_switch, start_switch_job,
-    start_window, switch_back, switched, sync_live, undo_quick_save, update_workspace, ws_moved,
+    show_spotlight, snap_back, start_capture, start_focus_only, start_switch, start_switch_job, start_window,
+    switch_back, switched, sync_live, undo_quick_save, update_workspace, ws_moved,
 };
 use workspaces::{start_group, window_planned};
 
@@ -114,8 +114,6 @@ const SESSION_OFFER_TRIES: u8 = 12;
 /// or it was switched to, so a drag or a switch is checked once.
 const TIMER_DRIFT: usize = 11;
 const DRIFT_AFTER_MS: u32 = 400;
-/// Retries a look at what is in front that the app was too busy for (menu open).
-const TIMER_STANDBY: usize = 12;
 /// How long the end of a Windows session waits for the last session's capture.
 const SESSION_END_WAIT: Duration = Duration::from_secs(2);
 /// How long a restore whose apps Windows reopens waits for their windows (D128).
@@ -394,7 +392,7 @@ fn relink(app: &mut App) {
         edge_resistance: if remapping { pointer.edge_resistance_px.min(MAX_EDGE_RESISTANCE_PX) as i32 } else { 0 },
         glue_push: pointer.glue_push_px.min(MAX_GLUE_PUSH_PX) as i32,
     });
-    snap::update(app.hwnd, &app.cfg, &app.sig, &app.mons, snap_aside(app).as_deref());
+    snap::update(app.hwnd, &app.cfg, &app.sig, &app.mons, aside(app).as_deref());
     let windows = &app.cfg.windows;
     let owner = app.hwnd.0 as isize;
     // The focus border waits with the rest while Seam stands by.
@@ -799,13 +797,13 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
             }
             WM_APP_STANDBY => {
                 if with_app(standby_check).is_none() {
-                    SetTimer(Some(hwnd), TIMER_STANDBY, 50, None);
+                    SetTimer(Some(hwnd), standby::TIMER_STANDBY, 50, None);
                 }
                 LRESULT(0)
             }
-            WM_TIMER if wparam.0 == TIMER_STANDBY => {
+            WM_TIMER if wparam.0 == standby::TIMER_STANDBY => {
                 if with_app(standby_check).is_some() {
-                    let _ = KillTimer(Some(hwnd), TIMER_STANDBY);
+                    let _ = KillTimer(Some(hwnd), standby::TIMER_STANDBY);
                 }
                 LRESULT(0)
             }

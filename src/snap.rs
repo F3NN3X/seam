@@ -169,6 +169,8 @@ struct Engine {
     enabled: bool,
     /// Another window manager has the windows, and why Seam steps aside (D110).
     aside: Option<String>,
+    /// Seam is paused or a full-screen app is in front (D390): no drag snapping, zones or handles.
+    standing_by: bool,
     settings: ZoneSettings,
     /// Lower case.
     exclude: Vec<String>,
@@ -251,7 +253,8 @@ pub fn update(owner: HWND, cfg: &Config, sig: &str, mons: &[Mon], aside: Option<
         raw_dpi: m.raw_dpi,
     });
     let screens: Vec<Screen> = screens.collect();
-    let on_drag = cfg.window_size_on_drag && aside.is_none();
+    let standing_by = crate::standby::reason().is_some();
+    let on_drag = cfg.window_size_on_drag && aside.is_none() && !standing_by;
     let drag_size = if on_drag { cfg.window_size_on_move } else { WindowSize::Windows };
     let exclude: Vec<String> = cfg.zones.exclude.iter().map(|x| x.to_lowercase()).collect();
     with_engine(|e| {
@@ -259,6 +262,7 @@ pub fn update(owner: HWND, cfg: &Config, sig: &str, mons: &[Mon], aside: Option<
         let same = e.owner == owner.0 as isize
             && e.enabled == cfg.zones.enabled
             && e.aside.as_deref() == aside
+            && e.standing_by == standing_by
             && e.settings == cfg.zones
             && e.exclude == exclude
             && e.drag_size == drag_size
@@ -270,11 +274,12 @@ pub fn update(owner: HWND, cfg: &Config, sig: &str, mons: &[Mon], aside: Option<
         e.owner = owner.0 as isize;
         e.enabled = cfg.zones.enabled;
         e.aside = aside.map(String::from);
+        e.standing_by = standing_by;
         e.settings = cfg.zones.clone();
         e.exclude = exclude;
         e.drag_size = drag_size;
         e.screens = screens;
-        if !e.settings.refit || e.aside.is_some() {
+        if !e.settings.refit || e.aside.is_some() || e.standing_by {
             e.refit_stop();
         }
         e.sync_hook();
@@ -435,7 +440,7 @@ impl Engine {
 
     /// Zones are on, and no other window manager has the windows.
     fn active(&self) -> bool {
-        self.enabled && self.aside.is_none()
+        self.enabled && self.aside.is_none() && !self.standing_by
     }
 
     /// Have the overlay thread draw ahead of time what a drag will show, or free it all.

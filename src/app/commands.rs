@@ -96,7 +96,7 @@ pub(super) fn run_command(app: &mut App, queued: Queued) {
         Command::ZonesSet(on) => {
             app.cfg.zones.enabled = on;
             persist(app);
-            snap::update(app.hwnd, &app.cfg, &app.sig, &app.mons, snap_aside(app).as_deref());
+            snap::update(app.hwnd, &app.cfg, &app.sig, &app.mons, aside(app).as_deref());
             publish(app);
             Ok(json!({ "on": on }))
         }
@@ -178,7 +178,10 @@ pub(super) fn run_command(app: &mut App, queued: Queued) {
             start_focus_only(app, scope, Some(reply));
             return;
         }
-        Command::WindowSpotlight(on) => Ok(json!({ "on": set_spotlight(app, on) })),
+        Command::WindowSpotlight(on) => {
+            let now = set_spotlight(app, on);
+            Ok(json!({ "on": now, "resumes": app.spotlight_resume }))
+        }
         Command::SeamPause(on) => Ok(json!({ "paused": set_paused(app, on) })),
         Command::WindowGroup(verb) => {
             start_group(app, verb, Some(reply));

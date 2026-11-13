@@ -143,36 +143,44 @@ pub fn configure(owner: HWND, on: bool) -> bool {
 /// logs it once, with the reason and no window titles.
 pub fn check() -> bool {
     if !WATCHING.load(Ordering::SeqCst) {
+        GONE.store(false, Ordering::SeqCst);
         return false;
     }
     let foreground = unsafe { GetForegroundWindow() };
-    // The window that was full screen closed or minimized: it is gone whatever the
-    // foreground still says for a moment.
-    if GONE.swap(false, Ordering::SeqCst)
-        && (foreground.is_invalid() || foreground.0 as isize == WATCHED.load(Ordering::SeqCst))
-    {
-        return leave();
+    // A transient window in front keeps the answer only while the full-screen window is
+    // still there and still covers its screen. If it closed, minimized or shrank, it is
+    // gone, whatever the foreground says.
+    let watched = HWND(WATCHED.load(Ordering::SeqCst) as *mut _);
+    let gone = GONE.swap(false, Ordering::SeqCst);
+    let mut changed = false;
+    if FULL_SCREEN.load(Ordering::SeqCst) && (gone || !still_full(watched)) {
+        changed = leave();
     }
     // Between two windows there is none for a moment. That says nothing.
     if foreground.is_invalid() {
-        return false;
+        return changed;
     }
     match look(foreground) {
-        Seen::Keep => false,
+        Seen::Keep => changed,
         Seen::Full(why) => {
             follow(Some(foreground));
             watch(Some(foreground));
-            let changed = !FULL_SCREEN.swap(true, Ordering::SeqCst);
-            if changed {
+            let entered = !FULL_SCREEN.swap(true, Ordering::SeqCst);
+            if entered {
                 log::info!("full-screen app in front ({why}): Seam steps aside");
             }
-            changed
+            changed || entered
         }
         Seen::Not => {
             follow(Some(foreground));
-            leave()
+            leave() || changed
         }
     }
+}
+
+/// The watched window still exists, isn't minimized and still covers its screen.
+fn still_full(h: HWND) -> bool {
+    !h.0.is_null() && unsafe { IsWindow(Some(h)).as_bool() } && covers_screen(h)
 }
 
 /// No full-screen app is in front. Returns whether there was one.
@@ -196,10 +204,11 @@ fn covers_screen(h: HWND) -> bool {
         }
     }
     let screen = info.rcMonitor;
-    (window.x - screen.left).abs() <= EDGE_SLACK
-        && (window.y - screen.top).abs() <= EDGE_SLACK
-        && (window.x + window.w - screen.right).abs() <= EDGE_SLACK
-        && (window.y + window.h - screen.bottom).abs() <= EDGE_SLACK
+    // Each edge on the screen's or beyond it, give or take a few pixels.
+    window.x <= screen.left + EDGE_SLACK
+        && window.y <= screen.top + EDGE_SLACK
+        && window.x + window.w >= screen.right - EDGE_SLACK
+        && window.y + window.h >= screen.bottom - EDGE_SLACK
 }
 
 /// Whether the foreground window is a full-screen app. Only a window that covers its
@@ -215,7 +224,9 @@ fn look(foreground: HWND) -> Seen {
     if !covers_screen(foreground) {
         return Seen::Not;
     }
-    if winutil::is_full_screen(foreground) {
+    // No title bar: an F11 page, a borderless, OpenGL or Vulkan game.
+    let style = unsafe { GetWindowLongW(foreground, GWL_STYLE) } as u32;
+    if style & WS_CAPTION.0 != WS_CAPTION.0 {
         return Seen::Full("window covers its screen");
     }
     match unsafe { SHQueryUserNotificationState() } {
@@ -242,9 +253,15 @@ fn follow(window: Option<HWND>) {
             let _ = unsafe { UnhookWinEvent(hook) };
         }
         let Some(window) = window else { return };
+        // A thread id of 0 would hook every thread: a window that is gone has none.
+        let thread = thread_of(window);
+        if thread == 0 {
+            FOLLOWED.store(0, Ordering::SeqCst);
+            return;
+        }
         let flags = WINEVENT_OUTOFCONTEXT | WINEVENT_SKIPOWNPROCESS;
         let event = EVENT_OBJECT_LOCATIONCHANGE;
-        let hook = unsafe { SetWinEventHook(event, event, None, Some(on_followed), 0, thread_of(window), flags) };
+        let hook = unsafe { SetWinEventHook(event, event, None, Some(on_followed), 0, thread, flags) };
         if hook.0.is_null() {
             log::info!("standby: window hook {event:#x} not installed");
         } else {
@@ -266,6 +283,10 @@ fn watch(window: Option<HWND>) {
         }
         let Some(window) = window else { return };
         let thread = thread_of(window);
+        if thread == 0 {
+            WATCHED.store(0, Ordering::SeqCst);
+            return;
+        }
         let flags = WINEVENT_OUTOFCONTEXT | WINEVENT_SKIPOWNPROCESS;
         for event in [EVENT_OBJECT_DESTROY, EVENT_SYSTEM_MINIMIZESTART] {
             let hook = unsafe { SetWinEventHook(event, event, None, Some(on_watched), 0, thread, flags) };

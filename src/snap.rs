@@ -330,6 +330,13 @@ fn specs(geometry: &[Placed]) -> Vec<zone_paint::ScreenSpec> {
     geometry.iter().map(spec).collect()
 }
 
+/// Undo of a split: give these windows their old zone numbers back, without moving them.
+pub fn rezone(list: Vec<Zoned>) {
+    if !list.is_empty() {
+        with_engine(|e| e.rezone(list));
+    }
+}
+
 /// A key the drag's keyboard hook passed on, by virtual-key code.
 pub fn drag_key(vk: u32) {
     with_engine(|e| e.drag_key(vk));
@@ -716,9 +723,13 @@ impl Engine {
             show.then(|| drag.geometry.iter().position(|g| g.bounds.contains(pt.x, pt.y))).flatten().map(|screen| {
                 let cell = zones::zone_at(&drag.geometry[screen].cells, pt.x, pt.y);
                 let hit = cell.map(|zone| {
+                    // Tab's choice holds while the pointer stays in the zone it was made in.
+                    if drag.keys.cycle_at != Some((screen, zone)) {
+                        drag.keys.cycle = 0;
+                    }
                     if drag.keys.cycle > 0 {
                         let list = dragkeys::candidates(&drag.geometry[screen].cells, zone, (pt.x, pt.y));
-                        return list[drag.keys.cycle % list.len()];
+                        return list[drag.keys.cycle.min(list.len() - 1)];
                     }
                     if !span {
                         drag.anchor = None;
@@ -756,8 +767,9 @@ impl Engine {
             zone_paint::hide(&drag.geometry[previous.screen].id);
         }
         // The keys are the drag's from the first time zones show, until it ends or Esc.
-        if view.is_some() && !drag.keys.hooked && !drag.keys.off {
-            dragkeys::start(self.owner);
+        if view.is_some() && !drag.keys.hooked && !drag.keys.off && !drag.keys.capped {
+            let own = |key: &str| self.settings.show_key == key || self.settings.span_key == key;
+            dragkeys::start(self.owner, own("ctrl"), own("alt"));
             drag.keys.hooked = true;
         }
         if drag.keys.hooked && !drag.keys.off {

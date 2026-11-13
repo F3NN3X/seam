@@ -252,6 +252,8 @@ struct TileUndo {
     changed: Option<wincontrol::tile::Change>,
     /// Each moved window, put back unless it has moved since.
     back: Vec<wincontrol::tile::Back>,
+    /// Windows a split renumbered, given their old zone numbers back.
+    keep: Vec<snap::Zoned>,
     until: Instant,
 }
 
@@ -893,6 +895,8 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
             // Busy elsewhere: the moves wait for nothing, but a layout can't be saved.
             if with_app(window_planned).is_none() {
                 wincontrol::planned(|_, _, _| false);
+                // Its layout wasn't saved, so there is nothing to undo.
+                wincontrol::take_split();
             }
             LRESULT(0)
         }

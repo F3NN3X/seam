@@ -59,6 +59,8 @@ pub struct Done {
     pub changed: Option<Change>,
     /// Each moved window, for Undo.
     pub back: Vec<Back>,
+    /// Windows a split renumbered without moving, with their old zones, for Undo.
+    pub keep: Vec<crate::snap::Zoned>,
     /// A layout picked on the Zones page rather than a tile.
     pub pick: bool,
     /// A drop that split a zone with the drag's keys rather than a tile.
@@ -242,6 +244,7 @@ pub(super) fn run(job: &Job, at: At) -> Result<Outcome, String> {
         screen: g.id.clone(),
         changed: existing.is_none().then(|| Change { now: Some(layout.clone()), before: None }),
         back,
+        keep: Vec::new(),
         pick: false,
         split: false,
     };
@@ -295,6 +298,7 @@ pub(super) fn pick(job: &Job, p: &Pick) -> Result<Outcome, String> {
         screen: p.screen.clone(),
         changed: Some(Change { now: Some(p.layout.clone()), before: p.before.clone() }),
         back,
+        keep: Vec::new(),
         pick: true,
         split: false,
     };

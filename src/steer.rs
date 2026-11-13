@@ -81,8 +81,20 @@ impl Engine {
             return None;
         }
         let occupants = self.occupants(drag, g, zones::span(g.zones[a], g.zones[b]))?;
-        if occupants.len() > 1 {
-            return None;
+        // Every window the snapping has in these zones, shown or not. Only one that is
+        // visible and wholly inside them can move to the rest; anything else is the usual drop.
+        let leaf_in = |i: &usize| (lo..=hi).contains(i);
+        let held: Vec<(isize, Vec<usize>)> = self
+            .snapped
+            .iter()
+            .filter(|(k, x)| **k != drag.hwnd && x.screen == g.id && x.from.max(x.to) < g.cells.len())
+            .map(|(k, x)| (*k, refit::covered(&g.cells, x.from, x.to)))
+            .filter(|(_, leaves)| leaves.iter().any(leaf_in))
+            .collect();
+        match (held.as_slice(), occupants.as_slice()) {
+            ([], []) => {}
+            ([(k, leaves)], [(h, _)]) if *k == h.0 as isize && leaves.iter().all(leaf_in) => {}
+            _ => return None,
         }
         let gap = (self.settings.gap.min(MAX_GAP) as f32 * g.dpi as f32 / 96.0).round() as i32;
         Some(Split {
@@ -109,13 +121,14 @@ impl Engine {
         let (g, cut) = (&drag.geometry[s], split.hi - split.lo + 1);
         let renumber = |i: usize| if i > split.hi { i + 2 - cut } else { i };
         let occupant = split.occupant.map(|(h, _)| h.0 as isize);
-        let mut back = Vec::new();
+        let (mut back, mut keep) = (Vec::new(), Vec::new());
+        // Every window snapped after the cut, hidden ones too, takes its new numbers.
+        // Undo gives them back their old ones without moving them.
         for (key, x) in self.snapped.iter_mut() {
             if x.screen != id || *key == drag.hwnd || Some(*key) == occupant || x.from.max(x.to) <= split.hi {
                 continue;
             }
-            let place = Placement { hwnd: *key, target: x.at, zone: Some((id.clone(), x.from, x.to)), dpi: g.dpi };
-            back.push(Back { place, set: x.at });
+            keep.push(Zoned { hwnd: *key, zone: (id.clone(), x.from, x.to), at: x.at, moving: false });
             (x.from, x.to) = (renumber(x.from), renumber(x.to));
             winutil::stamp_zones(hwnd_of(*key), &refit::covered(&split.cells, x.from, x.to));
         }
@@ -161,10 +174,23 @@ impl Engine {
             screen: id.clone(),
             changed: Some(Change { now: Some(split.layout.clone()), before: Some(split.before) }),
             back,
+            keep,
             pick: false,
             split: true,
         };
         wincontrol::save_split(self.owner, id, split.layout, done);
+    }
+
+    /// Undo of a split: windows snapped after the cut take their old zone numbers
+    /// back, stamps included, where the screen has its old layout again.
+    pub(super) fn rezone(&mut self, list: Vec<Zoned>) {
+        let geometry = self.geometry();
+        for z in list {
+            let (screen, from, to) = z.zone;
+            let Some(g) = geometry.iter().find(|g| g.id == screen && from.max(to) < g.cells.len()) else { continue };
+            winutil::stamp_zones(hwnd_of(z.hwnd), &refit::covered(&g.cells, from, to));
+            self.keep_snapped(z.hwnd, &screen, (from, to), z.at);
+        }
     }
 
     /// Pause to snap: a pointer that rests over a screen with zones for a moment
@@ -188,6 +214,17 @@ impl Engine {
     /// A key from the drag's hook, while zones show: it changes what the drop does,
     /// and the overlay follows on the spot.
     pub(super) fn drag_key(&mut self, vk: u32) {
+        if vk == 0 {
+            // The hook took itself out at the cap: the strip goes, and the keys are the apps'.
+            let Some(mut drag) = self.drag.take() else { return };
+            (drag.keys.hooked, drag.keys.capped) = (false, true);
+            let view = drag.shown;
+            if view.is_some() {
+                self.present(&mut drag, view);
+            }
+            self.drag = Some(drag);
+            return;
+        }
         let Some(key) = dragkeys::key_of(vk) else { return };
         let Some(drag) = self.drag.as_mut().filter(|d| d.shown.is_some() && !d.keys.off) else { return };
         let name = dragkeys::name(key);
@@ -203,8 +240,10 @@ impl Engine {
                 let n = dragkeys::candidates(cells, zone, (pt.x, pt.y)).len();
                 let show_key = key_code(&self.settings.show_key).unwrap_or(VK_SHIFT);
                 let back = show_key != VK_SHIFT && held(VK_SHIFT);
-                let now = drag.keys.cycle % n;
+                let at = view.map(|v| (v.screen, zone));
+                let now = if drag.keys.cycle_at == at { drag.keys.cycle.min(n - 1) } else { 0 };
                 drag.keys.cycle = if back { (now + n - 1) % n } else { (now + 1) % n };
+                drag.keys.cycle_at = at;
             }
             Key::Part(part) => drag.keys.part = part,
             Key::Side(side) => drag.keys.side = Some(side),

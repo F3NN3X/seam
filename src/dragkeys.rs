@@ -8,19 +8,31 @@
 use crate::log;
 use seam::groups::Side;
 use seam::zones::{self, Rect};
+use std::cell::Cell;
 use std::sync::atomic::{AtomicBool, AtomicIsize, AtomicU32, AtomicU64, Ordering};
 use windows::Win32::Foundation::*;
 use windows::Win32::System::Threading::GetCurrentThreadId;
 use windows::Win32::UI::Input::KeyboardAndMouse::*;
 use windows::Win32::UI::WindowsAndMessaging::*;
 
-/// A key for the drag, with its virtual-key code in wparam.
+/// A key for the drag, with its virtual-key code in wparam, or 0 when the hook
+/// took itself out at the cap.
 pub const WM_APP_DRAG_KEY: u32 = WM_APP + 32;
 /// The hook takes itself out after this long, even if the drag never ends.
 const CAP_MS: u32 = 60_000;
 
-/// Zones show, so the keys are the drag's.
-static LIVE: AtomicBool = AtomicBool::new(false);
+/// The generation of the hook whose drag shows zones, so its keys are the drag's, or 0.
+static LIVE: AtomicU64 = AtomicU64::new(0);
+/// Ctrl and Alt are the drag's own show or span key, so holding them doesn't hand keys back.
+static CTRL_OK: AtomicBool = AtomicBool::new(false);
+static ALT_OK: AtomicBool = AtomicBool::new(false);
+/// Keys whose press was swallowed, so their release is too, and a repeat posts nothing.
+static DOWN: [AtomicBool; 256] = [const { AtomicBool::new(false) }; 256];
+
+thread_local! {
+    /// The generation of the hook on this thread.
+    static MINE: Cell<u64> = const { Cell::new(0) };
+}
 /// The tray window the keys go to.
 static OWNER: AtomicIsize = AtomicIsize::new(0);
 /// The id of the hook's thread, or 0.
@@ -111,6 +123,10 @@ pub struct Steer {
     pub off: bool,
     /// The hook is in for this drag.
     pub hooked: bool,
+    /// The hook took itself out at the cap, so it isn't put back for this drag.
+    pub capped: bool,
+    /// The screen and zone Tab's choice is for. Another zone starts again from the zone itself.
+    pub cycle_at: Option<(usize, usize)>,
     /// The keys pressed, each once, for the log.
     pub used: Vec<&'static str>,
 }
@@ -167,15 +183,31 @@ pub fn hint(back: bool, tab: bool, cut: bool) -> String {
 }
 
 /// Swallow the drag's keys while zones show, and post each press to the tray.
+/// A release is swallowed only when its press was. A press with Ctrl, Alt or Win
+/// held passes, unless that key is the drag's own; Shift is Shift+Tab's.
 unsafe extern "system" fn key_proc(code: i32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
-    if code >= 0 && LIVE.load(Ordering::Relaxed) {
+    if code >= 0 {
         let key = &*(lparam.0 as *const KBDLLHOOKSTRUCT);
-        if key_of(key.vkCode).is_some() {
-            if matches!(wparam.0 as u32, WM_KEYDOWN | WM_SYSKEYDOWN) {
-                let owner = HWND(OWNER.load(Ordering::Relaxed) as *mut _);
-                let _ = PostMessageW(Some(owner), WM_APP_DRAG_KEY, WPARAM(key.vkCode as usize), LPARAM(0));
-            }
+        let slot = &DOWN[(key.vkCode & 0xFF) as usize];
+        let up = matches!(wparam.0 as u32, WM_KEYUP | WM_SYSKEYUP);
+        if up && slot.swap(false, Ordering::Relaxed) {
             return LRESULT(1);
+        }
+        let live = LIVE.load(Ordering::Relaxed);
+        if !up && live != 0 && live == MINE.get() && key_of(key.vkCode).is_some() {
+            let pressed = |vk: VIRTUAL_KEY| GetAsyncKeyState(i32::from(vk.0)) < 0;
+            let other = (pressed(VK_CONTROL) && !CTRL_OK.load(Ordering::Relaxed))
+                || (pressed(VK_MENU) && !ALT_OK.load(Ordering::Relaxed))
+                || pressed(VK_LWIN)
+                || pressed(VK_RWIN);
+            if !other {
+                // A held key repeats its press: swallow it, but it steers only once.
+                if !slot.swap(true, Ordering::Relaxed) {
+                    let owner = HWND(OWNER.load(Ordering::Relaxed) as *mut _);
+                    let _ = PostMessageW(Some(owner), WM_APP_DRAG_KEY, WPARAM(key.vkCode as usize), LPARAM(0));
+                }
+                return LRESULT(1);
+            }
         }
     }
     CallNextHookEx(None, code, wparam, lparam)
@@ -188,6 +220,7 @@ fn run(generation: u64) {
         // Creates this thread's queue, so a stop from now on reaches it.
         let _ = PeekMessageW(&mut msg, None, 0, 0, PM_NOREMOVE);
         OPEN.store(id, Ordering::SeqCst);
+        MINE.set(generation);
         if WANTED.load(Ordering::SeqCst) == generation {
             match SetWindowsHookExW(WH_KEYBOARD_LL, Some(key_proc), None, 0) {
                 Ok(hook) => {
@@ -195,6 +228,9 @@ fn run(generation: u64) {
                     while WANTED.load(Ordering::SeqCst) == generation && GetMessageW(&mut msg, None, 0, 0).as_bool() {
                         if msg.message == WM_TIMER && msg.hwnd.is_invalid() {
                             log::info!("drag keys: the hook took itself out after 60 s");
+                            // The drag hears of it, so its strip goes and the hook isn't put back.
+                            let owner = HWND(OWNER.load(Ordering::SeqCst) as *mut _);
+                            let _ = PostMessageW(Some(owner), WM_APP_DRAG_KEY, WPARAM(0), LPARAM(0));
                             break;
                         }
                         let _ = TranslateMessage(&msg);
@@ -205,18 +241,19 @@ fn run(generation: u64) {
                 Err(e) => log::info!("drag keys: no keyboard hook: {e}"),
             }
         }
-        if WANTED.load(Ordering::SeqCst) == generation {
-            LIVE.store(false, Ordering::SeqCst);
-        }
+        let _ = LIVE.compare_exchange(generation, 0, Ordering::SeqCst, Ordering::SeqCst);
         let _ = OPEN.compare_exchange(id, 0, Ordering::SeqCst, Ordering::SeqCst);
     }
 }
 
-/// Put the hook in for a drag, its keys going to `owner`. It passes every key
-/// through until `set_live` says zones show.
-pub fn start(owner: isize) {
+/// Put the hook in for a drag, its keys going to `owner`. `ctrl` and `alt` say
+/// whether those are the drag's show or span key. It passes every key through
+/// until `set_live` says zones show.
+pub fn start(owner: isize, ctrl: bool, alt: bool) {
     stop();
     OWNER.store(owner, Ordering::SeqCst);
+    CTRL_OK.store(ctrl, Ordering::SeqCst);
+    ALT_OK.store(alt, Ordering::SeqCst);
     let generation = WANTED.load(Ordering::SeqCst);
     if let Err(e) = std::thread::Builder::new().name("seam-dragkeys".into()).spawn(move || run(generation)) {
         log::info!("drag keys: couldn't start: {e}");
@@ -225,12 +262,12 @@ pub fn start(owner: isize) {
 
 /// Whether zones show, so the drag's keys are swallowed. One atomic store.
 pub fn set_live(on: bool) {
-    LIVE.store(on, Ordering::SeqCst);
+    LIVE.store(if on { WANTED.load(Ordering::SeqCst) } else { 0 }, Ordering::SeqCst);
 }
 
 /// The drag ended, or the tray is quitting: take the hook out.
 pub fn stop() {
-    LIVE.store(false, Ordering::SeqCst);
+    LIVE.store(0, Ordering::SeqCst);
     WANTED.fetch_add(1, Ordering::SeqCst);
     let open = OPEN.swap(0, Ordering::SeqCst);
     if open != 0 {

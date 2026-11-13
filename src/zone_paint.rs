@@ -276,6 +276,8 @@ impl Overlay {
                     if let Some(screen) = self.screens.get_mut(&id) {
                         screen.hide();
                     }
+                    // Outlines can sit on any screen, and belong to the preview this hides.
+                    self.outline("", Vec::new());
                     if self.hint.as_ref().is_some_and(|(on, ..)| *on == id) {
                         self.strip(&id, None);
                     }

@@ -91,6 +91,7 @@ pub(super) fn tile_finished(app: &mut App, result: Option<Result<wincontrol::til
                 screen: done.screen,
                 changed: done.changed,
                 back: done.back,
+                keep: done.keep,
                 until,
             });
             // With the overlay up, Ctrl+Z is the undo, and a notice would only get in its way.
@@ -215,6 +216,7 @@ pub(super) fn pick_layout(
                     screen,
                     changed: Some(wincontrol::tile::Change { now: layout, before }),
                     back: Vec::new(),
+                    keep: Vec::new(),
                     pick: true,
                     split: false,
                 };
@@ -243,6 +245,7 @@ pub(super) fn undo_tile(app: &mut App) {
             set_screen_layout(app, &undo.screen, change.before, false);
         }
     }
+    snap::rezone(undo.keep);
     let here = |b: &wincontrol::tile::Back| {
         let h = HWND(b.place.hwnd as *mut _);
         let (set, sized) = (b.set, seam::winutil::is_resizable(h));

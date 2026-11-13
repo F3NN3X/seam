@@ -4,6 +4,8 @@ All notable changes to Seam. The format follows [Keep a Changelog](https://keepa
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-11-13
+
 ### Added
 
 - **Pull a window out of its zone**: drag a snapped window off its zone and hold Ctrl as you let go where no zone shows. If it was alone in its zone, the layout loses that zone, the neighbouring zone takes the space, the windows there move to fill it, and the layout shows as **Changed** with a notice and Undo for 8 seconds. Without Ctrl the gap stays, as before. With **Move and resize from anywhere in a window** on and Ctrl+Alt as its key, Ctrl is held for the whole drag, so it does nothing there.

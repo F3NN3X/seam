@@ -16,6 +16,8 @@ const color = { page: "#202020", deep: "#1A1A1A", text: "#F3F3F3", muted: "#9494
 
 /** Look of a glyph: the outline colour, and whether the seam is lit. */
 const lit = { line: color.text, seam: color.seam, solid: true, width: 1 };
+/** Lit without amber, for keys that follow a choice and not a seam: a solid off-white seam. */
+const on = { line: color.text, seam: color.text, solid: true, width: 1 };
 const idle = { line: color.muted, seam: color.muted, solid: false, width: 1 };
 /** Action list and category icons are single-colour white. */
 const white = { line: "#FFFFFF", seam: "#FFFFFF", solid: true, width: 1.6 };
@@ -68,6 +70,27 @@ const quickLayout = (p) => {
   const cells = `<line x1="16" y1="6" x2="16" y2="14" stroke="${p.line}" stroke-width="${thin}"/>`;
   return { ...base, svg: base.svg + panel + cells };
 };
+
+/** One screen cut into a main zone and two stacked, the zone of the layout in use filled when it is. */
+const applyLayout = (p) => {
+  const thin = Math.min(p.width, 1);
+  const cuts =
+    `<line x1="18" y1="1" x2="18" y2="19" stroke="${p.line}" stroke-width="${thin}"/>` +
+    `<line x1="18" y1="10" x2="31" y2="10" stroke="${p.line}" stroke-width="${thin}"/>`;
+  const main = p === on ? `<rect x="1" y="1" width="17" height="18" fill="${p.line}" fill-opacity="0.35"/>` : "";
+  return { w: 32, h: 20, svg: screen(0, 0, 32, 20, p) + main + cuts };
+};
+
+/** The two screens with pause bars where the seam would be: Seam is standing by. */
+const pauseSeam = (p) => ({
+  w: 32,
+  h: 20,
+  svg:
+    screen(0, 2, 12, 16, p) +
+    screen(18, 0, 14, 20, p) +
+    `<rect x="13.5" y="5" width="1.5" height="10" fill="${p.line}"/>` +
+    `<rect x="15.5" y="5" width="1.5" height="10" fill="${p.line}"/>`,
+});
 
 const zoneStep = (dir) => (p) => {
   const base = zones(p);
@@ -203,6 +226,8 @@ const actions = {
   zones: { draw: zones, states: ["idle", "lit"] },
   "tile-screen": { draw: tileScreen, states: ["lit"] },
   "quick-layout": { draw: quickLayout, states: ["lit"] },
+  "apply-layout": { draw: applyLayout, states: ["idle", "lit"], lit: on },
+  "pause-seam": { draw: pauseSeam, states: ["idle", "lit"], lit: on },
   "zone-next": { draw: zoneStep("next"), states: ["lit"] },
   "zone-prev": { draw: zoneStep("prev"), states: ["lit"] },
   desk: { draw: mark, states: ["lit"] },
@@ -217,11 +242,11 @@ const actions = {
   spotlight: { draw: spotlight, states: ["idle", "lit"] },
 };
 
-for (const [name, { draw, states }] of Object.entries(actions)) {
+for (const [name, { draw, states, lit: look = lit }] of Object.entries(actions)) {
   write(`actions/${name}/icon.svg`, icon(draw));
   for (const state of states) {
     const file = states.length === 1 ? "key.svg" : `key-${state === "lit" ? "on" : "off"}.svg`;
-    write(`actions/${name}/${file}`, key(draw, state === "lit" ? lit : idle));
+    write(`actions/${name}/${file}`, key(draw, state === "lit" ? look : idle));
   }
 }
 

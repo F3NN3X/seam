@@ -213,11 +213,13 @@ A Stream Deck plugin in `integrations/streamdeck` puts Seam on keys. It talks to
 
 | Action | What it does |
 |---|---|
-| Switch workspace | Pick a workspace on the current desk. The key lights while it's in use, with an amber dot once a window of it was moved or minimized. Pressing it puts them back. |
+| Switch workspace | Pick a workspace on the current desk. The key lights while it's in use, with an amber dot once a window of it was moved or minimized. Pressing it puts them back. Tick **Open alongside** to switch without touching the other windows. |
 | Snap back | Puts the windows of the workspace in use back. |
 | Switch back | Switches to the workspace that was in use before this one. |
 | Save windows | Saves the windows into the workspace in use, as **Save windows to the active workspace** does. |
 | Tile screen | Puts the loose windows on the screen under the pointer into its zones. |
+| Apply layout | Pick a screen (a Line Up number, or the screen under the pointer) and one of its layouts. Pressing it gives the screen that layout, as picking it on the Zones page does. The key lights while the screen has it, and its title is the layout's name unless you type your own. |
+| Pause Seam | Pauses or resumes everything Seam does. The key lights while Seam is paused, and says "Full screen" while it waits for a game or full-screen app, unless you typed a title. |
 | Line up screens | Opens Line Up. |
 | Pause or resume remap, Zones on or off | Two-state keys that follow Seam, so they stay right when you change a setting elsewhere. |
 | Next zone, Previous zone | Move the focused window. |

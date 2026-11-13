@@ -68,6 +68,58 @@ pub fn for_screen<'a>(entries: &'a [Entry], device: &'a str) -> impl Iterator<It
     entries.iter().filter(move |e| e.fits(device))
 }
 
+/// A layout the API can name: `zones.layouts` lists them, `zones.apply` takes one.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Offer {
+    pub id: String,
+    pub name: String,
+    /// "template", "custom" or "none".
+    pub kind: &'static str,
+    /// None is no zones.
+    pub layout: Option<ZoneLayout>,
+}
+
+/// The id a screen's layout goes by in the API: its library id, else its template's
+/// name, "none" for no zones. None for a custom tree that isn't in the library.
+pub fn layout_id(layout: Option<&ZoneLayout>) -> Option<String> {
+    let Some(layout) = layout else { return Some("none".into()) };
+    if let Some(id) = &layout.custom {
+        return Some(id.clone());
+    }
+    match layout.template {
+        Template::Custom => None,
+        template => json!(template).as_str().map(String::from),
+    }
+}
+
+/// What a screen with this device path can be given: the built-in templates, the
+/// library layouts offered on it (and the one it uses, wherever that's tied), then none.
+pub fn offers(saved: &[Value], device: &str, now: Option<&ZoneLayout>) -> Vec<Offer> {
+    let in_use = now.and_then(|l| l.custom.as_deref());
+    let templates = Template::ALL.into_iter().filter_map(ZoneLayout::of).map(|layout| Offer {
+        id: layout_id(Some(&layout)).unwrap_or_default(),
+        name: layout.template.title().to_string(),
+        kind: "template",
+        layout: Some(layout),
+    });
+    let custom = entries(saved).into_iter().filter(|e| e.fits(device) || in_use == Some(e.id.as_str())).map(|e| {
+        let layout = Some(e.layout());
+        Offer { id: e.id, name: e.name, kind: "custom", layout }
+    });
+    let none = Offer { id: "none".into(), name: Template::None.title().to_string(), kind: "none", layout: None };
+    templates.chain(custom).chain([none]).collect()
+}
+
+/// The offer with this id, else the one with this name, ignoring case. A library
+/// layout wins a name over a built-in one, so a custom "Grid" is the one asked for.
+pub fn find_offer<'a>(offers: &'a [Offer], wanted: &str) -> Option<&'a Offer> {
+    let same = |a: &str| a.to_lowercase() == wanted.to_lowercase();
+    offers.iter().find(|o| same(&o.id)).or_else(|| {
+        let named = |kind| offers.iter().find(|o| o.kind == kind && same(&o.name));
+        named("custom").or_else(|| offers.iter().find(|o| same(&o.name)))
+    })
+}
+
 pub fn find(saved: &[Value], id: &str) -> Option<Entry> {
     saved.iter().filter(|v| id_of(v) == Some(id)).find_map(entry)
 }
@@ -171,5 +223,20 @@ mod tests {
         edited["tree"] = json!("leaf");
         let config = config.patched(&json!({ "custom_layouts": [edited] })).unwrap();
         assert_eq!(zones::layout_of(&config.desks["S"].zones["M"]).unwrap(), now);
+    }
+
+    #[test]
+    fn a_layout_is_found_by_id_or_name_ignoring_case() {
+        let tree = zones::template_tree(Template::Rows).unwrap();
+        let mine = Entry { id: "a1".into(), name: "Main + stack".into(), tree, screens: vec!["M".into()] };
+        let offers = offers(&[mine.value()], "m", None);
+        let kind = |wanted| find_offer(&offers, wanted).map(|o| o.kind);
+        assert_eq!(kind("GRID"), Some("template"), "an id beats a name");
+        assert_eq!(kind("A1"), Some("custom"));
+        assert_eq!(kind("main + STACK"), Some("custom"), "a library layout wins a name");
+        assert_eq!(kind("mainstack"), Some("template"));
+        assert_eq!(kind("none"), Some("none"));
+        assert_eq!(kind("nope"), None);
+        assert_eq!(layout_id(Some(&ZoneLayout::of(Template::MainStack).unwrap())).as_deref(), Some("mainstack"));
     }
 }

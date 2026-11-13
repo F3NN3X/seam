@@ -1,7 +1,7 @@
 import { action, type KeyAction } from "@elgato/streamdeck";
 import type { JsonObject } from "@elgato/utils";
 import { seam, type SeamState } from "../seam.js";
-import { SeamAction } from "./seam-action.js";
+import { SeamAction, TitledAction } from "./seam-action.js";
 
 /** Actions that carry no settings and have nothing of their own to draw. */
 abstract class Plain extends SeamAction {
@@ -124,6 +124,23 @@ export class Spotlight extends SeamAction {
 
 	protected async press(_key: KeyAction<JsonObject>, _settings: JsonObject, state: SeamState): Promise<void> {
 		await seam.call("window.spotlight", { on: !state.spotlight });
+	}
+}
+
+/** Lit while Seam is paused. While a full-screen app has Seam standing by, the title says so. */
+@action({ UUID: "co.f3nn3x.seam.pause-seam" })
+export class PauseSeam extends TitledAction {
+	constructor() {
+		super(["Pause Seam", "Paused"]);
+	}
+
+	protected async render(key: KeyAction<JsonObject>, _settings: JsonObject, state: SeamState): Promise<void> {
+		await key.setState(state.paused ? 1 : 0);
+		await this.titleKey(key, state.stepped_aside ? "Full screen" : undefined);
+	}
+
+	protected async press(_key: KeyAction<JsonObject>, _settings: JsonObject, state: SeamState): Promise<void> {
+		await seam.call("seam.pause", { on: !state.paused });
 	}
 }
 

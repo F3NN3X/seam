@@ -1,0 +1,138 @@
+<!doctype html>
+<html>
+	<head lang="en">
+		<title>Apply layout</title>
+		<meta charset="utf-8" />
+		<style>
+			body {
+				margin: 0;
+				padding: 8px 12px;
+				font: 13px "Segoe UI", sans-serif;
+				color: #d8d8d8;
+				background: #2d2d2d;
+			}
+			label {
+				display: flex;
+				align-items: center;
+				gap: 12px;
+			}
+			label + label {
+				margin-top: 8px;
+			}
+			span {
+				width: 70px;
+				flex: none;
+			}
+			select {
+				flex: 1;
+				min-width: 0;
+				padding: 4px 6px;
+				font: inherit;
+				color: #d8d8d8;
+				background: #3d3d3d;
+				border: 1px solid #1d1d1d;
+				border-radius: 3px;
+			}
+		</style>
+	</head>
+
+	<body>
+		<label>
+			<span>Screen</span>
+			<select id="screen"></select>
+		</label>
+		<label>
+			<span>Layout</span>
+			<select id="layout" disabled>
+				<option>Loading layouts</option>
+			</select>
+		</label>
+
+		<script>
+			// Stream Deck gives the inspector a socket to the app. The plugin
+			// answers "getLayouts" with the layouts of the chosen screen.
+			let socket;
+			let uuid;
+			let action;
+			let settings = {};
+			let screens = [];
+			const screen = document.getElementById("screen");
+			const layout = document.getElementById("layout");
+
+			const send = (message) => socket.send(JSON.stringify(message));
+			const save = () => send({ event: "setSettings", context: uuid, payload: settings });
+			const ask = () =>
+				send({
+					event: "sendToPlugin",
+					action,
+					context: uuid,
+					payload: { event: "getLayouts", screen: settings.screen ?? "pointer" },
+				});
+
+			function fillScreens() {
+				const chosen = settings.screen ?? "pointer";
+				screen.replaceChildren(new Option("Screen under the pointer", "pointer", false, chosen === "pointer"));
+				// Each screen comes as {number, label}; an older plugin sent bare numbers.
+				const labels = new Map(
+					screens.map((s) => (typeof s === "object" ? [String(s.number), s.label] : [String(s), `Screen ${s}`])),
+				);
+				const shown = new Set(labels.keys());
+				if (chosen !== "pointer") {
+					shown.add(chosen);
+				}
+				for (const number of [...shown].sort((a, b) => a - b)) {
+					const label = labels.get(number) ?? `Screen ${number}, not connected`;
+					screen.append(new Option(label, number, false, number === chosen));
+				}
+			}
+
+			function fillLayouts(items) {
+				layout.replaceChildren();
+				if (!items.some((item) => item.value === settings.id)) {
+					layout.append(new Option("Choose a layout", "", true, true));
+					layout.options[0].disabled = true;
+				}
+				for (const item of items) {
+					const option = new Option(item.label, item.value, false, item.value === settings.id);
+					option.disabled = !!item.disabled;
+					layout.append(option);
+				}
+				layout.disabled = false;
+			}
+
+			screen.addEventListener("change", () => {
+				settings = { ...settings, screen: screen.value };
+				save();
+				ask();
+			});
+
+			layout.addEventListener("change", () => {
+				settings = { ...settings, id: layout.value };
+				save();
+			});
+
+			window.connectElgatoStreamDeckSocket = (port, inUuid, registerEvent, _info, actionInfo) => {
+				uuid = inUuid;
+				const info = JSON.parse(actionInfo);
+				action = info.action;
+				settings = info.payload?.settings ?? {};
+				fillScreens();
+				socket = new WebSocket(`ws://127.0.0.1:${port}`);
+				socket.onopen = () => {
+					send({ event: registerEvent, uuid });
+					ask();
+				};
+				socket.onmessage = (message) => {
+					const data = JSON.parse(message.data);
+					if (data.event === "sendToPropertyInspector" && data.payload?.event === "getLayouts") {
+						screens = data.payload.screens;
+						fillScreens();
+						fillLayouts(data.payload.items);
+					} else if (data.event === "didReceiveSettings") {
+						settings = data.payload?.settings ?? settings;
+					}
+				};
+			};
+		</script>
+	</body>
+</html>

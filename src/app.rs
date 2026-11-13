@@ -446,12 +446,14 @@ fn refresh(app: &mut App) {
 }
 
 fn snapshot(app: &App) -> Snapshot {
+    let desk_zones = app.cfg.desks.get(&app.sig).map(|d| &d.zones);
     let screens = app.mons.iter().enumerate().map(|(i, m)| Screen {
         number: i as u32 + 1,
         id: m.id.clone(),
         name: m.name.clone(),
         primary: m.primary,
         rect: ScreenRect { x: m.rect.left, y: m.rect.top, w: m.rect.width(), h: m.rect.height() },
+        layout: seam::library::layout_id(desk_zones.and_then(|z| z.get(&m.id)).and_then(zones::layout_of).as_ref()),
     });
     let saved_name = app.cfg.desks.get(&app.sig).map(|d| d.name.clone()).filter(|n| !n.is_empty());
     let workspace = app.workspace.as_ref().and_then(|id| {

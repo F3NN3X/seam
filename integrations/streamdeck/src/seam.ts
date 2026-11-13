@@ -8,18 +8,39 @@ export type SeamState = {
 	zones: "on" | "off";
 	/** Spotlight is dimming everything but the focused window. */
 	spotlight?: boolean;
+	/** Seam is paused with `seam.pause`. */
+	paused?: boolean;
+	/** A game or other full-screen app is in front, so Seam waits. */
+	stepped_aside?: boolean;
 	desk: { sig: string; name: string };
+	/** Line Up numbers run from 1. `layout` is the id of the layout the screen has. `name` is the
+	 * monitor's own name, and `rect` where it sits on the desktop, in pixels. */
+	screens?: {
+		number: number;
+		layout: string | null;
+		name?: string;
+		primary?: boolean;
+		rect?: { x: number; y: number; w: number; h: number };
+	}[];
 	/** `drifted`: a window of it was moved or minimized since, so Snap back has work to do. */
 	workspace: { id: string; name: string; drifted?: boolean } | null;
 };
 
 export type Workspace = { id: string; name: string; active: boolean };
 
+/** What `zones.layouts` answers: what a screen can be given, and the id of what it has. */
+export type ScreenLayouts = {
+	number: number;
+	current: string | null;
+	layouts: { id: string; name: string; kind: "template" | "custom" | "none" }[];
+};
+
 /** `offline` is no pipe, `blocked` is Seam answering that other apps are switched off. */
 export type Status = "online" | "offline" | "blocked";
 
 /** Seam's error codes (api.md), plus one of ours for a call that never left. */
 export const NOT_FOUND = 1;
+export const REFUSED = 3;
 export const DISABLED = 5;
 export const OFFLINE = -1;
 
@@ -79,6 +100,11 @@ class SeamConnection {
 
 	workspaces(): Promise<Workspace[]> {
 		return this.call<Workspace[]>("workspaces.list");
+	}
+
+	/** A screen's layouts, by Line Up number or the screen under the pointer. */
+	layouts(number?: number): Promise<ScreenLayouts> {
+		return this.call<ScreenLayouts>("zones.layouts", number === undefined ? {} : { number });
 	}
 
 	#changed(): void {

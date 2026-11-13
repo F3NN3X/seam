@@ -26,7 +26,7 @@
 		{
 			"UUID": "co.f3nn3x.seam.workspace",
 			"Name": "Switch workspace",
-			"Tooltip": "Switch to a workspace on the current desk. The key lights while that workspace is in use, with an amber dot once a window of it was moved or minimized.",
+			"Tooltip": "Switch to a workspace on the current desk, or open it alongside the other windows. The key lights while that workspace is in use, with an amber dot once a window of it was moved or minimized.",
 			"Icon": "imgs/actions/workspace/icon",
 			"PropertyInspectorPath": "ui/workspace.html",
 			"Controllers": [
@@ -121,6 +121,49 @@
 				{
 					"Image": "imgs/actions/quick-layout/key",
 					"Title": "Quick layout",
+					"TitleAlignment": "bottom"
+				}
+			]
+		},
+		{
+			"UUID": "co.f3nn3x.seam.apply-layout",
+			"Name": "Apply layout",
+			"Tooltip": "Give a screen a layout, like picking it on the Zones page. The key lights while the screen has that layout.",
+			"Icon": "imgs/actions/apply-layout/icon",
+			"PropertyInspectorPath": "ui/apply-layout.html",
+			"Controllers": [
+				"Keypad"
+			],
+			"States": [
+				{
+					"Image": "imgs/actions/apply-layout/key-off",
+					"Title": "Apply layout",
+					"TitleAlignment": "bottom"
+				},
+				{
+					"Image": "imgs/actions/apply-layout/key-on",
+					"Title": "Apply layout",
+					"TitleAlignment": "bottom"
+				}
+			]
+		},
+		{
+			"UUID": "co.f3nn3x.seam.pause-seam",
+			"Name": "Pause Seam",
+			"Tooltip": "Pause or resume everything Seam does. The key lights while Seam is paused, and says Full screen while it waits for a full-screen app.",
+			"Icon": "imgs/actions/pause-seam/icon",
+			"Controllers": [
+				"Keypad"
+			],
+			"States": [
+				{
+					"Image": "imgs/actions/pause-seam/key-off",
+					"Title": "Pause Seam",
+					"TitleAlignment": "bottom"
+				},
+				{
+					"Image": "imgs/actions/pause-seam/key-on",
+					"Title": "Paused",
 					"TitleAlignment": "bottom"
 				}
 			]

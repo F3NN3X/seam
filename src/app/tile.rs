@@ -286,10 +286,13 @@ pub(super) fn undo_tile(app: &mut App) {
         seam::winutil::visible_rect(h)
             .is_some_and(|r| near(r.x, set.x) && near(r.y, set.y) && (!sized || (near(r.w, set.w) && near(r.h, set.h))))
     };
-    snap::place_more(undo.back.into_iter().filter(here).map(|b| b.place).collect());
-    if let Some((id, area)) = undo.group {
+    let all = undo.back.len();
+    let back: Vec<_> = undo.back.into_iter().filter(here).map(|b| b.place).collect();
+    // A group gets its old area back only with every window back in it.
+    if let (Some((id, area)), true) = (undo.group, back.len() == all) {
         snap::adhoc_area(id, area);
     }
+    snap::place_more(back);
     log::info!("tile screen: undone");
 }
 

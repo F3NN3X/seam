@@ -115,4 +115,24 @@ mod tests {
         // Too small a piece is no cut.
         assert_eq!(cut(&single(), Rect { x: 0, y: 0, w: 200, h: 600 }, 0, Side::Left, 0.5), None);
     }
+
+    #[test]
+    fn a_window_leaving_its_group_closes_it_up() {
+        let area = Rect { x: 0, y: 0, w: 1800, h: 1000 };
+        let three = zones::template_tree(zones::Template::Columns).unwrap();
+        let xs = |tree: &Node, area: Rect| zones::rects(tree, area, 0).iter().map(|c| (c.x, c.w)).collect::<Vec<_>>();
+        // The first column, one whole side: the area shrinks to the other two, which stay.
+        let (tree, shrunk) = remove(&three, area, 0, 0).unwrap();
+        assert_eq!(shrunk, Rect { x: 600, y: 0, w: 1200, h: 1000 });
+        assert_eq!(xs(&tree, shrunk), vec![(600, 600), (1200, 600)]);
+        // The last column: the middle one takes its room, and the area stays.
+        let (tree, same) = remove(&three, area, 0, 2).unwrap();
+        assert_eq!(same, area);
+        assert_eq!(xs(&tree, same), vec![(0, 600), (600, 1200)]);
+        // With the gap, the area keeps the gap around what is left.
+        let (_, shrunk) = remove(&three, area, 8, 0).unwrap();
+        assert_eq!(shrunk, Rect { x: 596, y: 0, w: 1204, h: 1000 });
+        // One zone is no group to leave.
+        assert_eq!(remove(&single(), area, 0, 0), None);
+    }
 }

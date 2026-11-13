@@ -19,6 +19,9 @@ const PREFIX: &str = "adhoc:";
 /// What a group, a window in zones or a window as big as its screen answers.
 const FILLS: &str = "Already fills its screen";
 
+/// Each window of a group and its zone in the tree.
+type Members = Vec<(isize, usize)>;
+
 /// Windows put side by side on a screen with no zones.
 pub(super) struct Adhoc {
     pub(super) id: u64,
@@ -27,6 +30,9 @@ pub(super) struct Adhoc {
     pub(super) area: Rect,
     /// The gap at that screen's scale when the group was made.
     pub(super) gap: i32,
+    /// The screen's work area and DPI then. A group whose screen changed since ends.
+    pub(super) work: Rect,
+    pub(super) dpi: u32,
     pub(super) tree: Node,
     /// Each window and its zone in `tree`.
     pub(super) members: Vec<(isize, usize)>,
@@ -118,6 +124,34 @@ pub fn fit(hwnd: HWND) -> Result<Fitted, String> {
     with_engine(|e| e.fit(hwnd)).unwrap_or_else(|| Err("Seam is busy, try again".into()))
 }
 
+/// A member's state changed while a group is about: closed, minimized, maximized or moved.
+unsafe extern "system" fn on_member(_: HWINEVENTHOOK, event: u32, hwnd: HWND, object: i32, child: i32, _: u32, _: u32) {
+    if object == OBJID_WINDOW.0 && child == 0 {
+        with_engine(|e| e.member_changed(hwnd, event));
+    }
+}
+
+unsafe extern "system" fn on_settled(_: HWND, _: u32, id: usize, _: u32) {
+    with_engine(|e| {
+        if e.adhoc_timer == id {
+            e.adhoc_timer = 0;
+            e.adhoc_settled();
+        }
+    });
+    unsafe {
+        let _ = KillTimer(None, id);
+    }
+}
+
+/// How long a member has to stay put before Seam looks where it is.
+const SETTLED_MS: u32 = 250;
+/// A window this close to its new place isn't moved there.
+const NEAR_PX: i32 = 2;
+
+fn near(a: Rect, b: Rect) -> bool {
+    [(a.x, b.x), (a.y, b.y), (a.w, b.w), (a.h, b.h)].iter().all(|(p, q)| (p - q).abs() <= NEAR_PX)
+}
+
 impl Engine {
     /// The gap at a screen's scale.
     fn gap_px(&self, dpi: u32) -> i32 {
@@ -141,43 +175,128 @@ impl Engine {
         }
     }
 
-    /// Take a window out of its ad-hoc group. The zone beside it takes its room and
-    /// its windows move there, unless that leaves the area smaller, and a group of
-    /// one is no group.
+    /// Group `i` once `key` has left it: its tree, area and members, renumbered. The
+    /// zone beside the one it leaves takes its room, unless that leaves the area
+    /// smaller. None when that leaves no group, as one window is none.
+    fn closed_up(&self, i: usize, key: isize) -> Option<(Node, Rect, Members)> {
+        let a = self.adhoc.get(i)?;
+        let leaf = a.members.iter().find(|(k, _)| *k == key)?.1;
+        let shift = |l: usize| if l > leaf { l - 1 } else { l };
+        let members: Vec<(isize, usize)> =
+            a.members.iter().filter(|(k, _)| *k != key).map(|&(k, l)| (k, shift(l))).collect();
+        if members.len() < 2 {
+            return None;
+        }
+        let (tree, area) = beside::remove(&a.tree, a.area, a.gap, leaf)?;
+        Some((tree, area, members))
+    }
+
+    /// Take a window out of its ad-hoc group. The windows that close up move to
+    /// their new places, and a group of one is no group.
     pub(super) fn leave_adhoc(&mut self, key: isize) {
-        let Some((i, leaf)) = self.adhoc_of(key) else { return };
-        let a = &mut self.adhoc[i];
-        a.members.retain(|(k, _)| *k != key);
-        let closed = beside::remove(&a.tree, a.area, a.gap, leaf).filter(|_| a.members.len() >= 2);
-        let Some((tree, area)) = closed else {
+        let Some((i, _)) = self.adhoc_of(key) else { return };
+        let Some((tree, area, members)) = self.closed_up(i, key) else {
             log::info!("snap beside: a window left its group, which is no group now");
             self.adhoc.remove(i);
             self.sync_dividers();
+            self.sync_adhoc_hooks();
             return;
         };
-        let before = a.cells();
-        (a.tree, a.area) = (tree, area);
-        let after = a.cells();
-        let dpi = self.screens.iter().find(|s| s.id == a.screen).and_then(|s| work_area(s.bounds)).map_or(96, |w| w.1);
+        let a = &self.adhoc[i];
+        let after = zones::rects(&tree, area, a.gap);
         let mut moves = Vec::new();
-        for (k, l) in a.members.iter_mut() {
-            let old = *l;
-            if *l > leaf {
-                *l -= 1;
-            }
-            // One that is going too isn't brought back to move it.
-            let h = hwnd_of(*k);
+        for &(k, l) in &members {
+            // One that is going too isn't brought back to move it, and one already there stays.
+            let h = hwnd_of(k);
             let away = winutil::is_minimized(h) || winutil::is_maximized(h);
-            if let (Some(was), Some(set), false) = (before.get(old), after.get(*l), away)
-                && was != set
+            let now = winutil::visible_rect(h).filter(|_| !away);
+            if let (Some(now), Some(set)) = (now, after.get(l).copied())
+                && !near(now, set)
             {
-                moves.push(Placement { hwnd: *k, target: *set, zone: None, dpi });
+                moves.push(Placement { hwnd: k, target: set, zone: None, dpi: a.dpi });
             }
         }
-        log::info!("snap beside: a window left its group, {} stay", a.members.len());
+        log::info!("snap beside: a window left its group, {} stay", members.len());
+        let a = &mut self.adhoc[i];
+        (a.tree, a.area, a.members) = (tree, area, members);
         self.queued.extend(moves);
         self.window_pump();
         self.sync_dividers();
+    }
+
+    /// Hear of members closing, minimizing and moving while there is a group.
+    pub(super) fn sync_adhoc_hooks(&mut self) {
+        let wanted = self.active() && !self.adhoc.is_empty();
+        if wanted == !self.member_hooks.is_empty() {
+            return;
+        }
+        if !wanted {
+            for hook in self.member_hooks.drain(..) {
+                let _ = unsafe { UnhookWinEvent(hook) };
+            }
+            return;
+        }
+        let flags = WINEVENT_OUTOFCONTEXT | WINEVENT_SKIPOWNPROCESS;
+        for event in [EVENT_SYSTEM_MINIMIZESTART, EVENT_OBJECT_DESTROY, EVENT_OBJECT_LOCATIONCHANGE] {
+            let hook = unsafe { SetWinEventHook(event, event, None, Some(on_member), 0, 0, flags) };
+            if hook.0.is_null() {
+                log::info!("snap beside: a group hook wasn't installed");
+            } else {
+                self.member_hooks.push(hook);
+            }
+        }
+    }
+
+    /// A member closed, minimized or maximized leaves its group at once. One that
+    /// moved is looked at once it has stayed put a moment, since Seam's own moves of
+    /// a group send the same event.
+    fn member_changed(&mut self, hwnd: HWND, event: u32) {
+        let key = hwnd.0 as isize;
+        if self.adhoc_of(key).is_none() {
+            return;
+        }
+        let gone = event == EVENT_OBJECT_DESTROY || event == EVENT_SYSTEM_MINIMIZESTART;
+        if gone || winutil::is_minimized(hwnd) || winutil::is_maximized(hwnd) {
+            self.leave_adhoc(key);
+            return;
+        }
+        self.settle_later();
+    }
+
+    fn settle_later(&mut self) {
+        unsafe {
+            if self.adhoc_timer != 0 {
+                let _ = KillTimer(None, self.adhoc_timer);
+            }
+            self.adhoc_timer = SetTimer(None, 0, SETTLED_MS, Some(on_settled));
+        }
+    }
+
+    /// Members stayed put: the ones no longer where their group put them leave it.
+    /// A drag of a window or a handle moves members on purpose, so it waits for that.
+    fn adhoc_settled(&mut self) {
+        if self.drag.is_some() || dividers::dragging() {
+            self.settle_later();
+            return;
+        }
+        self.prune_adhoc(true);
+    }
+
+    /// The screens or their work areas changed: a group on a screen that changed, or
+    /// was given zones, ends where its windows are, with nothing moved.
+    pub(super) fn adhoc_screens_changed(&mut self) {
+        let before = self.adhoc.len();
+        let screens = &self.screens;
+        let same = |a: &Adhoc| {
+            let s = screens.iter().find(|s| s.id == a.screen && s.layout.is_none());
+            s.and_then(|s| work_area(s.bounds)) == Some((a.work, a.dpi))
+        };
+        self.adhoc.retain(same);
+        if self.adhoc.len() < before {
+            log::info!("snap beside: {} groups ended with a change of their screen", before - self.adhoc.len());
+            self.sync_dividers();
+        }
+        self.sync_adhoc_hooks();
     }
 
     /// Drop the members that are gone: closed, minimized or maximized, and with
@@ -253,26 +372,33 @@ impl Engine {
         }
         let screen = self.screens.iter().position(|s| s.bounds.contains(at.x + at.w / 2, at.y + at.h / 2))?;
         let b = Beside { screen, target, at, side, part: drag.keys.part.unwrap_or(Part::Half) };
-        if let Some((_, found)) = drag.tried.filter(|(t, _)| *t == b) {
+        let id = &self.screens[screen].id;
+        let s = drag.geometry.iter().position(|g| g.id == *id);
+        let under = s.and_then(|s| zones::zone_at(&drag.geometry[s].cells, pt.x, pt.y));
+        if let Some((.., found)) = drag.tried.filter(|(t, u, _)| *t == b && *u == under) {
             return found.map(|view| (b, view));
         }
-        let id = &self.screens[screen].id;
-        let found = match drag.geometry.iter().position(|g| g.id == *id) {
+        let found = match s {
             Some(s) => self.beside_split(drag, s, &b, pt).map(Some),
             None => self.adhoc_plan(drag.hwnd, &b).map(|_| None),
         };
-        drag.tried = Some((b, found));
+        drag.tried = Some((b, under, found));
         found.map(|view| (b, view))
     }
 
     /// On a screen with zones: the view that splits the zones the target holds, or
-    /// the zone under the pointer when it holds none. None when they can't be split.
+    /// the zone under the pointer when it holds none but mostly fits it. None when
+    /// they can't be split, or a loose window lies over the zone, so the drop is the
+    /// usual one.
     fn beside_split(&self, drag: &Drag, s: usize, b: &Beside, pt: POINT) -> Option<View> {
         let g = &drag.geometry[s];
         let held = self.zones_held(hwnd_of(b.target), &drag.geometry, Some(b.at), false);
         let (a, z) = match held.filter(|(id, ..)| *id == g.id) {
             Some((_, a, z)) => (a, z),
-            None => zones::zone_at(&g.cells, pt.x, pt.y).map(|z| (z, z))?,
+            None => {
+                let z = zones::zone_at(&g.cells, pt.x, pt.y)?;
+                swap::fits_mutually(b.at, g.zones[z]).then_some((z, z))?
+            }
         };
         let cut = (b.part, b.side);
         self.split_plan(drag, s, (a, z), cut)?;
@@ -280,22 +406,27 @@ impl Engine {
     }
 
     /// On a screen with no zones: the target's zone in its group, or a new group of
-    /// it alone, cut in two, with the dropped window in its part. None when either
-    /// piece would be too small.
+    /// it alone, cut in two, with the dropped window in its part. A dragged member
+    /// of the same group has left it first, as it will have at the drop. None when
+    /// either piece would be too small.
     pub(super) fn adhoc_plan(&self, dragged: isize, b: &Beside) -> Option<Plan> {
         let screen = self.screens.get(b.screen)?;
-        let found = self.adhoc_of(b.target).filter(|(i, _)| self.adhoc[*i].screen == screen.id);
-        let (group, area, gap, tree, members, leaf) = match found {
-            Some((i, leaf)) => {
-                let a = &self.adhoc[i];
-                let members = a.members.iter().filter(|(k, _)| *k != dragged).copied().collect();
-                (Some(i), a.area, a.gap, a.tree.clone(), members, leaf)
+        let found = self.adhoc_of(b.target).map(|(i, _)| i).filter(|i| self.adhoc[*i].screen == screen.id);
+        let state = found.and_then(|i| {
+            let a = &self.adhoc[i];
+            if a.members.iter().any(|(k, _)| *k == dragged) {
+                return self.closed_up(i, dragged).map(|(tree, area, members)| (i, area, a.gap, tree, members));
             }
+            Some((i, a.area, a.gap, a.tree.clone(), a.members.clone()))
+        });
+        let (group, area, gap, tree, members) = match state {
+            Some((i, area, gap, tree, members)) => (Some(i), area, gap, tree, members),
             None => {
                 let gap = self.gap_px(work_area(screen.bounds)?.1);
-                (None, beside::area_around(b.at, gap), gap, beside::single(), vec![(b.target, 0)], 0)
+                (None, beside::area_around(b.at, gap), gap, beside::single(), vec![(b.target, 0)])
             }
         };
+        let leaf = members.iter().find(|(k, _)| *k == b.target)?.1;
         let (tree, at, rest) = beside::cut(&tree, area, leaf, b.side, b.part.share())?;
         let moved = |l: usize| match l {
             l if l == leaf => rest,
@@ -322,7 +453,8 @@ impl Engine {
             return;
         };
         let screen = &self.screens[b.screen];
-        let (id, dpi) = (screen.id.clone(), work_area(screen.bounds).map_or(96, |w| w.1));
+        let Some((work, dpi)) = work_area(screen.bounds) else { return };
+        let id = screen.id.clone();
         self.place(hwnd, plan.rect, winutil::monitor_dpi(hwnd) != dpi, false);
         self.queued.push_back(Placement { hwnd: b.target, target: plan.target, zone: None, dpi });
         self.window_pump();
@@ -332,9 +464,10 @@ impl Engine {
             None => {
                 self.adhoc_next += 1;
                 let (area, gap, tree, members) = (plan.area, plan.gap, plan.tree, plan.members);
-                self.adhoc.push(Adhoc { id: self.adhoc_next, screen: id, area, gap, tree, members });
+                self.adhoc.push(Adhoc { id: self.adhoc_next, screen: id, area, gap, work, dpi, tree, members });
             }
         }
+        self.sync_adhoc_hooks();
         log::info!("snap beside: ad-hoc group on screen {}, {} {:?}, {n} windows", b.screen + 1, b.part.name(), b.side);
         self.sync_dividers();
     }
@@ -385,6 +518,14 @@ impl Engine {
             wincontrol::movable(hwnd_of(*k), &self.exclude)?;
         }
         let (before, after) = (a.cells(), zones::rects(&a.tree, work, a.gap));
+        // No window goes below the smallest size its app allows, as Seam knows it now.
+        for &(k, leaf) in &a.members {
+            let (w, h) = minsize::cached(hwnd_of(k), dpi);
+            if after.get(leaf).is_some_and(|c| c.w < w || c.h < h) {
+                let name = winutil::app_name(hwnd_of(k)).unwrap_or_else(|| "A window".into());
+                return Err(format!("{name} can't be made that small"));
+            }
+        }
         let mut back = Vec::new();
         for &(k, leaf) in &a.members {
             let (Some(was), Some(set)) = (before.get(leaf).copied(), after.get(leaf).copied()) else { continue };

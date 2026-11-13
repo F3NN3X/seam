@@ -205,11 +205,12 @@ impl Engine {
 
     /// Pause to snap: a pointer that rests over a screen with zones for a moment
     /// shows them, and from then on the drag is as if the show key were held. With
-    /// snap beside on, any screen counts, as a window's edge may be under the pointer.
+    /// snap beside on, so does one that rests on a window's edge it can drop beside.
     pub(super) fn pause(&self, drag: &mut Drag, pt: POINT, pressed: bool) {
-        let beside = self.beside_on() && self.screens.iter().any(|s| s.bounds.contains(pt.x, pt.y));
-        let over = beside || drag.geometry.iter().any(|g| g.bounds.contains(pt.x, pt.y));
-        if !self.settings.pause_to_snap || drag.paused || pressed || !over {
+        let armed = self.settings.pause_to_snap && !drag.paused && !pressed;
+        let zoned = |drag: &Drag| drag.geometry.iter().any(|g| g.bounds.contains(pt.x, pt.y));
+        let over = armed && (zoned(drag) || (self.beside_on() && self.beside_at(drag, pt).is_some()));
+        if !over {
             drag.rest = None;
             return;
         }

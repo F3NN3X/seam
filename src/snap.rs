@@ -139,7 +139,7 @@ struct Drag {
     /// The window edge the pointer is on, while that is what a drop does.
     beside: Option<adhoc::Beside>,
     /// The last edge looked at, and what a drop there would show, if anything.
-    tried: Option<(adhoc::Beside, Option<Option<View>>)>,
+    tried: Option<(adhoc::Beside, Option<usize>, Option<Option<View>>)>,
     /// Windows looked at as targets, and whether Seam may move each.
     allowed: Vec<(isize, bool)>,
 }
@@ -200,6 +200,10 @@ struct Engine {
     adhoc: Vec<adhoc::Adhoc>,
     /// The last ad-hoc group's id.
     adhoc_next: u64,
+    /// Hooks on closing, minimizing and moving while there is a group.
+    member_hooks: Vec<HWINEVENTHOOK>,
+    /// Waits for a moved member to stay put.
+    adhoc_timer: usize,
 }
 
 /// Where window control wants a window, worked out on its worker.
@@ -292,13 +296,8 @@ pub fn update(owner: HWND, cfg: &Config, sig: &str, mons: &[Mon], aside: Option<
         e.exclude = exclude;
         e.drag_size = drag_size;
         e.screens = screens;
-        // An ad-hoc group is for a screen with no zones, which this one may now have.
-        let before = e.adhoc.len();
-        let bare: Vec<String> = e.screens.iter().filter(|s| s.layout.is_none()).map(|s| s.id.clone()).collect();
-        e.adhoc.retain(|a| bare.contains(&a.screen));
-        if e.adhoc.len() < before {
-            log::info!("snap beside: {} groups ended with their screen", before - e.adhoc.len());
-        }
+        // An ad-hoc group is for a screen with no zones, as it was when it was made.
+        e.adhoc_screens_changed();
         if !e.settings.refit || e.aside.is_some() || e.standing_by {
             e.refit_stop();
         }
@@ -311,6 +310,7 @@ pub fn update(owner: HWND, cfg: &Config, sig: &str, mons: &[Mon], aside: Option<
 /// The work area changed (a moved taskbar, a scaling change), so the zones' pixels did.
 pub fn work_area_changed() {
     with_engine(|e| {
+        e.adhoc_screens_changed();
         e.sync_overlay();
         e.sync_dividers();
     });
@@ -781,6 +781,10 @@ impl Engine {
         let span = show && span_key.is_some_and(held);
         // A window's edge under the pointer comes first, then the zones as usual.
         let beside = (show && self.beside_on()).then(|| self.beside_at(&mut drag, pt)).flatten();
+        // A share picked beside a window is that edge's, and doesn't carry into the zones.
+        if beside.is_none() && drag.beside.is_some() {
+            drag.keys.part = None;
+        }
         let zoned = show && beside.is_none();
         let view =
             zoned.then(|| drag.geometry.iter().position(|g| g.bounds.contains(pt.x, pt.y))).flatten().map(|screen| {

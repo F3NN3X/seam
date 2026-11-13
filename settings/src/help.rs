@@ -127,6 +127,7 @@ pub const TOPICS: &[Topic] = &[
                 "**Show zones** and **Span zones** change the two keys",
                 "**Gap** sets the space between zones and the screen edge",
                 "**Restore size when dragged out** gives a window its old size back when you drop it outside a zone",
+                "**Swap with the window already in a zone** makes a window you drop on a held zone trade places with it; off lets them overlap",
             ]),
             Text("Drag the edge of a window in a zone and the windows in the zones on the other side follow it. No window goes below the smallest size its app allows: the edge beyond it moves instead. When you let go, the window fits its zone again and the screen's layout shows as **Changed**. Esc puts everything back. **Resize neighbours with a window** turns this off."),
             Text("Between two snapped windows, the gap has a handle you can't see until the pointer is on it, then a slim bar shows. Drag it and the windows on both sides follow, with the same smallest sizes, and the layout is saved as **Changed** when you let go. Esc puts everything back. Right-click it to give the left or top window 1/2, 1/3, 2/3, 1/4 or 3/4 of the two, or to take one of them out: it leaves its zones with its old size, and the others stay. A gap under 4 px has no handles, so **Size menu** on Shortcuts opens the same choices for the focused window. It has no key until you set one. **Handles between snapped windows** turns the handles off."),

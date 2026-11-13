@@ -123,6 +123,12 @@ const ENTRIES: &[Entry] = &[
         "Drag one to resize both sides. Right-click for sizes",
         "divider handle gap drag share half third quarter take out",
     ),
+    entry(
+        Page::Zones,
+        "Swap with the window already in a zone",
+        "Off lets windows overlap in a zone",
+        "swap exchange trade overlap drop occupied",
+    ),
     entry(Page::Zones, "Focus border", "Colour the border of the window that has focus", "windows highlight active"),
     entry(
         Page::Zones,

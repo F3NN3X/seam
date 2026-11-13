@@ -850,6 +850,14 @@ pub fn render(panel: &mut Panel, window: &mut Window, cx: &mut Context<Panel>) -
                 view.update(cx, |panel, cx| panel.patch(json!({ "zones": { "resize_neighbours": on } }), window, cx))
             }
         });
+    let swap = switch("zone-swap", "Swap with the window already in a zone", zones_cfg.swap_on_drop, window, cx, {
+        let view = view.clone();
+        move |on, window, cx| {
+            view.update(cx, |panel, cx| panel.patch(json!({ "zones": { "swap_on_drop": on } }), window, cx))
+        }
+    });
+    let swap_row =
+        row("Swap with the window already in a zone", Some("Off lets windows overlap in a zone".into()), swap, p);
     let neighbours_row = row(
         "Resize neighbours with a window",
         Some("Windows in the zones next to it follow its edge".into()),
@@ -1203,7 +1211,7 @@ pub fn render(panel: &mut Panel, window: &mut Window, cx: &mut Context<Panel>) -
                 .flex_col()
                 .gap(px(12.))
                 .child(snapping)
-                .child(card(vec![neighbours_row, handles_row, on_screen_row, refit_row], p)),
+                .child(card(vec![swap_row, neighbours_row, handles_row, on_screen_row, refit_row], p)),
             p,
         ))
         .child(section("Windows", windows_card, p))

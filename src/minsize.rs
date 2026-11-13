@@ -126,6 +126,18 @@ pub fn of(h: HWND, dpi: u32) -> (i32, i32) {
     (scale(at96.0, 96, dpi), scale(at96.1, 96, dpi))
 }
 
+/// The smallest visible frame of `h` at `dpi` from what is already known, never asking
+/// the app, so the main thread may use it. A window not seen before gets the system's floor.
+pub fn cached(h: HWND, dpi: u32) -> (i32, i32) {
+    let floor = floor(margins(h));
+    let key = key(h);
+    let mut guard = KNOWN.lock().unwrap_or_else(|e| e.into_inner());
+    let known = guard.get_or_insert_with(Known::default);
+    let asked = key.as_ref().and_then(|k| known.asked.get(k)).copied().unwrap_or(floor);
+    let seen = key.and_then(|k| known.seen.get(&k).map(|(size, _)| *size)).unwrap_or_default();
+    (scale(asked.0.max(seen.0), 96, dpi), scale(asked.1.max(seen.1), 96, dpi))
+}
+
 /// A placement ended with the window bigger than `target`, so the app wouldn't go
 /// smaller: count that side as its minimum for a while. Only queues it, for the
 /// worker.

@@ -177,6 +177,8 @@ pub struct ZoneSettings {
     pub resize_neighbours: bool,
     /// Thin handles in the gap between snapped windows, to drag or right-click.
     pub divider_handles: bool,
+    /// Dropping a window into a zone another window holds swaps them instead of overlapping.
+    pub swap_on_drop: bool,
     /// Exe file names, case-insensitive.
     pub exclude: Vec<String>,
 }
@@ -193,6 +195,7 @@ impl Default for ZoneSettings {
             edit_on_screen: true,
             resize_neighbours: true,
             divider_handles: true,
+            swap_on_drop: true,
             exclude: Vec::new(),
         }
     }

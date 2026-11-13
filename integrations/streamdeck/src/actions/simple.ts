@@ -136,11 +136,7 @@ export class PauseSeam extends TitledAction {
 
 	protected async render(key: KeyAction<JsonObject>, _settings: JsonObject, state: SeamState): Promise<void> {
 		await key.setState(state.paused ? 1 : 0);
-		await this.titleKey(key, this.titleFor(_settings, state));
-	}
-
-	protected titleFor(_settings: JsonObject, state: SeamState): string | undefined {
-		return state.stepped_aside ? "Full screen" : undefined;
+		await this.titleKey(key, state.stepped_aside ? "Full screen" : undefined);
 	}
 
 	protected async press(_key: KeyAction<JsonObject>, _settings: JsonObject, state: SeamState): Promise<void> {

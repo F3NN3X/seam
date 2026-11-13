@@ -34,26 +34,23 @@ export class ApplyLayout extends TitledAction<Settings> {
 	}
 
 	protected async render(key: KeyAction<Settings>, settings: Settings, state: SeamState): Promise<void> {
-		await this.titleKey(key, this.titleFor(settings));
 		if (!settings.id && !settings.name) {
+			await this.titleKey(key, undefined);
 			await key.setState(0);
 			return;
 		}
+		// The layouts give the current name, so a rename in the library shows. A screen that isn't connected has none.
 		const number = screenNumber(settings);
+		const offered = await seam.layouts(number).catch(() => undefined);
+		const layout = offered && chosen(settings, offered);
+		await this.titleKey(key, layout?.name ?? settings.name);
 		if (number !== undefined) {
-			// The state carries each screen's layout, so a fixed screen needs no call. One that isn't connected stays unlit.
+			// The state carries each screen's layout, so a fixed screen's lit state needs no call.
 			const has = state.screens?.find((s) => s.number === number)?.layout;
 			await key.setState(settings.id && has === settings.id ? 1 : 0);
 			return;
 		}
-		// Only Seam knows the screen under the pointer.
-		const offered = await seam.layouts().catch(() => undefined);
-		const layout = offered && chosen(settings, offered);
 		await key.setState(layout && layout.id === offered.current ? 1 : 0);
-	}
-
-	protected titleFor(settings: Settings): string | undefined {
-		return settings.name;
 	}
 
 	protected async press(_key: KeyAction<Settings>, settings: Settings): Promise<void> {

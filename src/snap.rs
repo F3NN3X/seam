@@ -127,6 +127,10 @@ struct Drag {
     /// The other windows a drop could swap with, topmost first, and where each was
     /// when the drag began: one look at the windows, for every preview.
     others: Vec<(isize, Rect)>,
+    /// `others` was read, the first time zones showed.
+    looked: bool,
+    /// Moves posted at drag start, and where to, as they may not have landed yet.
+    landed: Vec<(isize, Rect)>,
     /// The pointer rested, so zones show as if the show key were held.
     paused: bool,
 }
@@ -641,9 +645,8 @@ impl Engine {
         let was_maximized = winutil::is_maximized(hwnd);
         let zone = current.map(|(_, zone)| zone);
         let old_zone =
-            if geometry.is_empty() { zone.clone() } else { self.zones_held(&geometry, frame, was_maximized) };
+            if geometry.is_empty() { zone.clone() } else { self.zones_held(hwnd, &geometry, frame, was_maximized) };
         let edges = self.edges_start(hwnd, &geometry, (zone, stamped), was_maximized);
-        let others = if geometry.is_empty() { Vec::new() } else { self.snapshot(key, &landed) };
         // The handles stay out of the way of any drag, and come back at its end.
         dividers::hide();
         self.drag = Some(Drag {
@@ -664,7 +667,9 @@ impl Engine {
             keys: dragkeys::Steer::default(),
             rest: None,
             paused: false,
-            others,
+            others: Vec::new(),
+            looked: false,
+            landed,
         });
     }
 
@@ -791,6 +796,11 @@ impl Engine {
             zone_paint::hide(&drag.geometry[previous.screen].id);
         }
         // The keys are the drag's from the first time zones show, until it ends or Esc.
+        // One look at the windows a drop could swap with, the first time zones show.
+        if view.is_some() && !drag.looked {
+            drag.others = self.snapshot(drag.hwnd, &drag.landed);
+            drag.looked = true;
+        }
         if view.is_some() && !drag.keys.hooked && !drag.keys.off && !drag.keys.capped {
             let show_key = key_code(&self.settings.show_key).unwrap_or(VK_SHIFT);
             let span_key = key_code(&self.settings.span_key);
@@ -1033,6 +1043,12 @@ impl Engine {
         let h = hwnd_of(p.hwnd);
         if !unsafe { IsWindow(Some(h)) }.as_bool() {
             return None;
+        }
+        // Across a DPI change, or out of maximized, it takes the steps with their checks.
+        if winutil::is_maximized(h) || winutil::monitor_dpi(h) != p.dpi {
+            let at = (p.hwnd, p.target);
+            self.place_queued(p);
+            return Some(at);
         }
         let window = winutil::window_rect(h)?;
         let visible = winutil::visible_rect(h).unwrap_or(window);

@@ -163,21 +163,32 @@ impl Engine {
     pub(super) fn refresh(&self, drag: &mut Drag) {
         let Some(view) = drag.shown else { return };
         let bounds = drag.geometry[view.screen].bounds;
-        for (key, r) in drag.others.iter_mut() {
-            if overlaps(*r, bounds) {
-                if let Some(now) = winutil::visible_rect(hwnd_of(*key)) {
-                    *r = now;
-                }
+        // One closed, minimized or hidden since is no longer there to swap with.
+        drag.others.retain_mut(|(key, r)| {
+            if !overlaps(*r, bounds) {
+                return true;
             }
-        }
+            let h = hwnd_of(*key);
+            let there = unsafe { IsWindow(Some(h)) }.as_bool() && !winutil::is_minimized(h) && !winutil::is_cloaked(h);
+            match winutil::visible_rect(h).filter(|_| there) {
+                Some(now) => {
+                    *r = now;
+                    true
+                }
+                None => false,
+            }
+        });
     }
 
     /// The zones the dragged window was in when the drag began, from where it was:
     /// the span on its screen its frame fits best, at least half of it inside and
     /// covering at least half of the span. None for a maximized window, or one that
     /// fits none, which is loose.
+    /// When none fits, the snapping's record still counts while at least half of the
+    /// window is inside its zones, as for one bigger than them for its minimum size.
     pub(super) fn zones_held(
         &self,
+        hwnd: HWND,
         geometry: &[Placed],
         frame: Option<Rect>,
         was_maximized: bool,
@@ -187,11 +198,16 @@ impl Engine {
         let g = geometry.iter().find(|g| g.bounds.contains(x, y))?;
         let n = g.zones.len();
         let span = |(i, j): (usize, usize)| zones::span(g.zones[i], g.zones[j]);
-        let (from, to) = (0..n)
+        let best = (0..n)
             .flat_map(|i| (i..n).map(move |j| (i, j)))
             .filter(|ij| fits_mutually(frame, span(*ij)))
-            .min_by_key(|ij| (area(span(*ij)) - area(frame)).abs())?;
-        Some((g.id.clone(), from, to))
+            .min_by_key(|ij| (area(span(*ij)) - area(frame)).abs());
+        if let Some((from, to)) = best {
+            return Some((g.id.clone(), from, to));
+        }
+        let s = self.snapped.get(&(hwnd.0 as isize))?;
+        let g = geometry.iter().find(|g| g.id == s.screen && s.from.max(s.to) < g.zones.len())?;
+        mostly_inside(frame, zones::span(g.zones[s.from], g.zones[s.to])).then(|| (g.id.clone(), s.from, s.to))
     }
 
     /// At the drop, with `--log`: where the snapping and the screen disagree about the

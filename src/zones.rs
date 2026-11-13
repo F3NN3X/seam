@@ -223,11 +223,7 @@ pub fn depth_of(node: &Node, index: usize) -> Option<usize> {
         Node::Leaf(_) => (index == 0).then_some(0),
         Node::Split { a, b, .. } => {
             let first = leaf_count(a);
-            if index < first {
-                depth_of(a, index).map(|d| d + 1)
-            } else {
-                depth_of(b, index - first).map(|d| d + 1)
-            }
+            if index < first { depth_of(a, index).map(|d| d + 1) } else { depth_of(b, index - first).map(|d| d + 1) }
         }
     }
 }
@@ -377,9 +373,9 @@ mod tests {
                         assert_eq!(filled, area.w as i64 * area.h as i64, "{t:?} leaves holes");
                     }
                     assert!(rs.iter().all(|r| r.x >= area.x + gap && r.y >= area.y + gap));
-                    assert!(rs
-                        .iter()
-                        .all(|r| r.x + r.w <= area.x + area.w - gap && r.y + r.h <= area.y + area.h - gap));
+                    assert!(
+                        rs.iter().all(|r| r.x + r.w <= area.x + area.w - gap && r.y + r.h <= area.y + area.h - gap)
+                    );
                 }
             }
         }

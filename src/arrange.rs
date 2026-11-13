@@ -3,7 +3,7 @@
 //! hook running this is a nicety; without it, it's the best Windows can do.
 
 use crate::geom::Rect;
-use crate::layout::{plan, Link};
+use crate::layout::{Link, plan};
 use crate::log;
 use crate::monitors::Mon;
 use windows::Win32::Devices::Display::*;
@@ -46,11 +46,11 @@ pub fn align(mons: &[Mon], links: &[Link]) -> Result<bool, String> {
             let gdi = String::from_utf16_lossy(&src.viewGdiDeviceName[..n]);
             let Some(k) = mons.iter().position(|m| m.gdi.eq_ignore_ascii_case(&gdi)) else { continue };
             let idx = p.sourceInfo.Anonymous.modeInfoIdx as usize;
-            if let Some(mode) = modes.get_mut(idx) {
-                if mode.infoType == DISPLAYCONFIG_MODE_INFO_TYPE_SOURCE {
-                    mode.Anonymous.sourceMode.position = POINTL { x: new[k].left, y: new[k].top };
-                    moved += 1;
-                }
+            if let Some(mode) = modes.get_mut(idx)
+                && mode.infoType == DISPLAYCONFIG_MODE_INFO_TYPE_SOURCE
+            {
+                mode.Anonymous.sourceMode.position = POINTL { x: new[k].left, y: new[k].top };
+                moved += 1;
             }
         }
         if moved == 0 {

@@ -2,8 +2,8 @@
 
 use crate::pages::app_rules;
 use crate::pages::zone_editor::{self, Opened};
-use crate::panel::{error_text, refusal, Panel};
-use crate::theme::{palette, Palette};
+use crate::panel::{Panel, error_text, refusal};
+use crate::theme::{Palette, palette};
 use crate::ui::{self, card, row, section, switch};
 use gpui_kit::component::button::ButtonVariants;
 use gpui_kit::component::checkbox::Checkbox;
@@ -22,7 +22,7 @@ use seam::library;
 use seam::palette as colours;
 use seam::state;
 use seam::zones::{self, Node, Rect, Template, ZoneLayout};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::rc::Rc;
 use std::time::Duration;
 
@@ -556,11 +556,7 @@ fn swatches(
                 let ink = fill.map_or(p.text, |f| {
                     let c = Rgba::from(f);
                     let luma = 0.2126 * c.r + 0.7152 * c.g + 0.0722 * c.b;
-                    if luma > 0.5 {
-                        hsla(0., 0., 0., 1.)
-                    } else {
-                        hsla(0., 0., 1., 1.)
-                    }
+                    if luma > 0.5 { hsla(0., 0., 0., 1.) } else { hsla(0., 0., 1., 1.) }
                 });
                 d.text_color(ink).child("✓")
             });
@@ -757,7 +753,7 @@ fn preview(mon: &Mon, layout: Option<&ZoneLayout>, gap: u32, room: f64, height: 
     card.child(surface)
 }
 
-pub fn render(panel: &mut Panel, window: &mut Window, cx: &mut Context<Panel>) -> impl IntoElement {
+pub fn render(panel: &mut Panel, window: &mut Window, cx: &mut Context<Panel>) -> impl IntoElement + use<> {
     let p = palette(cx);
     let zones_cfg = panel.config.zones.clone();
     let subtitle = format!("Hold {} while you drag a window to drop it into a zone", key_label(&zones_cfg.show_key));

@@ -4,7 +4,7 @@
 //! scaling. In the live view it takes no mouse input and clicks pass through.
 
 use super::zone_editor::{
-    begin_drag, discard, drag_to, end_drag, select, undo, DiscardEdit, DragDivider, UndoEdit, CONTEXT,
+    CONTEXT, DiscardEdit, DragDivider, UndoEdit, begin_drag, discard, drag_to, end_drag, select, undo,
 };
 use crate::panel::{Page, Panel};
 use crate::theme::palette;

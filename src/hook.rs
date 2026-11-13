@@ -5,10 +5,10 @@
 //! UI work like painting the overlay can never delay mouse input.
 
 use crate::geom::Rect;
-use crate::layout::{decide, Crossing, Link, Live, Move, Push};
+use crate::layout::{Crossing, Link, Live, Move, Push, decide};
 use crate::log;
 use std::cell::Cell;
-use std::sync::mpsc::{channel, Sender};
+use std::sync::mpsc::{Sender, channel};
 use std::sync::{OnceLock, RwLock};
 use std::time::{Duration, Instant};
 use windows::Win32::Foundation::{LPARAM, LRESULT, POINT, RECT, WPARAM};
@@ -206,36 +206,38 @@ fn cursor_is_confined(live: &Live) -> bool {
 }
 
 unsafe extern "system" fn ll_proc(code: i32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
-    // Seam's own empty move before it takes focus is never a pointer move to remap.
-    if (*(lparam.0 as *const MSLLHOOKSTRUCT)).dwExtraInfo == SEAM_INPUT_TAG {
-        return CallNextHookEx(None, code, wparam, lparam);
-    }
-    if !log::enabled() {
-        return on_mouse(code, wparam, lparam);
-    }
-    let started = Instant::now();
-    let res = on_mouse(code, wparam, lparam);
-    let ns = started.elapsed().as_nanos() as u64;
-    let next = NEXT_NS.take();
-    STATS.with(|s| {
-        let t = s.get();
-        let own = ns - next;
-        let (mut own_hist, mut next_hist) = (t.own_hist, t.next_hist);
-        own_hist[bucket(own)] += 1;
-        next_hist[bucket(next)] += 1;
-        s.set(Stats {
-            events: t.events + 1,
-            total: t.total + ns,
-            max: t.max.max(ns),
-            own_max: t.own_max.max(own),
-            next_max: t.next_max.max(next),
-            own_hist,
-            next_hist,
-            own_over_1ms: t.own_over_1ms + (own >= MS_NS) as u32,
-            next_over_1ms: t.next_over_1ms + (next >= MS_NS) as u32,
+    unsafe {
+        // Seam's own empty move before it takes focus is never a pointer move to remap.
+        if (*(lparam.0 as *const MSLLHOOKSTRUCT)).dwExtraInfo == SEAM_INPUT_TAG {
+            return CallNextHookEx(None, code, wparam, lparam);
+        }
+        if !log::enabled() {
+            return on_mouse(code, wparam, lparam);
+        }
+        let started = Instant::now();
+        let res = on_mouse(code, wparam, lparam);
+        let ns = started.elapsed().as_nanos() as u64;
+        let next = NEXT_NS.take();
+        STATS.with(|s| {
+            let t = s.get();
+            let own = ns - next;
+            let (mut own_hist, mut next_hist) = (t.own_hist, t.next_hist);
+            own_hist[bucket(own)] += 1;
+            next_hist[bucket(next)] += 1;
+            s.set(Stats {
+                events: t.events + 1,
+                total: t.total + ns,
+                max: t.max.max(ns),
+                own_max: t.own_max.max(own),
+                next_max: t.next_max.max(next),
+                own_hist,
+                next_hist,
+                own_over_1ms: t.own_over_1ms + (own >= MS_NS) as u32,
+                next_over_1ms: t.next_over_1ms + (next >= MS_NS) as u32,
+            });
         });
-    });
-    res
+        res
+    }
 }
 
 /// Log the hook's timing since the last call.
@@ -267,26 +269,31 @@ fn write_stats() {
 }
 
 unsafe fn call_next(code: i32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
-    if !log::enabled() {
-        return CallNextHookEx(None, code, wparam, lparam);
+    unsafe {
+        if !log::enabled() {
+            return CallNextHookEx(None, code, wparam, lparam);
+        }
+        let started = Instant::now();
+        let res = CallNextHookEx(None, code, wparam, lparam);
+        NEXT_NS.set(started.elapsed().as_nanos() as u64);
+        res
     }
-    let started = Instant::now();
-    let res = CallNextHookEx(None, code, wparam, lparam);
-    NEXT_NS.set(started.elapsed().as_nanos() as u64);
-    res
 }
 
 unsafe fn on_mouse(code: i32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
-    if code == HC_ACTION as i32 && wparam.0 as u32 == WM_MOUSEMOVE {
-        let info = &*(lparam.0 as *const MSLLHOOKSTRUCT);
-        // Leave injected input (remote desktop, automation, our own moves) alone.
-        if info.flags & LLMHF_INJECTED == 0 {
-            let started = log::enabled().then(Instant::now);
-            let mut prev = POINT::default();
-            if GetCursorPos(&mut prev).is_ok() {
-                let (from, pt) = ((prev.x, prev.y), (info.pt.x, info.pt.y));
-                if let Some((to, c)) = target(from, pt) {
-                    if to != pt && SetCursorPos(to.0, to.1).is_ok() {
+    unsafe {
+        if code == HC_ACTION as i32 && wparam.0 as u32 == WM_MOUSEMOVE {
+            let info = &*(lparam.0 as *const MSLLHOOKSTRUCT);
+            // Leave injected input (remote desktop, automation, our own moves) alone.
+            if info.flags & LLMHF_INJECTED == 0 {
+                let started = log::enabled().then(Instant::now);
+                let mut prev = POINT::default();
+                if GetCursorPos(&mut prev).is_ok() {
+                    let (from, pt) = ((prev.x, prev.y), (info.pt.x, info.pt.y));
+                    if let Some((to, c)) = target(from, pt)
+                        && to != pt
+                        && SetCursorPos(to.0, to.1).is_ok()
+                    {
                         if let Some(t0) = started {
                             let us = t0.elapsed().as_secs_f64() * 1e6;
                             match c {
@@ -304,6 +311,6 @@ unsafe fn on_mouse(code: i32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
                 }
             }
         }
+        call_next(code, wparam, lparam)
     }
-    call_next(code, wparam, lparam)
 }

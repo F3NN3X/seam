@@ -16,17 +16,17 @@ use seam::state::OTHER_WMS;
 use seam::{winutil, winver};
 use serde_json::json;
 use std::collections::{HashMap, HashSet};
-use std::sync::mpsc::{channel, Receiver, Sender};
+use std::sync::mpsc::{Receiver, Sender, channel};
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
 use windows::Win32::Foundation::*;
-use windows::Win32::Graphics::Dwm::{DwmSetWindowAttribute, DWMWA_BORDER_COLOR, DWMWA_COLOR_DEFAULT};
-use windows::Win32::System::Com::{CoInitializeEx, COINIT_APARTMENTTHREADED};
+use windows::Win32::Graphics::Dwm::{DWMWA_BORDER_COLOR, DWMWA_COLOR_DEFAULT, DwmSetWindowAttribute};
+use windows::Win32::System::Com::{COINIT_APARTMENTTHREADED, CoInitializeEx};
 use windows::Win32::System::Diagnostics::ToolHelp::{
-    CreateToolhelp32Snapshot, Process32FirstW, Process32NextW, PROCESSENTRY32W, TH32CS_SNAPPROCESS,
+    CreateToolhelp32Snapshot, PROCESSENTRY32W, Process32FirstW, Process32NextW, TH32CS_SNAPPROCESS,
 };
 use windows::Win32::System::Threading::GetCurrentThreadId;
-use windows::Win32::UI::Accessibility::{SetWinEventHook, UnhookWinEvent, HWINEVENTHOOK};
+use windows::Win32::UI::Accessibility::{HWINEVENTHOOK, SetWinEventHook, UnhookWinEvent};
 use windows::Win32::UI::WindowsAndMessaging::*;
 
 /// The window manager found running changed. Read it with `detected`.
@@ -258,12 +258,14 @@ fn wm_thread() -> u32 {
 /// Runs on the thread that installed the hook. It keeps only whole windows,
 /// asks Windows nothing, and queues the event for the loop.
 unsafe extern "system" fn on_event(_: HWINEVENTHOOK, event: u32, hwnd: HWND, object: i32, child: i32, _: u32, _: u32) {
-    // Child 0 is the window itself (CHILDID_SELF).
-    if object != OBJID_WINDOW.0 || child != 0 {
-        return;
-    }
-    if let Some(&id) = THREAD.get() {
-        let _ = PostThreadMessageW(id, WM_APP_EVENT, WPARAM(event as usize), LPARAM(hwnd.0 as isize));
+    unsafe {
+        // Child 0 is the window itself (CHILDID_SELF).
+        if object != OBJID_WINDOW.0 || child != 0 {
+            return;
+        }
+        if let Some(&id) = THREAD.get() {
+            let _ = PostThreadMessageW(id, WM_APP_EVENT, WPARAM(event as usize), LPARAM(hwnd.0 as isize));
+        }
     }
 }
 
@@ -876,18 +878,18 @@ impl Wm {
 
     /// Give the window that has the focus border the focus colour again.
     fn paint_focus(&self) {
-        if let (Some(h), Some(colour)) = (self.bordered.map(hwnd_of), self.focus_colour) {
-            if set_border_colour(h, colour) {
-                winutil::mark_border(h, Some(colour));
-            }
+        if let (Some(h), Some(colour)) = (self.bordered.map(hwnd_of), self.focus_colour)
+            && set_border_colour(h, colour)
+        {
+            winutil::mark_border(h, Some(colour));
         }
     }
 
     fn paint_pin(&self, h: HWND) {
-        if let (true, Some(colour)) = (borders_supported(), self.pin_colour) {
-            if set_border_colour(h, colour) {
-                winutil::mark_border(h, Some(colour));
-            }
+        if let (true, Some(colour)) = (borders_supported(), self.pin_colour)
+            && set_border_colour(h, colour)
+        {
+            winutil::mark_border(h, Some(colour));
         }
     }
 

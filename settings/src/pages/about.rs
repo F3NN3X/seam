@@ -2,10 +2,10 @@
 
 use crate::pages::updates;
 use crate::panel::Panel;
-use crate::theme::{palette, Palette};
+use crate::theme::{Palette, palette};
 use crate::ui;
-use gpui_kit::component::notification::Notification;
 use gpui_kit::component::WindowExt;
+use gpui_kit::component::notification::Notification;
 use gpui_kit::*;
 use seam::package;
 use seam::state::{BorderState, Remap, Zones};
@@ -75,7 +75,7 @@ fn diagnostics(panel: &Panel) -> String {
     text
 }
 
-pub fn render(panel: &mut Panel, window: &mut Window, cx: &mut Context<Panel>) -> impl IntoElement {
+pub fn render(panel: &mut Panel, window: &mut Window, cx: &mut Context<Panel>) -> impl IntoElement + use<> {
     let p = palette(cx);
     let header = div().flex().items_center().gap(px(16.)).child(mark(p)).child(ui::page_title(
         format!("Seam {}", env!("CARGO_PKG_VERSION")),
@@ -99,10 +99,10 @@ pub fn render(panel: &mut Panel, window: &mut Window, cx: &mut Context<Panel>) -
     if let Some(note) = updates::unsigned_note(cx) {
         page = page.child(note);
     }
-    if !package::is_packaged() {
-        if let Some(card) = updates::update_card(panel, cx) {
-            page = page.child(card);
-        }
+    if !package::is_packaged()
+        && let Some(card) = updates::update_card(panel, cx)
+    {
+        page = page.child(card);
     }
     page.child(updates::group(panel, window, cx)).child(ui::section(
         "Support",

@@ -5,8 +5,8 @@
 
 use crate::zones::{self, Rect, Template, ZoneLayout};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
-use serde_json::{json, Value};
-use std::collections::{hash_map::RandomState, BTreeMap, HashSet};
+use serde_json::{Value, json};
+use std::collections::{BTreeMap, HashSet, hash_map::RandomState};
 use std::hash::{BuildHasher, Hasher};
 use std::path::{Component, Path, Prefix};
 

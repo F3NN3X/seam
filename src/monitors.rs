@@ -3,12 +3,12 @@
 pub use crate::desk::Mon;
 use crate::geom::Rect;
 use crate::log;
-use windows::core::BOOL;
 use windows::Win32::Devices::Display::*;
 use windows::Win32::Foundation::{ERROR_SUCCESS, LPARAM, RECT};
 use windows::Win32::Graphics::Gdi::*;
 use windows::Win32::UI::HiDpi::{GetDpiForMonitor, MDT_RAW_DPI};
 use windows::Win32::UI::WindowsAndMessaging::MONITORINFOF_PRIMARY;
+use windows::core::BOOL;
 
 fn wstr(buf: &[u16]) -> String {
     let n = buf.iter().position(|&c| c == 0).unwrap_or(buf.len());
@@ -59,9 +59,11 @@ fn target_names() -> Vec<(String, String, String)> {
 }
 
 unsafe extern "system" fn enum_proc(hmon: HMONITOR, _: HDC, _: *mut RECT, data: LPARAM) -> BOOL {
-    let list = &mut *(data.0 as *mut Vec<HMONITOR>);
-    list.push(hmon);
-    BOOL(1)
+    unsafe {
+        let list = &mut *(data.0 as *mut Vec<HMONITOR>);
+        list.push(hmon);
+        BOOL(1)
+    }
 }
 
 pub fn enumerate() -> Vec<Mon> {

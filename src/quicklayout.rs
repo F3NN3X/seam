@@ -6,7 +6,7 @@
 
 use crate::geom::Rect;
 use crate::log;
-use crate::showlayout::{fill, text, Color};
+use crate::showlayout::{Color, fill, text};
 use crate::wincontrol;
 use seam::library::Entry;
 use seam::zones::{self, Node, Template, ZoneLayout};
@@ -16,7 +16,6 @@ use std::sync::atomic::{AtomicIsize, AtomicU32, Ordering};
 use std::sync::mpsc::channel;
 use std::sync::{Mutex, MutexGuard};
 use std::time::Duration;
-use windows::core::{w, PCWSTR};
 use windows::Win32::Foundation::*;
 use windows::Win32::Graphics::Gdi::*;
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
@@ -24,6 +23,7 @@ use windows::Win32::System::Threading::GetCurrentThreadId;
 use windows::Win32::UI::HiDpi::GetDpiForWindow;
 use windows::Win32::UI::Input::KeyboardAndMouse::*;
 use windows::Win32::UI::WindowsAndMessaging::*;
+use windows::core::{PCWSTR, w};
 
 /// A pick is waiting for the tray, or the tray's finished with one: `take_picks` and `take_done` have them.
 pub const WM_APP_QUICK_LAYOUT: u32 = WM_APP + 29;
@@ -388,17 +388,17 @@ impl Overlay {
             let _ = KillTimer(Some(WINDOW.with(|w| *w.borrow())), TIMER_SETTLE);
         }
         self.pending = false;
-        if let Some(before) = self.record.take() {
-            if before != actual {
-                self.history.push(before);
-            }
+        if let Some(before) = self.record.take()
+            && before != actual
+        {
+            self.history.push(before);
         }
         self.now = actual;
-        if std::mem::take(&mut self.undoing) {
-            if let Some(at) = self.current() {
-                self.selected = at;
-                self.reveal();
-            }
+        if std::mem::take(&mut self.undoing)
+            && let Some(at) = self.current()
+        {
+            self.selected = at;
+            self.reveal();
         }
         if let Some(next) = self.queued.take() {
             self.dispatch(next);
@@ -425,10 +425,12 @@ fn cell(slot: usize, top: i32, t: &dyn Fn(i32) -> i32) -> RECT {
 }
 
 unsafe fn outline(dc: HDC, r: RECT, width: i32, c: Color) {
-    fill(dc, RECT { bottom: r.top + width, ..r }, c);
-    fill(dc, RECT { top: r.bottom - width, ..r }, c);
-    fill(dc, RECT { right: r.left + width, ..r }, c);
-    fill(dc, RECT { left: r.right - width, ..r }, c);
+    unsafe {
+        fill(dc, RECT { bottom: r.top + width, ..r }, c);
+        fill(dc, RECT { top: r.bottom - width, ..r }, c);
+        fill(dc, RECT { right: r.left + width, ..r }, c);
+        fill(dc, RECT { left: r.right - width, ..r }, c);
+    }
 }
 
 fn grown(r: RECT, by: i32) -> RECT {
@@ -459,66 +461,69 @@ fn art(tree: Option<&Node>, shape: (i32, i32), at: RECT, t: &dyn Fn(i32) -> i32)
 }
 
 unsafe fn draw(dc: HDC, o: &Overlay, client: RECT, scale: f64) {
-    let t = |v: i32| (v as f64 * scale).round() as i32;
-    fill(dc, client, PAGE);
-    outline(dc, client, 1, HAIRLINE);
-    let (width, _, top) = frame(o, &t);
-    let inner = |from: i32, to: i32, y: i32, h: i32| RECT { left: from, top: y, right: to, bottom: y + h };
-    let (left, right) = (t(PAD), width - t(PAD));
-    let title = format!("Layout for screen {}", o.number);
-    text(dc, &title, inner(left, right, t(PAD), t(HEAD)), t(16), TEXT, DT_LEFT | DT_VCENTER);
-    if o.choices.len() > VISIBLE {
-        let last = (o.first + o.shown()).min(o.choices.len());
-        let range = format!("{} to {} of {}", o.first + 1, last, o.choices.len());
-        text(dc, &range, inner(left, right, t(PAD), t(HEAD)), t(12), MUTED, DT_RIGHT | DT_VCENTER);
+    unsafe {
+        let t = |v: i32| (v as f64 * scale).round() as i32;
+        fill(dc, client, PAGE);
+        outline(dc, client, 1, HAIRLINE);
+        let (width, _, top) = frame(o, &t);
+        let inner = |from: i32, to: i32, y: i32, h: i32| RECT { left: from, top: y, right: to, bottom: y + h };
+        let (left, right) = (t(PAD), width - t(PAD));
+        let title = format!("Layout for screen {}", o.number);
+        text(dc, &title, inner(left, right, t(PAD), t(HEAD)), t(16), TEXT, DT_LEFT | DT_VCENTER);
+        if o.choices.len() > VISIBLE {
+            let last = (o.first + o.shown()).min(o.choices.len());
+            let range = format!("{} to {} of {}", o.first + 1, last, o.choices.len());
+            text(dc, &range, inner(left, right, t(PAD), t(HEAD)), t(12), MUTED, DT_RIGHT | DT_VCENTER);
+        }
+        if let Some(note) = &o.note {
+            text(
+                dc,
+                note,
+                inner(left, right, t(PAD + HEAD), t(NOTE)),
+                t(13),
+                SECONDARY,
+                DT_LEFT | DT_VCENTER | DT_END_ELLIPSIS,
+            );
+        }
+        let current = o.current();
+        for slot in 0..o.shown() {
+            let at = o.first + slot;
+            let choice = &o.choices[at];
+            let r = cell(slot, top, &t);
+            if current == Some(at) {
+                outline(dc, grown(r, t(2)), t(1), HALO);
+            }
+            if o.selected == at {
+                outline(dc, grown(r, t(5)), t(2), TEXT);
+            }
+            fill(dc, r, if o.selected == at { RAISED } else { CARD });
+            outline(dc, r, t(1), if current == Some(at) { ACCENT } else { HAIRLINE });
+            let box_ =
+                RECT { left: r.left + t(8), top: r.top + t(8), right: r.right - t(8), bottom: r.top + t(8 + ART.1) };
+            let tree = choice.layout.as_ref().map(|l| &l.tree);
+            let (face, pieces) = art(tree, o.shape, box_, &t);
+            fill(dc, face, PAGE);
+            for piece in pieces {
+                fill(dc, piece, SEGMENT);
+            }
+            let badge = RECT { left: r.left + t(8), top: r.top + t(8), right: r.left + t(28), bottom: r.top + t(28) };
+            fill(dc, badge, CARD);
+            text(dc, &(slot + 1).to_string(), badge, t(12), TEXT, DT_CENTER | DT_VCENTER);
+            let name_top = r.top + t(8 + ART.1 + 8);
+            let name = RECT { left: r.left + t(8), top: name_top, right: r.right - t(8), bottom: name_top + t(18) };
+            let colour = if current == Some(at) { TEXT } else { SECONDARY };
+            if current == Some(at) {
+                text(dc, "In use", name, t(12), MUTED, DT_RIGHT | DT_VCENTER);
+                let room = RECT { right: name.right - t(52), ..name };
+                text(dc, &choice.title, room, t(13), colour, DT_LEFT | DT_VCENTER | DT_END_ELLIPSIS);
+            } else {
+                text(dc, &choice.title, name, t(13), colour, DT_LEFT | DT_VCENTER | DT_END_ELLIPSIS);
+            }
+        }
+        let hint = "1 to 9 pick, arrows and Enter, Ctrl+Z undo, Esc close";
+        let foot_top = client.bottom - t(PAD + FOOT);
+        text(dc, hint, inner(left, right, foot_top, t(FOOT)), t(12), MUTED, DT_LEFT | DT_VCENTER);
     }
-    if let Some(note) = &o.note {
-        text(
-            dc,
-            note,
-            inner(left, right, t(PAD + HEAD), t(NOTE)),
-            t(13),
-            SECONDARY,
-            DT_LEFT | DT_VCENTER | DT_END_ELLIPSIS,
-        );
-    }
-    let current = o.current();
-    for slot in 0..o.shown() {
-        let at = o.first + slot;
-        let choice = &o.choices[at];
-        let r = cell(slot, top, &t);
-        if current == Some(at) {
-            outline(dc, grown(r, t(2)), t(1), HALO);
-        }
-        if o.selected == at {
-            outline(dc, grown(r, t(5)), t(2), TEXT);
-        }
-        fill(dc, r, if o.selected == at { RAISED } else { CARD });
-        outline(dc, r, t(1), if current == Some(at) { ACCENT } else { HAIRLINE });
-        let box_ = RECT { left: r.left + t(8), top: r.top + t(8), right: r.right - t(8), bottom: r.top + t(8 + ART.1) };
-        let tree = choice.layout.as_ref().map(|l| &l.tree);
-        let (face, pieces) = art(tree, o.shape, box_, &t);
-        fill(dc, face, PAGE);
-        for piece in pieces {
-            fill(dc, piece, SEGMENT);
-        }
-        let badge = RECT { left: r.left + t(8), top: r.top + t(8), right: r.left + t(28), bottom: r.top + t(28) };
-        fill(dc, badge, CARD);
-        text(dc, &(slot + 1).to_string(), badge, t(12), TEXT, DT_CENTER | DT_VCENTER);
-        let name_top = r.top + t(8 + ART.1 + 8);
-        let name = RECT { left: r.left + t(8), top: name_top, right: r.right - t(8), bottom: name_top + t(18) };
-        let colour = if current == Some(at) { TEXT } else { SECONDARY };
-        if current == Some(at) {
-            text(dc, "In use", name, t(12), MUTED, DT_RIGHT | DT_VCENTER);
-            let room = RECT { right: name.right - t(52), ..name };
-            text(dc, &choice.title, room, t(13), colour, DT_LEFT | DT_VCENTER | DT_END_ELLIPSIS);
-        } else {
-            text(dc, &choice.title, name, t(13), colour, DT_LEFT | DT_VCENTER | DT_END_ELLIPSIS);
-        }
-    }
-    let hint = "1 to 9 pick, arrows and Enter, Ctrl+Z undo, Esc close";
-    let foot_top = client.bottom - t(PAD + FOOT);
-    text(dc, hint, inner(left, right, foot_top, t(FOOT)), t(12), MUTED, DT_LEFT | DT_VCENTER);
 }
 
 fn scale_of(hwnd: HWND) -> f64 {
@@ -563,131 +568,131 @@ fn key(o: &mut Overlay, vk: u32) -> bool {
 }
 
 unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
-    let redraw = |changed: bool| {
-        if changed {
-            let _ = InvalidateRect(Some(hwnd), None, false);
-        }
-    };
-    match msg {
-        WM_PAINT => {
-            let mut ps = PAINTSTRUCT::default();
-            let dc = BeginPaint(hwnd, &mut ps);
-            let mut client = RECT::default();
-            let _ = GetClientRect(hwnd, &mut client);
-            // Drawn off screen and copied over, so a change doesn't flicker.
-            let back = CreateCompatibleDC(Some(dc));
-            let bitmap = CreateCompatibleBitmap(dc, client.right, client.bottom);
-            let old = SelectObject(back, bitmap.into());
-            STATE.with(|s| {
-                if let Some(o) = s.borrow().as_ref() {
-                    draw(back, o, client, scale_of(hwnd));
-                }
-            });
-            let _ = BitBlt(dc, 0, 0, client.right, client.bottom, Some(back), 0, 0, SRCCOPY);
-            SelectObject(back, old);
-            let _ = DeleteObject(bitmap.into());
-            let _ = DeleteDC(back);
-            let _ = EndPaint(hwnd, &ps);
-            LRESULT(0)
-        }
-        WM_ERASEBKGND => LRESULT(1),
-        WM_KEYDOWN | WM_SYSKEYDOWN => {
-            let used = STATE.with(|s| s.borrow_mut().as_mut().is_some_and(|o| key(o, wparam.0 as u32)));
-            redraw(used);
-            if used {
-                LRESULT(0)
-            } else {
-                DefWindowProcW(hwnd, msg, wparam, lparam)
+    unsafe {
+        let redraw = |changed: bool| {
+            if changed {
+                let _ = InvalidateRect(Some(hwnd), None, false);
             }
-        }
-        WM_MOUSEMOVE => {
-            let (x, y) = ((lparam.0 & 0xffff) as i16 as i32, ((lparam.0 >> 16) & 0xffff) as i16 as i32);
-            let moved = STATE.with(|s| {
-                let mut s = s.borrow_mut();
-                let Some(o) = s.as_mut() else { return false };
-                match slot_at(o, hwnd, x, y).map(|slot| o.first + slot) {
-                    Some(at) if at != o.selected => {
-                        o.selected = at;
-                        true
+        };
+        match msg {
+            WM_PAINT => {
+                let mut ps = PAINTSTRUCT::default();
+                let dc = BeginPaint(hwnd, &mut ps);
+                let mut client = RECT::default();
+                let _ = GetClientRect(hwnd, &mut client);
+                // Drawn off screen and copied over, so a change doesn't flicker.
+                let back = CreateCompatibleDC(Some(dc));
+                let bitmap = CreateCompatibleBitmap(dc, client.right, client.bottom);
+                let old = SelectObject(back, bitmap.into());
+                STATE.with(|s| {
+                    if let Some(o) = s.borrow().as_ref() {
+                        draw(back, o, client, scale_of(hwnd));
                     }
-                    _ => false,
-                }
-            });
-            redraw(moved);
-            LRESULT(0)
-        }
-        WM_LBUTTONDOWN => {
-            let (x, y) = ((lparam.0 & 0xffff) as i16 as i32, ((lparam.0 >> 16) & 0xffff) as i16 as i32);
-            STATE.with(|s| {
-                if let Some(o) = s.borrow_mut().as_mut() {
-                    if let Some(slot) = slot_at(o, hwnd, x, y) {
+                });
+                let _ = BitBlt(dc, 0, 0, client.right, client.bottom, Some(back), 0, 0, SRCCOPY);
+                SelectObject(back, old);
+                let _ = DeleteObject(bitmap.into());
+                let _ = DeleteDC(back);
+                let _ = EndPaint(hwnd, &ps);
+                LRESULT(0)
+            }
+            WM_ERASEBKGND => LRESULT(1),
+            WM_KEYDOWN | WM_SYSKEYDOWN => {
+                let used = STATE.with(|s| s.borrow_mut().as_mut().is_some_and(|o| key(o, wparam.0 as u32)));
+                redraw(used);
+                if used { LRESULT(0) } else { DefWindowProcW(hwnd, msg, wparam, lparam) }
+            }
+            WM_MOUSEMOVE => {
+                let (x, y) = ((lparam.0 & 0xffff) as i16 as i32, ((lparam.0 >> 16) & 0xffff) as i16 as i32);
+                let moved = STATE.with(|s| {
+                    let mut s = s.borrow_mut();
+                    let Some(o) = s.as_mut() else { return false };
+                    match slot_at(o, hwnd, x, y).map(|slot| o.first + slot) {
+                        Some(at) if at != o.selected => {
+                            o.selected = at;
+                            true
+                        }
+                        _ => false,
+                    }
+                });
+                redraw(moved);
+                LRESULT(0)
+            }
+            WM_LBUTTONDOWN => {
+                let (x, y) = ((lparam.0 & 0xffff) as i16 as i32, ((lparam.0 >> 16) & 0xffff) as i16 as i32);
+                STATE.with(|s| {
+                    if let Some(o) = s.borrow_mut().as_mut()
+                        && let Some(slot) = slot_at(o, hwnd, x, y)
+                    {
                         o.pick(o.first + slot);
                     }
-                }
-            });
-            redraw(true);
-            LRESULT(0)
-        }
-        WM_DISPLAYCHANGE => {
-            quit();
-            LRESULT(0)
-        }
-        WM_TIMER if wparam.0 == TIMER_FOCUS => {
-            let _ = KillTimer(Some(hwnd), TIMER_FOCUS);
-            if GetForegroundWindow() != hwnd {
-                let _ = SetForegroundWindow(hwnd);
-                let _ = SetTimer(Some(hwnd), TIMER_FOCUS_LAST, FOCUS_LAST_MS, None);
+                });
+                redraw(true);
+                LRESULT(0)
             }
-            LRESULT(0)
-        }
-        WM_TIMER if wparam.0 == TIMER_FOCUS_LAST => {
-            let _ = KillTimer(Some(hwnd), TIMER_FOCUS_LAST);
-            if GetForegroundWindow() != hwnd {
-                log::info!("quick layout: Windows kept the focus elsewhere, so it closes");
+            WM_DISPLAYCHANGE => {
                 quit();
+                LRESULT(0)
             }
-            LRESULT(0)
-        }
-        WM_TIMER if wparam.0 == TIMER_SETTLE => {
-            STATE.with(|s| {
-                if let Some(o) = s.borrow_mut().as_mut() {
-                    o.give_up();
+            WM_TIMER if wparam.0 == TIMER_FOCUS => {
+                let _ = KillTimer(Some(hwnd), TIMER_FOCUS);
+                if GetForegroundWindow() != hwnd {
+                    let _ = SetForegroundWindow(hwnd);
+                    let _ = SetTimer(Some(hwnd), TIMER_FOCUS_LAST, FOCUS_LAST_MS, None);
                 }
-            });
-            redraw(true);
-            LRESULT(0)
-        }
-        WM_ACTIVATE => {
-            let inactive = (wparam.0 & 0xffff) as u32 == WA_INACTIVE;
-            let was_active = STATE.with(|s| {
-                let mut s = s.borrow_mut();
-                let Some(o) = s.as_mut() else { return false };
-                let was = o.active;
-                o.active |= !inactive;
-                was
-            });
-            if inactive && was_active {
-                quit();
+                LRESULT(0)
             }
-            LRESULT(0)
+            WM_TIMER if wparam.0 == TIMER_FOCUS_LAST => {
+                let _ = KillTimer(Some(hwnd), TIMER_FOCUS_LAST);
+                if GetForegroundWindow() != hwnd {
+                    log::info!("quick layout: Windows kept the focus elsewhere, so it closes");
+                    quit();
+                }
+                LRESULT(0)
+            }
+            WM_TIMER if wparam.0 == TIMER_SETTLE => {
+                STATE.with(|s| {
+                    if let Some(o) = s.borrow_mut().as_mut() {
+                        o.give_up();
+                    }
+                });
+                redraw(true);
+                LRESULT(0)
+            }
+            WM_ACTIVATE => {
+                let inactive = (wparam.0 & 0xffff) as u32 == WA_INACTIVE;
+                let was_active = STATE.with(|s| {
+                    let mut s = s.borrow_mut();
+                    let Some(o) = s.as_mut() else { return false };
+                    let was = o.active;
+                    o.active |= !inactive;
+                    was
+                });
+                if inactive && was_active {
+                    quit();
+                }
+                LRESULT(0)
+            }
+            _ => DefWindowProcW(hwnd, msg, wparam, lparam),
         }
-        _ => DefWindowProcW(hwnd, msg, wparam, lparam),
     }
 }
 
 /// A click outside the panel closes it, and goes on to what it was for.
 unsafe extern "system" fn mouse_proc(code: i32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
-    if code >= 0 && matches!(wparam.0 as u32, WM_LBUTTONDOWN | WM_RBUTTONDOWN | WM_MBUTTONDOWN) {
-        let at = (*(lparam.0 as *const MSLLHOOKSTRUCT)).pt;
-        let hwnd = WINDOW.with(|w| *w.borrow());
-        let mut r = RECT::default();
-        if GetWindowRect(hwnd, &mut r).is_ok()
-            && !(at.x >= r.left && at.x < r.right && at.y >= r.top && at.y < r.bottom)
-        {
-            quit();
+    unsafe {
+        if code >= 0 && matches!(wparam.0 as u32, WM_LBUTTONDOWN | WM_RBUTTONDOWN | WM_MBUTTONDOWN) {
+            let at = (*(lparam.0 as *const MSLLHOOKSTRUCT)).pt;
+            let hwnd = WINDOW.with(|w| *w.borrow());
+            let mut r = RECT::default();
+            if GetWindowRect(hwnd, &mut r).is_ok()
+                && !(at.x >= r.left && at.x < r.right && at.y >= r.top && at.y < r.bottom)
+            {
+                quit();
+            }
         }
+        CallNextHookEx(None, code, wparam, lparam)
     }
-    CallNextHookEx(None, code, wparam, lparam)
 }
 
 /// Clears `OPEN` when the overlay's thread ends, however it ends.

@@ -8,8 +8,8 @@ use super::*;
 use crate::wincontrol;
 use seam::groups::{self, Edge, Side};
 use seam::zones::{Node, Template};
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 /// A neighbour gets its next place once it has landed on the last, or after this long.
@@ -68,11 +68,7 @@ impl Member {
     /// The window rect that puts its visible frame on `frame`. Its own zones give back
     /// exactly where it was.
     fn rect_for(&self, frame: Rect) -> Rect {
-        if frame == self.cell {
-            self.window
-        } else {
-            zones::frame_adjust(frame, self.window, self.visible)
-        }
+        if frame == self.cell { self.window } else { zones::frame_adjust(frame, self.window, self.visible) }
     }
 
     fn put(&self, r: Rect) {

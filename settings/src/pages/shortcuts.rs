@@ -6,7 +6,7 @@ use crate::theme::palette;
 use crate::ui::{self, card, keycaps, row_with, section};
 use gpui_kit::*;
 use seam::hotkey;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 /// The config form of a keystroke, or `None` for a key Seam can't register.
 fn combo_of(k: &Keystroke) -> Option<String> {
@@ -146,7 +146,7 @@ fn shortcut_row(
     row_with(title, about, div().flex().items_center().gap(px(16.)).child(keys).child(button))
 }
 
-pub fn render(panel: &mut Panel, _: &mut Window, cx: &mut Context<Panel>) -> impl IntoElement {
+pub fn render(panel: &mut Panel, _: &mut Window, cx: &mut Context<Panel>) -> impl IntoElement + use<> {
     let p = palette(cx);
     let keys = panel.config.hotkeys.clone();
     let mut row = |title: &str, action: &str, combo: Option<&String>, slot: usize| {

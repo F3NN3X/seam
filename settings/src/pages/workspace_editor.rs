@@ -5,8 +5,8 @@
 use crate::icons::{self, Icons};
 use crate::pages::app_picker::Picker;
 use crate::pages::workspaces::{all, app_title, desk_sig};
-use crate::panel::{error_text, refusal, Panel};
-use crate::theme::{palette, Palette};
+use crate::panel::{Panel, error_text, refusal};
+use crate::theme::{Palette, palette};
 use crate::ui::{self, row, switch};
 use gpui_kit::component::button::ButtonVariants;
 use gpui_kit::component::checkbox::Checkbox;
@@ -20,7 +20,7 @@ use seam::library;
 use seam::state::Screen;
 use seam::workspace::{self, RowState, Rule, Shown, Target, WinState, Workspace};
 use seam::zones::{self, Template, ZoneLayout};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 const GRIP_WIDTH: f32 = 16.;
 const ICON_WIDTH: f32 = 32.;

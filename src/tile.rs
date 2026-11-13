@@ -5,14 +5,14 @@
 //! A layout picked on the Zones page moves that screen's snapped windows the same way.
 
 use super::{
-    centre, close, direction, free, geometry, into_zone, movable, regroup, zone_of, Geo, Job, Outcome, MAX_GAP,
+    Geo, Job, MAX_GAP, Outcome, centre, close, direction, free, geometry, into_zone, movable, regroup, zone_of,
 };
 use crate::snap::Placement;
 use seam::groups;
 use seam::winutil;
 use seam::zones::{self, Rect, ZoneLayout};
 use windows::Win32::Foundation::HWND;
-use windows::Win32::UI::WindowsAndMessaging::{GetWindowLongW, GWL_EXSTYLE, WS_EX_TOPMOST};
+use windows::Win32::UI::WindowsAndMessaging::{GWL_EXSTYLE, GetWindowLongW, WS_EX_TOPMOST};
 
 /// Most windows one tile takes; the rest are left alone.
 const MAX_TILED: usize = 9;

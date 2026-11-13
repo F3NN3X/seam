@@ -1,7 +1,7 @@
 //! The physical map, the borders, saved desks and the pointer switches.
 
-use crate::panel::{error_text, refusal, Panel};
-use crate::theme::{palette, Palette};
+use crate::panel::{Panel, error_text, refusal};
+use crate::theme::{Palette, palette};
 use crate::ui::{self, card, row, section, switch};
 use gpui_kit::component::button::ButtonVariants;
 use gpui_kit::component::dialog::{DialogAction, DialogClose, DialogFooter};
@@ -13,9 +13,9 @@ use gpui_kit::component::{Disableable, Icon, WindowExt};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 use seam::api::LayoutView;
-use seam::config::{Desk, SavedBorder, MAX_EDGE_RESISTANCE_PX, MAX_GLUE_PUSH_PX};
-use seam::desk::{month_day, relative_day, Placed};
-use seam::geom::{corridor, facing_gap, touching, EdgeMap, Rect, Side};
+use seam::config::{Desk, MAX_EDGE_RESISTANCE_PX, MAX_GLUE_PUSH_PX, SavedBorder};
+use seam::desk::{Placed, month_day, relative_day};
+use seam::geom::{EdgeMap, Rect, Side, corridor, facing_gap, touching};
 use seam::state::{Border, BorderState, State};
 use seam::winutil;
 use serde_json::json;
@@ -67,7 +67,7 @@ fn screen_tile(
     view: &View,
     p: Palette,
     cx: &mut Context<Panel>,
-) -> impl IntoElement {
+) -> impl IntoElement + use<> {
     let number = index + 1;
     let name = panel.mons.get(index).map_or("", |m| m.name.as_str()).to_string();
     let primary = panel.mons.get(index).is_some_and(|m| m.primary);
@@ -601,7 +601,7 @@ fn ease_alert(p: Palette, cx: &mut Context<Panel>) -> Div {
         )
 }
 
-pub fn render(panel: &mut Panel, window: &mut Window, cx: &mut Context<Panel>) -> impl IntoElement {
+pub fn render(panel: &mut Panel, window: &mut Window, cx: &mut Context<Panel>) -> impl IntoElement + use<> {
     let p = palette(cx);
     let screens = panel.mons.len();
     let subtitle = format!("{screens} screen{} on {}", if screens == 1 { "" } else { "s" }, panel.desk_name());

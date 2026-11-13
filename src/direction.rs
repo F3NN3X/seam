@@ -2,7 +2,7 @@
 //! stand, so every rect is measured in millimetres through its own screen
 //! before anything is compared (D109).
 
-use crate::desk::{physical_layout, Mon, Placed};
+use crate::desk::{Mon, Placed, physical_layout};
 use crate::layout::Link;
 use crate::zones::Rect;
 

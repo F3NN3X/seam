@@ -2,8 +2,8 @@
 
 use crate::icons::{self, Icons};
 use crate::pages::{app_picker, workspace_editor};
-use crate::panel::{error_text, refusal, Panel};
-use crate::theme::{palette, Palette};
+use crate::panel::{Panel, error_text, refusal};
+use crate::theme::{Palette, palette};
 use crate::ui::{self, card, keycaps, row, segmented, switch};
 use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::input::Input;
@@ -16,7 +16,7 @@ use gpui_kit::*;
 use seam::state::Screen;
 use seam::workspace::{self, Export, OtherWindows, RowState, Rule, ScreenInfo, Target, Workspace};
 use seam::zones;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::rc::Rc;
@@ -257,11 +257,7 @@ pub fn app_title(rule: &Rule) -> String {
         title.push(if title.is_empty() { c.to_ascii_uppercase() } else { c });
         before = c;
     }
-    if title.is_empty() {
-        rule.title_hint.clone()
-    } else {
-        title
-    }
+    if title.is_empty() { rule.title_hint.clone() } else { title }
 }
 
 /// The line under the name: which layout the windows use, or how many there are.
@@ -269,10 +265,10 @@ fn summary(panel: &Panel, ws: &Workspace) -> String {
     let screens = panel.state.as_ref().map(|s| s.screens.clone()).unwrap_or_default();
     let mut used: Vec<&Screen> = Vec::new();
     for rule in ws.windows.iter().filter(|r| matches!(r.target, Target::Zone { .. })) {
-        if let Some(s) = screens.iter().find(|s| s.id == rule.monitor) {
-            if !used.iter().any(|u| u.id == s.id) {
-                used.push(s);
-            }
+        if let Some(s) = screens.iter().find(|s| s.id == rule.monitor)
+            && !used.iter().any(|u| u.id == s.id)
+        {
+            used.push(s);
         }
     }
     let sig = desk_sig(panel);
@@ -629,7 +625,7 @@ fn empty_state(panel: &Panel, p: Palette, cx: &mut Context<Panel>) -> Div {
         .child(capture)
 }
 
-pub fn render(panel: &mut Panel, window: &mut Window, cx: &mut Context<Panel>) -> impl IntoElement {
+pub fn render(panel: &mut Panel, window: &mut Window, cx: &mut Context<Panel>) -> impl IntoElement + use<> {
     let p = palette(cx);
     let list = all(panel);
     let header = ui::page_header("Workspaces", "Save which apps go in which zone, then switch with one shortcut", p);

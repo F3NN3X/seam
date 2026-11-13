@@ -1,14 +1,13 @@
 //! Draws how the screens meet on the real screens, so you can check the Displays
 //! map against the desk. It closes on Esc, on any click, or after a few seconds.
 
-use crate::geom::{facing_gap, touching, Rect, Side};
+use crate::geom::{Rect, Side, facing_gap, touching};
 use crate::layout::Link;
 use crate::log;
 use crate::monitors::Mon;
 use seam::api::LayoutView;
 use std::cell::RefCell;
 use std::sync::atomic::{AtomicU32, Ordering};
-use windows::core::{w, PCWSTR};
 use windows::Win32::Foundation::*;
 use windows::Win32::Graphics::Gdi::*;
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
@@ -16,6 +15,7 @@ use windows::Win32::System::Threading::GetCurrentThreadId;
 use windows::Win32::UI::HiDpi::GetDpiForWindow;
 use windows::Win32::UI::Input::KeyboardAndMouse::VK_ESCAPE;
 use windows::Win32::UI::WindowsAndMessaging::*;
+use windows::core::{PCWSTR, w};
 
 const CLASS: PCWSTR = w!("SeamShowLayout");
 const SHOWN_MS: u32 = 8000;
@@ -122,163 +122,187 @@ pub(crate) fn rgb((r, g, b): Color) -> COLORREF {
 }
 
 pub(crate) unsafe fn fill(dc: HDC, r: RECT, c: Color) {
-    let brush = CreateSolidBrush(rgb(c));
-    FillRect(dc, &r, brush);
-    let _ = DeleteObject(brush.into());
+    unsafe {
+        let brush = CreateSolidBrush(rgb(c));
+        FillRect(dc, &r, brush);
+        let _ = DeleteObject(brush.into());
+    }
 }
 
 pub(crate) unsafe fn text(dc: HDC, s: &str, mut r: RECT, px: i32, c: Color, flags: DRAW_TEXT_FORMAT) {
-    let font = CreateFontW(
-        -px,
-        0,
-        0,
-        0,
-        FW_NORMAL.0 as i32,
-        0,
-        0,
-        0,
-        DEFAULT_CHARSET,
-        OUT_DEFAULT_PRECIS,
-        CLIP_DEFAULT_PRECIS,
-        CLEARTYPE_QUALITY,
-        0,
-        w!("Segoe UI"),
-    );
-    let old = SelectObject(dc, font.into());
-    SetBkMode(dc, TRANSPARENT);
-    SetTextColor(dc, rgb(c));
-    let mut buf: Vec<u16> = s.encode_utf16().collect();
-    DrawTextW(dc, &mut buf, &mut r, flags | DT_SINGLELINE | DT_NOPREFIX);
-    SelectObject(dc, old);
-    let _ = DeleteObject(font.into());
+    unsafe {
+        let font = CreateFontW(
+            -px,
+            0,
+            0,
+            0,
+            FW_NORMAL.0 as i32,
+            0,
+            0,
+            0,
+            DEFAULT_CHARSET,
+            OUT_DEFAULT_PRECIS,
+            CLIP_DEFAULT_PRECIS,
+            CLEARTYPE_QUALITY,
+            0,
+            w!("Segoe UI"),
+        );
+        let old = SelectObject(dc, font.into());
+        SetBkMode(dc, TRANSPARENT);
+        SetTextColor(dc, rgb(c));
+        let mut buf: Vec<u16> = s.encode_utf16().collect();
+        DrawTextW(dc, &mut buf, &mut r, flags | DT_SINGLELINE | DT_NOPREFIX);
+        SelectObject(dc, old);
+        let _ = DeleteObject(font.into());
+    }
 }
 
 /// A band from `along.0` to `along.1`, solid or as dashes or dots.
 unsafe fn band(dc: HDC, mark: &Mark, origin: i32, size: (i32, i32), t: &dyn Fn(i32) -> i32) {
-    let thick = t(BAND);
-    let (on, off) = match mark.style {
-        Style::Solid => (i32::MAX, 0),
-        Style::Dashed => (t(24), t(12)),
-        Style::Dotted => (t(4), t(8)),
-    };
-    let (from, to) = (mark.along.0 - origin, mark.along.1 - origin);
-    let mut at = from;
-    while at < to {
-        let end = at.saturating_add(on).min(to);
-        let r = match mark.side {
-            Side::Left => RECT { left: 0, top: at, right: thick, bottom: end },
-            Side::Right => RECT { left: size.0 - thick, top: at, right: size.0, bottom: end },
-            Side::Top => RECT { left: at, top: 0, right: end, bottom: thick },
-            Side::Bottom => RECT { left: at, top: size.1 - thick, right: end, bottom: size.1 },
+    unsafe {
+        let thick = t(BAND);
+        let (on, off) = match mark.style {
+            Style::Solid => (i32::MAX, 0),
+            Style::Dashed => (t(24), t(12)),
+            Style::Dotted => (t(4), t(8)),
         };
-        fill(dc, r, mark.color);
-        at = end + off.max(1);
+        let (from, to) = (mark.along.0 - origin, mark.along.1 - origin);
+        let mut at = from;
+        while at < to {
+            let end = at.saturating_add(on).min(to);
+            let r = match mark.side {
+                Side::Left => RECT { left: 0, top: at, right: thick, bottom: end },
+                Side::Right => RECT { left: size.0 - thick, top: at, right: size.0, bottom: end },
+                Side::Top => RECT { left: at, top: 0, right: end, bottom: thick },
+                Side::Bottom => RECT { left: at, top: size.1 - thick, right: end, bottom: size.1 },
+            };
+            fill(dc, r, mark.color);
+            at = end + off.max(1);
+        }
     }
 }
 
 unsafe fn draw(dc: HDC, plane: &Plane, client: RECT, scale: f64) {
-    let t = |v: i32| (v as f64 * scale).round() as i32;
-    fill(dc, client, BACKGROUND);
-    let size = (client.right, client.bottom);
-    for mark in &plane.marks {
-        let along_y = mark.side.along_is_y();
-        let origin = if along_y { plane.rect.top } else { plane.rect.left };
-        band(dc, mark, origin, size, &t);
-        let mid = (mark.along.0 + mark.along.1) / 2 - origin;
-        let (thick, gap, half) = (t(BAND), t(12), t(20));
-        let (r, flags) = match mark.side {
-            Side::Left => {
-                (RECT { left: thick + gap, top: mid - half, right: size.0, bottom: mid + half }, DT_LEFT | DT_VCENTER)
-            }
-            Side::Right => (
-                RECT { left: 0, top: mid - half, right: size.0 - thick - gap, bottom: mid + half },
-                DT_RIGHT | DT_VCENTER,
-            ),
-            Side::Top => (
-                RECT { left: mid - t(200), top: thick + gap, right: mid + t(200), bottom: thick + gap + 2 * half },
-                DT_CENTER | DT_TOP,
-            ),
-            Side::Bottom => (
-                RECT {
-                    left: mid - t(200),
-                    top: size.1 - thick - gap - 2 * half,
-                    right: mid + t(200),
-                    bottom: size.1 - thick - gap,
-                },
-                DT_CENTER | DT_BOTTOM,
-            ),
-        };
-        text(dc, &mark.label, r, t(16), TEXT, flags);
+    unsafe {
+        let t = |v: i32| (v as f64 * scale).round() as i32;
+        fill(dc, client, BACKGROUND);
+        let size = (client.right, client.bottom);
+        for mark in &plane.marks {
+            let along_y = mark.side.along_is_y();
+            let origin = if along_y { plane.rect.top } else { plane.rect.left };
+            band(dc, mark, origin, size, &t);
+            let mid = (mark.along.0 + mark.along.1) / 2 - origin;
+            let (thick, gap, half) = (t(BAND), t(12), t(20));
+            let (r, flags) = match mark.side {
+                Side::Left => (
+                    RECT { left: thick + gap, top: mid - half, right: size.0, bottom: mid + half },
+                    DT_LEFT | DT_VCENTER,
+                ),
+                Side::Right => (
+                    RECT { left: 0, top: mid - half, right: size.0 - thick - gap, bottom: mid + half },
+                    DT_RIGHT | DT_VCENTER,
+                ),
+                Side::Top => (
+                    RECT { left: mid - t(200), top: thick + gap, right: mid + t(200), bottom: thick + gap + 2 * half },
+                    DT_CENTER | DT_TOP,
+                ),
+                Side::Bottom => (
+                    RECT {
+                        left: mid - t(200),
+                        top: size.1 - thick - gap - 2 * half,
+                        right: mid + t(200),
+                        bottom: size.1 - thick - gap,
+                    },
+                    DT_CENTER | DT_BOTTOM,
+                ),
+            };
+            text(dc, &mark.label, r, t(16), TEXT, flags);
+        }
+        let corner = t(48);
+        let big = RECT { left: corner, top: corner, right: size.0, bottom: corner + t(120) };
+        text(dc, &plane.number.to_string(), big, t(96), TEXT, DT_LEFT | DT_TOP | DT_NOCLIP);
+        let name = RECT { left: corner, top: corner + t(120), right: size.0, bottom: corner + t(160) };
+        text(dc, &plane.name, name, t(28), SECONDARY, DT_LEFT | DT_TOP | DT_NOCLIP);
     }
-    let corner = t(48);
-    let big = RECT { left: corner, top: corner, right: size.0, bottom: corner + t(120) };
-    text(dc, &plane.number.to_string(), big, t(96), TEXT, DT_LEFT | DT_TOP | DT_NOCLIP);
-    let name = RECT { left: corner, top: corner + t(120), right: size.0, bottom: corner + t(160) };
-    text(dc, &plane.name, name, t(28), SECONDARY, DT_LEFT | DT_TOP | DT_NOCLIP);
 }
 
 unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
-    match msg {
-        WM_PAINT => {
-            let mut ps = PAINTSTRUCT::default();
-            let dc = BeginPaint(hwnd, &mut ps);
-            let mut client = RECT::default();
-            let _ = GetClientRect(hwnd, &mut client);
-            let scale = GetDpiForWindow(hwnd).max(96) as f64 / 96.0;
-            PLANES.with(|planes| {
-                if let Some((_, plane)) = planes.borrow().iter().find(|(h, _)| *h == hwnd.0 as isize) {
-                    draw(dc, plane, client, scale);
-                }
-            });
-            let _ = EndPaint(hwnd, &ps);
-            LRESULT(0)
+    unsafe {
+        match msg {
+            WM_PAINT => {
+                let mut ps = PAINTSTRUCT::default();
+                let dc = BeginPaint(hwnd, &mut ps);
+                let mut client = RECT::default();
+                let _ = GetClientRect(hwnd, &mut client);
+                let scale = GetDpiForWindow(hwnd).max(96) as f64 / 96.0;
+                PLANES.with(|planes| {
+                    if let Some((_, plane)) = planes.borrow().iter().find(|(h, _)| *h == hwnd.0 as isize) {
+                        draw(dc, plane, client, scale);
+                    }
+                });
+                let _ = EndPaint(hwnd, &ps);
+                LRESULT(0)
+            }
+            _ => DefWindowProcW(hwnd, msg, wparam, lparam),
         }
-        _ => DefWindowProcW(hwnd, msg, wparam, lparam),
     }
 }
 
 /// Esc and clicks end the show, and go on to whatever they were for.
 unsafe extern "system" fn key_proc(code: i32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
-    if code >= 0 && matches!(wparam.0 as u32, WM_KEYDOWN | WM_SYSKEYDOWN) {
-        let key = &*(lparam.0 as *const KBDLLHOOKSTRUCT);
-        if key.vkCode == VK_ESCAPE.0 as u32 {
-            PostQuitMessage(0);
+    unsafe {
+        if code >= 0 && matches!(wparam.0 as u32, WM_KEYDOWN | WM_SYSKEYDOWN) {
+            let key = &*(lparam.0 as *const KBDLLHOOKSTRUCT);
+            if key.vkCode == VK_ESCAPE.0 as u32 {
+                PostQuitMessage(0);
+            }
         }
+        CallNextHookEx(None, code, wparam, lparam)
     }
-    CallNextHookEx(None, code, wparam, lparam)
 }
 
 unsafe extern "system" fn mouse_proc(code: i32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
-    if code >= 0 && matches!(wparam.0 as u32, WM_LBUTTONDOWN | WM_RBUTTONDOWN | WM_MBUTTONDOWN) {
-        PostQuitMessage(0);
+    unsafe {
+        if code >= 0 && matches!(wparam.0 as u32, WM_LBUTTONDOWN | WM_RBUTTONDOWN | WM_MBUTTONDOWN) {
+            PostQuitMessage(0);
+        }
+        CallNextHookEx(None, code, wparam, lparam)
     }
-    CallNextHookEx(None, code, wparam, lparam)
 }
 
 /// Create one click-through window over a screen. It never takes focus.
 unsafe fn open_window(plane: &Plane) -> Option<HWND> {
-    let hinst = GetModuleHandleW(None).unwrap_or_default();
-    let hwnd = CreateWindowExW(
-        WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE | WS_EX_LAYERED | WS_EX_TRANSPARENT,
-        CLASS,
-        w!("Seam layout"),
-        WS_POPUP,
-        plane.rect.left,
-        plane.rect.top,
-        1,
-        1,
-        None,
-        None,
-        Some(hinst.into()),
-        None,
-    )
-    .ok()?;
-    let _ = SetLayeredWindowAttributes(hwnd, COLORREF(0), ALPHA, LWA_ALPHA);
-    // Sized after creation, because the window now knows its screen's DPI.
-    let r = plane.rect;
-    let _ =
-        SetWindowPos(hwnd, Some(HWND_TOPMOST), r.left, r.top, r.width(), r.height(), SWP_NOACTIVATE | SWP_SHOWWINDOW);
-    Some(hwnd)
+    unsafe {
+        let hinst = GetModuleHandleW(None).unwrap_or_default();
+        let hwnd = CreateWindowExW(
+            WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE | WS_EX_LAYERED | WS_EX_TRANSPARENT,
+            CLASS,
+            w!("Seam layout"),
+            WS_POPUP,
+            plane.rect.left,
+            plane.rect.top,
+            1,
+            1,
+            None,
+            None,
+            Some(hinst.into()),
+            None,
+        )
+        .ok()?;
+        let _ = SetLayeredWindowAttributes(hwnd, COLORREF(0), ALPHA, LWA_ALPHA);
+        // Sized after creation, because the window now knows its screen's DPI.
+        let r = plane.rect;
+        let _ = SetWindowPos(
+            hwnd,
+            Some(HWND_TOPMOST),
+            r.left,
+            r.top,
+            r.width(),
+            r.height(),
+            SWP_NOACTIVATE | SWP_SHOWWINDOW,
+        );
+        Some(hwnd)
+    }
 }
 
 fn run(planes: Vec<Plane>) {

@@ -12,12 +12,11 @@ use std::path::Path;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc::{self, Receiver};
 use std::time::{Duration, Instant};
-use windows::core::{w, Interface, BSTR, PCWSTR};
 use windows::Win32::Foundation::HWND;
 use windows::Win32::Storage::FileSystem::GetDriveTypeW;
 use windows::Win32::System::Com::{
-    CoCreateInstance, CoInitializeEx, CoTaskMemFree, CoUninitialize, IServiceProvider, CLSCTX_ALL,
-    CLSCTX_INPROC_SERVER, COINIT_APARTMENTTHREADED, COINIT_MULTITHREADED,
+    CLSCTX_ALL, CLSCTX_INPROC_SERVER, COINIT_APARTMENTTHREADED, COINIT_MULTITHREADED, CoCreateInstance, CoInitializeEx,
+    CoTaskMemFree, CoUninitialize, IServiceProvider,
 };
 use windows::Win32::System::Variant::VARIANT;
 use windows::Win32::UI::Accessibility::{
@@ -29,6 +28,7 @@ use windows::Win32::UI::Shell::{
     SID_STopLevelBrowser, ShellWindows,
 };
 use windows::Win32::UI::WindowsAndMessaging::FindWindowExW;
+use windows::core::{BSTR, Interface, PCWSTR, w};
 
 /// The longest each browser window may take to read.
 const PAGE_WAIT: Duration = Duration::from_millis(300);

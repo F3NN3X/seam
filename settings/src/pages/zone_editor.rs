@@ -13,7 +13,7 @@ use gpui_kit::*;
 use seam::desk::Mon;
 use seam::library;
 use seam::zones::{self, Dir, LeafTag, Node, Rect, Template, ZoneLayout};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::rc::Rc;
 
 actions!(seam_zone_editor, [DiscardEdit, UndoEdit]);
@@ -310,20 +310,20 @@ fn split(panel: &mut Panel, dir: Dir, cx: &mut Context<Panel>) {
 }
 
 fn merge(panel: &mut Panel, cx: &mut Context<Panel>) {
-    if let Some(editor) = panel.editor.as_mut() {
-        if let Some((tree, joined)) = zones::merge_leaf(&editor.tree, editor.selected) {
-            editor.edit("merge", tree, joined);
-        }
+    if let Some(editor) = panel.editor.as_mut()
+        && let Some((tree, joined)) = zones::merge_leaf(&editor.tree, editor.selected)
+    {
+        editor.edit("merge", tree, joined);
     }
     cx.notify();
 }
 
 fn reset(panel: &mut Panel, cx: &mut Context<Panel>) {
-    if let Some(editor) = panel.editor.as_mut() {
-        if editor.tree != editor.base {
-            let base = editor.base.clone();
-            editor.edit("reset", base, 0);
-        }
+    if let Some(editor) = panel.editor.as_mut()
+        && editor.tree != editor.base
+    {
+        let base = editor.base.clone();
+        editor.edit("reset", base, 0);
     }
     cx.notify();
 }
@@ -366,14 +366,13 @@ pub(super) fn drag_to(
 
 /// One drag is one Undo step.
 pub(super) fn end_drag(panel: &mut Panel, cx: &mut Context<Panel>) {
-    if let Some(editor) = panel.editor.as_mut() {
-        if let Some(Dragging { before, .. }) = editor.dragging.take() {
-            if before != editor.tree {
-                let current = std::mem::replace(&mut editor.tree, before);
-                let selected = editor.selected;
-                editor.edit("divider move", current, selected);
-            }
-        }
+    if let Some(editor) = panel.editor.as_mut()
+        && let Some(Dragging { before, .. }) = editor.dragging.take()
+        && before != editor.tree
+    {
+        let current = std::mem::replace(&mut editor.tree, before);
+        let selected = editor.selected;
+        editor.edit("divider move", current, selected);
     }
     cx.notify();
 }

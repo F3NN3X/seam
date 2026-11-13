@@ -68,19 +68,11 @@ impl Rect {
     }
     /// Origin of the rect along the axis of an edge on `side`.
     pub fn along_origin(&self, side: Side) -> i32 {
-        if side.along_is_y() {
-            self.top
-        } else {
-            self.left
-        }
+        if side.along_is_y() { self.top } else { self.left }
     }
     /// Length of the rect along the axis of an edge on `side`.
     pub fn along_len(&self, side: Side) -> i32 {
-        if side.along_is_y() {
-            self.height()
-        } else {
-            self.width()
-        }
+        if side.along_is_y() { self.height() } else { self.width() }
     }
 }
 
@@ -224,11 +216,7 @@ pub fn overlap_in_a(m: &EdgeMap, len_a: i32, len_b: i32) -> Option<(f64, f64)> {
     let x1 = inv.apply(len_b as f64);
     let lo = x0.min(x1).max(0.0);
     let hi = x0.max(x1).min(len_a as f64);
-    if hi - lo >= 2.0 {
-        Some((lo, hi))
-    } else {
-        None
-    }
+    if hi - lo >= 2.0 { Some((lo, hi)) } else { None }
 }
 
 /// The two fixed calibration lines on A: 20% and 80% into the (predicted)
@@ -393,7 +381,7 @@ mod tests {
         assert_eq!(over, 2);
         let dest = remap_crossing(&uhd(), &qhd(), side, &m, along, over).unwrap();
         assert_eq!(dest, (3842, 1080)); // 75% down the 1440p screen
-                                        // And back again: 1080 on the QHD maps to 1620 on the UHD.
+        // And back again: 1080 on the QHD maps to 1620 on the UHD.
         let (side2, along2, over2) = exits_of(&qhd(), (3840, 1080), (3839, 1080))[0].unwrap();
         assert_eq!(side2, Side::Left);
         let back = remap_crossing(&qhd(), &uhd(), side2, &m.inverse(), along2, over2).unwrap();

@@ -2,17 +2,17 @@
 //! now, by the capture's own rules, and the Start menu's list from
 //! `shell:AppsFolder`. Both block, so the panel calls them off its UI thread.
 
-use crate::classify::{classify, Verdict};
+use crate::classify::{Verdict, classify};
 use crate::winutil;
-use crate::workspace::{safe_aumid, safe_exe, Rule};
+use crate::workspace::{Rule, safe_aumid, safe_exe};
 use std::collections::HashMap;
-use windows::core::{Interface, GUID, PWSTR};
 use windows::Win32::Storage::EnhancedStorage::PKEY_Link_TargetParsingPath;
-use windows::Win32::System::Com::{CoInitializeEx, CoTaskMemFree, CoUninitialize, IBindCtx, COINIT_APARTMENTTHREADED};
+use windows::Win32::System::Com::{COINIT_APARTMENTTHREADED, CoInitializeEx, CoTaskMemFree, CoUninitialize, IBindCtx};
 use windows::Win32::UI::Shell::{
-    BHID_EnumItems, FOLDERID_AppsFolder, IEnumShellItems, IShellItem, IShellItem2, SHGetKnownFolderItem,
-    SHGetKnownFolderPath, KF_FLAG_DEFAULT, SIGDN_NORMALDISPLAY, SIGDN_PARENTRELATIVEPARSING,
+    BHID_EnumItems, FOLDERID_AppsFolder, IEnumShellItems, IShellItem, IShellItem2, KF_FLAG_DEFAULT,
+    SHGetKnownFolderItem, SHGetKnownFolderPath, SIGDN_NORMALDISPLAY, SIGDN_PARENTRELATIVEPARSING,
 };
+use windows::core::{GUID, Interface, PWSTR};
 
 /// Run `work` with COM up on this thread, for the property store and the shell.
 fn with_com<T>(work: impl FnOnce() -> T) -> T {

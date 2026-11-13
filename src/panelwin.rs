@@ -6,13 +6,13 @@
 use crate::geom;
 use crate::winutil::process_id;
 use crate::zones::Rect;
-use windows::core::BOOL;
 use windows::Win32::Foundation::{COLORREF, HWND, LPARAM, POINT, RECT};
 use windows::Win32::Graphics::Gdi::{
-    GetMonitorInfoW, MonitorFromPoint, MonitorFromRect, MONITORINFO, MONITOR_DEFAULTTONEAREST,
+    GetMonitorInfoW, MONITOR_DEFAULTTONEAREST, MONITORINFO, MonitorFromPoint, MonitorFromRect,
 };
 use windows::Win32::UI::HiDpi::{AdjustWindowRectExForDpi, GetDpiForMonitor, MDT_EFFECTIVE_DPI};
 use windows::Win32::UI::WindowsAndMessaging::*;
+use windows::core::BOOL;
 
 /// The work area (taskbar excluded) of the screen at `bounds`, in physical pixels.
 pub fn work_area(bounds: Rect) -> Option<Rect> {
@@ -82,14 +82,16 @@ struct Search {
 }
 
 unsafe extern "system" fn matches(h: HWND, data: LPARAM) -> BOOL {
-    let search = &mut *(data.0 as *mut Search);
-    let mut buf = [0u16; 64];
-    let len = GetWindowTextW(h, &mut buf).max(0) as usize;
-    if buf[..len] == search.title[..] && process_id(h) == search.pid {
-        search.found = Some(h);
-        return BOOL(0);
+    unsafe {
+        let search = &mut *(data.0 as *mut Search);
+        let mut buf = [0u16; 64];
+        let len = GetWindowTextW(h, &mut buf).max(0) as usize;
+        if buf[..len] == search.title[..] && process_id(h) == search.pid {
+            search.found = Some(h);
+            return BOOL(0);
+        }
+        BOOL(1)
     }
-    BOOL(1)
 }
 
 /// This process's top-level window with exactly this title.

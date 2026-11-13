@@ -4,12 +4,12 @@
 use crate::geom::Rect;
 use crate::overlay;
 use std::cell::Cell;
-use windows::core::{w, PCWSTR};
 use windows::Win32::Foundation::*;
 use windows::Win32::Graphics::Gdi::*;
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::HiDpi::GetDpiForWindow;
 use windows::Win32::UI::WindowsAndMessaging::*;
+use windows::core::{PCWSTR, w};
 
 const CLASS: PCWSTR = w!("SeamIdentify");
 const SHOWN_MS: u32 = 1500;
@@ -23,31 +23,33 @@ thread_local! {
 }
 
 unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
-    match msg {
-        WM_PAINT => {
-            let mut ps = PAINTSTRUCT::default();
-            let dc = BeginPaint(hwnd, &mut ps);
-            let mut client = RECT::default();
-            let _ = GetClientRect(hwnd, &mut client);
-            let brush = CreateSolidBrush(BACKGROUND);
-            FillRect(dc, &client, brush);
-            let _ = DeleteObject(brush.into());
-            let scale = GetDpiForWindow(hwnd).max(96) as f64 / 96.0;
-            let number = SHOWING.with(Cell::get).1.to_string();
-            let flags = DT_CENTER | DT_VCENTER | DT_SINGLELINE;
-            overlay::text(dc, &number, client, (120.0 * scale) as i32, false, TEXT, flags, false);
-            let _ = EndPaint(hwnd, &ps);
-            LRESULT(0)
+    unsafe {
+        match msg {
+            WM_PAINT => {
+                let mut ps = PAINTSTRUCT::default();
+                let dc = BeginPaint(hwnd, &mut ps);
+                let mut client = RECT::default();
+                let _ = GetClientRect(hwnd, &mut client);
+                let brush = CreateSolidBrush(BACKGROUND);
+                FillRect(dc, &client, brush);
+                let _ = DeleteObject(brush.into());
+                let scale = GetDpiForWindow(hwnd).max(96) as f64 / 96.0;
+                let number = SHOWING.with(Cell::get).1.to_string();
+                let flags = DT_CENTER | DT_VCENTER | DT_SINGLELINE;
+                overlay::text(dc, &number, client, (120.0 * scale) as i32, false, TEXT, flags, false);
+                let _ = EndPaint(hwnd, &ps);
+                LRESULT(0)
+            }
+            WM_TIMER if wparam.0 == TIMER_CLOSE => {
+                let _ = DestroyWindow(hwnd);
+                LRESULT(0)
+            }
+            WM_DESTROY => {
+                SHOWING.with(|s| s.set((0, 0)));
+                LRESULT(0)
+            }
+            _ => DefWindowProcW(hwnd, msg, wparam, lparam),
         }
-        WM_TIMER if wparam.0 == TIMER_CLOSE => {
-            let _ = DestroyWindow(hwnd);
-            LRESULT(0)
-        }
-        WM_DESTROY => {
-            SHOWING.with(|s| s.set((0, 0)));
-            LRESULT(0)
-        }
-        _ => DefWindowProcW(hwnd, msg, wparam, lparam),
     }
 }
 

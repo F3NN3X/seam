@@ -2,7 +2,7 @@
 //! row instead, because the Store does the updating there.
 
 use crate::panel::Panel;
-use crate::theme::{palette, Palette};
+use crate::theme::{Palette, palette};
 use crate::ui::{self, card, row, section, switch};
 use crate::update::{self, InstallError, Progress};
 use gpui_kit::component::notification::Notification;
@@ -64,34 +64,36 @@ pub fn check_now(panel: &mut Panel, window: &mut Window, cx: &mut Context<Panel>
         })
         .detach();
     let rx = Arc::new(Mutex::new(rx));
-    cx.spawn_in(window, async move |this, cx| loop {
-        let next = {
-            let rx = rx.clone();
-            cx.background_executor().spawn(async move { rx.lock().ok()?.recv().ok() }).await
-        };
-        let Some(msg) = next else { return };
-        let finished = matches!(msg, Msg::Done(_));
-        let updated = this.update_in(cx, |this, window, cx| {
-            match msg {
-                Msg::Progress(Progress::Checking) => this.update_ui = UpdateUi::Checking,
-                Msg::Progress(Progress::Downloading { version, done, total }) => {
-                    this.update_ui = UpdateUi::Downloading { version, done, total }
-                }
-                Msg::Done(result) => {
-                    this.update_file = updates::read();
-                    this.update_ui = match result {
-                        Ok(()) => UpdateUi::Idle,
-                        Err(e) => UpdateUi::Failed(e),
-                    };
-                    if this.update_file.available.is_none() && matches!(this.update_ui, UpdateUi::Idle) {
-                        window.push_notification(Notification::new().message("Seam is up to date"), cx);
+    cx.spawn_in(window, async move |this, cx| {
+        loop {
+            let next = {
+                let rx = rx.clone();
+                cx.background_executor().spawn(async move { rx.lock().ok()?.recv().ok() }).await
+            };
+            let Some(msg) = next else { return };
+            let finished = matches!(msg, Msg::Done(_));
+            let updated = this.update_in(cx, |this, window, cx| {
+                match msg {
+                    Msg::Progress(Progress::Checking) => this.update_ui = UpdateUi::Checking,
+                    Msg::Progress(Progress::Downloading { version, done, total }) => {
+                        this.update_ui = UpdateUi::Downloading { version, done, total }
+                    }
+                    Msg::Done(result) => {
+                        this.update_file = updates::read();
+                        this.update_ui = match result {
+                            Ok(()) => UpdateUi::Idle,
+                            Err(e) => UpdateUi::Failed(e),
+                        };
+                        if this.update_file.available.is_none() && matches!(this.update_ui, UpdateUi::Idle) {
+                            window.push_notification(Notification::new().message("Seam is up to date"), cx);
+                        }
                     }
                 }
+                cx.notify();
+            });
+            if updated.is_err() || finished {
+                return;
             }
-            cx.notify();
-        });
-        if updated.is_err() || finished {
-            return;
         }
     })
     .detach();

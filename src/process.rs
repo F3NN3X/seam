@@ -1,14 +1,15 @@
 //! Small questions about other processes, for the updater.
 
 use std::path::PathBuf;
-use windows::core::{w, PWSTR};
-use windows::Win32::Foundation::{CloseHandle, LocalFree, HANDLE, HLOCAL, WAIT_OBJECT_0};
+use windows::Win32::Foundation::{CloseHandle, HANDLE, HLOCAL, LocalFree, WAIT_OBJECT_0};
 use windows::Win32::Security::Authorization::ConvertSidToStringSidW;
-use windows::Win32::Security::{GetTokenInformation, TokenUser, TOKEN_QUERY, TOKEN_USER};
+use windows::Win32::Security::{GetTokenInformation, TOKEN_QUERY, TOKEN_USER, TokenUser};
 use windows::Win32::System::Threading::{
-    GetCurrentProcess, OpenMutexW, OpenProcess, OpenProcessToken, QueryFullProcessImageNameW, WaitForSingleObject,
-    PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_SYNCHRONIZE, SYNCHRONIZATION_SYNCHRONIZE,
+    GetCurrentProcess, OpenMutexW, OpenProcess, OpenProcessToken, PROCESS_NAME_WIN32,
+    PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_SYNCHRONIZE, QueryFullProcessImageNameW, SYNCHRONIZATION_SYNCHRONIZE,
+    WaitForSingleObject,
 };
+use windows::core::{PWSTR, w};
 
 /// Where the exe of a running process lives.
 pub fn image_path(pid: u32) -> Option<PathBuf> {

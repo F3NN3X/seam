@@ -5,10 +5,10 @@
 //! from Windows 11 build 22557, where the setting first came. Seam only ever
 //! turns it on, and only when asked to.
 
-use windows::core::{w, PCWSTR};
 use windows::Win32::Foundation::{ERROR_FILE_NOT_FOUND, ERROR_SUCCESS, LPARAM, WIN32_ERROR, WPARAM};
 use windows::Win32::System::Registry::*;
 use windows::Win32::UI::WindowsAndMessaging::*;
+use windows::core::{PCWSTR, w};
 
 const CURSORS: PCWSTR = w!("Control Panel\\Cursors");
 const NAME: PCWSTR = w!("CursorDeadzoneJumpingSetting");
@@ -66,11 +66,7 @@ pub fn turn_on() -> Result<(), String> {
         return Err(format!("Windows didn't save the setting ({})", code.0));
     }
     // Something may have put it back, so read it again.
-    if read() == Some(true) {
-        Ok(())
-    } else {
-        Err("Windows didn't keep Ease cursor movement on".into())
-    }
+    if read() == Some(true) { Ok(()) } else { Err("Windows didn't keep Ease cursor movement on".into()) }
 }
 
 /// Tell Windows the cursor settings changed, as Settings does, so no sign-out is needed.

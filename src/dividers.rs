@@ -21,18 +21,18 @@ use seam::winutil;
 use seam::zones::{self, Dir, Rect, ZoneLayout};
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
-use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicU8, Ordering};
 use std::time::{Duration, Instant};
-use windows::core::{w, PCWSTR};
 use windows::Win32::Foundation::*;
 use windows::Win32::Graphics::Gdi::*;
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
-use windows::Win32::UI::Accessibility::{SetWinEventHook, UnhookWinEvent, HWINEVENTHOOK};
+use windows::Win32::UI::Accessibility::{HWINEVENTHOOK, SetWinEventHook, UnhookWinEvent};
 use windows::Win32::UI::Input::KeyboardAndMouse::{
-    GetAsyncKeyState, ReleaseCapture, SetCapture, TrackMouseEvent, TME_LEAVE, TRACKMOUSEEVENT, VK_ESCAPE,
+    GetAsyncKeyState, ReleaseCapture, SetCapture, TME_LEAVE, TRACKMOUSEEVENT, TrackMouseEvent, VK_ESCAPE,
 };
 use windows::Win32::UI::WindowsAndMessaging::*;
+use windows::core::{PCWSTR, w};
 
 mod menu;
 mod place;
@@ -148,11 +148,12 @@ fn post(start: bool, message: u32) {
         unsafe {
             let _ = PostMessageW(Some(hwnd_of(window)), message, WPARAM(0), LPARAM(0));
         }
-    } else if start && THREAD.compare_exchange(IDLE, STARTED, Ordering::SeqCst, Ordering::SeqCst).is_ok() {
-        if let Err(e) = std::thread::Builder::new().name("seam-dividers".into()).spawn(run) {
-            log::info!("divider handles: couldn't start: {e}");
-            let _ = THREAD.compare_exchange(STARTED, IDLE, Ordering::SeqCst, Ordering::SeqCst);
-        }
+    } else if start
+        && THREAD.compare_exchange(IDLE, STARTED, Ordering::SeqCst, Ordering::SeqCst).is_ok()
+        && let Err(e) = std::thread::Builder::new().name("seam-dividers".into()).spawn(run)
+    {
+        log::info!("divider handles: couldn't start: {e}");
+        let _ = THREAD.compare_exchange(STARTED, IDLE, Ordering::SeqCst, Ordering::SeqCst);
     }
 }
 
@@ -653,48 +654,50 @@ fn meets(a: Rect, b: Rect) -> bool {
 }
 
 unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
-    match msg {
-        WM_APP_SCENE => {
-            with_state(State::take_scene);
+    unsafe {
+        match msg {
+            WM_APP_SCENE => {
+                with_state(State::take_scene);
+            }
+            WM_APP_HIDE => {
+                with_state(State::hide);
+            }
+            WM_APP_MENU => menu::asked_menu(),
+            WM_TIMER => {
+                with_state(|s| s.timer(wparam.0));
+            }
+            // A click never makes a handle the active window.
+            WM_MOUSEACTIVATE => return LRESULT(MA_NOACTIVATE as isize),
+            WM_SETCURSOR if with_state(|s| s.set_cursor(hwnd)) == Some(true) => return LRESULT(1),
+            WM_MOUSEMOVE => {
+                with_state(|s| match s.drag {
+                    Some(_) => s.drag_to(),
+                    None => s.hover(hwnd, true),
+                });
+            }
+            WM_MOUSELEAVE => {
+                with_state(|s| s.hover(hwnd, false));
+            }
+            WM_LBUTTONDOWN => {
+                with_state(|s| s.press(hwnd));
+            }
+            WM_LBUTTONUP => {
+                with_state(|s| s.release(true));
+            }
+            // Capture taken away mid-drag. Its own release comes here too, and finds no drag.
+            WM_CAPTURECHANGED => {
+                with_state(|s| s.release(false));
+            }
+            WM_RBUTTONUP => menu::handle_menu(hwnd),
+            WM_CLOSE if with_state(|s| s.owner == hwnd) == Some(true) => {
+                with_state(State::clear);
+                let _ = DestroyWindow(hwnd);
+                PostQuitMessage(0);
+            }
+            _ => return DefWindowProcW(hwnd, msg, wparam, lparam),
         }
-        WM_APP_HIDE => {
-            with_state(State::hide);
-        }
-        WM_APP_MENU => menu::asked_menu(),
-        WM_TIMER => {
-            with_state(|s| s.timer(wparam.0));
-        }
-        // A click never makes a handle the active window.
-        WM_MOUSEACTIVATE => return LRESULT(MA_NOACTIVATE as isize),
-        WM_SETCURSOR if with_state(|s| s.set_cursor(hwnd)) == Some(true) => return LRESULT(1),
-        WM_MOUSEMOVE => {
-            with_state(|s| match s.drag {
-                Some(_) => s.drag_to(),
-                None => s.hover(hwnd, true),
-            });
-        }
-        WM_MOUSELEAVE => {
-            with_state(|s| s.hover(hwnd, false));
-        }
-        WM_LBUTTONDOWN => {
-            with_state(|s| s.press(hwnd));
-        }
-        WM_LBUTTONUP => {
-            with_state(|s| s.release(true));
-        }
-        // Capture taken away mid-drag. Its own release comes here too, and finds no drag.
-        WM_CAPTURECHANGED => {
-            with_state(|s| s.release(false));
-        }
-        WM_RBUTTONUP => menu::handle_menu(hwnd),
-        WM_CLOSE if with_state(|s| s.owner == hwnd) == Some(true) => {
-            with_state(State::clear);
-            let _ = DestroyWindow(hwnd);
-            PostQuitMessage(0);
-        }
-        _ => return DefWindowProcW(hwnd, msg, wparam, lparam),
+        LRESULT(0)
     }
-    LRESULT(0)
 }
 
 fn run() {
@@ -708,7 +711,7 @@ fn run() {
             ..Default::default()
         };
         RegisterClassExW(&wc); // fails harmlessly if already registered
-                               // A hidden window, not message-only, so it can own a menu in front.
+        // A hidden window, not message-only, so it can own a menu in front.
         let made = CreateWindowExW(
             WS_EX_TOOLWINDOW,
             CLASS,

@@ -2,7 +2,7 @@
 //! across a border lands, and how to rearrange monitors to match the borders.
 
 use crate::geom::{
-    aligned_along_origin, exits_of, facing, place_against, remap_crossing, touching, EdgeMap, Rect, Side,
+    EdgeMap, Rect, Side, aligned_along_origin, exits_of, facing, place_against, remap_crossing, touching,
 };
 use std::collections::VecDeque;
 
@@ -53,11 +53,7 @@ impl Live {
     /// only asked when it's on. A glued edge takes the larger of the two.
     pub fn push_needed(&self, glued: bool, buttons: impl FnOnce() -> bool) -> i32 {
         let edge = if self.edge_resistance > 0 && !buttons() { self.edge_resistance } else { 0 };
-        if glued {
-            edge.max(self.glue_push)
-        } else {
-            edge
-        }
+        if glued { edge.max(self.glue_push) } else { edge }
     }
 }
 
@@ -202,11 +198,7 @@ impl Push {
         let edge = Some((c.src, c.dst, c.glue));
         // `over` counts the first pixel out as 0.
         let px = if self.edge == edge { self.px } else { 0 } + c.over + 1;
-        if px >= need {
-            (Push::default(), true)
-        } else {
-            (Push { edge, px }, false)
-        }
+        if px >= need { (Push::default(), true) } else { (Push { edge, px }, false) }
     }
 }
 
@@ -361,11 +353,7 @@ mod tests {
     }
 
     fn along_of(side: Side, p: (i32, i32)) -> i32 {
-        if side.along_is_y() {
-            p.1
-        } else {
-            p.0
-        }
+        if side.along_is_y() { p.1 } else { p.0 }
     }
 
     // ------------------------------------------------------------- decide --

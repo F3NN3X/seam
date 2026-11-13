@@ -6,7 +6,7 @@
 
 use crate::config::Config;
 use crate::zones::{self, Node, Template, ZoneLayout};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 #[derive(Clone, Debug, PartialEq)]

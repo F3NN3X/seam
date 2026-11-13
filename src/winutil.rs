@@ -1,34 +1,34 @@
 //! Win32 helpers for moving other apps' windows: which ones may move, and
 //! placing one so its visible frame lands on a rect.
 
-use crate::classify::{classify, Verdict, WindowFacts};
+use crate::classify::{Verdict, WindowFacts, classify};
 use crate::desk::Date;
-use crate::zones::{frame_adjust, Rect};
+use crate::zones::{Rect, frame_adjust};
 use std::sync::OnceLock;
-use windows::core::{w, BOOL, PCWSTR, PWSTR};
 use windows::Win32::Foundation::{CloseHandle, ERROR_ACCESS_DENIED, HANDLE, HWND, LPARAM, POINT, RECT};
 use windows::Win32::Foundation::{ERROR_SUCCESS, FILETIME, SYSTEMTIME};
-use windows::Win32::Graphics::Dwm::{DwmGetWindowAttribute, DWMWA_CLOAKED, DWMWA_EXTENDED_FRAME_BOUNDS};
+use windows::Win32::Graphics::Dwm::{DWMWA_CLOAKED, DWMWA_EXTENDED_FRAME_BOUNDS, DwmGetWindowAttribute};
 use windows::Win32::Graphics::Gdi::{
-    GetMonitorInfoW, MonitorFromPoint, MonitorFromRect, MonitorFromWindow, MONITORINFO, MONITOR_DEFAULTTONEAREST,
-    MONITOR_DEFAULTTONULL, MONITOR_DEFAULTTOPRIMARY,
+    GetMonitorInfoW, MONITOR_DEFAULTTONEAREST, MONITOR_DEFAULTTONULL, MONITOR_DEFAULTTOPRIMARY, MONITORINFO,
+    MonitorFromPoint, MonitorFromRect, MonitorFromWindow,
 };
-use windows::Win32::Security::{GetTokenInformation, TokenElevation, TOKEN_ELEVATION, TOKEN_QUERY};
+use windows::Win32::Security::{GetTokenInformation, TOKEN_ELEVATION, TOKEN_QUERY, TokenElevation};
 use windows::Win32::Storage::EnhancedStorage::PKEY_AppUserModel_ID;
 use windows::Win32::Storage::Packaging::Appx::GetPackageFamilyName;
 use windows::Win32::System::Com::CoTaskMemFree;
 use windows::Win32::System::Com::StructuredStorage::PropVariantToStringAlloc;
 use windows::Win32::System::Diagnostics::ToolHelp::{
-    CreateToolhelp32Snapshot, Process32FirstW, Process32NextW, PROCESSENTRY32W, TH32CS_SNAPPROCESS,
+    CreateToolhelp32Snapshot, PROCESSENTRY32W, Process32FirstW, Process32NextW, TH32CS_SNAPPROCESS,
 };
 use windows::Win32::System::Threading::{
-    GetCurrentProcess, OpenProcess, OpenProcessToken, QueryFullProcessImageNameW, PROCESS_NAME_WIN32,
-    PROCESS_QUERY_LIMITED_INFORMATION,
+    GetCurrentProcess, OpenProcess, OpenProcessToken, PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION,
+    QueryFullProcessImageNameW,
 };
 use windows::Win32::System::Time::{FileTimeToSystemTime, SystemTimeToTzSpecificLocalTime};
 use windows::Win32::UI::HiDpi::{GetDpiForMonitor, GetSystemMetricsForDpi, MDT_EFFECTIVE_DPI};
 use windows::Win32::UI::Shell::PropertiesSystem::{IPropertyStore, SHGetPropertyStoreForWindow};
 use windows::Win32::UI::WindowsAndMessaging::*;
+use windows::core::{BOOL, PCWSTR, PWSTR, w};
 
 fn rect_of(r: RECT) -> Rect {
     Rect { x: r.left, y: r.top, w: r.right - r.left, h: r.bottom - r.top }
@@ -137,11 +137,7 @@ pub fn monitor_dpi(h: HWND) -> u32 {
     let (mut dx, mut dy) = (0u32, 0u32);
     unsafe {
         let monitor = MonitorFromWindow(h, MONITOR_DEFAULTTONEAREST);
-        if GetDpiForMonitor(monitor, MDT_EFFECTIVE_DPI, &mut dx, &mut dy).is_ok() && dx > 0 {
-            dx
-        } else {
-            96
-        }
+        if GetDpiForMonitor(monitor, MDT_EFFECTIVE_DPI, &mut dx, &mut dy).is_ok() && dx > 0 { dx } else { 96 }
     }
 }
 
@@ -165,8 +161,8 @@ pub fn app_name(h: HWND) -> Option<String> {
 
 /// The FileDescription in an exe's version info, in its first language.
 fn file_description(path: &str) -> Option<String> {
-    use windows::core::HSTRING;
     use windows::Win32::Storage::FileSystem::{GetFileVersionInfoSizeW, GetFileVersionInfoW, VerQueryValueW};
+    use windows::core::HSTRING;
     let file = HSTRING::from(path);
     unsafe {
         let size = GetFileVersionInfoSizeW(&file, None);
@@ -411,8 +407,10 @@ pub fn work_area(bounds: Rect) -> Option<(Rect, u32)> {
 // ---- Workspaces: finding, describing and placing other apps' windows.
 
 unsafe extern "system" fn collect_window(h: HWND, data: LPARAM) -> BOOL {
-    (*(data.0 as *mut Vec<HWND>)).push(h);
-    BOOL(1)
+    unsafe {
+        (*(data.0 as *mut Vec<HWND>)).push(h);
+        BOOL(1)
+    }
 }
 
 /// Every top-level window, topmost first.
@@ -479,11 +477,13 @@ pub fn package_family_of(pid: u32) -> Option<String> {
 }
 
 unsafe extern "system" fn find_core_window(h: HWND, data: LPARAM) -> BOOL {
-    if class_name(h) == "Windows.UI.Core.CoreWindow" {
-        *(data.0 as *mut Option<HWND>) = Some(h);
-        return BOOL(0);
+    unsafe {
+        if class_name(h) == "Windows.UI.Core.CoreWindow" {
+            *(data.0 as *mut Option<HWND>) = Some(h);
+            return BOOL(0);
+        }
+        BOOL(1)
     }
-    BOOL(1)
 }
 
 /// The full path of the program that owns the window. A packaged app's frame is

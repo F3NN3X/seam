@@ -2,7 +2,8 @@
 //! the key and drag with the left button to move, or with the right to resize.
 //! A low-level mouse hook on a thread of its own (the D204 pattern), in only while
 //! the setting is on and Seam isn't standing by. The hook decides a press with a
-//! few checks, swallows it and its release, and only posts. A worker thread does
+//! few cheap checks and what the worker found about the app before, swallows it and
+//! its release, and only posts. A worker thread asks the slow questions and does
 //! the moving. The tray hears when a drag starts and ends, so the snapping treats
 //! it as a normal drag: zones with the show key, neighbours following an edge, a
 //! window moved away leaving its group.
@@ -11,13 +12,14 @@ use crate::hook::SEAM_INPUT_TAG;
 use crate::{log, minsize, wincontrol};
 use seam::winutil;
 use seam::zones::Rect;
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::sync::atomic::{AtomicBool, AtomicIsize, AtomicU8, AtomicU32, AtomicU64, Ordering};
 use std::sync::mpsc::channel;
-use std::sync::{Arc, RwLock};
-use std::time::Instant;
+use std::sync::{Arc, Mutex, RwLock};
+use std::time::{Duration, Instant};
 use windows::Win32::Foundation::*;
 use windows::Win32::System::Threading::GetCurrentThreadId;
+use windows::Win32::UI::HiDpi::GetDpiForWindow;
 use windows::Win32::UI::Input::KeyboardAndMouse::*;
 use windows::Win32::UI::WindowsAndMessaging::*;
 
@@ -35,6 +37,18 @@ const MSG_MOVED: u32 = WM_APP + 3;
 const MSG_END: u32 = WM_APP + 4;
 /// Wakes the hook's thread so it looks whether it is still wanted.
 const MSG_WAKE: u32 = WM_APP + 5;
+/// Look at the app of the window in wparam, for the next press on it.
+const MSG_LOOK: u32 = WM_APP + 6;
+/// The hook's thread looks whether Windows took the hook out.
+const MSG_CHECK: u32 = WM_APP + 7;
+/// How often the hook's thread looks, while it is in.
+const CHECK_MS: u32 = 60_000;
+/// How long what the worker found about an app counts.
+const VERDICT_FOR: Duration = Duration::from_secs(30);
+/// How long quitting waits for the release of a drag still going.
+const QUIT_WAIT: Duration = Duration::from_millis(200);
+/// How long the app has to say how big it may get.
+const ASK_MS: u32 = 100;
 
 /// The key held for a drag.
 const KEY_ALT: u8 = 0;
@@ -52,6 +66,13 @@ static ON: AtomicBool = AtomicBool::new(false);
 static WANTED: AtomicU64 = AtomicU64::new(0);
 /// The newest hook's thread, or 0.
 static OPEN: AtomicU32 = AtomicU32::new(0);
+/// The newest hook's worker, or 0.
+static WORKER: AtomicU32 = AtomicU32::new(0);
+/// A hook owes a release, so quitting waits a moment for it.
+static OWING: AtomicBool = AtomicBool::new(false);
+/// By process: whether Seam may move its windows (not Seam's, not an administrator's,
+/// not excluded), and when the worker found it out. The hook only tries the lock.
+static VERDICTS: Mutex<Vec<(u32, bool, Instant)>> = Mutex::new(Vec::new());
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Button {
@@ -68,10 +89,14 @@ struct Hooked {
     pending: Arc<AtomicBool>,
     /// The button whose press was swallowed, so its release is too.
     held: Option<Button>,
+    /// The other button, pressed during the drag: its press and release are the drag's too.
+    other: Option<Button>,
 }
 
 thread_local! {
     static HOOKED: RefCell<Hooked> = RefCell::new(Hooked::default());
+    /// Calls of the hook on this thread, to tell whether Windows took it out.
+    static CALLS: Cell<u64> = const { Cell::new(0) };
 }
 
 /// Put the hook in or take it out, and take the key and the excluded apps.
@@ -86,22 +111,37 @@ pub fn configure(owner: isize, on: bool, key: &str, exclude: &[String]) {
         },
         Ordering::SeqCst,
     );
-    *EXCLUDE.write().unwrap_or_else(|e| e.into_inner()) = exclude.iter().map(|x| x.to_lowercase()).collect();
+    let exclude: Vec<String> = exclude.iter().map(|x| x.to_lowercase()).collect();
+    let mut kept = EXCLUDE.write().unwrap_or_else(|e| e.into_inner());
+    if *kept != exclude {
+        *kept = exclude;
+        VERDICTS.lock().unwrap_or_else(|e| e.into_inner()).clear();
+    }
+    drop(kept);
     if ON.swap(on, Ordering::SeqCst) == on {
+        // Still on: the hook's thread looks whether Windows took the hook out.
+        let open = OPEN.load(Ordering::SeqCst);
+        if on && open != 0 {
+            unsafe {
+                let _ = PostThreadMessageW(open, MSG_CHECK, WPARAM(0), LPARAM(0));
+            }
+        }
         return;
     }
     if on {
         let generation = WANTED.fetch_add(1, Ordering::SeqCst) + 1;
         if let Err(e) = std::thread::Builder::new().name("seam-altdrag".into()).spawn(move || run(generation)) {
             log::info!("alt-drag: couldn't start: {e}");
+            // The next change of settings tries again.
+            ON.store(false, Ordering::SeqCst);
         }
     } else {
         stop();
     }
 }
 
-/// The setting went off, Seam stands by or the tray is quitting: no new drag. A
-/// drag still going keeps the hook until its release comes, so no app gets a lone one.
+/// The setting went off or Seam stands by: no new drag. A drag still going keeps
+/// the hook until its release comes, so no app gets a lone one.
 pub fn stop() {
     ON.store(false, Ordering::SeqCst);
     WANTED.fetch_add(1, Ordering::SeqCst);
@@ -110,6 +150,30 @@ pub fn stop() {
         unsafe {
             let _ = PostThreadMessageW(open, MSG_WAKE, WPARAM(0), LPARAM(0));
         }
+    }
+}
+
+/// The tray is quitting. A drag still going ends now, and the hook waits a moment
+/// for its release before it goes, so the app doesn't get a lone one.
+pub fn shutdown() {
+    stop();
+    if !OWING.load(Ordering::SeqCst) {
+        return;
+    }
+    let worker = WORKER.load(Ordering::SeqCst);
+    unsafe {
+        let _ = PostThreadMessageW(worker, MSG_END, WPARAM(0), LPARAM(0));
+    }
+    let until = Instant::now() + QUIT_WAIT;
+    while OWING.load(Ordering::SeqCst) && Instant::now() < until {
+        std::thread::sleep(Duration::from_millis(10));
+    }
+}
+
+/// The hook couldn't go in, or was lost: the next change of settings tries again.
+fn failed(generation: u64) {
+    if WANTED.load(Ordering::SeqCst) == generation {
+        ON.store(false, Ordering::SeqCst);
     }
 }
 
@@ -128,40 +192,77 @@ fn run(generation: u64) {
             (Ok(_), Ok(worker)) => worker,
             _ => {
                 log::info!("alt-drag: couldn't start the worker");
+                failed(generation);
                 let _ = OPEN.compare_exchange(id, 0, Ordering::SeqCst, Ordering::SeqCst);
                 return;
             }
         };
-        HOOKED.with(|h| *h.borrow_mut() = Hooked { generation, worker, pending, held: None });
+        WORKER.store(worker, Ordering::SeqCst);
+        HOOKED.with(|h| *h.borrow_mut() = Hooked { generation, worker, pending, held: None, other: None });
+        let install = || SetWindowsHookExW(WH_MOUSE_LL, Some(mouse_proc), None, 0);
         if WANTED.load(Ordering::SeqCst) == generation {
-            match SetWindowsHookExW(WH_MOUSE_LL, Some(mouse_proc), None, 0) {
-                Ok(hook) => {
+            match install() {
+                Ok(mut hook) => {
                     log::info!("alt-drag: hook installed");
+                    SetTimer(None, 0, CHECK_MS, None);
+                    let mut seen = (CALLS.get(), cursor());
                     while (WANTED.load(Ordering::SeqCst) == generation || owes())
                         && GetMessageW(&mut msg, None, 0, 0).as_bool()
                     {
+                        if msg.message == MSG_CHECK || (msg.message == WM_TIMER && msg.hwnd.is_invalid()) {
+                            // Windows takes out a hook that was too slow, and says nothing. The
+                            // pointer moved since the last look, and the hook heard nothing of it.
+                            let now = (CALLS.get(), cursor());
+                            if now.0 == seen.0 && now.1 != seen.1 {
+                                let _ = UnhookWindowsHookEx(hook);
+                                match install() {
+                                    Ok(again) => {
+                                        hook = again;
+                                        log::info!("alt-drag: hook re-armed, Windows had taken it out");
+                                    }
+                                    Err(e) => {
+                                        log::info!("alt-drag: hook lost and not put back: {e}");
+                                        failed(generation);
+                                        break;
+                                    }
+                                }
+                            }
+                            seen = (CALLS.get(), cursor());
+                            continue;
+                        }
                         let _ = TranslateMessage(&msg);
                         DispatchMessageW(&msg);
                     }
                     let _ = UnhookWindowsHookEx(hook);
                     log::info!("alt-drag: hook uninstalled");
                 }
-                Err(e) => log::info!("alt-drag: no mouse hook: {e}"),
+                Err(e) => {
+                    log::info!("alt-drag: no mouse hook: {e}");
+                    failed(generation);
+                }
             }
         }
+        OWING.store(false, Ordering::SeqCst);
         let _ = PostThreadMessageW(worker, WM_QUIT, WPARAM(0), LPARAM(0));
         let _ = OPEN.compare_exchange(id, 0, Ordering::SeqCst, Ordering::SeqCst);
     }
 }
 
 fn owes() -> bool {
-    HOOKED.with(|h| h.try_borrow().map_or(true, |h| h.held.is_some()))
+    HOOKED.with(|h| h.try_borrow().map_or(true, |h| h.owes()))
+}
+
+fn cursor() -> POINT {
+    let mut pt = POINT::default();
+    let _ = unsafe { GetCursorPos(&mut pt) };
+    pt
 }
 
 /// Swallow a press with the key held over a window Seam may move, and its release.
 /// Moves always pass, and during a drag only tell the worker the pointer moved.
 unsafe extern "system" fn mouse_proc(code: i32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
     unsafe {
+        CALLS.set(CALLS.get() + 1);
         if code >= 0 {
             let info = &*(lparam.0 as *const MSLLHOOKSTRUCT);
             let swallow = info.dwExtraInfo != SEAM_INPUT_TAG
@@ -175,17 +276,32 @@ unsafe extern "system" fn mouse_proc(code: i32, wparam: WPARAM, lparam: LPARAM) 
 }
 
 impl Hooked {
+    fn owes(&self) -> bool {
+        self.held.is_some() || self.other.is_some()
+    }
+
+    /// A swallowed release came, or a press whose release never will. A hook that was
+    /// stopped during the drag goes once it owes nothing.
+    unsafe fn settle(&self) {
+        let owes = self.owes();
+        OWING.store(owes, Ordering::Relaxed);
+        if !owes && WANTED.load(Ordering::Relaxed) != self.generation {
+            unsafe { PostQuitMessage(0) };
+        }
+    }
+
     /// Whether to swallow this mouse message.
     unsafe fn on_mouse(&mut self, msg: u32, pt: POINT) -> bool {
         unsafe {
             let worker = self.worker;
             let post = |message: u32, wparam: usize, lparam: isize| {
-                let _ = PostThreadMessageW(worker, message, WPARAM(wparam), LPARAM(lparam));
+                PostThreadMessageW(worker, message, WPARAM(wparam), LPARAM(lparam)).is_ok()
             };
             let button = match msg {
                 WM_MOUSEMOVE => {
-                    if self.held.is_some() && !self.pending.swap(true, Ordering::Relaxed) {
-                        post(MSG_MOVED, 0, 0);
+                    // A move the worker never gets mustn't hold back the next.
+                    if self.held.is_some() && !self.pending.swap(true, Ordering::Relaxed) && !post(MSG_MOVED, 0, 0) {
+                        self.pending.store(false, Ordering::Relaxed);
                     }
                     return false;
                 }
@@ -194,28 +310,38 @@ impl Hooked {
                 _ => return false,
             };
             if matches!(msg, WM_LBUTTONUP | WM_RBUTTONUP) {
-                if self.held != Some(button) {
+                if self.other == Some(button) {
+                    self.other = None;
+                } else if self.held == Some(button) {
+                    self.held = None;
+                    post(MSG_END, 0, 0);
+                } else {
                     return false;
                 }
-                self.held = None;
-                post(MSG_END, 0, 0);
-                // Stopped while this drag went on: the release was the last thing owed.
-                if WANTED.load(Ordering::Relaxed) != self.generation {
-                    PostQuitMessage(0);
-                }
+                self.settle();
                 return true;
             }
-            // A second press of the drag's button: its release never came (a secure
-            // desktop took it), so that drag is over and this press is a new one.
+            // A second press of a button whose press was swallowed: its release never
+            // came (a secure desktop took it), so that is over and this press is new.
+            if self.other == Some(button) {
+                self.other = None;
+            }
             if self.held == Some(button) {
                 self.held = None;
                 post(MSG_END, 0, 0);
             }
-            if self.held.is_some() || WANTED.load(Ordering::Relaxed) != self.generation || !key_held() {
+            // The other button during a drag is the drag's, so no stray click reaches the app.
+            if self.held.is_some() {
+                self.other = Some(button);
+                return true;
+            }
+            self.settle();
+            if WANTED.load(Ordering::Relaxed) != self.generation || !key_held() {
                 return false;
             }
-            let Some(window) = target(pt, button) else { return false };
+            let Some(window) = target(pt, button, |h| post(MSG_LOOK, h.0 as usize, 0)) else { return false };
             self.held = Some(button);
+            OWING.store(true, Ordering::Relaxed);
             let message = if button == Button::Left { MSG_MOVE } else { MSG_RESIZE };
             post(message, window.0 as usize, pack(pt));
             true
@@ -229,15 +355,18 @@ fn key_held() -> bool {
     let (ctrl, alt, shift, win) = (down(VK_CONTROL), down(VK_MENU), down(VK_SHIFT), down(VK_LWIN) || down(VK_RWIN));
     match KEY.load(Ordering::Relaxed) {
         KEY_WIN => win && !ctrl && !alt && !shift,
-        KEY_CTRL_ALT => ctrl && alt && !shift && !win,
+        // AltGr is Ctrl+Alt to Windows, and types characters on many layouts.
+        KEY_CTRL_ALT => ctrl && alt && !shift && !win && !down(VK_RMENU),
         _ => alt && !ctrl && !shift && !win,
     }
 }
 
-/// The top-level window under the point, when Seam may move it: not Seam's own, an
-/// administrator's, a full-screen app's, a hung or an excluded app's. A resize also
-/// needs a sizing border, and a maximized window isn't resized.
-unsafe fn target(pt: POINT, button: Button) -> Option<HWND> {
+/// The top-level window under the point, when Seam may move it, from cheap checks
+/// only: a real window, not Seam's, not full screen. A resize also needs a sizing
+/// border, and a maximized window isn't resized. Whether its app is Seam's, an
+/// administrator's or excluded is what the worker found before: an app it hasn't
+/// looked at yet gets the press, and `look` has the worker find out for next time.
+unsafe fn target(pt: POINT, button: Button, look: impl Fn(HWND) -> bool) -> Option<HWND> {
     unsafe {
         let under = WindowFromPoint(pt);
         if under.is_invalid() {
@@ -247,9 +376,36 @@ unsafe fn target(pt: POINT, button: Button) -> Option<HWND> {
         if button == Button::Right && (!winutil::is_resizable(window) || winutil::is_maximized(window)) {
             return None;
         }
-        let exclude = EXCLUDE.try_read().ok()?;
-        wincontrol::movable(window, &exclude).ok().map(|_| window)
+        // With no exclude list it opens no process.
+        if !winutil::is_snappable(window, std::process::id(), &[]) {
+            return None;
+        }
+        let pid = winutil::process_id(window);
+        let known = VERDICTS.try_lock().ok().and_then(|list| {
+            list.iter().find(|(p, _, at)| *p == pid && at.elapsed() < VERDICT_FOR).map(|(_, ok, _)| *ok)
+        });
+        match known {
+            Some(ok) => ok.then_some(window),
+            None => {
+                look(window);
+                None
+            }
+        }
     }
+}
+
+/// Find out whether Seam may move the windows of this window's app, for the hook.
+fn look(h: HWND) {
+    let pid = winutil::process_id(h);
+    let ok = {
+        let exclude = EXCLUDE.read().unwrap_or_else(|e| e.into_inner());
+        !wincontrol::is_seam(h)
+            && !winutil::is_elevated_over_us(h)
+            && (exclude.is_empty() || winutil::exe_name(h).is_none_or(|name| !exclude.contains(&name)))
+    };
+    let mut list = VERDICTS.lock().unwrap_or_else(|e| e.into_inner());
+    list.retain(|(p, _, at)| *p != pid && at.elapsed() < VERDICT_FOR);
+    list.push((pid, ok, Instant::now()));
 }
 
 /// A point in an lparam, each half a signed 16-bit coordinate.
@@ -290,8 +446,9 @@ struct Drag {
     from: POINT,
     /// Edges a resize moves, None for a move.
     sides: Option<(i32, i32)>,
-    /// The smallest window rect a resize may make.
+    /// The smallest and largest window rect a resize may make.
     min: (i32, i32),
+    max: (i32, i32),
 }
 
 const FLAGS: SET_WINDOW_POS_FLAGS = SET_WINDOW_POS_FLAGS(SWP_NOZORDER.0 | SWP_NOACTIVATE.0 | SWP_ASYNCWINDOWPOS.0);
@@ -299,16 +456,19 @@ const FLAGS: SET_WINDOW_POS_FLAGS = SET_WINDOW_POS_FLAGS(SWP_NOZORDER.0 | SWP_NO
 impl Drag {
     fn begin(hwnd: HWND, from: POINT, resize: bool) -> Option<Drag> {
         let started = Instant::now();
+        // The hook only looked at what is cheap. A window that stopped answering is
+        // left alone, and its release is still swallowed with the press.
+        let visible = winutil::visible_rect(hwnd).filter(|_| !winutil::is_hung(hwnd))?;
         let mut start = winutil::window_rect(hwnd)?;
         tell(hwnd, true);
         tap();
         let mut sides = None;
-        let mut min = (0, 0);
+        let (mut min, mut max) = ((0, 0), (i32::MAX, i32::MAX));
         if resize {
             sides = Some(sides_at(start, (from.x, from.y)));
-            let visible = winutil::visible_rect(hwnd).unwrap_or(start);
             let (w, h) = minsize::of(hwnd, winutil::monitor_dpi(hwnd));
             min = (w + start.w - visible.w, h + start.h - visible.h);
+            max = largest(hwnd);
         } else if winutil::is_maximized(hwnd) {
             // As dragging a maximized title bar does: its normal size, centred under the pointer.
             let dpi = winutil::monitor_dpi(hwnd);
@@ -318,7 +478,7 @@ impl Drag {
                 start = winutil::window_rect(hwnd).unwrap_or(start);
             }
         }
-        Some(Drag { hwnd, started, start, from, sides, min })
+        Some(Drag { hwnd, started, start, from, sides, min, max })
     }
 
     /// Put the window where the pointer says. The last step waits for the app, so
@@ -334,8 +494,8 @@ impl Drag {
         let (x, y, w, h, flags) = match self.sides {
             None => (s.x + dx, s.y + dy, 0, 0, flags | SWP_NOSIZE),
             Some((sx, sy)) => {
-                let (x, w) = edge(s.x, s.w, sx, dx, self.min.0);
-                let (y, h) = edge(s.y, s.h, sy, dy, self.min.1);
+                let (x, w) = edge(s.x, s.w, sx, dx, (self.min.0, self.max.0));
+                let (y, h) = edge(s.y, s.h, sy, dy, (self.min.1, self.max.1));
                 (x, y, w, h, flags)
             }
         };
@@ -352,17 +512,43 @@ impl Drag {
     }
 }
 
-/// One axis of a resize: the start and length after the pointer moved `d`, keeping
-/// at least `min`. Moving the left or top edge leaves the far one where it was.
-fn edge(start: i32, len: i32, side: i32, d: i32, min: i32) -> (i32, i32) {
+/// One axis of a resize: the start and length after the pointer moved `d`, between
+/// `min` and `max`. Moving the left or top edge leaves the far one where it was, so
+/// a window held at its largest or smallest doesn't drift.
+fn edge(start: i32, len: i32, side: i32, d: i32, (min, max): (i32, i32)) -> (i32, i32) {
+    let fit = |to: i32| to.min(max).max(min);
     match side {
         -1 => {
-            let to = (len - d).max(min);
+            let to = fit(len - d);
             (start + len - to, to)
         }
-        1 => (start, (len + d).max(min)),
+        1 => (start, fit(len + d)),
         _ => (start, len),
     }
+}
+
+/// The largest window rect the app allows, in screen pixels, or no limit when it
+/// doesn't say. Worker only: asking can wait on the app.
+fn largest(h: HWND) -> (i32, i32) {
+    let mut info = MINMAXINFO::default();
+    let sent = unsafe {
+        SendMessageTimeoutW(
+            h,
+            WM_GETMINMAXINFO,
+            WPARAM(0),
+            LPARAM(&mut info as *mut _ as isize),
+            SMTO_ABORTIFHUNG,
+            ASK_MS,
+            None,
+        )
+    };
+    let (w, ht) = (info.ptMaxTrackSize.x, info.ptMaxTrackSize.y);
+    if sent.0 == 0 || w <= 0 || ht <= 0 {
+        return (i32::MAX, i32::MAX);
+    }
+    // A window that ignores DPI answers in its own pixels, which the screen scales.
+    let (screen, own) = (winutil::monitor_dpi(h) as i64, unsafe { GetDpiForWindow(h) }.max(96) as i64);
+    ((w as i64 * screen / own) as i32, (ht as i64 * screen / own) as i32)
 }
 
 /// Tell the tray a drag started or ended, so the snapping follows it.
@@ -397,7 +583,7 @@ fn tap() {
     }
 }
 
-/// The worker: one drag at a time, from the hook's messages.
+/// The worker: one drag at a time, from the hook's messages, and the looks at apps.
 fn work(pending: Arc<AtomicBool>, ready: std::sync::mpsc::Sender<u32>) {
     unsafe {
         let mut msg = MSG::default();
@@ -426,6 +612,7 @@ fn work(pending: Arc<AtomicBool>, ready: std::sync::mpsc::Sender<u32>) {
                         d.end();
                     }
                 }
+                MSG_LOOK => look(HWND(msg.wParam.0 as *mut _)),
                 _ => {}
             }
         }

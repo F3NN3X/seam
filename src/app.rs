@@ -1047,7 +1047,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                     wm::release_before_exit();
                 }
                 snap::shutdown();
-                altdrag::stop();
+                altdrag::shutdown();
                 spotlight::stop();
                 with_app(|a| {
                     let nid = tray_data(a);

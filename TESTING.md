@@ -352,6 +352,8 @@ Columns on screen 1, **Resize neighbours with a window** on, the debug log on. T
 
 - [ ] **Hook in and out.** Turning it on logs `alt-drag: hook installed`, turning it off `alt-drag: hook uninstalled`. Off by default: a fresh `config.json` logs neither, and Alt+click in Notepad reaches Notepad.
 - [ ] **Move.** Hold Alt and drag Notepad from the middle of its text: it follows the pointer with the same grab point, without coming to the front. Let go: the log has one `alt-drag: move, N ms` line and no title.
+- [ ] **First press on an app.** Seam asks about an app (administrator, excluded, its own) off the hook, so the first Alt+click on an app it hasn't looked at in the last 30 s reaches the app, and the next one drags. Note whether that first click is noticeable.
+- [ ] **Other button.** During an Alt-drag, click the right button: the app gets no right-click and no context menu, and the drag goes on.
 - [ ] **Maximized.** Maximize a browser, Alt-drag it: it comes back to its normal size centred under the pointer and follows it. Alt+right-drag on a maximized window does nothing of Seam's: the app gets its right-click.
 - [ ] **Resize from each zone.** Alt+right-drag Notepad from each of its nine thirds: the top-left, top-right, bottom-left and bottom-right corners move that corner, the middle of each side moves that side only, and the centre moves the bottom-right corner. It never goes below Notepad's smallest size. One `alt-drag: resize, N ms` line per drag.
 - [ ] **Neighbours follow.** Snap two windows side by side in the columns, Alt+right-drag the left one from the middle of its right side: the neighbour follows live, and on letting go both stay snapped and the layout shows Changed, as with a normal edge drag.
@@ -359,7 +361,7 @@ Columns on screen 1, **Resize neighbours with a window** on, the debug log on. T
 - [ ] **Groups.** Snap two windows beside each other on a screen with no zones. Alt-drag one away: it leaves the group, as with a title-bar drag.
 - [ ] **No menu bar.** Alt-drag Notepad and let go of Alt: no menu bar is selected (an Alt tap alone still selects it). Same in Explorer.
 - [ ] **Win as the key.** Pick Win in the key menu, drag with Win held, let go of Win: Start doesn't open. Alt+click now reaches VS Code (an extra cursor). Ctrl+Alt the same.
-- [ ] **Only that key.** With Alt as the key, Ctrl+Alt+click and Shift+Alt+click reach the app untouched.
+- [ ] **Only that key.** With Alt as the key, Ctrl+Alt+click and Shift+Alt+click reach the app untouched. With Ctrl+Alt as the key, AltGr+click reaches the app.
 - [ ] **Refused windows.** Alt-drag Task Manager running as administrator, the Seam window, and an excluded app: each gets its Alt+click, nothing moves, and no click is left half done (no stuck selection or lone context menu).
 - [ ] **Full screen.** With a game in full screen in front, the log shows `alt-drag: hook uninstalled`, and Alt+click reaches the game. After leaving it, `alt-drag: hook installed` again. Pause Seam does the same.
 - [ ] **Hook timing.** Note `hook stats`, then Alt-drag windows for 30 s. `own max` and `avg` match a run with the setting off, and the pointer stays smooth.

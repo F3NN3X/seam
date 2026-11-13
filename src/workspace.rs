@@ -119,7 +119,8 @@ pub struct Rule {
     /// `WINDOWPLACEMENT.rcNormalPosition` as fractions of the work area.
     pub normal_rect: Option<[f32; 4]>,
     pub launch: bool,
-    /// Only the last session has pins. A switch pins the window it matches again.
+    /// The last session's pins, which a switch pins the window it matches again, and
+    /// an app rule's "Keep on top".
     #[serde(skip_serializing_if = "Option::is_none")]
     pub pin: Option<Pin>,
     pub shown: Shown,
@@ -193,6 +194,11 @@ impl<'de> Deserialize<'de> for Rule {
 }
 
 impl Rule {
+    /// Whether the rule sends its window somewhere: it has a screen and a place.
+    pub fn moves(&self) -> bool {
+        !self.monitor.is_empty() && self.target != (Target::State { state: WinState::Keep })
+    }
+
     /// Send the window somewhere else. Full is maximized, and another place
     /// isn't, but a minimized window stays minimized.
     pub fn set_target(&mut self, target: Target) {
@@ -328,10 +334,8 @@ pub fn list(saved: &[Value]) -> Vec<Workspace> {
 /// The app rules this build can use: an app, a screen and a place to go to. Others
 /// stay in the config and are ignored.
 pub fn app_rules(saved: &[Value]) -> Vec<Rule> {
-    let usable = |r: &Rule| {
-        let named = !r.exe.is_empty() || r.aumid.is_some();
-        named && !r.monitor.is_empty() && r.target != (Target::State { state: WinState::Keep })
-    };
+    // A rule needs a place to send the window to, or a pin to keep it with.
+    let usable = |r: &Rule| (!r.exe.is_empty() || r.aumid.is_some()) && (r.moves() || r.pin.is_some());
     saved.iter().filter_map(|v| serde_json::from_value(v.clone()).ok()).filter(usable).collect()
 }
 
@@ -1089,6 +1093,25 @@ mod tests {
 
     fn win(hwnd: isize, exe: &str, aumid: Option<&str>, class: &str, title: &str, z: usize) -> Candidate {
         Candidate { hwnd, exe: exe.into(), aumid: aumid.map(Into::into), class: class.into(), title: title.into(), z }
+    }
+
+    #[test]
+    fn app_rules_need_a_place_or_a_pin() {
+        let keep = Target::State { state: WinState::Keep };
+        let saved = |exe: &str, monitor: &str, target: Target, pin: Option<Pin>| {
+            let rule = Rule { exe: exe.into(), monitor: monitor.into(), target, pin, ..Rule::default() };
+            serde_json::to_value(rule).unwrap()
+        };
+        let zone = || Target::Zone { zone: 1, span_to: None };
+        let list = [
+            saved("a.exe", "m", zone(), None),
+            saved("b.exe", "", keep.clone(), Some(Pin::Top)),
+            saved("c.exe", "m", keep.clone(), None),
+            saved("d.exe", "m", zone(), Some(Pin::Both)),
+            saved("", "m", zone(), Some(Pin::Top)),
+        ];
+        let usable: Vec<String> = app_rules(&list).into_iter().map(|r| r.exe).collect();
+        assert_eq!(usable, ["a.exe", "b.exe", "d.exe"]);
     }
 
     #[test]

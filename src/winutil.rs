@@ -331,6 +331,20 @@ pub fn set_pin_bits(h: HWND, bits: usize) {
     }
 }
 
+/// The `Seam_pin` bits an app rule has applied to the window. It outlives Release, so
+/// a rule doesn't pin a released window again until it's opened anew.
+const RULE_PIN: PCWSTR = w!("Seam_rulepin");
+
+pub fn rule_pin_bits(h: HWND) -> usize {
+    unsafe { GetPropW(h, RULE_PIN).0 as usize }
+}
+
+pub fn set_rule_pin_bits(h: HWND, bits: usize) {
+    unsafe {
+        let _ = SetPropW(h, RULE_PIN, Some(HANDLE(bits as *mut _)));
+    }
+}
+
 /// Which workspace placed the window, and for which of its rows, so Seam knows it's
 /// already placed. The high bits are `workspace::stamp_key`, the low 16 the row plus one.
 const WS_STAMP: PCWSTR = w!("Seam_ws");

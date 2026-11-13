@@ -92,8 +92,14 @@ const ENTRIES: &[Entry] = &[
     entry(
         Page::Zones,
         "Where apps open",
-        "Seam puts these apps in place whenever they open, outside workspaces too",
+        "Seam puts these apps in place, or keeps them on top, whenever they open, outside workspaces too",
         "app rules always open place add an app",
+    ),
+    entry(
+        Page::Zones,
+        "Keep an app on top",
+        "An app rule can pin its windows on top, so Release pinned windows takes them back",
+        "pin always on top app rules keep on top sticky doesn't move",
     ),
     entry(
         Page::Zones,

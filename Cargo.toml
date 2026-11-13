@@ -5,6 +5,7 @@ members = ["settings"]
 name = "seam"
 version = "0.6.5"
 edition = "2021"
+rust-version = "1.100"
 description = "Line up your screens on Windows 11 so the pointer crosses where they physically meet."
 license = "MIT"
 

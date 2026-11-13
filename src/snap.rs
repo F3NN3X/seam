@@ -959,10 +959,9 @@ impl Engine {
         self.refit_resume();
     }
 
-    /// Ctrl is the show key or the span key, so it can be held for a drag that never meant a pull-out.
+    /// Ctrl is the show key, so it can be held for a drag that never meant a pull-out.
     fn ctrl_is_a_key(&self) -> bool {
-        let is_ctrl = |key: &str| key_code(key) == Some(VK_CONTROL);
-        is_ctrl(&self.settings.show_key) || is_ctrl(&self.settings.span_key)
+        key_code(&self.settings.show_key) == Some(VK_CONTROL)
     }
 
     fn finish_drag(&mut self, drag: &Drag, dropped: bool, hwnd: HWND) {
@@ -1184,8 +1183,6 @@ impl Engine {
         Some((p.hwnd, p.target))
     }
 
-    /// Start one of window control's moves, recorded where it goes: snapped in its
-    /// zones, or loose.
     fn put_back(&mut self, p: Placement, old: Option<Old>) {
         let hwnd = hwnd_of(p.hwnd);
         let Some((id, from, to)) = p.zone else { return };
@@ -1195,11 +1192,21 @@ impl Engine {
         let geometry = self.geometry();
         let Some(g) = geometry.iter().find(|g| g.id == id && to < g.zones.len()) else { return };
         let on = winutil::visible_rect(hwnd).is_some_and(|r| g.bounds.contains(r.x + r.w / 2, r.y + r.h / 2));
+        let held = self
+            .snapped
+            .iter()
+            .any(|(k, x)| *k != p.hwnd && x.screen == id && refit::covered(&g.cells, x.from, x.to).contains(&from));
+        if held {
+            log::info!("pull out: Undo left the window where it is, another window holds its zone");
+            return;
+        }
         if on {
             self.snap_to(hwnd, g, (from, to), p.target, Some(old));
         }
     }
 
+    /// Start one of window control's moves, recorded where it goes: snapped in its
+    /// zones, or loose.
     fn place_queued(&mut self, p: Placement) {
         let hwnd = hwnd_of(p.hwnd);
         if !unsafe { IsWindow(Some(hwnd)) }.as_bool() {

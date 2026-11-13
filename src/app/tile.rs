@@ -274,7 +274,7 @@ pub(super) fn undo_tile(app: &mut App) {
         log::info!("tile screen: too late to undo");
         return;
     }
-    let mut layout_back = false;
+    let (mut layout_back, changed) = (false, undo.changed.is_some());
     if let Some(change) = undo.changed {
         let desk = app.cfg.desks.get(&app.sig);
         let now = desk.and_then(|d| d.zones.get(&undo.screen)).and_then(zones::layout_of);
@@ -282,7 +282,8 @@ pub(super) fn undo_tile(app: &mut App) {
             layout_back = set_screen_layout(app, &undo.screen, change.before, false);
         }
     }
-    snap::rezone(undo.keep);
+    // Where the screen kept another layout, the numbers are not the old layout's to give back.
+    snap::rezone(if changed && !layout_back { Vec::new() } else { undo.keep });
     let here = |b: &wincontrol::tile::Back| {
         let h = HWND(b.place.hwnd as *mut _);
         let (set, sized) = (b.set, seam::winutil::is_resizable(h));

@@ -95,7 +95,8 @@ impl Engine {
             .filter(|(_, leaves)| leaves.iter().any(leaf_in))
             .collect();
         match (held.as_slice(), occupants.as_slice()) {
-            ([], []) => {}
+            // A window on screen the snapping has no record of is one it can move too.
+            ([], []) | ([], [_]) => {}
             ([(k, leaves)], [(h, _)]) if *k == h.0 as isize && leaves.iter().all(leaf_in) => {}
             _ => return None,
         }

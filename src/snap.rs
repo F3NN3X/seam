@@ -589,8 +589,6 @@ impl Engine {
 
     fn drag_start(&mut self, hwnd: HWND) {
         self.cancel_drag();
-        // A drag takes over from window control's moves still waiting.
-        self.queued.clear();
         let key = hwnd.0 as isize;
         // A placement still waiting would yank the window back under the pointer.
         if self.pending.as_ref().is_some_and(|p| p.hwnd == key) {
@@ -598,6 +596,15 @@ impl Engine {
                 unsafe {
                     let _ = KillTimer(None, p.timer);
                 }
+            }
+        }
+        // Moves still waiting land now, where they were going, and are recorded there:
+        // dropping them left a swap half done, its other window still in its old zone
+        // under the dropped one, and the snapping's records no longer what is on screen.
+        // The dragged window's own is dropped, as the drag takes it.
+        for p in std::mem::take(&mut self.queued) {
+            if p.hwnd != key {
+                self.place_queued(p);
             }
         }
         let wanted = self.active() || self.drags_sized();
@@ -630,7 +637,7 @@ impl Engine {
         let was_maximized = winutil::is_maximized(hwnd);
         let zone = current.map(|(_, zone)| zone);
         let old_zone =
-            if geometry.is_empty() { zone.clone() } else { self.zones_held(hwnd, &geometry, frame, was_maximized) };
+            if geometry.is_empty() { zone.clone() } else { self.zones_held(&geometry, frame, was_maximized) };
         let edges = self.edges_start(hwnd, &geometry, (zone, stamped), was_maximized);
         // The handles stay out of the way of any drag, and come back at its end.
         dividers::hide();
@@ -884,17 +891,10 @@ impl Engine {
             self.split_drop(drag, hwnd, screen, split);
             return;
         }
-        if out.swap.is_none() {
-            if let Err(why) = self.swap_why(drag, screen, (a.min(b), a.max(b))) {
-                // Counting the windows around reads every window, so only for the log.
-                if why == swap::Skip::NoOccupants && log::enabled() {
-                    let g = &drag.geometry[screen];
-                    let target = zones::span(g.zones[a], g.zones[b]);
-                    let (known, loose) = self.around(drag, g, target);
-                    log::info!(
-                        "zone swap: skipped, NoOccupants ({known} snapped on that screen, {loose} loose over the zone)"
-                    );
-                } else if why != swap::Skip::Off {
+        if log::enabled() {
+            self.audit(drag, screen, (a.min(b), a.max(b)));
+            if let (None, Err(why)) = (&out.swap, self.swap_why(drag, screen, (a.min(b), a.max(b)))) {
+                if why != swap::Skip::Off {
                     log::info!("zone swap: skipped, {why:?}");
                 }
             }
@@ -1013,18 +1013,24 @@ impl Engine {
     fn window_pump(&mut self) {
         while self.pending.is_none() && self.drag.is_none() {
             let Some(p) = self.queued.pop_front() else { break };
-            let hwnd = hwnd_of(p.hwnd);
-            if !unsafe { IsWindow(Some(hwnd)) }.as_bool() {
-                continue;
-            }
-            let geometry = self.geometry();
-            match p.zone.and_then(|(id, from, to)| Some((geometry.iter().find(|g| g.id == id)?, from, to))) {
-                Some((g, from, to)) if to < g.zones.len() => self.snap_to(hwnd, g, (from, to), p.target, None),
-                _ => {
-                    // The screen's DPI, as in `snap_to`.
-                    self.place(hwnd, p.target, winutil::monitor_dpi(hwnd) != p.dpi, false);
-                    self.unsnap(hwnd, winutil::has_zone_stamp(hwnd));
-                }
+            self.place_queued(p);
+        }
+    }
+
+    /// Start one of window control's moves, recorded where it goes: snapped in its
+    /// zones, or loose.
+    fn place_queued(&mut self, p: Placement) {
+        let hwnd = hwnd_of(p.hwnd);
+        if !unsafe { IsWindow(Some(hwnd)) }.as_bool() {
+            return;
+        }
+        let geometry = self.geometry();
+        match p.zone.and_then(|(id, from, to)| Some((geometry.iter().find(|g| g.id == id)?, from, to))) {
+            Some((g, from, to)) if to < g.zones.len() => self.snap_to(hwnd, g, (from, to), p.target, None),
+            _ => {
+                // The screen's DPI, as in `snap_to`.
+                self.place(hwnd, p.target, winutil::monitor_dpi(hwnd) != p.dpi, false);
+                self.unsnap(hwnd, winutil::has_zone_stamp(hwnd));
             }
         }
     }

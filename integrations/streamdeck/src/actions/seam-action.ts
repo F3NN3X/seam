@@ -37,6 +37,10 @@ export abstract class SeamAction<T extends JsonObject = JsonObject> extends Sing
 		this.#settings.set(id, settings);
 	}
 
+	protected settingsOf(id: string): T {
+		return this.#settings.get(id) ?? ({} as T);
+	}
+
 	protected refresh(): void {
 		for (const action of this.actions) {
 			if (action.isKey()) {
@@ -54,7 +58,7 @@ export abstract class SeamAction<T extends JsonObject = JsonObject> extends Sing
 				return;
 			}
 			await key.setTitle(undefined);
-			await this.render(key, this.#settings.get(key.id) ?? ({} as T), state);
+			await this.render(key, this.settingsOf(key.id), state);
 		} catch (error) {
 			streamDeck.logger.warn(`Couldn't draw a key: ${(error as Error).message}`);
 		}
@@ -102,38 +106,54 @@ export abstract class SeamAction<T extends JsonObject = JsonObject> extends Sing
 
 /**
  * A key that puts a title of its own on itself unless the user typed one. Stream Deck
- * reports the title on screen, ours and the manifest's included, so those aren't the user's.
+ * reports the title on screen, ours included. A title is the user's only when it differs
+ * from the last one this key was given by us and isn't a manifest default. With no record
+ * of ours (the plugin restarted), it is ours if it is what the key would show now.
  */
 export abstract class TitledAction<T extends JsonObject = JsonObject> extends SeamAction<T> {
 	readonly #typed = new Set<string>();
-	readonly #ours: Set<string>;
+	/** Per key, the last title we sent: undefined is the user's or the manifest's. */
+	readonly #last = new Map<string, string | undefined>();
+	readonly #manifest: ReadonlySet<string>;
 
 	/** `manifestTitles` are the titles the manifest gives the key's states. */
 	constructor(manifestTitles: string[]) {
 		super();
-		this.#ours = new Set(manifestTitles);
+		this.#manifest = new Set(manifestTitles);
 	}
+
+	/** The title the key shows with the settings and state it has, or undefined for none. */
+	protected abstract titleFor(settings: T, state: SeamState): string | undefined;
 
 	/** Show `title`, or leave the user's if they typed one. */
 	protected async titleKey(key: KeyAction<T>, title: string | undefined): Promise<void> {
-		if (title === undefined || this.#typed.has(key.id)) {
-			await key.setTitle(undefined);
-			return;
-		}
-		this.#ours.add(title);
-		await key.setTitle(title);
+		const shown = this.#typed.has(key.id) ? undefined : title;
+		this.#last.set(key.id, shown);
+		await key.setTitle(shown);
 	}
 
 	override async onTitleParametersDidChange(ev: TitleParametersDidChangeEvent<T>): Promise<void> {
 		const { title } = ev.payload;
-		const typed = title !== "" && !this.#ours.has(title);
-		if (typed === this.#typed.has(ev.action.id)) {
+		const id = ev.action.id;
+		let typed = false;
+		if (title !== "" && !this.#manifest.has(title)) {
+			if (this.#last.has(id)) {
+				typed = title !== this.#last.get(id);
+			} else {
+				const state = seam.state;
+				typed = !state || title !== this.titleFor(this.settingsOf(id), state);
+				if (!typed) {
+					this.#last.set(id, title);
+				}
+			}
+		}
+		if (typed === this.#typed.has(id)) {
 			return;
 		}
 		if (typed) {
-			this.#typed.add(ev.action.id);
+			this.#typed.add(id);
 		} else {
-			this.#typed.delete(ev.action.id);
+			this.#typed.delete(id);
 		}
 		if (ev.action.isKey()) {
 			await this.paint(ev.action);
@@ -142,6 +162,7 @@ export abstract class TitledAction<T extends JsonObject = JsonObject> extends Se
 
 	override onWillDisappear(ev: WillDisappearEvent<T>): void {
 		this.#typed.delete(ev.action.id);
+		this.#last.delete(ev.action.id);
 		super.onWillDisappear(ev);
 	}
 }

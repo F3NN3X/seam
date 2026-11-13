@@ -110,10 +110,14 @@ pub fn offers(saved: &[Value], device: &str, now: Option<&ZoneLayout>) -> Vec<Of
     templates.chain(custom).chain([none]).collect()
 }
 
-/// The offer with this id, else the one with this name, ignoring case.
+/// The offer with this id, else the one with this name, ignoring case. A library
+/// layout wins a name over a built-in one, so a custom "Grid" is the one asked for.
 pub fn find_offer<'a>(offers: &'a [Offer], wanted: &str) -> Option<&'a Offer> {
     let same = |a: &str| a.to_lowercase() == wanted.to_lowercase();
-    offers.iter().find(|o| same(&o.id)).or_else(|| offers.iter().find(|o| same(&o.name)))
+    offers.iter().find(|o| same(&o.id)).or_else(|| {
+        let named = |kind| offers.iter().find(|o| o.kind == kind && same(&o.name));
+        named("custom").or_else(|| offers.iter().find(|o| same(&o.name)))
+    })
 }
 
 pub fn find(saved: &[Value], id: &str) -> Option<Entry> {
@@ -224,12 +228,13 @@ mod tests {
     #[test]
     fn a_layout_is_found_by_id_or_name_ignoring_case() {
         let tree = zones::template_tree(Template::Rows).unwrap();
-        let mine = Entry { id: "a1".into(), name: "Grid".into(), tree, screens: vec!["M".into()] };
+        let mine = Entry { id: "a1".into(), name: "Main + stack".into(), tree, screens: vec!["M".into()] };
         let offers = offers(&[mine.value()], "m", None);
         let kind = |wanted| find_offer(&offers, wanted).map(|o| o.kind);
         assert_eq!(kind("GRID"), Some("template"), "an id beats a name");
         assert_eq!(kind("A1"), Some("custom"));
-        assert_eq!(kind("main + STACK"), Some("template"));
+        assert_eq!(kind("main + STACK"), Some("custom"), "a library layout wins a name");
+        assert_eq!(kind("mainstack"), Some("template"));
         assert_eq!(kind("none"), Some("none"));
         assert_eq!(kind("nope"), None);
         assert_eq!(layout_id(Some(&ZoneLayout::of(Template::MainStack).unwrap())).as_deref(), Some("mainstack"));

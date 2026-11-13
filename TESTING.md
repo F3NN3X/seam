@@ -922,6 +922,8 @@ Build the plugin with `pnpm install`, `pnpm build` and `pnpm run pack` in `integ
 - [ ] **Typed title.** Type your own title on an Apply layout key and on a Pause Seam key. The keys keep it, and clear it to get the layout name or "Pause Seam" back.
 - [ ] **Pause Seam.** Drag the action to a key. It reads "Pause Seam". Press it: Seam pauses, the key lights and reads "Paused", and the tray says "Resume Seam". Press it again to resume. Pause and resume from the tray: the key follows.
 - [ ] **Pause Seam in a full-screen app.** With the key not lit, start a full-screen video. The key reads "Full screen" and is not lit. Leave full screen: it goes back to "Pause Seam". With a title typed on it, the key keeps that title throughout.
+- [ ] **Pause Seam while paused and full screen.** Pause Seam with the key, then start a full-screen video. The key stays lit and reads "Paused", not "Full screen". Leave full screen and resume: it goes back to "Pause Seam".
+- [ ] **Apply layout while paused.** Pause Seam and press an Apply layout key: the screen's windows still move into the new zones, as the window commands still work while paused.
 - [ ] **Open alongside.** In a Switch workspace key's settings tick **Open alongside**. Put Notepad outside the workspace, whose Other windows is Minimize, and press the key: the workspace is applied and Notepad stays. Untick it: pressing the key minimizes Notepad again.
 - [ ] **Desk.** The key shows the active desk's name. Press it. The Displays page opens.
 - [ ] **Desk change.** Unplug the U3477. The desk key and the workspace keys change to match, and a workspace key from the other desk goes dark. Replug it. They come back.

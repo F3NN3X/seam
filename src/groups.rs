@@ -469,6 +469,43 @@ pub fn relabel(template: Template, tree: Node) -> ZoneLayout {
     ZoneLayout { template: if same { template } else { Template::Custom }, custom: None, tree }
 }
 
+/// Zones `lo` to `hi`, when they are one part of the tree, cut in two: `part` of it
+/// on `side` for a dropped window, and the rest beside it as one zone. The new tree,
+/// and the zone numbers of the window's part and of the rest. None when the zones
+/// aren't one part of the tree, or the tree would be past the editor's limits.
+pub fn split_part(tree: &Node, (lo, hi): (usize, usize), part: f32, side: Side) -> Option<(Node, usize, usize)> {
+    let (split, ratio, first) = match side {
+        Side::Left => (Dir::Vertical, part, true),
+        Side::Right => (Dir::Vertical, 1.0 - part, false),
+        Side::Top => (Dir::Horizontal, part, true),
+        Side::Bottom => (Dir::Horizontal, 1.0 - part, false),
+    };
+    let leaf = || Box::new(Node::Leaf(LeafTag::Leaf));
+    let two = Node::Split { split, ratio, a: leaf(), b: leaf() };
+    let tree = replace_part(tree, 0, (lo, hi), &two)?;
+    if !zones::within_limits(&tree) {
+        return None;
+    }
+    Some(if first { (tree, lo, lo + 1) } else { (tree, lo + 1, lo) })
+}
+
+/// `tree` with the part holding exactly zones `lo` to `hi` replaced by `with`. `offset`
+/// is the number of `node`'s first zone.
+fn replace_part(node: &Node, offset: usize, (lo, hi): (usize, usize), with: &Node) -> Option<Node> {
+    if offset == lo && offset + zones::leaf_count(node) == hi + 1 {
+        return Some(with.clone());
+    }
+    let Node::Split { split, ratio, a, b } = node else { return None };
+    let (split, ratio, first) = (*split, *ratio, offset + zones::leaf_count(a));
+    if hi < first {
+        Some(Node::Split { split, ratio, a: Box::new(replace_part(a, offset, (lo, hi), with)?), b: b.clone() })
+    } else if lo >= first {
+        Some(Node::Split { split, ratio, a: a.clone(), b: Box::new(replace_part(b, first, (lo, hi), with)?) })
+    } else {
+        None
+    }
+}
+
 /// `n` equal parts along `dir`, each made by `part`.
 fn equal_parts(dir: Dir, n: usize, part: &dyn Fn() -> Node) -> Node {
     if n <= 1 {
@@ -584,6 +621,21 @@ mod tests {
 
     fn edge(path: &[bool]) -> Edge {
         Edge { path: path.to_vec() }
+    }
+
+    #[test]
+    fn a_cut_gives_the_window_its_part_on_its_side() {
+        // A third on the right of the middle column: the rest keeps the left of it.
+        let (tree, at, rest) = split_part(&columns(), (1, 1), 1.0 / 3.0, Side::Right).unwrap();
+        let cells = zones::rects(&tree, AREA, 0);
+        assert_eq!((at, rest), (2, 1));
+        assert_eq!(xs(&cells), vec![(0, 600), (600, 400), (1000, 200), (1200, 600)]);
+        // The whole screen, top half: two zones.
+        let (tree, at, rest) = split_part(&columns(), (0, 2), 0.5, Side::Top).unwrap();
+        let cells = zones::rects(&tree, AREA, 0);
+        assert_eq!((at, rest, cells[at].h, cells[rest].y), (0, 1, 500, 500));
+        // The first two columns aren't one part of the tree.
+        assert_eq!(split_part(&columns(), (0, 1), 0.5, Side::Left), None);
     }
 
     #[test]

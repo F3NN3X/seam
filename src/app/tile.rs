@@ -50,8 +50,9 @@ pub(super) fn pointer() -> At {
     At::Point(pt.x, pt.y)
 }
 
-/// A tile finished: say what it did and keep what Undo puts back, or say why
-/// nothing happened. Undo is a click on the notice, as with a quick save.
+/// A tile, a pick or a split by a drag's keys finished: say what it did and keep
+/// what Undo puts back, or say why nothing happened. Undo is a click on the notice,
+/// as with a quick save.
 pub(super) fn tile_finished(app: &mut App, result: Option<Result<wincontrol::tile::Done, String>>) {
     match result {
         None => {}
@@ -66,7 +67,9 @@ pub(super) fn tile_finished(app: &mut App, result: Option<Result<wincontrol::til
                 return;
             }
             let windows = if n == 1 { "window" } else { "windows" };
-            let (title, body) = if done.pick {
+            let (title, body) = if done.split {
+                ("Split the zone".to_string(), "Click to undo".to_string())
+            } else if done.pick {
                 let title = format!("Screen {} has a new layout", done.number);
                 let body = match done.left {
                     0 => format!("{n} {windows} moved to the new zones. Click to undo"),
@@ -88,6 +91,7 @@ pub(super) fn tile_finished(app: &mut App, result: Option<Result<wincontrol::til
                 screen: done.screen,
                 changed: done.changed,
                 back: done.back,
+                keep: done.keep,
                 until,
             });
             // With the overlay up, Ctrl+Z is the undo, and a notice would only get in its way.
@@ -212,7 +216,9 @@ pub(super) fn pick_layout(
                     screen,
                     changed: Some(wincontrol::tile::Change { now: layout, before }),
                     back: Vec::new(),
+                    keep: Vec::new(),
                     pick: true,
+                    split: false,
                 };
                 tile_finished(app, Some(Ok(done)));
             }
@@ -239,6 +245,7 @@ pub(super) fn undo_tile(app: &mut App) {
             set_screen_layout(app, &undo.screen, change.before, false);
         }
     }
+    snap::rezone(undo.keep);
     let here = |b: &wincontrol::tile::Back| {
         let h = HWND(b.place.hwnd as *mut _);
         let (set, sized) = (b.set, seam::winutil::is_resizable(h));

@@ -9,7 +9,9 @@
 //! screen with every zone and number, and a small lit window per zone. Showing
 //! a zone is then a show of windows that already exist. A zone or span that
 //! wasn't drawn yet is drawn when asked for, and a screen whose base isn't
-//! ready yet shows as soon as it is, with nobody waiting for it.
+//! ready yet shows as soon as it is, with nobody waiting for it. A preview adds
+//! outlines where other windows will land and, while the drag's keys are live, a
+//! strip naming them, drawn when asked for and gone when the drag ends.
 
 use crate::{log, overlay};
 use seam::zones::Rect;
@@ -35,6 +37,13 @@ const INK: (u8, u8, u8) = (0xF3, 0xF3, 0xF3);
 const SHADE: (u8, u8, u8) = (0x20, 0x20, 0x20);
 /// The seam colour, `#FFB020`.
 const AMBER: (u8, u8, u8) = (0xFF, 0xB0, 0x20);
+/// Where other windows will land, in the muted text colour `#949494`.
+const MUTED: (u8, u8, u8) = (0x94, 0x94, 0x94);
+/// The key strip: its text size, height, padding and distance from the bottom of the work area, at 96 DPI.
+const HINT_TEXT: f32 = 13.;
+const HINT_HEIGHT: f32 = 32.;
+const HINT_PAD: f32 = 16.;
+const HINT_BOTTOM: f32 = 24.;
 const WM_APP_WAKE: u32 = WM_APP + 1;
 
 type Key = (i32, i32, i32, i32);
@@ -56,7 +65,9 @@ pub struct ScreenSpec {
 
 enum Command {
     Build(u64, Vec<ScreenSpec>),
-    Show(String, Option<Rect>),
+    /// A screen, its lit rect, the share of it the window takes, outlines where other
+    /// windows land, and the key strip's text.
+    Preview(String, Option<Rect>, Option<Rect>, Vec<Rect>, Option<String>),
     Hide(String),
     HideAll,
     Clear,
@@ -115,10 +126,11 @@ pub fn build(screens: Vec<ScreenSpec>) {
     send(Command::Build(generation, screens));
 }
 
-/// Show the overlay of screen `id`, with `lit` lit. If its drawing isn't ready
-/// it shows when it is. Returns at once.
-pub fn show(id: &str, lit: Option<Rect>) {
-    send(Command::Show(id.to_string(), lit));
+/// Show the overlay of screen `id`, with `lit` lit and `part` of it lit once more,
+/// muted outlines on `others`, and `hint` in a strip at its bottom. If the screen's
+/// drawing isn't ready it shows when it is. Returns at once.
+pub fn preview(id: &str, lit: Option<Rect>, part: Option<Rect>, others: Vec<Rect>, hint: Option<String>) {
+    send(Command::Preview(id.to_string(), lit, part, others, hint));
 }
 
 pub fn hide(id: &str) {
@@ -160,6 +172,12 @@ struct Overlay {
     todo: VecDeque<Unit>,
     /// Digit coverage by label, glyph size and mask size.
     masks: HashMap<MaskKey, Vec<u8>>,
+    /// The outlines shown now, by rect.
+    others: Vec<(Key, HWND)>,
+    /// The share of the lit zone shown now.
+    part: Option<(Key, HWND)>,
+    /// The key strip shown now: its screen, text and window.
+    hint: Option<(String, String, HWND)>,
 }
 
 unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
@@ -231,6 +249,15 @@ impl Overlay {
                     let _ = TranslateMessage(&msg);
                     DispatchMessageW(&msg);
                 }
+                // A wake-up posted after `drain` took the queue was eaten by the loop
+                // above, and the commands it was for would wait for the next window
+                // message, while every later `send` saw a full queue and posted none.
+                // So look at the queue before sleeping: a post after this look stays queued.
+                let waiting =
+                    SHARED.get().is_some_and(|s| !s.queue.lock().unwrap_or_else(|e| e.into_inner()).is_empty());
+                if waiting {
+                    continue;
+                }
                 if self.todo.is_empty() {
                     // Asleep until the main thread posts, or a window message comes.
                     if !GetMessageW(&mut msg, None, 0, 0).as_bool() {
@@ -252,13 +279,29 @@ impl Overlay {
         for command in commands {
             match command {
                 Command::Build(generation, specs) => self.build(generation, specs),
-                Command::Show(id, lit) => self.show(&id, lit),
+                Command::Preview(id, lit, part, others, hint) => {
+                    let raised = self.show(&id, lit);
+                    self.share(&id, part, raised);
+                    self.outline(&id, others);
+                    self.strip(&id, hint);
+                }
                 Command::Hide(id) => {
                     if let Some(screen) = self.screens.get_mut(&id) {
                         screen.hide();
                     }
+                    // Outlines can sit on any screen, and belong to the preview this hides.
+                    self.outline("", Vec::new());
+                    self.share("", None, false);
+                    if self.hint.as_ref().is_some_and(|(on, ..)| *on == id) {
+                        self.strip(&id, None);
+                    }
                 }
-                Command::HideAll => self.screens.values_mut().for_each(Screen::hide),
+                Command::HideAll => {
+                    self.screens.values_mut().for_each(Screen::hide);
+                    self.outline("", Vec::new());
+                    self.share("", None, false);
+                    self.strip("", None);
+                }
                 Command::Clear => self.clear(),
             }
         }
@@ -266,6 +309,9 @@ impl Overlay {
     }
 
     fn clear(&mut self) {
+        self.outline("", Vec::new());
+        self.share("", None, false);
+        self.strip("", None);
         self.todo.clear();
         for (_, screen) in self.screens.drain() {
             screen.destroy();
@@ -353,13 +399,14 @@ impl Overlay {
         }
     }
 
-    fn show(&mut self, id: &str, lit: Option<Rect>) {
+    /// Whether it raised a lit window, which the share then goes back over.
+    fn show(&mut self, id: &str, lit: Option<Rect>) -> bool {
         let started = log::enabled().then(Instant::now);
-        let Some(screen) = self.screens.get_mut(id) else { return };
+        let Some(screen) = self.screens.get_mut(id) else { return false };
         let Some(base) = screen.base else {
             // Not drawn yet: show it when it is.
             screen.want = Some(lit);
-            return;
+            return false;
         };
         if !screen.base_shown {
             unsafe {
@@ -367,6 +414,7 @@ impl Overlay {
             }
             screen.base_shown = true;
         }
+        let mut raised = false;
         let wanted = lit.as_ref().map(key);
         let mut made = false;
         if screen.shown != wanted {
@@ -383,6 +431,7 @@ impl Overlay {
                 }
                 if let Some(window) = screen.lit.get(&k) {
                     show_on_top(*window);
+                    raised = true;
                 }
             }
             screen.shown = wanted;
@@ -390,6 +439,79 @@ impl Overlay {
         if let Some(started) = started {
             let us = started.elapsed().as_secs_f64() * 1e6;
             log::info!("zone overlay: worker show {us:.0}us, lit window drawn: {made}");
+        }
+        raised
+    }
+
+    /// The share of the lit zone the window takes, in the lit style over it, so it
+    /// shows stronger inside the whole zone. Kept while it is the same rect.
+    /// A new rect redraws the same window there rather than making another, and it
+    /// is raised only when it is new or `raised` put a lit zone over it.
+    fn share(&mut self, id: &str, part: Option<Rect>, raised: bool) {
+        let Some(rect) = part else {
+            if let Some((_, window)) = self.part.take() {
+                unsafe {
+                    let _ = DestroyWindow(window);
+                }
+            }
+            return;
+        };
+        let s = self.screens.get(id).map_or(1., |screen| screen.spec.scale);
+        match self.part.as_mut() {
+            Some((k, window)) => {
+                if *k != key(&rect) {
+                    paint_lit(*window, rect, s);
+                    *k = key(&rect);
+                }
+                if raised {
+                    show_on_top(*window);
+                }
+            }
+            None => {
+                if let Some(window) = lit_window(rect, s) {
+                    show_on_top(window);
+                    self.part = Some((key(&rect), window));
+                }
+            }
+        }
+    }
+
+    /// Muted outlines on `rects`, drawn at the scale of screen `id`. The ones
+    /// already up stay when the list is the same.
+    fn outline(&mut self, id: &str, rects: Vec<Rect>) {
+        let keys: Vec<Key> = rects.iter().map(key).collect();
+        if self.others.iter().map(|(k, _)| *k).eq(keys.iter().copied()) {
+            return;
+        }
+        for (_, window) in self.others.drain(..) {
+            unsafe {
+                let _ = DestroyWindow(window);
+            }
+        }
+        let s = self.screens.get(id).map_or(1., |screen| screen.spec.scale);
+        for (rect, k) in rects.into_iter().zip(keys) {
+            if let Some(window) = outline_window(rect, s) {
+                show_on_top(window);
+                self.others.push((k, window));
+            }
+        }
+    }
+
+    /// The key strip at the bottom of screen `id`, or none.
+    fn strip(&mut self, id: &str, text: Option<String>) {
+        if self.hint.as_ref().map(|(on, t, _)| (on.as_str(), t)) == text.as_ref().map(|t| (id, t)) {
+            return;
+        }
+        if let Some((_, _, window)) = self.hint.take() {
+            unsafe {
+                let _ = DestroyWindow(window);
+            }
+        }
+        let Some(text) = text else { return };
+        let Some(spec) = self.screens.get(id).map(|screen| &screen.spec) else { return };
+        if let Some(window) = hint_window(spec.work, &text, spec.scale) {
+            show_on_top(window);
+            self.hint = Some((id.to_string(), text, window));
         }
     }
 }
@@ -568,9 +690,55 @@ fn render(hwnd: HWND, area: Rect, draw: impl FnOnce(&mut Canvas)) {
 /// A hidden window holding the lit look of `zone`.
 fn lit_window(zone: Rect, s: f32) -> Option<HWND> {
     let hwnd = create()?;
+    paint_lit(hwnd, zone, s);
+    Some(hwnd)
+}
+
+/// Give `hwnd` the lit look of `zone`, there.
+fn paint_lit(hwnd: HWND, zone: Rect, s: f32) {
     render(hwnd, zone, |canvas| {
         let area = Rect { x: 0, y: 0, ..zone };
         canvas.rounded(area, RADIUS, pm(AMBER, 0.1), Some((pm(AMBER, 1.), OUTLINE)), s);
+    });
+}
+
+/// A hidden window with a muted outline around `rect`, where another window will land.
+fn outline_window(rect: Rect, s: f32) -> Option<HWND> {
+    let hwnd = create()?;
+    render(hwnd, rect, |canvas| {
+        let area = Rect { x: 0, y: 0, ..rect };
+        canvas.rounded(area, RADIUS, 0, Some((pm(MUTED, 1.), OUTLINE)), s);
+    });
+    Some(hwnd)
+}
+
+/// A hidden window with `text` in a strip, centred at the bottom of `work`. The
+/// text is drawn as wide as the screen allows and the strip is cut to its ink.
+fn hint_window(work: Rect, text: &str, s: f32) -> Option<HWND> {
+    let px = |v: f32| (v * s).round() as i32;
+    let (size, h, pad) = (px(HINT_TEXT), px(HINT_HEIGHT), px(HINT_PAD));
+    let room = work.w - 4 * pad;
+    if room <= 0 {
+        return None;
+    }
+    let mask = glyph_mask(text, size, room, h)?;
+    let inked = |x: i32| (0..h).any(|y| mask[(y * room + x) as usize] > 0);
+    let first = (0..room).find(|x| inked(*x))?;
+    let last = (0..room).rev().find(|x| inked(*x))?;
+    let w = last - first + 1 + 2 * pad;
+    let at = Rect { x: work.x + (work.w - w) / 2, y: work.y + work.h - h - px(HINT_BOTTOM), w, h };
+    let hwnd = create()?;
+    render(hwnd, at, |canvas| {
+        canvas.rounded(Rect { x: 0, y: 0, w, h }, RADIUS, pm(SHADE, 0.9), Some((pm(INK, 0.4), OUTLINE)), s);
+        let ink = pm(INK, 1.);
+        for y in 0..h {
+            for x in first..=last {
+                let cover = mask[(y * room + x) as usize];
+                if cover > 0 {
+                    canvas.blend(pad + x - first, y, scale(ink, cover as f32 / 255.));
+                }
+            }
+        }
     });
     Some(hwnd)
 }

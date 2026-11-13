@@ -94,6 +94,8 @@ static PLANNED: Mutex<Option<Planned>> = Mutex::new(None);
 /// Layouts edge and divider drags changed, waiting to be saved in order, with the
 /// windows a divider drag moved, which stay snapped at their new places.
 static DRAGGED: Mutex<Vec<(String, ZoneLayout, Vec<snap::Zoned>)>> = Mutex::new(Vec::new());
+/// What the last split by a drag's keys did, for its notice and Undo once its layout is saved.
+static SPLIT: Mutex<Option<tile::Done>> = Mutex::new(None);
 /// Why a tile with no API client waiting did nothing. It has its own place, so it can't cancel a move waiting in PLANNED.
 static NOTE: Mutex<Option<String>> = Mutex::new(None);
 
@@ -159,6 +161,11 @@ pub fn planned(mut save: impl FnMut(&str, ZoneLayout, bool) -> bool) -> Option<R
     done.map(Ok)
 }
 
+/// What the last split by a drag's keys did, once `planned` has saved its layout.
+pub fn take_split() -> Option<tile::Done> {
+    SPLIT.lock().unwrap_or_else(|e| e.into_inner()).take()
+}
+
 /// A drag of a window's edge changed a screen's layout: save it the way a group
 /// command's is, which also drops what Priority kept for the screen. It waits
 /// behind a group command's plan rather than replacing it. Nothing moves here, as
@@ -174,6 +181,15 @@ pub fn save_moved(owner: isize, screen: String, layout: ZoneLayout, moved: Vec<s
     unsafe {
         let _ = PostMessageW(Some(hwnd_of(owner)), WM_APP_WINDOW, WPARAM(0), LPARAM(0));
     }
+}
+
+/// A drop split a zone with the drag's keys: save the layout as an edge drag's is,
+/// then offer Undo with what `done` says.
+pub fn save_split(owner: isize, screen: String, layout: ZoneLayout, done: tile::Done) {
+    if SPLIT.lock().unwrap_or_else(|e| e.into_inner()).replace(done).is_some() {
+        log::info!("zone split: a newer split replaced the earlier one's Undo before its notice");
+    }
+    save_layout(owner, screen, layout);
 }
 
 /// What a command came to.

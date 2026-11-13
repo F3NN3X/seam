@@ -240,6 +240,10 @@ pub(super) fn set_spotlight(app: &mut App, on: Option<bool>) -> bool {
 pub(super) fn window_planned(app: &mut App) {
     let tiled = wincontrol::planned(|screen, layout, fresh| set_screen_layout(app, screen, Some(layout), fresh));
     tile_finished(app, tiled);
+    // A split's layout was saved with the edge drags', so its notice comes after a tile's.
+    if let Some(split) = wincontrol::take_split() {
+        tile_finished(app, Some(Ok(split)));
+    }
 }
 
 /// Save a screen's layout on this desk, or take it away for no zones. A layout

@@ -94,6 +94,7 @@ fn caption(action: &str) -> Option<&'static str> {
     match action {
         "quick_layout" => Some("Pick this screen's layout from the keyboard"),
         "divider_menu" => Some("Share or take out the focused snapped window"),
+        "pause_seam" => Some("Pause or resume everything Seam does"),
         _ => None,
     }
 }
@@ -155,6 +156,7 @@ pub fn render(panel: &mut Panel, _: &mut Window, cx: &mut Context<Panel>) -> imp
     let rows = vec![
         row("Line up screens", "line_up", keys.line_up.as_ref(), 0),
         row("Pause or resume pointer remap", "pause", keys.pause.as_ref(), 1),
+        row("Pause Seam", "pause_seam", keys.pause_seam.as_ref(), 950),
     ];
     let zone_rows = vec![
         row("Move window to next zone", "next_zone", keys.next_zone.as_ref(), 2),

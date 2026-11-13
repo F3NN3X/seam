@@ -105,8 +105,9 @@ In the examples, `->` is what you send, with the `jsonrpc` and `id` fields left 
 | `zones.set` | `on`: bool | `{on}` | Any | `-32602` | `{"method":"zones.set","params":{"on":true}}` |
 | `autoapply.set` | `on`: bool | `{on}` | Any | `-32602` | `{"method":"autoapply.set","params":{"on":true}}` |
 | `cursor_easing.set` | `on`: bool | `{on}`, the setting as Windows reports it | Panel | 3, 4 | `{"method":"cursor_easing.set","params":{"on":true}}` |
+| `seam.pause` | `on?`: bool | `{paused}` | Any | `-32602` | `{"method":"seam.pause","params":{"on":true}}` |
 
-`state.get` and `config.get` read a snapshot, so they answer at once even while Seam is busy. `config.patch` is validated: a patch that makes an invalid config, or comes from a different config version, answers `3` and changes nothing. `autoapply.set` is "Put apps in place when they open". `config.patch` can also set `app_rules`, the list behind "Where apps open": each entry is a workspace row with `exe` (or `aumid`), `monitor` (the screen's device path) and `target` (`{zone}`, `{state: "max"}` for the full screen). A patch replaces the whole list, and an entry this build can't read is kept and ignored. A screen's layout on a desk or in a workspace's `zones` with that entry's `custom` id takes the entry's new tree, and keeps its tree without the id when the entry is deleted. `config.patch` also sets the pointer's push past an edge: `pointer.edge_resistance_px` (0 to 100, 0 is off) holds the pointer at the edge to any other screen until it has pushed that many pixels past it, and `pointer.glue_push_px` (0 to 200, default 60) does the same at a glued edge. Larger values are read as the top of the range. `cursor_easing.set` only accepts `true`: Seam never turns Ease cursor movement off, and `false` answers `3`.
+`state.get` and `config.get` read a snapshot, so they answer at once even while Seam is busy. `config.patch` is validated: a patch that makes an invalid config, or comes from a different config version, answers `3` and changes nothing. `autoapply.set` is "Put apps in place when they open". `config.patch` can also set `app_rules`, the list behind "Where apps open": each entry is a workspace row with `exe` (or `aumid`), `monitor` (the screen's device path) and `target` (`{zone}`, `{state: "max"}` for the full screen). A patch replaces the whole list, and an entry this build can't read is kept and ignored. A screen's layout on a desk or in a workspace's `zones` with that entry's `custom` id takes the entry's new tree, and keeps its tree without the id when the entry is deleted. `config.patch` also sets the pointer's push past an edge: `pointer.edge_resistance_px` (0 to 100, 0 is off) holds the pointer at the edge to any other screen until it has pushed that many pixels past it, and `pointer.glue_push_px` (0 to 200, default 60) does the same at a glued edge. Larger values are read as the top of the range. `cursor_easing.set` only accepts `true`: Seam never turns Ease cursor movement off, and `false` answers `3`. `seam.pause` pauses or resumes everything Seam does, and toggles when `on` is left out. While paused, Seam's shortcuts (except the one that resumes it), drag snapping, Spotlight, the focus border, the divider handles, the pointer remap and edge resistance, app rules and auto-apply are off. The API, the tray, the Seam window and switching workspaces still work. A pause is not saved, so a restart resumes. `config.patch` can set `step_aside_fullscreen` (default `true`), which does the same for the shortcuts, snapping and Spotlight while a game or other full-screen app is in front, and `hotkeys.pause_seam`, the shortcut for `seam.pause` (no key by default).
 
 ### Desks and Line Up
 
@@ -164,9 +165,9 @@ A screen's layout, `desks[sig].zones[screen]`, is `{template, tree}`. One given 
 | Method | Params | Result | Who | Errors | Example |
 |---|---|---|---|---|---|
 | `window.focus_only` | `scope?`: `"screen"` (default) or `"workspace"` | `{ok: true, minimized}` or `{ok: true, restored}` | Any | 2, 3, -32602 | `{"method":"window.focus_only","params":{"scope":"screen"}}` |
-| `window.spotlight` | `on?`: bool | `{on}` | Any | -32602 | `{"method":"window.spotlight","params":{"on":true}}` |
+| `window.spotlight` | `on?`: bool | `{on, resumes}` | Any | -32602 | `{"method":"window.spotlight","params":{"on":true}}` |
 
-`window.focus_only` minimizes every other window on the focused window's screen. With `scope` `"workspace"` it minimizes every window outside the workspace in use, on all of the desk's screens, using the matching a workspace switch uses. Seam's own, administrator, hung, excluded, sticky and pinned-on-top windows are left alone. Calling it again while any window it minimized still exists restores those that are still minimized, bottom of the stack first, and gives focus back to the window that had it. Error `3` carries the reason: no window has focus, no other window to minimize, or no workspace in use. It also answers `3` while another window manager has Seam leaving placement alone. `window.spotlight` toggles when `on` is left out, and answers the new state. It dims every screen except the focused window, and works next to another window manager. The state's `spotlight` says whether it is on.
+`window.focus_only` minimizes every other window on the focused window's screen. With `scope` `"workspace"` it minimizes every window outside the workspace in use, on all of the desk's screens, using the matching a workspace switch uses. Seam's own, administrator, hung, excluded, sticky and pinned-on-top windows are left alone. Calling it again while any window it minimized still exists restores those that are still minimized, bottom of the stack first, and gives focus back to the window that had it. Error `3` carries the reason: no window has focus, no other window to minimize, or no workspace in use. It also answers `3` while another window manager has Seam leaving placement alone. `window.spotlight` toggles when `on` is left out, and answers the new state. While Seam is paused or stepped aside for a full-screen app it stays off and answers `{on: false, resumes: true}` if it will come on when Seam resumes. It dims every screen except the focused window, and works next to another window manager. The state's `spotlight` says whether it is on.
 
 ### Pins
 
@@ -239,6 +240,8 @@ Subscribe with `events.subscribe` and a list of topics. An event belongs to the 
   "remap": "on",
   "zones": "on",
   "spotlight": false,
+  "paused": false,
+  "stepped_aside": false,
   "wm": {
     "other_wm": null,
     "manual_other_wm": false,
@@ -267,6 +270,8 @@ Subscribe with `events.subscribe` and a list of topics. An event belongs to the 
 | `remap` | The pointer remap: `on`, `paused`, or `off_no_borders` when no border is lined up on this desk |
 | `zones` | `on` or `off`: whether drag snapping is enabled |
 | `spotlight` | Spotlight is dimming everything but the focused window |
+| `paused` | Seam is paused with `seam.pause`, the tray or its shortcut. It isn't saved |
+| `stepped_aside` | A game or other full-screen app is in front, so Seam waits. Stays `false` while `paused` |
 | `wm.other_wm` | `komorebi`, `glazewm` or `leopardwm` while that window manager is running, else `null`. Seam leaves placing windows to it |
 | `wm.manual_other_wm` | "Another window manager handles my windows" is on |
 | `wm.focus_border` | "Focus border" is on |

@@ -29,6 +29,7 @@ pub(super) fn patch_config(app: &mut App, patch: &Value) -> Reply {
     sync_restart_apps(app);
     persist(app);
     log::apply(app.cfg.debug_log);
+    standby_configure(app);
     apply_hotkeys(app);
     relink(app);
     if remap_turned_on {
@@ -177,7 +178,11 @@ pub(super) fn run_command(app: &mut App, queued: Queued) {
             start_focus_only(app, scope, Some(reply));
             return;
         }
-        Command::WindowSpotlight(on) => Ok(json!({ "on": set_spotlight(app, on) })),
+        Command::WindowSpotlight(on) => {
+            let now = set_spotlight(app, on);
+            Ok(json!({ "on": now, "resumes": app.spotlight_resume }))
+        }
+        Command::SeamPause(on) => Ok(json!({ "paused": set_paused(app, on) })),
         Command::WindowGroup(verb) => {
             start_group(app, verb, Some(reply));
             return;

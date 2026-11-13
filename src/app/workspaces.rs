@@ -42,12 +42,17 @@ pub(super) fn apply_hotkeys(app: &mut App) {
         (HOTKEY_FOCUS_ONLY, "focus_only".to_string(), keys.focus_only.clone()),
         (HOTKEY_SPOTLIGHT, "spotlight".to_string(), keys.spotlight.clone()),
         (HOTKEY_DIVIDER_MENU, "divider_menu".to_string(), keys.divider_menu.clone()),
+        (HOTKEY_PAUSE_SEAM, "pause_seam".to_string(), keys.pause_seam.clone()),
     ];
     for (id, (verb, dir, combo)) in (HOTKEY_WINDOW..).zip(keys.directional()) {
         wanted.push((id, format!("{verb}_{dir}"), combo.cloned()));
     }
     for (id, ws) in (HOTKEY_WORKSPACE..).zip(desk_workspaces(app)) {
         wanted.push((id, format!("workspace:{}", ws.id), ws.hotkey));
+    }
+    // Standing by, the keys go back to the app in front. A paused Seam keeps the one that resumes it.
+    if let Some(why) = standby::reason() {
+        wanted.retain(|(id, ..)| *id == HOTKEY_PAUSE_SEAM && why == standby::Standby::Paused);
     }
     if wanted == app.bound {
         return;
@@ -227,7 +232,18 @@ pub(super) fn start_focus_only(app: &App, scope: FocusScope, reply: Option<Sende
 
 /// Turn spotlight on or off, or over when `on` is `None`. Returns whether it's on now.
 pub(super) fn set_spotlight(app: &mut App, on: Option<bool>) -> bool {
-    let now = spotlight::set(on.unwrap_or(!spotlight::is_on()), &app.mons);
+    let wanted = on.unwrap_or(!(spotlight::is_on() || app.spotlight_resume));
+    // Standing by, it waits and comes back with the rest.
+    if standby::reason().is_some() {
+        app.spotlight_resume = wanted;
+        return false;
+    }
+    show_spotlight(app, wanted)
+}
+
+/// Put the dim on or off. Returns whether it's on now.
+pub(super) fn show_spotlight(app: &mut App, on: bool) -> bool {
+    let now = spotlight::set(on, &app.mons);
     wm::spotlight(now);
     log::info!("spotlight: {}", if now { "on" } else { "off" });
     publish(app);
@@ -365,7 +381,7 @@ pub(super) fn sync_live(app: &mut App) {
     if active.is_none() {
         app.drifted = false;
     }
-    let auto_apply = app.cfg.auto_apply && aside(app).is_none();
+    let auto_apply = app.cfg.auto_apply && aside(app).is_none() && !standby::paused();
     let live = active.map(|ws| live_of(app, ws));
     live::set_active(app.hwnd.0 as isize, live, auto_apply);
     live::set_rules(app_rules_of(app));
@@ -374,7 +390,7 @@ pub(super) fn sync_live(app: &mut App) {
 /// The app rules this build can use, unless another window manager has the windows.
 fn app_rules_of(app: &App) -> Option<AppRules> {
     let rules = workspace::app_rules(&app.cfg.app_rules);
-    if rules.is_empty() || aside(app).is_some() {
+    if rules.is_empty() || aside(app).is_some() || standby::paused() {
         return None;
     }
     let exclude = app.cfg.zones.exclude.iter().map(|x| x.to_lowercase()).collect();
@@ -503,6 +519,10 @@ pub(super) fn ws_moved(app: &mut App, key: u32) {
 /// Things have been still for a moment: tell the panel which workspaces' windows
 /// moved, and have the worker look whether the one in use drifted.
 pub(super) fn drift_due(app: &mut App) {
+    // Moves wait while paused. Resuming looks again.
+    if standby::paused() {
+        return;
+    }
     let moved = std::mem::take(&mut app.moved);
     for ws in desk_workspaces(app).into_iter().filter(|w| moved.contains(&workspace::stamp_key(&w.id))) {
         api_server::broadcast("workspace.moved", &json!({ "id": ws.id }));

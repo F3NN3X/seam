@@ -1,6 +1,7 @@
 //! Tray app: owns config, tracks monitor changes, runs the hook and the overlay.
 
 mod commands;
+mod pause;
 mod session;
 mod share;
 mod tile;
@@ -17,6 +18,7 @@ use crate::live::{WM_APP_DETECTED, WM_APP_DRIFT};
 use crate::log;
 use crate::monitors::{self, Mon};
 use crate::snap::{self, WM_APP_REFIT, WM_APP_SNAP_BLOCKED};
+use crate::standby::{self, WM_APP_STANDBY};
 use crate::switcher::{
     self, AppRules, CaptureJob, LiveWorkspace, Screen as SwitchScreen, SwitchJob, WM_APP_CAPTURED, WM_APP_SESSION,
     WM_APP_SWITCHED,
@@ -28,6 +30,7 @@ use crate::{
     wincontrol, wm,
 };
 use commands::{align_finished, busy, drain_api, patch_config, refused};
+use pause::{set_paused, standby_check, standby_configure};
 use seam::api::{self, Client, Command, FocusScope, GroupVerb, PinKind, Reply, RpcError, WindowVerb};
 use seam::config::{RestoreApps, TrayClick};
 use seam::direction::Dir;
@@ -71,8 +74,8 @@ use windows::core::{PCWSTR, w};
 use workspaces::{
     apply_hotkeys, aside, capture_job, captured, choose_in_use, desk_workspaces, detected_in_use, drift_checked,
     drift_due, forget_deleted, live_of, migrate_hotkeys, other_wm_changed, quick_save, set_default, set_spotlight,
-    snap_back, start_capture, start_focus_only, start_switch, start_switch_job, start_window, switch_back, switched,
-    sync_live, undo_quick_save, update_workspace, ws_moved,
+    show_spotlight, snap_back, start_capture, start_focus_only, start_switch, start_switch_job, start_window,
+    switch_back, switched, sync_live, undo_quick_save, update_workspace, ws_moved,
 };
 use workspaces::{start_group, window_planned};
 
@@ -147,6 +150,8 @@ const HOTKEY_FOCUS_ONLY: i32 = 40;
 const HOTKEY_SPOTLIGHT: i32 = 41;
 /// The size menu: share or take out the focused snapped window.
 const HOTKEY_DIVIDER_MENU: i32 = 60;
+/// Pause or resume everything Seam does.
+const HOTKEY_PAUSE_SEAM: i32 = 65;
 /// One hotkey id per workspace on the desk, from here up.
 const HOTKEY_WORKSPACE: i32 = 100;
 const NIN_KEYSELECT: u32 = NIN_SELECT | NINF_KEY;
@@ -157,6 +162,8 @@ const ID_RELEASE: usize = 3;
 const ID_OPEN: usize = 6;
 const ID_QUIT: usize = 9;
 const ID_SWITCH_BACK: usize = 10;
+/// Pause or resume everything Seam does.
+const ID_PAUSE_SEAM: usize = 12;
 /// Tile with one screen, or with several when the submenu couldn't be made.
 const ID_TILE: usize = 11;
 /// Menu ids of the screens in the Tile windows submenu, from here up to the workspaces.
@@ -266,6 +273,8 @@ struct Aligning {
 struct App {
     hwnd: HWND,
     icon: HICON,
+    /// The icon while Seam stands by.
+    quiet_icon: HICON,
     cfg: Config,
     mons: Vec<Mon>,
     sig: String,
@@ -323,6 +332,8 @@ struct App {
     session_ending: bool,
     /// Windows' Restart apps was on when Seam last looked (D128).
     restart_apps: bool,
+    /// Spotlight was on when Seam began to stand by, so it comes back after.
+    spotlight_resume: bool,
 }
 
 thread_local! {
@@ -344,13 +355,18 @@ fn wide<const N: usize>(s: &str) -> [u16; N] {
     out
 }
 
+/// Whether the pointer remap runs: it is on, and Seam isn't paused (D390).
+fn remapping(app: &App) -> bool {
+    app.cfg.enabled && !standby::paused()
+}
+
 /// (Re)install the hook if it should be running. Unhooking first guarantees a
 /// hook Windows dropped behind our back comes back. Edge resistance needs it at
 /// every border, lined up or not. Paused, the pointer is left to Windows entirely.
 fn arm_hook(app: &App) {
     hook::enable(false);
     let resist = app.cfg.pointer.edge_resistance_px > 0 && app.mons.len() > 1;
-    hook::enable(app.cfg.enabled && (!app.links.is_empty() || resist));
+    hook::enable(remapping(app) && (!app.links.is_empty() || resist));
 }
 
 fn unix_now() -> u64 {
@@ -368,21 +384,20 @@ fn persist(app: &App) {
 fn relink(app: &mut App) {
     app.links = resolve(&app.mons, app.cfg.desks.get(&app.sig).map(|d| d.borders.as_slice()));
     let pointer = &app.cfg.pointer;
+    let remapping = remapping(app);
     hook::set_live(Live {
         rects: app.mons.iter().map(|m| m.rect).collect(),
         // Paused, the hook remaps nothing and holds nothing.
-        links: if app.cfg.enabled { app.links.clone() } else { Vec::new() },
-        edge_resistance: if app.cfg.enabled {
-            pointer.edge_resistance_px.min(MAX_EDGE_RESISTANCE_PX) as i32
-        } else {
-            0
-        },
+        links: if remapping { app.links.clone() } else { Vec::new() },
+        edge_resistance: if remapping { pointer.edge_resistance_px.min(MAX_EDGE_RESISTANCE_PX) as i32 } else { 0 },
         glue_push: pointer.glue_push_px.min(MAX_GLUE_PUSH_PX) as i32,
     });
     snap::update(app.hwnd, &app.cfg, &app.sig, &app.mons, aside(app).as_deref());
     let windows = &app.cfg.windows;
     let owner = app.hwnd.0 as isize;
-    wm::configure(owner, windows.focus_border, &windows.focus_color, &windows.pin_color, windows.notify_pinned_close);
+    // The focus border waits with the rest while Seam stands by.
+    let border = windows.focus_border && standby::reason().is_none();
+    wm::configure(owner, border, &windows.focus_color, &windows.pin_color, windows.notify_pinned_close);
     sync_live(app);
     arm_hook(app);
     update_tip(app);
@@ -395,6 +410,8 @@ fn refresh(app: &mut App) {
     }
     app.mons = monitors::enumerate();
     spotlight::screens_changed(&app.mons);
+    // A display change can make a window cover its screen, or stop it.
+    standby_check(app);
     let sig = signature(app.mons.iter().map(|m| m.id.as_str()));
     let arrived = sig != app.sig && !app.mons.is_empty();
     app.sig = sig;
@@ -451,6 +468,8 @@ fn snapshot(app: &App) -> Snapshot {
         remap: Remap::of(app.cfg.enabled, app.links.len()),
         zones: if app.cfg.zones.enabled { state::Zones::On } else { state::Zones::Off },
         spotlight: spotlight::is_on(),
+        paused: standby::paused(),
+        stepped_aside: standby::reason() == Some(standby::Standby::FullScreen),
         wm: WmState {
             other_wm: app.other_wm.map(String::from),
             manual_other_wm: app.cfg.windows.other_wm,
@@ -693,6 +712,9 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                     HOTKEY_PAUSE => {
                         with_app(|a| set_remap(a, !a.cfg.enabled));
                     }
+                    HOTKEY_PAUSE_SEAM => {
+                        with_app(|a| set_paused(a, None));
+                    }
                     id @ (HOTKEY_NEXT_ZONE | HOTKEY_PREV_ZONE) => {
                         if let Err(why) = snap::move_foreground(id == HOTKEY_NEXT_ZONE) {
                             log::info!("zone hotkey: {why}");
@@ -770,6 +792,18 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                         });
                     }
                     _ => {}
+                }
+                LRESULT(0)
+            }
+            WM_APP_STANDBY => {
+                if with_app(standby_check).is_none() {
+                    SetTimer(Some(hwnd), standby::TIMER_STANDBY, 50, None);
+                }
+                LRESULT(0)
+            }
+            WM_TIMER if wparam.0 == standby::TIMER_STANDBY => {
+                if with_app(standby_check).is_some() {
+                    let _ = KillTimer(Some(hwnd), standby::TIMER_STANDBY);
                 }
                 LRESULT(0)
             }
@@ -1112,7 +1146,8 @@ pub fn run() {
 
         let app = App {
             hwnd,
-            icon: make_icon(),
+            icon: make_icon(false),
+            quiet_icon: make_icon(true),
             cfg,
             mons: Vec::new(),
             sig: String::new(),
@@ -1147,11 +1182,14 @@ pub fn run() {
             session_capture: None,
             session_ending: false,
             restart_apps: false,
+            spotlight_resume: false,
         };
         APP.with(|a| *a.borrow_mut() = Some(app));
         with_app(|a| {
             add_icon(a);
             migrate_hotkeys(a);
+            // Before the shortcuts, so a game already in front keeps its keys.
+            standby_configure(a);
             apply_hotkeys(a);
             check_restart_apps(a);
             refresh(a);

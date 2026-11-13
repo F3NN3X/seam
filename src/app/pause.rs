@@ -47,6 +47,9 @@ fn standby_changed(app: &mut App, before: Option<Standby>) {
         }
         _ => {}
     }
+    if now == Some(Standby::Paused) && before != now {
+        cancel_sign_in(app);
+    }
     apply_hotkeys(app);
     relink(app);
     // Moves made while paused were not looked at, so look once now.

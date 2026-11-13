@@ -325,9 +325,9 @@ const ENTRIES: &[Entry] = &[
     entry(Page::General, "Offer to line up new screens", "Asks once when screens Seam hasn't seen connect", ""),
     entry(
         Page::General,
-        "Offer to restore my windows after I sign in",
-        "Seam remembers which apps were where and asks before it starts any",
-        "session restore reboot sign out login",
+        "When I sign in",
+        "Do nothing, offer my last session, or open a workspace",
+        "session restore reboot sign out login startup workspace ask first",
     ),
     entry(
         Page::General,

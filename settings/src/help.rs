@@ -344,13 +344,16 @@ pub const TOPICS: &[Topic] = &[
         opens: Some(Page::Zones),
     },
     Topic {
-        title: "Last session",
+        title: "When you sign in",
         blocks: &[
             Text(
-                "**Offer to restore my windows after I sign in** keeps a hidden last session for each desk: which apps are where, and which are pinned. It's off until you turn it on.",
+                "**When I sign in**, on General, picks what Seam does on this desk when it starts at sign-in: **Do nothing** (the default), **Offer my last session** or **Open a workspace**. Starting Seam by hand does none of them.",
             ),
             Text(
-                "When Seam starts at sign-in, it asks whether to restore it. A click puts the windows back in their zones and pins them again. Nothing starts without the click.",
+                "**Offer my last session** keeps a hidden last session for each desk: which apps are where, and which are pinned. At sign-in Seam asks whether to restore it. A click puts the windows back in their zones and pins them again. Nothing starts without the click.",
+            ),
+            Text(
+                "**Open a workspace** switches to the workspace you pick, like any workspace switch. **Ask first** is on by default: Seam shows \"Open <workspace>? Click to open\" and waits for the click. Off, it switches about 10 seconds after the taskbar is up. If a full-screen app is in front it waits, up to 3 minutes after Seam starts. A pause by hand cancels it. It acts on the desk that is current then.",
             ),
             Text(
                 "**Who reopens the apps** picks **Windows reopens them**, where Seam puts each window back as it appears, or **Seam reopens them**, where Seam starts the missing apps itself.",

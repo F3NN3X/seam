@@ -65,6 +65,8 @@ pub struct Done {
     pub pick: bool,
     /// A drop that split a zone with the drag's keys rather than a tile.
     pub split: bool,
+    /// A drop that took a window out of the layout, closing its gap.
+    pub pulled: bool,
 }
 
 /// A window the tile moved.
@@ -247,6 +249,7 @@ pub(super) fn run(job: &Job, at: At) -> Result<Outcome, String> {
         keep: Vec::new(),
         pick: false,
         split: false,
+        pulled: false,
     };
     let layout = existing.is_none().then(|| (g.id.clone(), layout));
     Ok(Outcome::Tile(Box::new(Plan { list, layout, done })))
@@ -301,6 +304,7 @@ pub(super) fn pick(job: &Job, p: &Pick) -> Result<Outcome, String> {
         keep: Vec::new(),
         pick: true,
         split: false,
+        pulled: false,
     };
     Ok(Outcome::Tile(Box::new(Plan { list, layout: Some((p.screen.clone(), p.layout.clone())), done })))
 }

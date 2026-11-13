@@ -171,6 +171,9 @@ pub const TOPICS: &[Topic] = &[
                 "**Esc** drops the window where you let go, without a zone",
             ]),
             Text(
+                "Hold Ctrl as you let go outside the zones to take a window out of the layout; the others close the gap. It works for a snapped window that is alone in its zone, and a notification offers Undo for 8 seconds.",
+            ),
+            Text(
                 "Other keys, clicks and moves reach your apps as usual. **Pause to snap** shows the zones when you hold the pointer still for a moment while dragging, with no key. **Show keys while dragging** puts a strip on the screen that names the wheel, right-click and these keys.",
             ),
             Text(

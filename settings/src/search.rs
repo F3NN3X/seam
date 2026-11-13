@@ -108,7 +108,12 @@ const ENTRIES: &[Entry] = &[
         "exclude never manage never include ignore",
     ),
     entry(Page::Zones, "Show zones", "Hold while dragging", "shift ctrl alt key"),
-    entry(Page::Zones, "Span zones", "Add this key to cover more", "shift ctrl alt key"),
+    entry(
+        Page::Zones,
+        "Span zones",
+        "Add this key to cover more",
+        "shift ctrl alt key pull out take out of layout close gap",
+    ),
     entry(Page::Zones, "Gap", "Space between zones and the screen edge", "padding"),
     entry(
         Page::Zones,

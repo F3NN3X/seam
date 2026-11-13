@@ -187,8 +187,79 @@ impl Engine {
             keep,
             pick: false,
             split: true,
+            pulled: false,
         };
         wincontrol::save_split(self.owner, id, split.layout, done);
+    }
+
+    /// Drop outside every zone with Ctrl held: a window that was alone in its zone
+    /// takes the zone out of the layout, its sibling takes the space, and the windows
+    /// in the zones that grew move to fill them. As a split's, the layout is saved
+    /// once and the notice's Undo puts it and every window back. The dragged window is
+    /// the drop's to place.
+    pub(super) fn pull_out(&mut self, drag: &Drag) {
+        let Some(own) = self.snapped.get(&drag.hwnd).filter(|_| drag.was_snapped.is_some()) else { return };
+        let (id, k) = (own.screen.clone(), own.from);
+        if own.from != own.to {
+            return;
+        }
+        let Some(g) = drag.geometry.iter().find(|g| g.id == id && k < g.cells.len()) else { return };
+        let Some(number) = self.screens.iter().position(|x| x.id == id) else { return };
+        let Some(before) = self.screens[number].layout.clone() else { return };
+        let Some(tree) = zones::remove_leaf(&before.tree, k) else { return };
+        let shared = self
+            .snapped
+            .iter()
+            .any(|(key, x)| *key != drag.hwnd && x.screen == id && refit::covered(&g.cells, x.from, x.to).contains(&k));
+        if shared {
+            log::info!("pull out: screen {}, zone {}, another window holds it, so a plain drop", number + 1, k + 1);
+            return;
+        }
+        let layout = groups::relabel(before.template, tree.clone());
+        let gap = (self.settings.gap.min(MAX_GAP) as f32 * g.dpi as f32 / 96.0).round() as i32;
+        let (cells, zone_rects) = (zones::rects(&tree, g.work, 0), zones::rects(&tree, g.work, gap));
+        self.screens[number].layout = Some(layout.clone());
+        let renumber = |i: usize| if i > k { i - 1 } else { i };
+        let (mut back, mut keep, mut queue) = (Vec::new(), Vec::new(), Vec::new());
+        for (key, x) in self.snapped.iter_mut() {
+            if x.screen != id || *key == drag.hwnd {
+                continue;
+            }
+            let (from, to) = (renumber(x.from), renumber(x.to));
+            let ends = |rects: &[Rect], (a, b): (usize, usize)| Some(zones::span(*rects.get(a)?, *rects.get(b)?));
+            let (Some(old), Some(new)) = (ends(&g.zones, (x.from, x.to)), ends(&zone_rects, (from, to))) else {
+                continue;
+            };
+            let zone = (id.clone(), x.from, x.to);
+            if new != old && !winutil::is_minimized(hwnd_of(*key)) {
+                let place = Placement { hwnd: *key, target: x.at, zone: Some(zone), dpi: g.dpi };
+                back.push(Back { place, set: new });
+                queue.push(Placement { hwnd: *key, target: new, zone: Some((id.clone(), from, to)), dpi: g.dpi });
+            } else if (from, to) != (x.from, x.to) {
+                // Renumbered without moving. Undo gives it back its old numbers.
+                keep.push(Zoned { hwnd: *key, zone, at: x.at, moving: false });
+                (x.from, x.to) = (from, to);
+                winutil::stamp_zones(hwnd_of(*key), &refit::covered(&cells, from, to));
+            }
+        }
+        let moved = queue.len();
+        self.queued.extend(queue);
+        self.window_pump();
+        self.sync_overlay();
+        log::info!("pull out: screen {}, zone {}, {moved} windows moved", number + 1, k + 1);
+        let done = Done {
+            number: number + 1,
+            tiled: moved,
+            left: 0,
+            screen: id.clone(),
+            changed: Some(Change { now: Some(layout.clone()), before: Some(before) }),
+            back,
+            keep,
+            pick: false,
+            split: false,
+            pulled: true,
+        };
+        wincontrol::save_split(self.owner, id, layout, done);
     }
 
     /// Undo of a split: windows snapped after the cut take their old zone numbers

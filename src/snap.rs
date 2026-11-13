@@ -142,6 +142,8 @@ struct Drag {
     tried: Option<(adhoc::Beside, Option<usize>, Option<Option<View>>)>,
     /// Windows looked at as targets, and whether Seam may move each.
     allowed: Vec<(isize, bool)>,
+    /// It began in `altdrag`, from anywhere in the window.
+    alt: bool,
 }
 
 struct Snapped {
@@ -186,6 +188,8 @@ struct Engine {
     /// The size a free drag to another screen gives the window: Windows' own unless
     /// "Also when I drag a window to another screen" is on and nothing steps aside.
     drag_size: WindowSize,
+    /// The key for dragging from anywhere in a window includes Ctrl, so Ctrl is held for the whole drag.
+    alt_holds_ctrl: bool,
     screens: Vec<Screen>,
     hook: Option<HWINEVENTHOOK>,
     drag: Option<Drag>,
@@ -273,6 +277,7 @@ pub fn update(owner: HWND, cfg: &Config, sig: &str, mons: &[Mon], aside: Option<
     let standing_by = crate::standby::reason().is_some();
     let on_drag = cfg.window_size_on_drag && aside.is_none() && !standing_by;
     let drag_size = if on_drag { cfg.window_size_on_move } else { WindowSize::Windows };
+    let alt_holds_ctrl = cfg.windows.alt_drag.on && cfg.windows.alt_drag.key == "ctrl_alt";
     let exclude: Vec<String> = cfg.zones.exclude.iter().map(|x| x.to_lowercase()).collect();
     with_engine(|e| {
         // A change that isn't about zones mustn't cut a drag short.
@@ -283,6 +288,7 @@ pub fn update(owner: HWND, cfg: &Config, sig: &str, mons: &[Mon], aside: Option<
             && e.settings == cfg.zones
             && e.exclude == exclude
             && e.drag_size == drag_size
+            && e.alt_holds_ctrl == alt_holds_ctrl
             && e.screens == screens;
         if same {
             return;
@@ -295,6 +301,7 @@ pub fn update(owner: HWND, cfg: &Config, sig: &str, mons: &[Mon], aside: Option<
         e.settings = cfg.zones.clone();
         e.exclude = exclude;
         e.drag_size = drag_size;
+        e.alt_holds_ctrl = alt_holds_ctrl;
         e.screens = screens;
         // An ad-hoc group is for a screen with no zones, as it was when it was made.
         e.adhoc_screens_changed();
@@ -383,6 +390,7 @@ pub fn alt_drag(hwnd: HWND, started: bool) {
         e.drag_start(hwnd);
         if let Some(drag) = e.drag.as_mut() {
             drag.button = None;
+            drag.alt = true;
         }
     });
 }
@@ -725,6 +733,7 @@ impl Engine {
             beside: None,
             tried: None,
             allowed: Vec::new(),
+            alt: false,
         });
     }
 
@@ -977,6 +986,10 @@ impl Engine {
         }
         let lit = drag.shown.and_then(|view| Some((view.screen, view.hit?, view.cut)));
         let Some((screen, (a, b), cut)) = lit else {
+            // With Ctrl held, a window alone in its zone leaves the layout, and the others close the gap.
+            if held(VK_CONTROL) && !(drag.alt && self.alt_holds_ctrl) {
+                self.pull_out(drag);
+            }
             // Dropped outside every zone, so a snapped window gets its old size back.
             let mut restored = false;
             if let (Some(Some(old)), true) = (drag.was_snapped, self.settings.restore_size)

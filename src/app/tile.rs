@@ -67,7 +67,9 @@ pub(super) fn tile_finished(app: &mut App, result: Option<Result<wincontrol::til
                 return;
             }
             let windows = if n == 1 { "window" } else { "windows" };
-            let (title, body) = if done.split {
+            let (title, body) = if done.pulled {
+                (format!("Took the window out of screen {}'s layout", done.number), "Click to undo".to_string())
+            } else if done.split {
                 ("Split the zone".to_string(), "Click to undo".to_string())
             } else if done.pick {
                 let title = format!("Screen {} has a new layout", done.number);
@@ -252,6 +254,7 @@ pub(super) fn pick_layout(
                     keep: Vec::new(),
                     pick: true,
                     split: false,
+                    pulled: false,
                 };
                 tile_finished(app, Some(Ok(done)));
             }

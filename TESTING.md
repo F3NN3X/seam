@@ -222,7 +222,7 @@ Set up first: on Zones, pick **Priority** for screen 1 and **Grid** for screen 2
 
 ### Where apps open
 
-Turn the debug log on. **Where apps open** is the last card on Zones, with the caption "Seam puts these apps in place whenever they open, outside workspaces too".
+Turn the debug log on. **Where apps open** is the last card on Zones, with the caption "Seam puts these apps in place, or keeps them on top, whenever they open, outside workspaces too".
 
 - [ ] **Add a rule.** **Add an app**, pick Notepad from **Open now**, and it gets a row with its icon and a **Goes to** choice. Set it to screen 1, zone 2. `app_rules` in `config.json` holds one entry, and Undo takes the change back. Picking Notepad again says "Already has a place" and adds nothing.
 - [ ] **Opens in place.** With **Put apps in place when they open** off and no workspace in use, close Notepad and open it: it goes to zone 2 of screen 1 once, and the log has `app rule notepad: placed`. Drag it elsewhere: it stays there.
@@ -232,7 +232,21 @@ Turn the debug log on. **Where apps open** is the last card on Zones, with the c
 - [ ] **A dialog isn't moved.** Press Ctrl+O in Notepad: the Open dialog stays where Windows puts it, while a new Notepad window still goes to the rule's zone.
 - [ ] **During a switch.** Start a workspace switch and open Notepad by hand while it runs: the switch owns it, and the rule doesn't move it afterwards.
 - [ ] **Full screen and Remove.** Change **Goes to** to "Screen 1, full": the next Notepad opens maximized on it. **...**, **Remove** deletes the rule with Undo, and the next Notepad opens untouched.
-- [ ] **Search and Help.** Searching "where apps open", "app rules" or "always open" finds the card, and Help has a **Where apps open** topic.
+- [ ] **Search and Help.** Searching "where apps open", "app rules" or "always open" finds the card, and "keep an app on top" finds its entry. Help has a **Where apps open** topic.
+
+#### Keep on top
+
+Turn the debug log on. Use Notepad, with the pin colour on anything but None.
+
+- [ ] **Keep on top.** Open **...** on Notepad's row and tick **Keep on top**: it gets a check, and the row's second line reads "notepad.exe, on top" in muted text, without a pill. `app_rules` in `config.json` has `"pin": "top"`. Close Notepad and open it: it's on top with the pin border, the log has `app rule notepad: placed, pinned`,.
+- [ ] **Release stays released.** Pick **Release pinned windows** in the tray menu: Notepad is no longer on top, and the log says `released 1 pinned windows, 1 of them pinned by app rules`. Switch workspaces and back and change another setting: Notepad isn't pinned again. Close it and open it anew: it's pinned again.
+- [ ] **A rule made again.** Release, then remove Notepad's rule and add it again, or untick **Keep on top** and tick it: the open Notepad is pinned again. Only a rule that stays as it is leaves a released window alone.
+- [ ] **A rule made while the app is open.** Remove the check, open Notepad, then tick **Keep on top**: the open Notepad is pinned at once, and the log has `app rules pinned 1 open windows`.
+- [ ] **Only a pin.** Add Calculator, pick **Doesn't move** under its place: it gets **Keep on top** by itself, and the row says "Doesn't move". Open it from a corner of the screen: it stays where it opens and is pinned. A rule set to **Doesn't move** with the pin unticked does nothing and is ignored.
+- [ ] **A place and a pin.** Give Notepad zone 2 of screen 1 and **Keep on top**: the next Notepad goes to the zone and is pinned, and the log says `placed, pinned`. With the screen unplugged it is pinned and stays where it opens.
+- [ ] **Sticky.** Tick **Keep out of workspace switches** only: the row says "out of workspace switches" and a workspace switch leaves the window alone.
+- [ ] **While paused.** Pause Seam, then open Notepad: it isn't pinned. Resume: it's pinned within a second, and the log has `app rules pinned 1 open windows`. A window you released before the pause isn't pinned again.
+- [ ] **An elevated app.** Run the app of a rule as administrator and open it: it isn't pinned, nothing is logged for it, and no other window is affected.
 
 ## Window control
 

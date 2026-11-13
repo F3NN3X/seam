@@ -669,8 +669,8 @@ impl Wm {
                 }
             }
             Command::Release { reply } => {
-                let released = self.release();
-                log::info!("released {released} pinned windows");
+                let (released, by_rules) = self.release();
+                log::info!("released {released} pinned windows, {by_rules} of them pinned by app rules");
                 if let Some(tx) = reply {
                     let _ = tx.send(Ok(json!({ "ok": true, "released": released })));
                 }
@@ -959,12 +959,14 @@ impl Wm {
         Ok(want)
     }
 
-    /// Take back every pin and border Seam set. Returns how many windows were pinned.
-    fn release(&mut self) -> usize {
-        let mut released = 0;
+    /// Take back every pin and border Seam set. Returns how many windows were pinned,
+    /// and how many of those an app rule pinned.
+    fn release(&mut self) -> (usize, usize) {
+        let (mut released, mut by_rules) = (0, 0);
         for h in winutil::top_level_windows() {
             let bits = winutil::pin_bits(h);
             if bits != 0 {
+                by_rules += usize::from(winutil::rule_pin_bits(h) != 0);
                 if bits & winutil::PIN_TOP != 0 {
                     set_topmost(h, false);
                 }
@@ -982,7 +984,7 @@ impl Wm {
         if released > 0 {
             self.tell_tray_of(WM_APP_WINDOWS_CHANGED);
         }
-        released
+        (released, by_rules)
     }
 
     /// A pinned window closed. Seam asking it to, Release all and quitting are

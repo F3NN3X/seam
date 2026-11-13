@@ -330,6 +330,9 @@ pub const TOPICS: &[Topic] = &[
             Text(
                 "A rule moves a window once, a moment after it opens. Dialogs, windows that open while a workspace switches, apps that run as administrator and apps under **Left alone** stay where they open, and so does a window whose rule's screen isn't connected.",
             ),
+            Text(
+                "**...**, **Keep on top** on an app's row pins its windows as you would by hand, once, a moment after they open. Choose **Doesn't move** as its place to only pin it. **Release pinned windows** takes the pin back, and the rule leaves that window alone until it's opened again.",
+            ),
             Text("**Left alone** lists the apps Seam never manages. Remove an app there to manage it again."),
         ],
         opens: Some(Page::Zones),

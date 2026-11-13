@@ -629,7 +629,8 @@ impl Engine {
         let timer = unsafe { SetTimer(None, 0, TICK_MS, Some(on_tick)) };
         let was_maximized = winutil::is_maximized(hwnd);
         let zone = current.map(|(_, zone)| zone);
-        let old_zone = if geometry.is_empty() { zone.clone() } else { self.zones_held(hwnd, &geometry, frame) };
+        let old_zone =
+            if geometry.is_empty() { zone.clone() } else { self.zones_held(hwnd, &geometry, frame, was_maximized) };
         let edges = self.edges_start(hwnd, &geometry, (zone, stamped), was_maximized);
         // The handles stay out of the way of any drag, and come back at its end.
         dividers::hide();
@@ -885,7 +886,8 @@ impl Engine {
         }
         if out.swap.is_none() {
             if let Err(why) = self.swap_why(drag, screen, (a.min(b), a.max(b))) {
-                if why == swap::Skip::NoOccupants {
+                // Counting the windows around reads every window, so only for the log.
+                if why == swap::Skip::NoOccupants && log::enabled() {
                     let g = &drag.geometry[screen];
                     let target = zones::span(g.zones[a], g.zones[b]);
                     let (known, loose) = self.around(drag, g, target);
@@ -1058,14 +1060,10 @@ impl Engine {
                     if let (false, true, Some(v)) = (landed, sized, visible) {
                         minsize::observed(hwnd, v, p.target, CLOSE_ENOUGH);
                     }
-                    // Off its place after the retries: the snapping records where it is,
-                    // so it still counts as in its zones.
                     if let (false, Some(v)) = (landed, visible) {
-                        if let Some(s) = self.snapped.get_mut(&p.hwnd).filter(|s| s.at == p.target) {
-                            let (dx, dy, dw, dh) = (v.x - s.at.x, v.y - s.at.y, v.w - s.at.w, v.h - s.at.h);
-                            log::info!("zone place: landed {dx},{dy} px off its zones, {dw}x{dh} px in size");
-                            s.at = v;
-                        }
+                        let t = p.target;
+                        let (dx, dy, dw, dh) = (v.x - t.x, v.y - t.y, v.w - t.w, v.h - t.h);
+                        log::info!("zone place: landed {dx},{dy} px off its place, {dw}x{dh} px in size");
                     }
                     return;
                 }

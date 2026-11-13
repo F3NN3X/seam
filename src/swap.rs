@@ -48,10 +48,19 @@ fn overlaps(a: Rect, b: Rect) -> bool {
 /// Whether at least half of `r` lies inside `zone`. A window an app keeps a few
 /// pixels off its zones, or bigger than them for its minimum size, still counts.
 pub(super) fn mostly_inside(r: Rect, zone: Rect) -> bool {
-    let w = (r.x + r.w).min(zone.x + zone.w) - r.x.max(zone.x);
-    let h = (r.y + r.h).min(zone.y + zone.h) - r.y.max(zone.y);
-    let area = |w: i32, h: i32| i64::from(w.max(0)) * i64::from(h.max(0));
-    area(r.w, r.h) > 0 && 2 * area(w, h) >= area(r.w, r.h)
+    let (shared, whole) = (shared_area(r, zone), area(r));
+    whole > 0 && 2 * shared >= whole
+}
+
+fn area(r: Rect) -> i64 {
+    i64::from(r.w.max(0)) * i64::from(r.h.max(0))
+}
+
+/// The area `a` and `b` have in common.
+fn shared_area(a: Rect, b: Rect) -> i64 {
+    let w = (a.x + a.w).min(b.x + b.w) - a.x.max(b.x);
+    let h = (a.y + a.h).min(b.y + b.h) - a.y.max(b.y);
+    i64::from(w.max(0)) * i64::from(h.max(0))
 }
 
 /// Where `r`, the part of it inside `from`, lands when `from` is stretched over `to`.
@@ -127,13 +136,15 @@ impl Engine {
 
     /// The zones the dragged window was in when the drag began, for the swap: its
     /// entry in the snapping while at least half of it is still inside those zones,
-    /// as for an occupant. Otherwise, as after a restart of the tray, the zones on its
-    /// screen its frame mostly fills and is mostly inside, its stamp's first.
+    /// as for an occupant. Otherwise, as after a restart of the tray, its stamp's
+    /// zones, or the span on its screen it fits best: at least half of it inside, and
+    /// covering at least 80% of the span. A maximized window has none.
     pub(super) fn zones_held(
         &self,
         hwnd: HWND,
         geometry: &[Placed],
         frame: Option<Rect>,
+        was_maximized: bool,
     ) -> Option<(String, usize, usize)> {
         let frame = frame?;
         if let Some(s) = self.snapped.get(&(hwnd.0 as isize)) {
@@ -147,17 +158,24 @@ impl Engine {
             }
             log::info!("zone drag: the window's zones no longer hold most of it");
         }
+        if was_maximized {
+            return None;
+        }
         let (x, y) = (frame.x + frame.w / 2, frame.y + frame.h / 2);
         let g = geometry.iter().find(|g| g.bounds.contains(x, y))?;
         if let Some((from, to, _)) = wincontrol::stamped_in(hwnd, frame, &g.zones) {
             return Some((g.id.clone(), from, to));
         }
         let n = g.zones.len();
-        let fits = |(i, j): &(usize, usize)| {
-            let span = zones::span(g.zones[*i], g.zones[*j]);
-            mostly_inside(frame, span) && mostly_inside(span, frame)
+        let span = |(i, j): (usize, usize)| zones::span(g.zones[i], g.zones[j]);
+        let fits = |ij: &(usize, usize)| {
+            let s = span(*ij);
+            mostly_inside(frame, s) && 5 * shared_area(frame, s) >= 4 * area(s)
         };
-        let (from, to) = (0..n).flat_map(|i| (i..n).map(move |j| (i, j))).find(fits)?;
+        let (from, to) = (0..n)
+            .flat_map(|i| (i..n).map(move |j| (i, j)))
+            .filter(fits)
+            .min_by_key(|ij| (area(span(*ij)) - area(frame)).abs())?;
         Some((g.id.clone(), from, to))
     }
 

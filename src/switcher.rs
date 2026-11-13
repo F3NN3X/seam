@@ -1723,13 +1723,29 @@ fn rule_hit(set: &AppRules, owner: Option<&Workspace>, h: HWND, procs: &mut Proc
 
 /// Pin a window as its rule says, unless the rule did already. What the rule pinned
 /// stays on the window, so after Release or an unpin by hand the rule leaves it alone
-/// until it's opened anew. Whether it asked for a pin.
-fn pin_by_marker(h: HWND, rule: &Rule) -> bool {
+/// until it's opened anew or the rule gains a pin (`fresh`). Only a pin the seam-wm
+/// thread applied is kept and counts. Whether it pinned.
+fn pin_by_marker(h: HWND, rule: &Rule, fresh: bool) -> bool {
+    if fresh {
+        winutil::set_rule_pin_bits(h, 0);
+    }
     let done = winutil::rule_pin_bits(h);
-    let Some(pin) = rule.pin.and_then(|p| Pin::of_bits(p.bits() & !done)) else { return false };
-    winutil::set_rule_pin_bits(h, done | pin.bits());
-    pin_again(h.0 as isize, pin);
-    true
+    let want = rule.pin.map_or(0, |p| p.bits());
+    let mut now = done;
+    for (kind, bit) in [(PinKind::Top, winutil::PIN_TOP), (PinKind::Sticky, winutil::PIN_STICKY)] {
+        if want & !done & bit != 0 && pinned_by_wm(kind, h) {
+            now |= bit;
+        }
+    }
+    winutil::set_rule_pin_bits(h, now);
+    now != done
+}
+
+/// Ask the seam-wm thread to pin a window and wait for its answer.
+fn pinned_by_wm(kind: PinKind, h: HWND) -> bool {
+    let (tx, rx) = std::sync::mpsc::channel();
+    crate::wm::pin(kind, Some(true), h.0 as isize, Some(tx));
+    matches!(rx.recv_timeout(Duration::from_secs(1)), Ok(Ok(_)))
 }
 
 /// Put a window that just opened where its app's rule puts it, once, then pin it if
@@ -1753,7 +1769,7 @@ pub fn place_by_rule(set: &AppRules, owner: Option<&Workspace>, hwnd: isize) -> 
         winutil::set_ws_stamp(h, workspace::stamp_key("app_rule"), hit);
         done.push(if moved { "placed" } else { "already in place" });
     }
-    if pin_by_marker(h, rule) {
+    if pin_by_marker(h, rule, false) {
         done.push("pinned");
     }
     if done.is_empty() {
@@ -1763,8 +1779,9 @@ pub fn place_by_rule(set: &AppRules, owner: Option<&Workspace>, hwnd: isize) -> 
 }
 
 /// Pin the open windows the rules say to keep on top: for a rule made or changed while
-/// its app was open, and after a pause. Nothing is moved. Returns how many it pinned.
-pub fn pin_by_rules(set: &AppRules, owner: Option<&Workspace>) -> usize {
+/// its app was open, and after a pause. Nothing is moved. The windows of a `fresh` rule
+/// are pinned even if they were released. Returns how many it pinned.
+pub fn pin_by_rules(set: &AppRules, owner: Option<&Workspace>, fresh: &[Rule]) -> usize {
     if switching() {
         return 0;
     }
@@ -1772,8 +1789,12 @@ pub fn pin_by_rules(set: &AppRules, owner: Option<&Workspace>) -> usize {
     let mut procs = Procs::new();
     let mut pinned = 0;
     for h in winutil::top_level_windows() {
+        // A workspace that isn't in use placed it, and the rule's own stamp doesn't count.
+        if winutil::ws_stamp(h).is_some_and(|(key, _)| key != workspace::stamp_key("app_rule")) {
+            continue;
+        }
         let hit = rule_hit(set, owner, h, &mut procs);
-        pinned += usize::from(hit.is_some_and(|i| pin_by_marker(h, &set.rules[i])));
+        pinned += usize::from(hit.is_some_and(|i| pin_by_marker(h, &set.rules[i], fresh.contains(&set.rules[i]))));
     }
     pinned
 }

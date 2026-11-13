@@ -34,8 +34,9 @@ fn goes(rule: &Rule, screens: &[Screen]) -> String {
 /// What a rule's pin adds to the line under its app's name.
 fn pin_note(rule: &Rule) -> Option<&'static str> {
     match rule.pin? {
-        Pin::Top | Pin::Both => Some("on top"),
+        Pin::Top => Some("on top"),
         Pin::Sticky => Some("out of workspace switches"),
+        Pin::Both => Some("on top, out of workspace switches"),
     }
 }
 
@@ -160,7 +161,7 @@ fn set_pin(panel: &mut Panel, at: usize, bit: usize, on: bool, window: &mut Wind
     });
 }
 
-fn more_menu(at: usize, title: &str, bits: usize, cx: &mut Context<Panel>) -> AnyElement {
+fn more_menu(at: usize, title: &str, bits: usize, stays: bool, cx: &mut Context<Panel>) -> AnyElement {
     let weak = cx.entity().downgrade();
     ui::secondary(("rule-more", at), "", cx)
         .ghost()
@@ -169,7 +170,10 @@ fn more_menu(at: usize, title: &str, bits: usize, cx: &mut Context<Panel>) -> An
         .dropdown_menu(move |mut menu, _, _| {
             for (bit, label) in [(TOP, "Keep on top"), (STICKY, "Keep out of workspace switches")] {
                 let (weak, on) = (weak.clone(), bits & bit == 0);
-                let item = PopupMenuItem::new(label).checked(!on).on_click(move |_, window, cx| {
+                // A rule that doesn't move its app needs a pin to do anything.
+                let last = stays && bits == bit;
+                let label = if last { format!("{label} (it only pins)") } else { label.to_string() };
+                let item = PopupMenuItem::new(label).checked(!on).disabled(last).on_click(move |_, window, cx| {
                     let _ = weak.update(cx, |panel, cx| set_pin(panel, at, bit, on, window, cx));
                 });
                 menu = menu.item(item);
@@ -215,6 +219,7 @@ fn rule_row(
             at,
             &title,
             rule.pin.map_or(0, Pin::bits),
+            goes(rule, screens) == STAYS,
             cx,
         )))
         .into_any_element()

@@ -43,8 +43,9 @@ enum Job {
         workspaces: Vec<LiveWorkspace>,
     },
     Opened(isize),
-    /// The rules that keep an app on top changed, so the windows already open get theirs.
-    PinOpen,
+    /// Pin the open windows of the rules that keep an app on top. The windows of these
+    /// rules are pinned again even if they were released.
+    PinOpen(Vec<workspace::Rule>),
     /// A switch finished, so the windows that opened during it get their turn.
     SwitchEnded,
     /// These windows now hold these rows of the workspace with this stamp key. With
@@ -69,6 +70,8 @@ static RULES: Mutex<Option<Arc<AppRules>>> = Mutex::new(None);
 static SWITCH_OWNED: Mutex<Vec<isize>> = Mutex::new(Vec::new());
 /// The app rules with a pin that the open windows were last looked at for.
 static PINNING: Mutex<Vec<workspace::Rule>> = Mutex::new(Vec::new());
+/// The rules were taken away for a pause, so the open windows are looked at on resume.
+static RESUME: AtomicBool = AtomicBool::new(false);
 static AUTO: AtomicBool = AtomicBool::new(false);
 static OWNER: AtomicIsize = AtomicIsize::new(0);
 static DRIFT: Mutex<Option<Drift>> = Mutex::new(None);
@@ -92,19 +95,31 @@ pub fn set_active(owner: isize, live: Option<LiveWorkspace>, auto_apply: bool) {
     crate::wm::workspace(active, auto_apply);
 }
 
-/// The app rules now, or none. The seam-wm thread hears whether to watch. Rules that
-/// keep an app on top are looked at against the open windows when they change, and
-/// again after a pause, which takes them away.
-pub fn set_rules(rules: Option<AppRules>) {
+/// The app rules now, or none. The seam-wm thread hears whether to watch. Open windows
+/// get the pins of a new rule or one that gained a pin, and all of them on resume.
+pub fn set_rules(rules: Option<AppRules>, standing_by: bool) {
     let any = rules.is_some();
     let pinning: Vec<workspace::Rule> =
         rules.iter().flat_map(|set| &set.rules).filter(|r| r.pin.is_some()).cloned().collect();
     *RULES.lock().unwrap_or_else(|e| e.into_inner()) = rules.map(Arc::new);
     crate::wm::app_rules(any);
-    let before = std::mem::replace(&mut *PINNING.lock().unwrap_or_else(|e| e.into_inner()), pinning.clone());
-    if !pinning.is_empty() && before != pinning {
-        send(Job::PinOpen);
+    if standing_by {
+        RESUME.store(true, Ordering::SeqCst);
+        return;
     }
+    let before = std::mem::replace(&mut *PINNING.lock().unwrap_or_else(|e| e.into_inner()), pinning.clone());
+    let fresh: Vec<workspace::Rule> = pinning.iter().filter(|r| gained(&before, r)).cloned().collect();
+    let resumed = RESUME.swap(false, Ordering::SeqCst);
+    if !pinning.is_empty() && (resumed || !fresh.is_empty()) {
+        send(Job::PinOpen(fresh));
+    }
+}
+
+/// The rule is new, or has a pin it didn't have.
+fn gained(before: &[workspace::Rule], rule: &workspace::Rule) -> bool {
+    let bits = |r: &workspace::Rule| r.pin.map_or(0, |p| p.bits());
+    let same = |p: &&workspace::Rule| p.exe.eq_ignore_ascii_case(&rule.exe) && p.aumid == rule.aumid;
+    before.iter().find(same).is_none_or(|p| bits(rule) & !bits(p) != 0)
 }
 
 pub fn take_drift() -> Option<Drift> {
@@ -179,6 +194,7 @@ fn work(jobs: Receiver<Job>) {
     let mut later: Vec<isize> = Vec::new();
     // Waits for a switch to end, like the opened windows.
     let mut pin_open = false;
+    let mut pin_fresh: Vec<workspace::Rule> = Vec::new();
     while let Ok(first) = jobs.recv() {
         let batch: Vec<Job> = std::iter::once(first).chain(jobs.try_iter()).collect();
         for job in &batch {
@@ -192,7 +208,10 @@ fn work(jobs: Receiver<Job>) {
         for job in &batch {
             match job {
                 Job::Opened(hwnd) if !later.contains(hwnd) => later.push(*hwnd),
-                Job::PinOpen => pin_open = true,
+                Job::PinOpen(fresh) => {
+                    pin_open = true;
+                    pin_fresh.extend(fresh.iter().cloned());
+                }
                 _ => {}
             }
         }
@@ -222,7 +241,8 @@ fn work(jobs: Receiver<Job>) {
         if pin_open && !switcher::switching() {
             pin_open = false;
             let owner = live.as_ref().map(|l| &l.workspace);
-            let pinned = rules.as_ref().map_or(0, |set| switcher::pin_by_rules(set, owner));
+            let pinned =
+                rules.as_ref().map_or(0, |set| switcher::pin_by_rules(set, owner, &std::mem::take(&mut pin_fresh)));
             if pinned > 0 {
                 log::info!("app rules pinned {pinned} open windows");
             }

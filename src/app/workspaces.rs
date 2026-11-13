@@ -384,7 +384,7 @@ pub(super) fn sync_live(app: &mut App) {
     let auto_apply = app.cfg.auto_apply && aside(app).is_none() && !standby::paused();
     let live = active.map(|ws| live_of(app, ws));
     live::set_active(app.hwnd.0 as isize, live, auto_apply);
-    live::set_rules(app_rules_of(app));
+    live::set_rules(app_rules_of(app), standby::reason().is_some() || aside(app).is_some());
 }
 
 /// The app rules this build can use, unless another window manager has the windows.

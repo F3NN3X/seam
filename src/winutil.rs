@@ -339,9 +339,14 @@ pub fn rule_pin_bits(h: HWND) -> usize {
     unsafe { GetPropW(h, RULE_PIN).0 as usize }
 }
 
+/// Replace the bits. None at all removes the prop.
 pub fn set_rule_pin_bits(h: HWND, bits: usize) {
     unsafe {
-        let _ = SetPropW(h, RULE_PIN, Some(HANDLE(bits as *mut _)));
+        if bits == 0 {
+            let _ = RemovePropW(h, RULE_PIN);
+        } else {
+            let _ = SetPropW(h, RULE_PIN, Some(HANDLE(bits as *mut _)));
+        }
     }
 }
 

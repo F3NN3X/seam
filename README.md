@@ -29,7 +29,7 @@ Seam makes the pointer cross exactly where your screens physically meet, snaps w
   - [Window control](#window-control)
   - [Pins and borders](#pins-and-borders)
   - [Workspaces](#workspaces)
-  - [Last session](#last-session)
+  - [When you sign in](#when-you-sign-in)
   - [Shortcuts](#shortcuts)
   - [Tray menu](#tray-menu)
   - [Help](#help)
@@ -168,11 +168,15 @@ A workspace saves which app is on which screen and in which zone (or at its own 
 
 **Export and import.** Each workspace's **...** menu has **Export...** and **Import...**. Export leaves out saved folders and pages, and so does the settings export on General. Both kinds of import drop any a file has. An imported workspace starts with launching off, and every app has to be ticked again, because a file from someone else shouldn't be able to start programs for you. Windows are mapped to your screens by device path, then by number and model, then by number, and any that match nothing stay where they are. Each screen's layout is mapped the same way, and one that matches no screen is left out.
 
-### Last session
+### When you sign in
 
-**Offer to restore my windows after I sign in**, on General, is off until you turn it on. Seam then keeps a hidden last session for each desk: which apps are where, and which are pinned. It saves it 30 seconds after it last snapped, pinned or switched, and again when you sign out or shut down.
+**When I sign in**, on General, is one choice for each desk: **Do nothing** (the default), **Offer my last session** or **Open a workspace**. It only acts when Seam starts by itself at sign-in. Starting Seam by hand, or after an update, does nothing.
 
-When Seam starts at sign-in, it asks "Restore your last session? Click to restore". A click works like a workspace switch that leaves other windows alone: windows go back to their zones, and pins come back. Nothing starts without the click.
+**Offer my last session** keeps a hidden last session for each desk: which apps are where, and which are pinned. Seam saves it 30 seconds after it last snapped, pinned or switched, and again when you sign out or shut down. At sign-in it asks "Restore your last session? Click to restore". A click works like a workspace switch that leaves other windows alone: windows go back to their zones, and pins come back. Nothing starts without the click.
+
+**Open a workspace** lists the desk's workspaces. With **Ask first** on, the default, Seam shows "Open <workspace>? Click to open" and switches on the click, and nothing starts without it. With it off, Seam switches once Windows is ready. It's a normal workspace switch, so the workspace's launch settings, stages and Other windows apply. If the workspace has been deleted or isn't for the desk you're on, nothing opens and the log says so. If a full-screen app is in front, Seam waits until it's gone, and pausing Seam by hand cancels it.
+
+Config files from before this keep working: `restore_session` on reads as **Offer my last session** until you choose.
 
 **Who reopens the apps** picks between Windows' Restart apps (Seam starts nothing and puts each window back as it appears, for up to a minute) and Seam (it starts the missing apps, and turns Windows' Restart apps off until you switch back or turn restore off).
 
@@ -313,7 +317,7 @@ No, with one exception: the update check, which asks GitHub for the latest relea
 Use **Settings > Apps > Installed apps**. The installer's uninstaller asks whether to remove your settings. Uninstalling the Store version removes them. For the portable zip, turn off **Start with Windows** on General, quit Seam, delete the two exes, and delete `%APPDATA%\Seam` if you want your settings gone. The screen arrangement Seam aligned stays as it is, and you can change it in Display settings.
 
 **Will Seam open my apps for me when I sign in?**
-Only if you ask. Turn on **Offer to restore my windows after I sign in** on General. Seam then asks once at sign-in, and nothing starts without your click. See [Last session](#last-session).
+Only if you ask. Set **When I sign in** on General to **Offer my last session** or **Open a workspace**. With **Ask first** on, nothing starts without your click. See [When you sign in](#when-you-sign-in).
 
 **Can I script Seam or use it from another tool?**
 Yes, through the [local API](docs/api.md), which is what the Stream Deck plugin uses.

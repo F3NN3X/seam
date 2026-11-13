@@ -1,13 +1,15 @@
 //! App-wide things: startup, the tray icon, other apps, files.
 
+use crate::pages::workspaces::{all, desk_sig};
 use crate::panel::{Panel, error_text, refusal};
 use crate::theme::palette;
 use crate::ui::{self, card, row, row_with, section, switch};
+use gpui_kit::component::menu::{DropdownMenu, PopupMenuItem};
 use gpui_kit::component::notification::Notification;
 use gpui_kit::component::{ActiveTheme, WindowExt};
 use gpui_kit::*;
 use seam::autostart;
-use seam::config::{Config, RestoreApps, TrayClick};
+use seam::config::{Config, RestoreApps, SignInMode, TrayClick};
 use seam::package::{self, Startup};
 use seam::workspace;
 use serde_json::{Value, json};
@@ -174,14 +176,68 @@ pub fn render(panel: &mut Panel, window: &mut Window, cx: &mut Context<Panel>) -
         cx,
         setter(|on| json!({ "ask_new_desks": on })),
     );
-    let restore = switch(
-        "restore-session",
-        "Offer to restore my windows after I sign in",
-        panel.config.restore_session,
+    let sig = desk_sig(panel);
+    let sign_in = panel.config.desks.get(&sig).map(|d| d.sign_in_or(panel.config.restore_session)).unwrap_or_default();
+    let workspaces = all(panel);
+    // Picking the workspace mode keeps the workspace chosen before, else takes the first.
+    let keep = sign_in.workspace.clone().filter(|id| workspaces.iter().any(|w| w.id == *id));
+    let pick = keep.or_else(|| workspaces.first().map(|w| w.id.clone()));
+    let mode_at = match sign_in.mode {
+        SignInMode::Nothing => 0,
+        SignInMode::LastSession => 1,
+        SignInMode::Workspace => 2,
+    };
+    let when = ui::segmented(
+        "sign-in-mode",
+        "When I sign in",
+        &["Do nothing", "Offer my last session", "Open a workspace"],
+        mode_at,
         window,
         cx,
-        setter(|on| json!({ "restore_session": on })),
+        {
+            let (view, sig) = (view.clone(), sig.clone());
+            move |i, window, cx| {
+                let mode = ["nothing", "last_session", "workspace"][i.min(2)];
+                let mut chosen = json!({ "mode": mode });
+                if i == 2 {
+                    chosen["workspace"] = json!(pick);
+                }
+                if !sig.is_empty() {
+                    let patch = json!({ "desks": { sig.clone(): { "sign_in": chosen } } });
+                    view.update(cx, |panel, cx| panel.patch(patch, window, cx));
+                }
+            }
+        },
     );
+    let workspace_choice = {
+        let shown = workspaces.iter().find(|w| Some(&w.id) == sign_in.workspace.as_ref());
+        let label = shown.map_or("Choose a workspace".to_string(), |w| w.name.clone());
+        let weak = cx.entity().downgrade();
+        let sig = sig.clone();
+        let current = sign_in.workspace.clone();
+        let menu = move |mut menu: gpui_kit::component::menu::PopupMenu, _: &mut Window, _: &mut Context<_>| {
+            for w in &workspaces {
+                let (weak, sig, id) = (weak.clone(), sig.clone(), w.id.clone());
+                let checked = current.as_deref() == Some(w.id.as_str());
+                menu = menu.item(PopupMenuItem::new(w.name.clone()).checked(checked).on_click(move |_, window, cx| {
+                    let patch = json!({ "desks": { sig.clone(): { "sign_in": { "workspace": id.clone() } } } });
+                    let _ = weak.update(cx, |panel, cx| panel.patch(patch, window, cx));
+                }));
+            }
+            menu
+        };
+        ui::secondary("sign-in-workspace", label.clone(), cx)
+            .dropdown_caret(true)
+            .accessibility_label(format!("Workspace to open: {label}"))
+            .dropdown_menu(menu)
+    };
+    let ask_first = switch("sign-in-ask", "Ask first", sign_in.ask, window, cx, {
+        let (view, sig) = (view.clone(), sig.clone());
+        move |on, window, cx| {
+            let patch = json!({ "desks": { sig.clone(): { "sign_in": { "ask": on } } } });
+            view.update(cx, |panel, cx| panel.patch(patch, window, cx));
+        }
+    });
     let seam_reopens = panel.config.restore_apps == RestoreApps::Seam;
     let reopen_choice = ui::segmented(
         "restore-apps",
@@ -206,7 +262,7 @@ pub fn render(panel: &mut Panel, window: &mut Window, cx: &mut Context<Panel>) -
     } else {
         "Windows' Restart apps or the apps themselves open them, and Seam puts each window back"
     };
-    let restart_note = (panel.config.restore_session
+    let restart_note = (sign_in.mode == SignInMode::LastSession
         && seam_reopens
         && panel.state.as_ref().is_some_and(|s| s.restart_apps))
     .then(|| {
@@ -275,15 +331,27 @@ pub fn render(panel: &mut Panel, window: &mut Window, cx: &mut Context<Panel>) -
     let mut startup_rows = vec![
         row("Start with Windows", Some(start_about.into()), start_with_windows, p),
         row("Offer to line up new screens", Some("Asks once when screens Seam hasn't seen connect".into()), offer, p),
-        row(
-            "Offer to restore my windows after I sign in",
-            Some("Seam remembers which apps were where and asks before it starts any".into()),
-            restore,
-            p,
-        ),
+        row("When I sign in", Some("What Seam does on this desk when it starts at sign-in".into()), when, p),
     ];
-    if panel.config.restore_session {
-        startup_rows.push(row("Who reopens the apps", Some(reopen_about.into()), reopen_choice, p));
+    match sign_in.mode {
+        SignInMode::Nothing => {}
+        SignInMode::LastSession => {
+            startup_rows.push(row("Who reopens the apps", Some(reopen_about.into()), reopen_choice, p));
+        }
+        SignInMode::Workspace => {
+            startup_rows.push(row(
+                "Workspace",
+                Some("Switches to it like any workspace switch".into()),
+                workspace_choice,
+                p,
+            ));
+            startup_rows.push(row(
+                "Ask first",
+                Some("Shows a notice to click, and opens nothing until you do".into()),
+                ask_first,
+                p,
+            ));
+        }
     }
 
     div()

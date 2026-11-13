@@ -314,6 +314,36 @@ pub enum RestoreApps {
     Seam,
 }
 
+/// What Seam does when I sign in.
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum SignInMode {
+    #[default]
+    Nothing,
+    /// Offer the desk's last session (D120).
+    LastSession,
+    /// Open one of the desk's workspaces.
+    Workspace,
+}
+
+/// "When I sign in", per desk.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct SignIn {
+    pub mode: SignInMode,
+    /// The workspace to open, in `Workspace` mode.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub workspace: Option<String>,
+    /// "Ask first": a notice to click, instead of switching straight away.
+    pub ask: bool,
+}
+
+impl Default for SignIn {
+    fn default() -> Self {
+        SignIn { mode: SignInMode::Nothing, workspace: None, ask: true }
+    }
+}
+
 /// One set of screens and everything that belongs to it.
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
@@ -334,6 +364,10 @@ pub struct Desk {
     /// kept apart from them, so no list, menu or shortcut shows it.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub last_session: Option<serde_json::Value>,
+    /// "When I sign in". Absent in a file from before it existed: `sign_in_or` reads
+    /// that as the old `restore_session` switch.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sign_in: Option<SignIn>,
     /// The id of the workspace last in use here, so a restart shows it as in use again.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub active_workspace: Option<String>,
@@ -381,8 +415,8 @@ pub struct Config {
     pub hotkeys: Hotkeys,
     pub zones: ZoneSettings,
     pub windows: WindowSettings,
-    /// "Offer to restore my windows after I sign in" (D120). Off saves no session
-    /// and deletes the saved ones.
+    /// Some desk offers its last session at sign-in (D120). Off saves no session and
+    /// deletes the saved ones. The tray sets it from each desk's `sign_in`.
     pub restore_session: bool,
     /// Who reopens the last session's apps (D128).
     pub restore_apps: RestoreApps,
@@ -514,7 +548,27 @@ pub(crate) fn write_atomic(path: &Path, contents: &str) -> std::io::Result<()> {
     std::fs::rename(&tmp, path)
 }
 
+impl Desk {
+    /// What happens at sign-in on this desk. A desk with no choice yet reads the old
+    /// `restore_session` switch, and the last session needs that switch on.
+    pub fn sign_in_or(&self, restore_session: bool) -> SignIn {
+        match &self.sign_in {
+            Some(chosen) if chosen.mode == SignInMode::LastSession && !restore_session => {
+                SignIn { mode: SignInMode::Nothing, ..chosen.clone() }
+            }
+            Some(chosen) => chosen.clone(),
+            None if restore_session => SignIn { mode: SignInMode::LastSession, ..SignIn::default() },
+            None => SignIn::default(),
+        }
+    }
+}
+
 impl Config {
+    /// Whether the desk keeps a last session.
+    pub fn keeps_session(&self, sig: &str) -> bool {
+        self.desks.get(sig).is_some_and(|d| d.sign_in_or(self.restore_session).mode == SignInMode::LastSession)
+    }
+
     /// This config with a merge patch applied. A patch's null deletes a key,
     /// but a deleted shortcut would come back as its default, so "not set"
     /// stays an explicit null.
@@ -528,8 +582,21 @@ impl Config {
         let mut config: Config = serde_json::from_value(merged)?;
         config.windows.focus_color = palette::normalise(&config.windows.focus_color, palette::FOCUS_DEFAULT);
         config.windows.pin_color = palette::normalise(&config.windows.pin_color, palette::PIN_DEFAULT);
-        if !config.restore_session {
-            config.desks.values_mut().for_each(|desk| desk.last_session = None);
+        let sign_in_patched = patch
+            .get("desks")
+            .and_then(|d| d.as_object())
+            .is_some_and(|desks| desks.values().any(|desk| desk.get("sign_in").is_some()));
+        if sign_in_patched && patch.get("restore_session").is_none() {
+            // A desk that never chose reads the old switch, so write that down before it changes.
+            let was = config.restore_session;
+            for desk in config.desks.values_mut().filter(|d| d.sign_in.is_none() && was) {
+                desk.sign_in = Some(SignIn { mode: SignInMode::LastSession, ..SignIn::default() });
+            }
+            config.restore_session = config.desks.values().any(|d| d.sign_in_or(true).mode == SignInMode::LastSession);
+        }
+        let restore = config.restore_session;
+        for desk in config.desks.values_mut().filter(|d| d.sign_in_or(restore).mode != SignInMode::LastSession) {
+            desk.last_session = None;
         }
         crate::library::follow(&self.custom_layouts, &mut config);
         Ok(config)
@@ -620,6 +687,18 @@ mod tests {
     use super::*;
     use crate::desk::{Mon, note_active};
     use crate::geom::Rect;
+
+    #[test]
+    fn sign_in_reads_the_old_switch_until_a_choice_is_made() {
+        let desk = Desk::default();
+        assert_eq!(desk.sign_in_or(false).mode, SignInMode::Nothing);
+        assert_eq!(desk.sign_in_or(true).mode, SignInMode::LastSession);
+        let chosen = Desk { sign_in: Some(SignIn { mode: SignInMode::LastSession, ..SignIn::default() }), ..desk };
+        assert_eq!(chosen.sign_in_or(false).mode, SignInMode::Nothing);
+        let workspace = Desk { sign_in: Some(SignIn { mode: SignInMode::Workspace, ..SignIn::default() }), ..chosen };
+        assert_eq!(workspace.sign_in_or(true).mode, SignInMode::Workspace);
+        assert!(workspace.sign_in_or(true).ask);
+    }
 
     fn border(a: &str, b: &str, side: Side, s: f64, o: f64) -> SavedBorder {
         SavedBorder { a: a.into(), b: b.into(), side, map: EdgeMap { s, o }, glued: false, not_on_desk: false }

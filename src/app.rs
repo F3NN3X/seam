@@ -4,6 +4,7 @@ mod commands;
 mod pause;
 mod session;
 mod share;
+mod signin;
 mod tile;
 mod tray_icon;
 mod update;
@@ -46,6 +47,7 @@ use session::{
     check_restart_apps, end_session, offer_session, pin_closed, query_end_session, reopen_closed, restore_session,
     saved_session, session_captured, start_session_capture, sync_restart_apps, windows_changed,
 };
+use signin::{open_offered, sign_in_tick};
 use std::cell::RefCell;
 use std::os::windows::process::CommandExt;
 use std::sync::Mutex;
@@ -179,6 +181,8 @@ enum BalloonAction {
     OpenPanel(&'static str),
     /// Start the app of the pinned window that closed (D119).
     Reopen,
+    /// Open the workspace offered at sign-in.
+    OpenWorkspace,
     /// Restore the last session offered at sign-in (D120).
     RestoreSession,
     /// Put back what the last quick save changed.
@@ -326,6 +330,8 @@ struct App {
     /// The last session as it was when it was offered, for the notice's click.
     session_offer: Option<Workspace>,
     session_offer_tries: u8,
+    /// The workspace offered at sign-in, for the notice's click.
+    sign_in_offer: Option<String>,
     /// A last-session capture is running, for the desk it started on.
     session_capture: Option<String>,
     /// Windows asked whether the session may end, and the capture for it has started.
@@ -684,6 +690,9 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                             Some(BalloonAction::UndoTile) => {
                                 with_app(undo_tile);
                             }
+                            Some(BalloonAction::OpenWorkspace) => {
+                                with_app(open_offered);
+                            }
                             Some(BalloonAction::RestoreSession) => {
                                 with_app(|a| {
                                     if let Some(Err(e)) = a.session_offer.take().map(|s| restore_session(a, s)) {
@@ -850,7 +859,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                 LRESULT(0)
             }
             WM_TIMER if wparam.0 == TIMER_SESSION_OFFER => {
-                if with_app(offer_session).unwrap_or(false) {
+                if with_app(sign_in_tick).unwrap_or(false) {
                     let _ = KillTimer(Some(hwnd), TIMER_SESSION_OFFER);
                 }
                 LRESULT(0)
@@ -1181,6 +1190,7 @@ pub fn run() {
             reopen: None,
             session_offer: None,
             session_offer_tries: 0,
+            sign_in_offer: None,
             session_capture: None,
             session_ending: false,
             restart_apps: false,
@@ -1220,8 +1230,8 @@ pub fn run() {
         if !quiet {
             with_app(|a| open_panel(a, None));
         }
-        // After a sign-in, offer the last session once the desktop has settled (D120).
-        if login && with_app(|a| a.cfg.restore_session) == Some(true) {
+        // After a sign-in, do what I chose once the desktop has settled (D120).
+        if login {
             SetTimer(Some(hwnd), TIMER_SESSION_OFFER, SESSION_OFFER_AFTER_MS, None);
         }
         if line_up {

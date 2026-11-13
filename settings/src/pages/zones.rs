@@ -29,6 +29,8 @@ use std::time::Duration;
 /// Config value and label of each key a drag can use.
 const KEYS: [(&str, &str); 3] = [("shift", "Shift"), ("ctrl", "Ctrl"), ("alt", "Alt")];
 const SPAN_ORDER: [usize; 3] = [1, 0, 2];
+/// The keys "Move and resize from anywhere in a window" can be held with.
+const DRAG_KEYS: [(&str, &str); 3] = [("alt", "Alt"), ("win", "Win"), ("ctrl_alt", "Ctrl+Alt")];
 /// A tile's width and the size of its drawing: your layouts, and the smaller built-in ones.
 const TILE: (f32, (f32, f32)) = (96., (80., 44.));
 const BUILT_IN_TILE: (f32, (f32, f32)) = (76., (68., 38.));
@@ -1002,6 +1004,37 @@ pub fn render(panel: &mut Panel, window: &mut Window, cx: &mut Context<Panel>) -
             }
         },
     );
+    let alt_drag = windows_cfg.alt_drag.clone();
+    let drag_key = DRAG_KEYS.iter().find(|(k, _)| *k == alt_drag.key).map_or("Alt", |(_, label)| label);
+    let drag_switch = switch("alt-drag", "Move and resize from anywhere in a window", alt_drag.on, window, cx, {
+        let view = view.clone();
+        move |on, window, cx| {
+            view.update(cx, |panel, cx| panel.patch(json!({ "windows": { "alt_drag": { "on": on } } }), window, cx))
+        }
+    });
+    let drag_menu = ui::secondary("alt-drag-key", drag_key, cx)
+        .dropdown_caret(true)
+        .accessibility_label(format!("Key to hold: {drag_key}"))
+        .dropdown_menu({
+            let view = view.downgrade();
+            move |mut menu, _, _| {
+                for (key, label) in DRAG_KEYS {
+                    let view = view.clone();
+                    let item = PopupMenuItem::new(label).checked(label == drag_key).on_click(move |_, window, cx| {
+                        let patch = json!({ "windows": { "alt_drag": { "key": key } } });
+                        let _ = view.update(cx, |panel, cx| panel.patch(patch, window, cx));
+                    });
+                    menu = menu.item(item);
+                }
+                menu
+            }
+        });
+    let drag_control = div().flex().items_center().gap(px(12.)).child(drag_menu).child(drag_switch);
+    // Alt+click is some apps' own, such as VS Code's extra cursor.
+    let drag_about = match drag_key {
+        "Alt" => "Hold Alt and drag to move, or right-drag to resize. Win leaves Alt+click to apps".to_string(),
+        key => format!("Hold {key} and drag to move, or right-drag to resize"),
+    };
     let size_mode = panel.config.window_size_on_move;
     let size_at = SIZE_MODES.iter().position(|m| *m == size_mode).unwrap_or(0);
     let size_choice = ui::segmented(
@@ -1082,6 +1115,7 @@ pub fn render(panel: &mut Panel, window: &mut Window, cx: &mut Context<Panel>) -
                 pins_stay,
                 p,
             ),
+            row("Move and resize from anywhere in a window", Some(drag_about.into()), drag_control, p),
             row("When a window moves to another screen", size_caption(panel, size_mode), size_choice, p),
             div()
                 .when(scaled, |d| d.opacity(0.4))

@@ -27,7 +27,7 @@ use crate::switcher::{
 use crate::tray::{CLASS, WM_APP_API, WM_APP_LINEUP, WM_APP_WINDOWS_CHANGED};
 use crate::wm::{Pinned, WM_APP_WS_MOVED};
 use crate::{
-    arrange, dividers, ease, focus_only, hotkey, identify, live, overlay, quicklayout, showlayout, spotlight,
+    altdrag, arrange, dividers, ease, focus_only, hotkey, identify, live, overlay, quicklayout, showlayout, spotlight,
     wincontrol, wm,
 };
 use commands::{align_finished, busy, drain_api, patch_config, refused};
@@ -410,6 +410,9 @@ fn relink(app: &mut App) {
     // The focus border waits with the rest while Seam stands by.
     let border = windows.focus_border && standby::reason().is_none();
     wm::configure(owner, border, &windows.focus_color, &windows.pin_color, windows.notify_pinned_close);
+    // The hook is in only while it's wanted, and not while Seam stands by or steps aside.
+    let alt_drag = windows.alt_drag.on && standby::reason().is_none() && aside(app).is_none();
+    altdrag::configure(owner, alt_drag, &windows.alt_drag.key, &app.cfg.zones.exclude);
     sync_live(app);
     arm_hook(app);
     update_tip(app);
@@ -923,6 +926,10 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                 snap::drag_key(wparam.0 as u32, lparam.0 as u64);
                 LRESULT(0)
             }
+            altdrag::WM_APP_ALT_DRAG => {
+                snap::alt_drag(HWND(lparam.0 as *mut _), wparam.0 == 1);
+                LRESULT(0)
+            }
             dividers::WM_APP_DIVIDER => {
                 if with_app(share::divider_choice).is_none() {
                     SetTimer(Some(hwnd), TIMER_DIVIDER, 50, None);
@@ -1051,6 +1058,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                     wm::release_before_exit();
                 }
                 snap::shutdown();
+                altdrag::shutdown();
                 spotlight::stop();
                 with_app(|a| {
                     let nid = tray_data(a);

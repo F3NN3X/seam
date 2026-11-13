@@ -20,7 +20,7 @@ use std::sync::mpsc::Sender;
 use std::sync::{Condvar, Mutex, OnceLock};
 use windows::Win32::Foundation::*;
 use windows::Win32::UI::Input::KeyboardAndMouse::{
-    SendInput, INPUT, INPUT_0, INPUT_MOUSE, MOUSEEVENTF_MOVE, MOUSEINPUT,
+    INPUT, INPUT_0, INPUT_MOUSE, MOUSEEVENTF_MOVE, MOUSEINPUT, SendInput,
 };
 use windows::Win32::UI::WindowsAndMessaging::*;
 
@@ -385,11 +385,7 @@ pub fn stamped_in(h: HWND, rect: Rect, placed: &[Rect]) -> Option<(usize, usize,
 
 /// Where along the free room a window starts, from 0 to 1.
 fn fraction(at: i32, room: i32) -> f64 {
-    if room <= 0 {
-        0.5
-    } else {
-        (at as f64 / room as f64).clamp(0.0, 1.0)
-    }
+    if room <= 0 { 0.5 } else { (at as f64 / room as f64).clamp(0.0, 1.0) }
 }
 
 /// The same place on another screen: the size follows the scale, and the

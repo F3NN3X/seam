@@ -12,26 +12,26 @@
 use crate::log;
 use crate::tray::WM_APP_API;
 use seam::api::{
-    desks_list, error_line, event_line, parse_request, pipe_name, result_line, topic_of, workspaces_list, Command,
-    Peer, Reply, RpcError, API_VERSION, BUSY, DISABLED, MAX_LINE, MAX_QUEUED_EVENTS,
+    API_VERSION, BUSY, Command, DISABLED, MAX_LINE, MAX_QUEUED_EVENTS, Peer, Reply, RpcError, desks_list, error_line,
+    event_line, parse_request, pipe_name, result_line, topic_of, workspaces_list,
 };
 use seam::process;
 use seam::state::Snapshot;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::collections::VecDeque;
 use std::ffi::c_void;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::mpsc::{channel, Sender};
+use std::sync::mpsc::{Sender, channel};
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock, RwLock};
 use std::time::{Duration, Instant};
-use windows::core::PCWSTR;
 use windows::Win32::Foundation::*;
 use windows::Win32::Security::Authorization::{ConvertStringSecurityDescriptorToSecurityDescriptorW, SDDL_REVISION_1};
-use windows::Win32::Security::Cryptography::{BCryptGenRandom, BCRYPT_USE_SYSTEM_PREFERRED_RNG};
+use windows::Win32::Security::Cryptography::{BCRYPT_USE_SYSTEM_PREFERRED_RNG, BCryptGenRandom};
 use windows::Win32::Security::{PSECURITY_DESCRIPTOR, SECURITY_ATTRIBUTES};
 use windows::Win32::Storage::FileSystem::{
-    ReadFile, WriteFile, FILE_FLAG_FIRST_PIPE_INSTANCE, FILE_FLAG_OVERLAPPED, PIPE_ACCESS_DUPLEX,
+    FILE_FLAG_FIRST_PIPE_INSTANCE, FILE_FLAG_OVERLAPPED, PIPE_ACCESS_DUPLEX, ReadFile, WriteFile,
 };
+use windows::Win32::System::IO::{CancelIoEx, GetOverlappedResult, OVERLAPPED};
 use windows::Win32::System::Pipes::{
     ConnectNamedPipe, CreateNamedPipeW, DisconnectNamedPipe, GetNamedPipeClientProcessId, PIPE_READMODE_BYTE,
     PIPE_REJECT_REMOTE_CLIENTS, PIPE_TYPE_BYTE, PIPE_WAIT,
@@ -39,8 +39,8 @@ use windows::Win32::System::Pipes::{
 use windows::Win32::System::Threading::{
     CreateEventW, GetCurrentProcess, ResetEvent, SetEvent, WaitForMultipleObjects, WaitForSingleObject,
 };
-use windows::Win32::System::IO::{CancelIoEx, GetOverlappedResult, OVERLAPPED};
 use windows::Win32::UI::WindowsAndMessaging::PostMessageW;
+use windows::core::PCWSTR;
 
 const MAX_CLIENTS: u32 = 8;
 const PIPE_BUFFER: u32 = 64 * 1024;
@@ -432,10 +432,10 @@ fn pump(shared: &Shared, pipe: HANDLE, read_event: HANDLE, write_event: HANDLE, 
         let mut overlapped = OVERLAPPED { hEvent: read_event, ..Default::default() };
         unsafe {
             let _ = ResetEvent(read_event);
-            if let Err(e) = ReadFile(pipe, Some(&mut buffer), None, Some(&mut overlapped)) {
-                if e.code() != ERROR_IO_PENDING.to_hresult() {
-                    break;
-                }
+            if let Err(e) = ReadFile(pipe, Some(&mut buffer), None, Some(&mut overlapped))
+                && e.code() != ERROR_IO_PENDING.to_hresult()
+            {
+                break;
             }
         }
         // The read stays pending while events go out.

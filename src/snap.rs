@@ -32,7 +32,7 @@ mod steer;
 #[path = "swap.rs"]
 mod swap;
 
-pub use refit::{display_changed, found as refit_found, line_up_ended, WM_APP_REFIT};
+pub use refit::{WM_APP_REFIT, display_changed, found as refit_found, line_up_ended};
 
 /// A window the tray couldn't move, probably because it runs as administrator.
 pub const WM_APP_SNAP_BLOCKED: u32 = WM_APP + 14;
@@ -237,11 +237,7 @@ fn close(a: Rect, b: Rect, sized: bool) -> bool {
 
 /// The main mouse button as the keyboard-state calls see it, so a swapped pair counts.
 fn main_button() -> VIRTUAL_KEY {
-    if unsafe { GetSystemMetrics(SM_SWAPBUTTON) } != 0 {
-        VK_RBUTTON
-    } else {
-        VK_LBUTTON
-    }
+    if unsafe { GetSystemMetrics(SM_SWAPBUTTON) } != 0 { VK_RBUTTON } else { VK_LBUTTON }
 }
 
 /// Tell the engine what the settings, this desk's layouts and the screens are
@@ -420,13 +416,15 @@ unsafe extern "system" fn on_tick(_: HWND, _: u32, _: usize, _: u32) {
 }
 
 unsafe extern "system" fn on_settle(_: HWND, _: u32, id: usize, _: u32) {
-    with_engine(|e| {
-        if e.pending.as_ref().is_some_and(|p| p.timer == id) {
-            e.advance();
-        } else {
-            let _ = KillTimer(None, id);
-        }
-    });
+    unsafe {
+        with_engine(|e| {
+            if e.pending.as_ref().is_some_and(|p| p.timer == id) {
+                e.advance();
+            } else {
+                let _ = KillTimer(None, id);
+            }
+        });
+    }
 }
 
 impl Engine {
@@ -598,11 +596,11 @@ impl Engine {
         self.cancel_drag();
         let key = hwnd.0 as isize;
         // A placement still waiting would yank the window back under the pointer.
-        if self.pending.as_ref().is_some_and(|p| p.hwnd == key) {
-            if let Some(p) = self.pending.take() {
-                unsafe {
-                    let _ = KillTimer(None, p.timer);
-                }
+        if self.pending.as_ref().is_some_and(|p| p.hwnd == key)
+            && let Some(p) = self.pending.take()
+        {
+            unsafe {
+                let _ = KillTimer(None, p.timer);
             }
         }
         // Moves still waiting land now, where they were going, and are recorded there:
@@ -894,11 +892,12 @@ impl Engine {
         let Some((screen, (a, b), cut)) = lit else {
             // Dropped outside every zone, so a snapped window gets its old size back.
             let mut restored = false;
-            if let (Some(Some(old)), true) = (drag.was_snapped, self.settings.restore_size) {
-                if !winutil::is_maximized(hwnd) && winutil::is_resizable(hwnd) {
-                    self.restore_size(hwnd, old);
-                    restored = true;
-                }
+            if let (Some(Some(old)), true) = (drag.was_snapped, self.settings.restore_size)
+                && !winutil::is_maximized(hwnd)
+                && winutil::is_resizable(hwnd)
+            {
+                self.restore_size(hwnd, old);
+                restored = true;
             }
             self.unsnap(hwnd, drag.stamped);
             if !restored && !drag.was_maximized {
@@ -913,10 +912,10 @@ impl Engine {
         }
         if log::enabled() {
             self.audit(drag, screen, (a.min(b), a.max(b)));
-            if let (None, Err(why)) = (&out.swap, self.swap_why(drag, screen, (a.min(b), a.max(b)))) {
-                if why != swap::Skip::Off {
-                    log::info!("zone swap: skipped, {why:?}");
-                }
+            if let (None, Err(why)) = (&out.swap, self.swap_why(drag, screen, (a.min(b), a.max(b))))
+                && why != swap::Skip::Off
+            {
+                log::info!("zone swap: skipped, {why:?}");
             }
         }
         let g = &drag.geometry[screen];

@@ -13,14 +13,14 @@ use crate::geom::Rect;
 use crate::log;
 use crate::monitors::Mon;
 use seam::winutil;
-use std::sync::mpsc::channel;
 use std::sync::Mutex;
-use windows::core::{w, PCWSTR};
+use std::sync::mpsc::channel;
 use windows::Win32::Foundation::*;
 use windows::Win32::Graphics::Gdi::*;
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::System::Threading::GetCurrentThreadId;
 use windows::Win32::UI::WindowsAndMessaging::*;
+use windows::core::{PCWSTR, w};
 
 const CLASS: PCWSTR = w!("SeamSpotlight");
 /// About 50% black.
@@ -106,7 +106,7 @@ fn start() -> u32 {
 }
 
 unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
-    DefWindowProcW(hwnd, msg, wparam, lparam)
+    unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) }
 }
 
 /// One screen's dim window.
@@ -194,27 +194,29 @@ impl Dims {
 
 /// Create one click-through window over a screen. It never takes focus.
 unsafe fn open_window(screen: Rect) -> Option<HWND> {
-    let hinst = GetModuleHandleW(None).unwrap_or_default();
-    let hwnd = CreateWindowExW(
-        WS_EX_LAYERED | WS_EX_TRANSPARENT | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE,
-        CLASS,
-        w!("Seam spotlight"),
-        WS_POPUP,
-        screen.left,
-        screen.top,
-        1,
-        1,
-        None,
-        None,
-        Some(hinst.into()),
-        None,
-    )
-    .ok()?;
-    let _ = SetLayeredWindowAttributes(hwnd, COLORREF(0), ALPHA, LWA_ALPHA);
-    // Sized after creation, because the window now knows its screen's DPI.
-    let flags = SWP_NOZORDER | SWP_NOACTIVATE;
-    let _ = SetWindowPos(hwnd, None, screen.left, screen.top, screen.width(), screen.height(), flags);
-    Some(hwnd)
+    unsafe {
+        let hinst = GetModuleHandleW(None).unwrap_or_default();
+        let hwnd = CreateWindowExW(
+            WS_EX_LAYERED | WS_EX_TRANSPARENT | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE,
+            CLASS,
+            w!("Seam spotlight"),
+            WS_POPUP,
+            screen.left,
+            screen.top,
+            1,
+            1,
+            None,
+            None,
+            Some(hinst.into()),
+            None,
+        )
+        .ok()?;
+        let _ = SetLayeredWindowAttributes(hwnd, COLORREF(0), ALPHA, LWA_ALPHA);
+        // Sized after creation, because the window now knows its screen's DPI.
+        let flags = SWP_NOZORDER | SWP_NOACTIVATE;
+        let _ = SetWindowPos(hwnd, None, screen.left, screen.top, screen.width(), screen.height(), flags);
+        Some(hwnd)
+    }
 }
 
 fn run(ready: std::sync::mpsc::Sender<u32>) {

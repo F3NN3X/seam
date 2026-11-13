@@ -60,21 +60,25 @@ pub fn found() {
 }
 
 unsafe extern "system" fn on_debounce(_: HWND, _: u32, id: usize, _: u32) {
-    with_engine(|e| {
-        if e.refit.timer == id {
-            let _ = KillTimer(None, id);
-            e.refit.timer = 0;
-            e.refit_begin();
-        }
-    });
+    unsafe {
+        with_engine(|e| {
+            if e.refit.timer == id {
+                let _ = KillTimer(None, id);
+                e.refit.timer = 0;
+                e.refit_begin();
+            }
+        });
+    }
 }
 
 unsafe extern "system" fn collect(h: HWND, data: LPARAM) -> BOOL {
-    let list = &mut *(data.0 as *mut Vec<isize>);
-    if winutil::has_zone_stamp(h) {
-        list.push(h.0 as isize);
+    unsafe {
+        let list = &mut *(data.0 as *mut Vec<isize>);
+        if winutil::has_zone_stamp(h) {
+            list.push(h.0 as isize);
+        }
+        BOOL(1)
     }
-    BOOL(1)
 }
 
 /// Runs on the worker.

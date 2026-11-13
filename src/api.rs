@@ -7,12 +7,12 @@ use crate::log;
 use crate::process;
 use crate::state::Snapshot;
 use serde::Serialize;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::fs::{File, OpenOptions};
 use std::io::{self, BufRead, BufReader, Write};
 use std::os::windows::fs::OpenOptionsExt;
 use std::os::windows::io::AsRawHandle;
-use std::sync::mpsc::{channel, Receiver};
+use std::sync::mpsc::{Receiver, channel};
 use std::time::{Duration, Instant};
 use windows::Win32::Foundation::HANDLE;
 use windows::Win32::Storage::FileSystem::{SECURITY_IDENTIFICATION, SECURITY_SQOS_PRESENT};
@@ -685,10 +685,10 @@ impl Client {
                     return;
                 }
                 let message = serde_json::from_str::<Value>(&line).ok();
-                if let Some(event) = message.as_ref().and_then(event_of) {
-                    if tx.send(event).is_err() {
-                        return;
-                    }
+                if let Some(event) = message.as_ref().and_then(event_of)
+                    && tx.send(event).is_err()
+                {
+                    return;
                 }
             }
         })?;

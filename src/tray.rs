@@ -1,9 +1,9 @@
 //! How the settings panel and the tray app find each other.
 
-use windows::core::{w, PCWSTR};
-use windows::Win32::Foundation::{GetLastError, ERROR_ALREADY_EXISTS};
+use windows::Win32::Foundation::{ERROR_ALREADY_EXISTS, GetLastError};
 use windows::Win32::System::Threading::CreateMutexW;
 use windows::Win32::UI::WindowsAndMessaging::*;
+use windows::core::{PCWSTR, w};
 
 pub const CLASS: PCWSTR = w!("SeamTray");
 pub const WM_APP_LINEUP: u32 = WM_APP + 3;

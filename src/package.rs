@@ -2,15 +2,15 @@
 //! things that differ if so. The same exes run in both channels.
 
 use crate::autostart;
-use crate::config::{write_atomic, Config};
+use crate::config::{Config, write_atomic};
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
-use windows::core::{HSTRING, PWSTR};
 use windows::ApplicationModel::Activation::ActivationKind;
 use windows::ApplicationModel::{AppInstance, StartupTask, StartupTaskState};
 use windows::Win32::Foundation::{ERROR_INSUFFICIENT_BUFFER, ERROR_SUCCESS};
 use windows::Win32::Storage::Packaging::Appx::{GetCurrentPackageFamilyName, GetCurrentPackageFullName};
-use windows::Win32::System::WinRT::{RoInitialize, RO_INIT_MULTITHREADED};
+use windows::Win32::System::WinRT::{RO_INIT_MULTITHREADED, RoInitialize};
+use windows::core::{HSTRING, PWSTR};
 
 /// `desktop:StartupTask` in the manifest.
 const STARTUP_TASK: &str = "SeamStartup";

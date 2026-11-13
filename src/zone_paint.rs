@@ -20,7 +20,6 @@ use std::collections::{HashMap, VecDeque};
 use std::sync::mpsc::channel;
 use std::sync::{Mutex, OnceLock};
 use std::time::Instant;
-use windows::core::{w, PCWSTR};
 use windows::Win32::Foundation::*;
 use windows::Win32::Graphics::Gdi::*;
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
@@ -28,6 +27,7 @@ use windows::Win32::System::Threading::{
     GetCurrentThread, GetCurrentThreadId, SetThreadPriority, THREAD_PRIORITY_BELOW_NORMAL,
 };
 use windows::Win32::UI::WindowsAndMessaging::*;
+use windows::core::{PCWSTR, w};
 
 const CLASS: PCWSTR = w!("SeamZones");
 const RADIUS: f32 = 6.;
@@ -181,7 +181,7 @@ struct Overlay {
 }
 
 unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
-    DefWindowProcW(hwnd, msg, wparam, lparam)
+    unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) }
 }
 
 /// A hidden overlay window.
@@ -389,10 +389,10 @@ impl Overlay {
                 let Some(rect) = screen.spec.zones.get(zone).copied() else { return };
                 if !screen.lit.contains_key(&key(&rect)) {
                     let scale = screen.spec.scale;
-                    if let Some(window) = lit_window(rect, scale) {
-                        if let Some(screen) = self.screens.get_mut(&id) {
-                            screen.lit.insert(key(&rect), window);
-                        }
+                    if let Some(window) = lit_window(rect, scale)
+                        && let Some(screen) = self.screens.get_mut(&id)
+                    {
+                        screen.lit.insert(key(&rect), window);
                     }
                 }
             }
@@ -423,11 +423,11 @@ impl Overlay {
             }
             if let (Some(zone), Some(k)) = (lit, wanted) {
                 // A span's box isn't one of the zones, and any zone may still be waiting its turn.
-                if let Entry::Vacant(slot) = screen.lit.entry(k) {
-                    if let Some(window) = lit_window(zone, screen.spec.scale) {
-                        slot.insert(window);
-                        made = true;
-                    }
+                if let Entry::Vacant(slot) = screen.lit.entry(k)
+                    && let Some(window) = lit_window(zone, screen.spec.scale)
+                {
+                    slot.insert(window);
+                    made = true;
                 }
                 if let Some(window) = screen.lit.get(&k) {
                     show_on_top(*window);

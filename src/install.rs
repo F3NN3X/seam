@@ -4,9 +4,9 @@
 use crate::{autostart, log, package};
 use std::path::Path;
 use std::sync::OnceLock;
-use windows::core::{w, HSTRING};
 use windows::Win32::Foundation::ERROR_SUCCESS;
 use windows::Win32::System::Registry::*;
+use windows::core::{HSTRING, w};
 
 /// The one place the installer's `AppId` is kept. `seam.iss` gets it from the same file.
 const INSTALLER: &str = include_str!("../packaging/installer.json");

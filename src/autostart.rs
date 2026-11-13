@@ -2,9 +2,9 @@
 //! StartupTask instead (`package.rs`).
 
 use std::path::Path;
-use windows::core::{w, PCWSTR};
 use windows::Win32::Foundation::ERROR_SUCCESS;
 use windows::Win32::System::Registry::*;
+use windows::core::{PCWSTR, w};
 
 const RUN: PCWSTR = w!("Software\\Microsoft\\Windows\\CurrentVersion\\Run");
 const NAME: PCWSTR = w!("Seam");

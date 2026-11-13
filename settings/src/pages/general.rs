@@ -1,6 +1,6 @@
 //! App-wide things: startup, the tray icon, other apps, files.
 
-use crate::panel::{error_text, refusal, Panel};
+use crate::panel::{Panel, error_text, refusal};
 use crate::theme::palette;
 use crate::ui::{self, card, row, row_with, section, switch};
 use gpui_kit::component::notification::Notification;
@@ -10,7 +10,7 @@ use seam::autostart;
 use seam::config::{Config, RestoreApps, TrayClick};
 use seam::package::{self, Startup};
 use seam::workspace;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::path::PathBuf;
 
 fn export(panel: &Panel, window: &mut Window, cx: &mut Context<Panel>) {
@@ -122,7 +122,7 @@ fn folder_label() -> String {
     }
 }
 
-pub fn render(panel: &mut Panel, window: &mut Window, cx: &mut Context<Panel>) -> impl IntoElement {
+pub fn render(panel: &mut Panel, window: &mut Window, cx: &mut Context<Panel>) -> impl IntoElement + use<> {
     let p = palette(cx);
     let view = cx.entity();
     let setter = |patch: fn(bool) -> serde_json::Value| {

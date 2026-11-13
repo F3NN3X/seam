@@ -1,14 +1,14 @@
 //! An app's icon as RGBA pixels, for the panel's workspace list. Called off the
 //! panel's UI thread.
 
-use windows::core::HSTRING;
 use windows::Win32::Foundation::SIZE;
 use windows::Win32::Graphics::Gdi::{
-    DeleteObject, GetDC, GetDIBits, GetObjectW, ReleaseDC, BITMAP, BITMAPINFO, BITMAPINFOHEADER, BI_RGB,
-    DIB_RGB_COLORS, HBITMAP, HGDIOBJ,
+    BI_RGB, BITMAP, BITMAPINFO, BITMAPINFOHEADER, DIB_RGB_COLORS, DeleteObject, GetDC, GetDIBits, GetObjectW, HBITMAP,
+    HGDIOBJ, ReleaseDC,
 };
-use windows::Win32::System::Com::{CoInitializeEx, CoUninitialize, IBindCtx, COINIT_APARTMENTTHREADED};
+use windows::Win32::System::Com::{COINIT_APARTMENTTHREADED, CoInitializeEx, CoUninitialize, IBindCtx};
 use windows::Win32::UI::Shell::{IShellItemImageFactory, SHCreateItemFromParsingName, SIIGBF_ICONONLY};
+use windows::core::HSTRING;
 
 /// Straight (not premultiplied) RGBA, top row first.
 pub struct Icon {
@@ -35,41 +35,45 @@ pub fn load(exe: &str, aumid: Option<&str>, size: i32) -> Option<Icon> {
 }
 
 unsafe fn shell_image(path: &str, size: i32) -> Option<Icon> {
-    let item: IShellItemImageFactory = SHCreateItemFromParsingName(&HSTRING::from(path), None::<&IBindCtx>).ok()?;
-    let bitmap = item.GetImage(SIZE { cx: size, cy: size }, SIIGBF_ICONONLY).ok()?;
-    let icon = read_bitmap(bitmap);
-    let _ = DeleteObject(HGDIOBJ(bitmap.0));
-    icon
+    unsafe {
+        let item: IShellItemImageFactory = SHCreateItemFromParsingName(&HSTRING::from(path), None::<&IBindCtx>).ok()?;
+        let bitmap = item.GetImage(SIZE { cx: size, cy: size }, SIIGBF_ICONONLY).ok()?;
+        let icon = read_bitmap(bitmap);
+        let _ = DeleteObject(HGDIOBJ(bitmap.0));
+        icon
+    }
 }
 
 unsafe fn read_bitmap(bitmap: HBITMAP) -> Option<Icon> {
-    let mut info = BITMAP::default();
-    let got = GetObjectW(HGDIOBJ(bitmap.0), size_of::<BITMAP>() as i32, Some(&mut info as *mut _ as *mut _));
-    if got == 0 || info.bmWidth <= 0 || info.bmHeight <= 0 {
-        return None;
-    }
-    let (width, height) = (info.bmWidth as u32, info.bmHeight as u32);
-    let mut header = BITMAPINFO {
-        bmiHeader: BITMAPINFOHEADER {
-            biSize: size_of::<BITMAPINFOHEADER>() as u32,
-            biWidth: width as i32,
-            // Negative: top row first.
-            biHeight: -(height as i32),
-            biPlanes: 1,
-            biBitCount: 32,
-            biCompression: BI_RGB.0,
+    unsafe {
+        let mut info = BITMAP::default();
+        let got = GetObjectW(HGDIOBJ(bitmap.0), size_of::<BITMAP>() as i32, Some(&mut info as *mut _ as *mut _));
+        if got == 0 || info.bmWidth <= 0 || info.bmHeight <= 0 {
+            return None;
+        }
+        let (width, height) = (info.bmWidth as u32, info.bmHeight as u32);
+        let mut header = BITMAPINFO {
+            bmiHeader: BITMAPINFOHEADER {
+                biSize: size_of::<BITMAPINFOHEADER>() as u32,
+                biWidth: width as i32,
+                // Negative: top row first.
+                biHeight: -(height as i32),
+                biPlanes: 1,
+                biBitCount: 32,
+                biCompression: BI_RGB.0,
+                ..Default::default()
+            },
             ..Default::default()
-        },
-        ..Default::default()
-    };
-    let mut bgra = vec![0u8; (width * height * 4) as usize];
-    let dc = GetDC(None);
-    let lines = GetDIBits(dc, bitmap, 0, height, Some(bgra.as_mut_ptr() as *mut _), &mut header, DIB_RGB_COLORS);
-    ReleaseDC(None, dc);
-    if lines == 0 {
-        return None;
+        };
+        let mut bgra = vec![0u8; (width * height * 4) as usize];
+        let dc = GetDC(None);
+        let lines = GetDIBits(dc, bitmap, 0, height, Some(bgra.as_mut_ptr() as *mut _), &mut header, DIB_RGB_COLORS);
+        ReleaseDC(None, dc);
+        if lines == 0 {
+            return None;
+        }
+        Some(Icon { width, height, rgba: straight_rgba(bgra) })
     }
-    Some(Icon { width, height, rgba: straight_rgba(bgra) })
 }
 
 /// BGRA from the shell is premultiplied; undo that and put red first. A bitmap with

@@ -601,17 +601,17 @@ impl Config {
 /// the first copy counts: a later one could already hold another run's changes.
 fn keep_v1_copy(config: &Path, bytes: &[u8]) {
     let backup = config.with_file_name("config.v1.json.bak");
-    if !backup.exists() {
-        if let Err(e) = std::fs::write(&backup, bytes) {
-            log::info!("config.v1.json.bak not written: {e}");
-        }
+    if !backup.exists()
+        && let Err(e) = std::fs::write(&backup, bytes)
+    {
+        log::info!("config.v1.json.bak not written: {e}");
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::desk::{note_active, Mon};
+    use crate::desk::{Mon, note_active};
     use crate::geom::Rect;
 
     fn border(a: &str, b: &str, side: Side, s: f64, o: f64) -> SavedBorder {

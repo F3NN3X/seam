@@ -4,7 +4,7 @@
 //! The solver works out the new layout, then every member whose place changed moves.
 //! A drag of a window's edge finds its group with the same two functions.
 
-use super::{close, direction, geometry, hwnd_of, into_zone, movable, stamped_in, zone_of, Job, Outcome, MAX_GAP};
+use super::{Job, MAX_GAP, Outcome, close, direction, geometry, hwnd_of, into_zone, movable, stamped_in, zone_of};
 use crate::{minsize, snap};
 use seam::api::{Axis, GroupVerb};
 use seam::groups::{self, Side, Stash};

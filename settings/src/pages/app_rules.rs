@@ -7,15 +7,15 @@ use crate::pages::app_picker;
 use crate::pages::workspace_editor::{app_icon, exe_line, goes_to, places};
 use crate::pages::workspaces::app_title;
 use crate::panel::Panel;
-use crate::theme::{palette, Palette};
+use crate::theme::{Palette, palette};
 use crate::ui::{self, card, section};
+use gpui_kit::component::Icon;
 use gpui_kit::component::button::ButtonVariants;
 use gpui_kit::component::menu::{DropdownMenu, PopupMenuItem};
-use gpui_kit::component::Icon;
 use gpui_kit::*;
 use seam::state::Screen;
 use seam::workspace::Rule;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::rc::Rc;
 
 const GOES_TO_WIDTH: f32 = 200.;

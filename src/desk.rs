@@ -2,7 +2,7 @@
 //! it from here, so they always agree on what's lined up.
 
 use crate::config::{Config, Desk, SavedBorder, WindowSize};
-use crate::geom::{corridor, facing, facing_gap, predict_centred, touching, EdgeMap, Rect, Side};
+use crate::geom::{EdgeMap, Rect, Side, corridor, facing, facing_gap, predict_centred, touching};
 use crate::layout::Link;
 use crate::log;
 use crate::state::{Border, BorderState};
@@ -124,11 +124,7 @@ pub struct Placed {
 }
 
 fn dpi(m: &Mon) -> f64 {
-    if m.raw_dpi > 0.0 {
-        m.raw_dpi
-    } else {
-        96.0
-    }
+    if m.raw_dpi > 0.0 { m.raw_dpi } else { 96.0 }
 }
 
 fn to_mm(px: f64, dpi: f64) -> f64 {

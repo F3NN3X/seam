@@ -89,11 +89,7 @@ fn opened(panel: &mut Panel, open: bool, window: &mut Window, cx: &mut Context<P
 
 /// What a list entry says: the Start menu's name, or for a window its app.
 fn label(rule: &Rule, installed: bool) -> String {
-    if installed {
-        rule.title_hint.clone()
-    } else {
-        app_title(rule)
-    }
+    if installed { rule.title_hint.clone() } else { app_title(rule) }
 }
 
 /// What the picker hands an app to once it's picked, with the window it was picked

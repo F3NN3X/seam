@@ -1,9 +1,9 @@
 //! Windows' "Restart apps" sign-in option, which reopens apps at sign-in as Seam's
 //! last session can. Seam turns it off while it reopens the apps itself (D128).
 
-use windows::core::{w, PCWSTR};
 use windows::Win32::Foundation::{ERROR_FILE_NOT_FOUND, ERROR_SUCCESS, WIN32_ERROR};
 use windows::Win32::System::Registry::*;
+use windows::core::{PCWSTR, w};
 
 const WINLOGON: PCWSTR = w!("Software\\Microsoft\\Windows NT\\CurrentVersion\\Winlogon");
 const NAME: PCWSTR = w!("RestartApps");
@@ -11,11 +11,7 @@ const NAME: PCWSTR = w!("RestartApps");
 pub const MISSING: u32 = u32::MAX;
 
 fn result(code: WIN32_ERROR) -> Result<(), WIN32_ERROR> {
-    if code == ERROR_SUCCESS {
-        Ok(())
-    } else {
-        Err(code)
-    }
+    if code == ERROR_SUCCESS { Ok(()) } else { Err(code) }
 }
 
 /// The value as it is now, or `MISSING`.

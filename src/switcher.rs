@@ -9,28 +9,28 @@ use crate::places;
 use crate::wincontrol;
 use crate::wm::Pinned;
 use seam::api::PinKind;
-use seam::classify::{classify, Verdict, WindowFacts};
+use seam::classify::{Verdict, WindowFacts, classify};
 use seam::config::WindowSize;
 use seam::desk;
 use seam::winutil;
 use seam::workspace::{
-    self, Bound, Candidate, OtherWindows, Pin, Place, RowState, RowStatus, Rule, Shown, Target, WinState, Workspace,
-    SESSION_ID,
+    self, Bound, Candidate, OtherWindows, Pin, Place, RowState, RowStatus, Rule, SESSION_ID, Shown, Target, WinState,
+    Workspace,
 };
 use seam::zones::{self, Rect, ZoneLayout};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::Path;
+use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::mpsc::RecvTimeoutError;
-use std::sync::Mutex;
 use std::time::{Duration, Instant};
-use windows::core::{w, PCWSTR};
 use windows::Win32::Foundation::*;
 use windows::Win32::Storage::FileSystem::GetDriveTypeW;
-use windows::Win32::System::Com::{CoInitializeEx, CoUninitialize, COINIT_APARTMENTTHREADED};
+use windows::Win32::System::Com::{COINIT_APARTMENTTHREADED, CoInitializeEx, CoUninitialize};
 use windows::Win32::System::SystemInformation::GetWindowsDirectoryW;
 use windows::Win32::UI::Shell::ShellExecuteW;
 use windows::Win32::UI::WindowsAndMessaging::*;
+use windows::core::{PCWSTR, w};
 
 /// A worker finished a switch.
 pub const WM_APP_SWITCHED: u32 = WM_APP + 16;
@@ -552,7 +552,8 @@ fn launch_key(rule: &Rule) -> String {
 fn earlier_launch(key: &str, mine: u64, taken: &mut Vec<usize>) -> Option<Instant> {
     let mut launches = LAUNCHES.lock().unwrap_or_else(|e| e.into_inner());
     launches.retain(|(_, at, _)| at.elapsed() < LAUNCH_WAIT);
-    let i = launches.iter().enumerate().position(|(i, (k, _, gen))| k == key && *gen != mine && !taken.contains(&i))?;
+    let i =
+        launches.iter().enumerate().position(|(i, (k, _, r#gen))| k == key && *r#gen != mine && !taken.contains(&i))?;
     taken.push(i);
     Some(launches[i].1)
 }
@@ -604,10 +605,10 @@ fn launch(rule: &Rule, places: bool) -> Result<(), &'static str> {
         }
     }
     let aumid = rule.aumid.as_deref().filter(|a| workspace::safe_aumid(a));
-    if let Some(aumid) = aumid {
-        if shell_open(&explorer_path(), Some(&format!(r"shell:AppsFolder\{aumid}"))) {
-            return Ok(());
-        }
+    if let Some(aumid) = aumid
+        && shell_open(&explorer_path(), Some(&format!(r"shell:AppsFolder\{aumid}")))
+    {
+        return Ok(());
     }
     // Any workspace, imported or not, only starts an .exe on a drive letter, never a network drive.
     if !workspace::safe_exe(&rule.exe) || is_network_drive(&rule.exe) {

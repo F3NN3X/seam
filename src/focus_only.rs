@@ -9,7 +9,7 @@ use seam::api::{self, FocusScope, Reply, RpcError};
 use seam::geom::Rect;
 use seam::winutil;
 use seam::workspace::Workspace;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::Sender;
 use std::sync::{Condvar, Mutex, OnceLock};

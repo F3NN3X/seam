@@ -34,11 +34,11 @@ fn next_to_this_exe(name: &str) -> Option<std::path::PathBuf> {
 /// Only a panel the tray started has the session's token, so any other launch
 /// makes sure the tray is up and asks it for one.
 fn hand_over_to_tray(page: Option<String>) {
-    if Client::connect("seam-settings", None).is_err() {
-        if let Some(tray) = next_to_this_exe("seam.exe") {
-            // Only the window was asked for, so the tray needn't open another.
-            let _ = std::process::Command::new(tray).arg("--tray-only").spawn();
-        }
+    if Client::connect("seam-settings", None).is_err()
+        && let Some(tray) = next_to_this_exe("seam.exe")
+    {
+        // Only the window was asked for, so the tray needn't open another.
+        let _ = std::process::Command::new(tray).arg("--tray-only").spawn();
     }
     let started = Instant::now();
     while started.elapsed() < TRAY_START_TIMEOUT {

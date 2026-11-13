@@ -3,7 +3,7 @@
 //! minimum size, so no window is squeezed and nothing else shifts. Pure logic,
 //! shared by grow, shrink and priority now and by dragging a window's edge later.
 
-use crate::zones::{self, Dir, LeafTag, Node, Rect, Template, ZoneLayout, MIN_ZONE_PX};
+use crate::zones::{self, Dir, LeafTag, MIN_ZONE_PX, Node, Rect, Template, ZoneLayout};
 
 /// The ratio clamp every split keeps, as in `zones`.
 const LOW: f32 = 0.1;
@@ -98,11 +98,7 @@ fn locate<'a>(node: &'a Abs, r: Rect, path: &[bool]) -> Option<(&'a Abs, Rect)> 
         (Abs::Split { .. }, None) => Some((node, r)),
         (Abs::Split { dir, at, a, b, .. }, Some((second, rest))) => {
             let (ra, rb) = cut(r, *dir, *at);
-            if *second {
-                locate(b, rb, rest)
-            } else {
-                locate(a, ra, rest)
-            }
+            if *second { locate(b, rb, rest) } else { locate(a, ra, rest) }
         }
         _ => None,
     }
@@ -178,23 +174,23 @@ fn shift(root: &mut Abs, area: Rect, path: &[bool], want: i32, mins: &[(i32, i32
     let to = if want < at {
         let own = need_a.min(at - lo);
         let mut floor = lo + own.max(tenth(len));
-        if want < floor {
-            if let Some(k) = bound(root, path, dir, true) {
-                let keep = own.max(hi.saturating_sub(want).saturating_add(8) / 9);
-                let start = shift(root, area, &path[..k], want.saturating_sub(keep), mins);
-                floor = start + own.max(tenth(hi - start));
-            }
+        if want < floor
+            && let Some(k) = bound(root, path, dir, true)
+        {
+            let keep = own.max(hi.saturating_sub(want).saturating_add(8) / 9);
+            let start = shift(root, area, &path[..k], want.saturating_sub(keep), mins);
+            floor = start + own.max(tenth(hi - start));
         }
         want.max(floor).min(at)
     } else if want > at {
         let own = need_b.min(hi - at);
         let mut ceiling = hi - own.max(tenth(len));
-        if want > ceiling {
-            if let Some(k) = bound(root, path, dir, false) {
-                let keep = own.max(want.saturating_sub(lo).saturating_add(8) / 9);
-                let end = shift(root, area, &path[..k], want.saturating_add(keep), mins);
-                ceiling = end - own.max(tenth(end - lo));
-            }
+        if want > ceiling
+            && let Some(k) = bound(root, path, dir, false)
+        {
+            let keep = own.max(want.saturating_sub(lo).saturating_add(8) / 9);
+            let end = shift(root, area, &path[..k], want.saturating_add(keep), mins);
+            ceiling = end - own.max(tenth(end - lo));
         }
         want.min(ceiling).max(at)
     } else {

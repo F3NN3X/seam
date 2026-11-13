@@ -2,8 +2,8 @@
 //! they are now, become a new library layout with a zone for each, which the screen
 //! is given. Each window is then snapped into its zone, so it is stamped as for any snap.
 
-use super::tile::{screen_of, windows_on, At};
-use super::{centre, direction, geometry, into_zone, Job, Outcome, MAX_GAP};
+use super::tile::{At, screen_of, windows_on};
+use super::{Job, MAX_GAP, Outcome, centre, direction, geometry, into_zone};
 use seam::groups;
 use seam::library;
 use seam::zones::{self, Rect, Template, ZoneLayout};

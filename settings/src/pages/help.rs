@@ -1,8 +1,8 @@
 //! Help: a list of topics, and the text of the one picked with a button to its page.
 
-use crate::help::{self, Block, Topic, TOPICS};
+use crate::help::{self, Block, TOPICS, Topic};
 use crate::panel::{Page, Panel};
-use crate::theme::{palette, Palette};
+use crate::theme::{Palette, palette};
 use crate::ui::{self, card};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
@@ -87,7 +87,7 @@ fn detail(topic: &Topic, p: Palette, cx: &mut Context<Panel>) -> Div {
     div().flex_1().min_w_0().child(card(rows, p))
 }
 
-pub fn render(panel: &mut Panel, cx: &mut Context<Panel>) -> impl IntoElement {
+pub fn render(panel: &mut Panel, cx: &mut Context<Panel>) -> impl IntoElement + use<> {
     let p = palette(cx);
     let header = ui::page_header("Help", "What each part of Seam does, and where to find it", p);
     let picked = panel.help_topic.min(TOPICS.len() - 1);

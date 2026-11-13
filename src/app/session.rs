@@ -162,9 +162,9 @@ pub(super) fn pin_closed(app: &mut App) {
 }
 
 pub(super) fn reopen_closed(app: &mut App) {
-    if let Some(gone) = app.reopen.take() {
-        if !switcher::reopen(gone) {
-            log::info!("reopen: couldn't start the worker");
-        }
+    if let Some(gone) = app.reopen.take()
+        && !switcher::reopen(gone)
+    {
+        log::info!("reopen: couldn't start the worker");
     }
 }

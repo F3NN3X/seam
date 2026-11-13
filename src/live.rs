@@ -10,7 +10,7 @@ use seam::api::Reply;
 use seam::{winutil, workspace};
 use serde_json::json;
 use std::sync::atomic::{AtomicBool, AtomicIsize, Ordering};
-use std::sync::mpsc::{channel, Receiver, Sender};
+use std::sync::mpsc::{Receiver, Sender, channel};
 use std::sync::{Arc, Mutex, OnceLock};
 use windows::Win32::Foundation::{HWND, LPARAM, WPARAM};
 use windows::Win32::UI::WindowsAndMessaging::{PostMessageW, WM_APP};
@@ -176,10 +176,10 @@ fn work(jobs: Receiver<Job>) {
             }
         }
         for job in &batch {
-            if let Job::Opened(hwnd) = job {
-                if !later.contains(hwnd) {
-                    later.push(*hwnd);
-                }
+            if let Job::Opened(hwnd) = job
+                && !later.contains(hwnd)
+            {
+                later.push(*hwnd);
             }
         }
         // The switch stamps what it waited for, so only the others are placed after it.
@@ -199,10 +199,10 @@ fn work(jobs: Receiver<Job>) {
             if let (Some(what), Some(live)) = (&row, &live) {
                 log::info!("auto-apply {}: {what}", live.workspace.name);
                 placed = true;
-            } else if let Some(set) = rules.as_ref().filter(|_| !owned) {
-                if let Some(what) = switcher::place_by_rule(set, live.as_ref().map(|l| &l.workspace), hwnd) {
-                    log::info!("app rule {what}");
-                }
+            } else if let Some(set) = rules.as_ref().filter(|_| !owned)
+                && let Some(what) = switcher::place_by_rule(set, live.as_ref().map(|l| &l.workspace), hwnd)
+            {
+                log::info!("app rule {what}");
             }
         }
         let Some(live) = live else { continue };

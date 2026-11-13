@@ -13,7 +13,7 @@ use gpui_kit::component::{ActiveTheme, Icon, Theme, ThemeStyled, WindowExt};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 use seam::api::{CallError, Client, Event};
-use seam::config::{diff_patch, Config, MAX_EDGE_RESISTANCE_PX, MAX_GLUE_PUSH_PX};
+use seam::config::{Config, MAX_EDGE_RESISTANCE_PX, MAX_GLUE_PUSH_PX, diff_patch};
 use seam::desk::{self, Mon, Placed};
 use seam::layout::Link;
 use seam::monitors;
@@ -21,7 +21,7 @@ use seam::package::{self, Startup};
 use seam::state::{Remap, State};
 use seam::updates::{self, UpdateFile};
 use seam::workspace::RowStatus;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::path::PathBuf;
 use std::sync::mpsc::Receiver;
 use std::sync::{Arc, Mutex};
@@ -341,75 +341,78 @@ impl Panel {
     /// Stay connected, and redraw from events. There's no polling.
     fn link(&self, window: &Window, cx: &mut Context<Self>) -> Task<()> {
         let token = self.token.clone();
-        cx.spawn_in(window, async move |this, cx| loop {
-            let session = {
-                let token = token.clone();
-                cx.background_executor().spawn(async move { connect(&token) }).await
-            };
-            let Ok((client, events, state, config)) = session else {
-                let linked = this.update(cx, |this, cx| {
-                    this.client = None;
-                    this.state = None;
+        cx.spawn_in(window, async move |this, cx| {
+            loop {
+                let session = {
+                    let token = token.clone();
+                    cx.background_executor().spawn(async move { connect(&token) }).await
+                };
+                let Ok((client, events, state, config)) = session else {
+                    let linked = this.update(cx, |this, cx| {
+                        this.client = None;
+                        this.state = None;
+                        cx.notify();
+                    });
+                    if linked.is_err() {
+                        return;
+                    }
+                    cx.background_executor().timer(Duration::from_secs(1)).await;
+                    continue;
+                };
+                let client = Arc::new(Mutex::new(client));
+                let accepted = this.update(cx, |this, cx| {
+                    // A new tray has a new token, so this panel can't change settings.
+                    // Ask for a fresh one.
+                    if this.was_linked {
+                        crate::restart_panel(cx);
+                        return false;
+                    }
+                    this.was_linked = true;
+                    this.client = Some(client.clone());
+                    this.apply(state, config);
                     cx.notify();
+                    true
                 });
-                if linked.is_err() {
+                if !matches!(accepted, Ok(true)) {
                     return;
                 }
-                cx.background_executor().timer(Duration::from_secs(1)).await;
-                continue;
-            };
-            let client = Arc::new(Mutex::new(client));
-            let accepted = this.update(cx, |this, cx| {
-                // A new tray has a new token, so this panel can't change settings.
-                // Ask for a fresh one.
-                if this.was_linked {
-                    crate::restart_panel(cx);
-                    return false;
-                }
-                this.was_linked = true;
-                this.client = Some(client.clone());
-                this.apply(state, config);
-                cx.notify();
-                true
-            });
-            if !matches!(accepted, Ok(true)) {
-                return;
-            }
-            let events = Arc::new(Mutex::new(events));
-            loop {
-                let next = {
-                    let events = events.clone();
-                    cx.background_executor().spawn(async move { next_event(&events) }).await
-                };
-                let Some(event) = next else { break };
-                let fresh = {
-                    let client = client.clone();
-                    cx.background_executor()
-                        .spawn(async move { client.lock().ok()?.call("config.get", json!({})).ok() })
-                        .await
-                };
-                let updated = this.update_in(cx, |this, window, cx| {
-                    if event.kind == "panel.show" {
-                        if let Some(page) = event.data["page"].as_str().and_then(Page::from_arg) {
+                let events = Arc::new(Mutex::new(events));
+                loop {
+                    let next = {
+                        let events = events.clone();
+                        cx.background_executor().spawn(async move { next_event(&events) }).await
+                    };
+                    let Some(event) = next else { break };
+                    let fresh = {
+                        let client = client.clone();
+                        cx.background_executor()
+                            .spawn(async move { client.lock().ok()?.call("config.get", json!({})).ok() })
+                            .await
+                    };
+                    let updated = this.update_in(cx, |this, window, cx| {
+                        if event.kind == "panel.show"
+                            && let Some(page) = event.data["page"].as_str().and_then(Page::from_arg)
+                        {
                             this.show(page, None, window, cx);
                         }
-                    }
-                    // A moved window of another workspace changes nothing on show.
-                    let moved_here = event.kind == "workspace.moved"
-                        && this.status.as_ref().is_some_and(|(id, _)| event.data["id"].as_str() == Some(id));
-                    let restatus = moved_here || matches!(event.kind.as_str(), "state.changed" | "workspace.switched");
-                    if event.kind == "state.changed" {
-                        if let (Ok(state), Some(config)) = (serde_json::from_value(event.data), fresh) {
+                        // A moved window of another workspace changes nothing on show.
+                        let moved_here = event.kind == "workspace.moved"
+                            && this.status.as_ref().is_some_and(|(id, _)| event.data["id"].as_str() == Some(id));
+                        let restatus =
+                            moved_here || matches!(event.kind.as_str(), "state.changed" | "workspace.switched");
+                        if event.kind == "state.changed"
+                            && let (Ok(state), Some(config)) = (serde_json::from_value(event.data), fresh)
+                        {
                             this.apply(state, config);
                         }
+                        if restatus {
+                            this.ask_status(cx);
+                        }
+                        cx.notify();
+                    });
+                    if updated.is_err() {
+                        return;
                     }
-                    if restatus {
-                        this.ask_status(cx);
-                    }
-                    cx.notify();
-                });
-                if updated.is_err() {
-                    return;
                 }
             }
         })
@@ -624,7 +627,7 @@ impl Panel {
         self.search.update(cx, |input, cx| input.set_value("", window, cx));
     }
 
-    fn nav_row(&self, page: Page, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn nav_row(&self, page: Page, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let p = palette(cx);
         let active = self.page == page;
         let id = ElementId::Name(format!("nav-{}", page.title()).into());
@@ -660,7 +663,7 @@ impl Panel {
             }))
     }
 
-    fn status_row(&self, cx: &mut Context<Self>) -> impl IntoElement {
+    fn status_row(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let p = palette(cx);
         let base = div().flex().items_center().gap(px(8.)).mt(px(12.)).p(px(8.)).rounded(px(8.)).bg(p.card);
         let text = |title: String, detail: String| {
@@ -701,7 +704,7 @@ impl Panel {
         base.child(ui::dot(color, filled)).child(text(title.into(), detail)).child(toggle)
     }
 
-    fn sidebar(&self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn sidebar(&self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let p = palette(cx);
         let search = Input::new(&self.search)
             .appearance(false)
@@ -788,7 +791,7 @@ impl Panel {
         banners
     }
 
-    fn results(&self, cx: &mut Context<Self>) -> impl IntoElement {
+    fn results(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let p = palette(cx);
         let matches = search::find(&self.query);
         let mut list = div().flex().flex_col().gap(px(24.)).child(ui::page_title(

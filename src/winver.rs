@@ -1,7 +1,7 @@
 //! Which Windows this is, for About and diagnostics.
 
-use windows::core::{w, PCWSTR};
-use windows::Win32::System::Registry::{RegGetValueW, HKEY_LOCAL_MACHINE, RRF_RT_REG_SZ};
+use windows::Win32::System::Registry::{HKEY_LOCAL_MACHINE, RRF_RT_REG_SZ, RegGetValueW};
+use windows::core::{PCWSTR, w};
 
 fn read(name: PCWSTR) -> String {
     let mut buf = [0u16; 64];

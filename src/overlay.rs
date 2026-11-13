@@ -5,18 +5,18 @@
 
 use crate::config::SavedBorder;
 use crate::desk::{glue_candidates, resolve};
-use crate::geom::{anchor_points, map_from_offset, overlap_in_a, predict, predict_centred, touching, EdgeMap, Side};
+use crate::geom::{EdgeMap, Side, anchor_points, map_from_offset, overlap_in_a, predict, predict_centred, touching};
 use crate::hook;
 use crate::layout::Link;
 use crate::monitors::Mon;
 use std::cell::RefCell;
-use windows::core::{w, PCWSTR};
 use windows::Win32::Foundation::*;
 use windows::Win32::Graphics::Gdi::*;
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::HiDpi::GetDpiForWindow;
 use windows::Win32::UI::Input::KeyboardAndMouse::*;
 use windows::Win32::UI::WindowsAndMessaging::*;
+use windows::core::{PCWSTR, w};
 
 pub const WM_APP_CALIB_DONE: u32 = WM_APP + 2;
 const CLASS: PCWSTR = w!("SeamOverlay");
@@ -225,7 +225,7 @@ pub fn start(owner: HWND, mons: Vec<Mon>, saved: &[SavedBorder], measure: bool) 
         RegisterClassExW(&wc); // fails harmlessly if already registered
         for (i, m) in mons.iter().enumerate() {
             let r = m.rect;
-            if let Ok(h) = CreateWindowExW(
+            match CreateWindowExW(
                 WS_EX_TOPMOST | WS_EX_TOOLWINDOW,
                 CLASS,
                 w!("Seam"),
@@ -239,10 +239,13 @@ pub fn start(owner: HWND, mons: Vec<Mon>, saved: &[SavedBorder], measure: bool) 
                 Some(hinst.into()),
                 None,
             ) {
-                SetWindowLongPtrW(h, GWLP_USERDATA, i as isize);
-                wins.push(h);
-            } else {
-                wins.push(HWND::default());
+                Ok(h) => {
+                    SetWindowLongPtrW(h, GWLP_USERDATA, i as isize);
+                    wins.push(h);
+                }
+                _ => {
+                    wins.push(HWND::default());
+                }
             }
         }
     }
@@ -317,11 +320,7 @@ fn pointer_along(side: Side) -> i32 {
     unsafe {
         let _ = GetCursorPos(&mut p);
     }
-    if side.along_is_y() {
-        p.y
-    } else {
-        p.x
-    }
+    if side.along_is_y() { p.y } else { p.x }
 }
 
 fn set_b(step: &mut Step, which: Which, base: (f64, f64), delta: f64) {
@@ -514,15 +513,7 @@ fn handle(hwnd: HWND, idx: usize, msg: u32, wparam: WPARAM, lparam: LPARAM) -> O
                 }
             }
             WM_SETCURSOR => {
-                let id = if is_b && live {
-                    if side.along_is_y() {
-                        IDC_SIZENS
-                    } else {
-                        IDC_SIZEWE
-                    }
-                } else {
-                    IDC_ARROW
-                };
+                let id = if is_b && live { if side.along_is_y() { IDC_SIZENS } else { IDC_SIZEWE } } else { IDC_ARROW };
                 unsafe {
                     SetCursor(LoadCursorW(None, id).ok());
                 }
@@ -539,41 +530,43 @@ fn handle(hwnd: HWND, idx: usize, msg: u32, wparam: WPARAM, lparam: LPARAM) -> O
 }
 
 unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
-    let idx = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as usize;
-    match msg {
-        WM_ERASEBKGND => return LRESULT(1),
-        WM_PAINT => {
-            paint(hwnd, idx);
-            return LRESULT(0);
+    unsafe {
+        let idx = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as usize;
+        match msg {
+            WM_ERASEBKGND => return LRESULT(1),
+            WM_PAINT => {
+                paint(hwnd, idx);
+                return LRESULT(0);
+            }
+            // Keep the window exactly on its monitor; never rescale it.
+            WM_DPICHANGED => return LRESULT(0),
+            WM_CLOSE => {
+                finish(false);
+                return LRESULT(0);
+            }
+            _ => {}
         }
-        // Keep the window exactly on its monitor; never rescale it.
-        WM_DPICHANGED => return LRESULT(0),
-        WM_CLOSE => {
-            finish(false);
-            return LRESULT(0);
+        if let Some((res, after)) = handle(hwnd, idx, msg, wparam, lparam) {
+            // Win32 calls that send messages back to us happen after the borrow ends.
+            match after {
+                After::Nothing => {}
+                After::Capture(h) => {
+                    SetCapture(h);
+                }
+                After::Release => {
+                    let _ = ReleaseCapture();
+                }
+                After::Focus(h) => {
+                    let _ = ReleaseCapture();
+                    let _ = SetForegroundWindow(h);
+                    let _ = SetFocus(Some(h));
+                }
+                After::Finish(ok) => finish(ok),
+            }
+            return res;
         }
-        _ => {}
+        DefWindowProcW(hwnd, msg, wparam, lparam)
     }
-    if let Some((res, after)) = handle(hwnd, idx, msg, wparam, lparam) {
-        // Win32 calls that send messages back to us happen after the borrow ends.
-        match after {
-            After::Nothing => {}
-            After::Capture(h) => {
-                SetCapture(h);
-            }
-            After::Release => {
-                let _ = ReleaseCapture();
-            }
-            After::Focus(h) => {
-                let _ = ReleaseCapture();
-                let _ = SetForegroundWindow(h);
-                let _ = SetFocus(Some(h));
-            }
-            After::Finish(ok) => finish(ok),
-        }
-        return res;
-    }
-    DefWindowProcW(hwnd, msg, wparam, lparam)
 }
 
 // ---------------------------------------------------------------- drawing --
@@ -589,9 +582,11 @@ const EDGE: (u8, u8, u8) = (255, 176, 32);
 const LINE_COLORS: [(u8, u8, u8); 2] = [(0, 200, 255), (255, 72, 176)];
 
 unsafe fn fill(dc: HDC, r: RECT, c: (u8, u8, u8)) {
-    let br = CreateSolidBrush(rgb(c.0, c.1, c.2));
-    FillRect(dc, &r, br);
-    let _ = DeleteObject(br.into());
+    unsafe {
+        let br = CreateSolidBrush(rgb(c.0, c.1, c.2));
+        FillRect(dc, &r, br);
+        let _ = DeleteObject(br.into());
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -605,72 +600,78 @@ pub(crate) unsafe fn text(
     flags: DRAW_TEXT_FORMAT,
     panel: bool,
 ) {
-    let weight = if bold { FW_SEMIBOLD.0 } else { FW_NORMAL.0 } as i32;
-    let font = CreateFontW(
-        -px,
-        0,
-        0,
-        0,
-        weight,
-        0,
-        0,
-        0,
-        DEFAULT_CHARSET,
-        OUT_DEFAULT_PRECIS,
-        CLIP_DEFAULT_PRECIS,
-        CLEARTYPE_QUALITY,
-        0,
-        w!("Segoe UI"),
-    );
-    let old = SelectObject(dc, font.into());
-    let mut buf: Vec<u16> = s.encode_utf16().collect();
-    if panel {
-        let mut measure = r;
-        DrawTextW(dc, &mut buf, &mut measure, flags | DT_CALCRECT);
-        let (w, h) = (measure.right - measure.left, measure.bottom - measure.top);
-        let cx = (r.left + r.right) / 2;
-        let pad = px;
-        let top = r.top;
-        fill(
-            dc,
-            RECT { left: cx - w / 2 - pad, top: top - pad, right: cx + w / 2 + pad, bottom: top + h + pad },
-            PANEL,
+    unsafe {
+        let weight = if bold { FW_SEMIBOLD.0 } else { FW_NORMAL.0 } as i32;
+        let font = CreateFontW(
+            -px,
+            0,
+            0,
+            0,
+            weight,
+            0,
+            0,
+            0,
+            DEFAULT_CHARSET,
+            OUT_DEFAULT_PRECIS,
+            CLIP_DEFAULT_PRECIS,
+            CLEARTYPE_QUALITY,
+            0,
+            w!("Segoe UI"),
         );
-        r = RECT { left: cx - w / 2, top, right: cx + w / 2 + 1, bottom: top + h };
+        let old = SelectObject(dc, font.into());
+        let mut buf: Vec<u16> = s.encode_utf16().collect();
+        if panel {
+            let mut measure = r;
+            DrawTextW(dc, &mut buf, &mut measure, flags | DT_CALCRECT);
+            let (w, h) = (measure.right - measure.left, measure.bottom - measure.top);
+            let cx = (r.left + r.right) / 2;
+            let pad = px;
+            let top = r.top;
+            fill(
+                dc,
+                RECT { left: cx - w / 2 - pad, top: top - pad, right: cx + w / 2 + pad, bottom: top + h + pad },
+                PANEL,
+            );
+            r = RECT { left: cx - w / 2, top, right: cx + w / 2 + 1, bottom: top + h };
+        }
+        SetBkMode(dc, TRANSPARENT);
+        SetTextColor(dc, rgb(c.0, c.1, c.2));
+        DrawTextW(dc, &mut buf, &mut r, flags);
+        SelectObject(dc, old);
+        let _ = DeleteObject(font.into());
     }
-    SetBkMode(dc, TRANSPARENT);
-    SetTextColor(dc, rgb(c.0, c.1, c.2));
-    DrawTextW(dc, &mut buf, &mut r, flags);
-    SelectObject(dc, old);
-    let _ = DeleteObject(font.into());
 }
 
 /// A line across the whole client area, perpendicular to the shared edge.
 unsafe fn line(dc: HDC, w: i32, h: i32, along_is_y: bool, pos: f64, thick: i32, c: (u8, u8, u8)) {
-    let p = pos.round() as i32 - thick / 2;
-    let r = if along_is_y {
-        RECT { left: 0, top: p, right: w, bottom: p + thick }
-    } else {
-        RECT { left: p, top: 0, right: p + thick, bottom: h }
-    };
-    fill(dc, r, c);
+    unsafe {
+        let p = pos.round() as i32 - thick / 2;
+        let r = if along_is_y {
+            RECT { left: 0, top: p, right: w, bottom: p + thick }
+        } else {
+            RECT { left: p, top: 0, right: p + thick, bottom: h }
+        };
+        fill(dc, r, c);
+    }
 }
 
 /// Small numbered tag next to a line, on the shared-edge side of the screen.
 #[allow(clippy::too_many_arguments)]
 unsafe fn tag(dc: HDC, w: i32, h: i32, edge: Side, pos: f64, label: &str, s: f64, c: (u8, u8, u8)) {
-    let size = (34.0 * s) as i32;
-    let inset = (28.0 * s) as i32;
-    let p = pos.round() as i32;
-    let (x, y) = match edge {
-        Side::Right => (w - inset - size, p - size - (6.0 * s) as i32),
-        Side::Left => (inset, p - size - (6.0 * s) as i32),
-        Side::Bottom => (p + (6.0 * s) as i32, h - inset - size),
-        Side::Top => (p + (6.0 * s) as i32, inset),
-    };
-    let r = RECT { left: x, top: y, right: x + size, bottom: y + size };
-    fill(dc, r, c);
-    text(dc, label, r, (20.0 * s) as i32, true, BG, DT_CENTER | DT_VCENTER | DT_SINGLELINE, false);
+    unsafe {
+        let size = (34.0 * s) as i32;
+        let inset = (28.0 * s) as i32;
+        let p = pos.round() as i32;
+        let (x, y) = match edge {
+            Side::Right => (w - inset - size, p - size - (6.0 * s) as i32),
+            Side::Left => (inset, p - size - (6.0 * s) as i32),
+            Side::Bottom => (p + (6.0 * s) as i32, h - inset - size),
+            Side::Top => (p + (6.0 * s) as i32, inset),
+        };
+        let r = RECT { left: x, top: y, right: x + size, bottom: y + size };
+        fill(dc, r, c);
+        text(dc, label, r, (20.0 * s) as i32, true, BG, DT_CENTER | DT_VCENTER | DT_SINGLELINE, false);
+    }
 }
 
 /// `c` faded most of the way into the background, for lines that are off.
@@ -681,105 +682,102 @@ fn dim(c: (u8, u8, u8)) -> (u8, u8, u8) {
 
 /// The shared edge drawn in dashes, for screens with a gap between them in Windows.
 unsafe fn dashed_edge(dc: HDC, w: i32, h: i32, edge: Side, t: i32, s: f64, c: (u8, u8, u8)) {
-    let (dash, step) = ((24.0 * s) as i32, (36.0 * s) as i32);
-    let strip = edge_strip(w, h, edge, t);
-    let len = if edge.along_is_y() { h } else { w };
-    for p in (0..len).step_by(step.max(2) as usize) {
-        let r = if edge.along_is_y() {
-            RECT { top: p, bottom: (p + dash).min(h), ..strip }
-        } else {
-            RECT { left: p, right: (p + dash).min(w), ..strip }
-        };
-        fill(dc, r, c);
+    unsafe {
+        let (dash, step) = ((24.0 * s) as i32, (36.0 * s) as i32);
+        let strip = edge_strip(w, h, edge, t);
+        let len = if edge.along_is_y() { h } else { w };
+        for p in (0..len).step_by(step.max(2) as usize) {
+            let r = if edge.along_is_y() {
+                RECT { top: p, bottom: (p + dash).min(h), ..strip }
+            } else {
+                RECT { left: p, right: (p + dash).min(w), ..strip }
+            };
+            fill(dc, r, c);
+        }
     }
 }
 
 /// How far apart Windows has the step's screens, in pixels.
 fn windows_gap(c: &Calib, step: &Step) -> i32 {
     let (a, b) = (c.mons[step.a].rect, c.mons[step.b].rect);
-    if step.side.along_is_y() {
-        b.left - a.right
-    } else {
-        b.top - a.bottom
-    }
+    if step.side.along_is_y() { b.left - a.right } else { b.top - a.bottom }
 }
 
 /// A note beside the shared edge, saying how big the gap is in Windows.
 unsafe fn gap_hint(dc: HDC, w: i32, h: i32, edge: Side, gap: i32, s: f64) {
-    let inset = (80.0 * s) as i32;
-    let (bw, bh) = ((360.0 * s) as i32, (28.0 * s) as i32);
-    let (r, align) = match edge {
-        Side::Right => (RECT { left: w - inset - bw, top: h / 4, right: w - inset, bottom: h / 4 + bh }, DT_RIGHT),
-        Side::Left => (RECT { left: inset, top: h / 4, right: inset + bw, bottom: h / 4 + bh }, DT_LEFT),
-        Side::Bottom => {
-            (RECT { left: w / 2 - bw / 2, top: h - inset - bh, right: w / 2 + bw / 2, bottom: h - inset }, DT_CENTER)
-        }
-        Side::Top => (RECT { left: w / 2 - bw / 2, top: inset, right: w / 2 + bw / 2, bottom: inset + bh }, DT_CENTER),
-    };
-    let label = format!("Gap in Windows, {gap} px");
-    text(dc, &label, r, (16.0 * s) as i32, false, (176, 176, 176), align | DT_SINGLELINE, false);
+    unsafe {
+        let inset = (80.0 * s) as i32;
+        let (bw, bh) = ((360.0 * s) as i32, (28.0 * s) as i32);
+        let (r, align) = match edge {
+            Side::Right => (RECT { left: w - inset - bw, top: h / 4, right: w - inset, bottom: h / 4 + bh }, DT_RIGHT),
+            Side::Left => (RECT { left: inset, top: h / 4, right: inset + bw, bottom: h / 4 + bh }, DT_LEFT),
+            Side::Bottom => (
+                RECT { left: w / 2 - bw / 2, top: h - inset - bh, right: w / 2 + bw / 2, bottom: h - inset },
+                DT_CENTER,
+            ),
+            Side::Top => {
+                (RECT { left: w / 2 - bw / 2, top: inset, right: w / 2 + bw / 2, bottom: inset + bh }, DT_CENTER)
+            }
+        };
+        let label = format!("Gap in Windows, {gap} px");
+        text(dc, &label, r, (16.0 * s) as i32, false, (176, 176, 176), align | DT_SINGLELINE, false);
+    }
 }
 
 /// The step's screen `i` as "3 (HDMI)", the number and model the corner shows.
 fn screen_name(c: &Calib, i: usize) -> String {
     let m = &c.mons[i];
-    if m.named {
-        format!("{} ({})", i + 1, m.name)
-    } else {
-        format!("{}", i + 1)
-    }
+    if m.named { format!("{} ({})", i + 1, m.name) } else { format!("{}", i + 1) }
 }
 
 /// A band of 45 degree stripes along the shared edge, 10 mm apart on the desk. A's
 /// are drawn in its own pixels. B's go through the step's map, so they run on
 /// across the edge when the map is right, and step or change spacing when it isn't.
 unsafe fn stripes(dc: HDC, w: i32, h: i32, c: &Calib, step: &Step, idx: usize, dpi_scale: f64) {
-    let Some((mm_a, mm_b)) = sizes(&c.mons, step) else { return };
-    let role_a = idx == step.a;
-    let depth = (STRIPE_BAND_MM / if role_a { mm_a } else { mm_b }).round() as i32;
-    let period = STRIPE_GAP_MM / mm_a;
-    if period < 3.0 {
-        return;
-    }
-    let (along_len, perp_len) = if step.side.along_is_y() { (h, w) } else { (w, h) };
-    let (edge, band) =
-        if role_a { (step.side, (perp_len - depth, perp_len)) } else { (step.side.opposite(), (0, depth)) };
-    // Each stripe is `along = perp + k`, with its own `k` on each screen.
-    let ks: Vec<f64> = if role_a {
-        let last = ((along_len + depth) as f64 / period).ceil() as i32;
-        (0..=last).map(|n| n as f64 * period - perp_len as f64).collect()
-    } else {
-        let Some(m) = step.map() else { return };
-        let inv = m.inverse();
-        let first = (inv.apply(-depth as f64) / period).floor() as i32;
-        let last = (inv.apply(along_len as f64) / period).ceil() as i32;
-        (first..=last).map(|n| m.apply(n as f64 * period)).collect()
-    };
-    if ks.len() > 4000 {
-        return;
-    }
-    let saved = SaveDC(dc);
-    let strip = edge_strip(w, h, edge, depth);
-    IntersectClipRect(dc, strip.left, strip.top, strip.right, strip.bottom);
-    let tone = dim((110, 116, 130));
-    let pen = CreatePen(PS_SOLID, ((2.0 * dpi_scale).round() as i32).max(1), rgb(tone.0, tone.1, tone.2));
-    let old = SelectObject(dc, pen.into());
-    for k in ks {
-        let at = |perp: i32| {
-            let along = (perp as f64 + k).round() as i32;
-            if step.side.along_is_y() {
-                (perp, along)
-            } else {
-                (along, perp)
-            }
+    unsafe {
+        let Some((mm_a, mm_b)) = sizes(&c.mons, step) else { return };
+        let role_a = idx == step.a;
+        let depth = (STRIPE_BAND_MM / if role_a { mm_a } else { mm_b }).round() as i32;
+        let period = STRIPE_GAP_MM / mm_a;
+        if period < 3.0 {
+            return;
+        }
+        let (along_len, perp_len) = if step.side.along_is_y() { (h, w) } else { (w, h) };
+        let (edge, band) =
+            if role_a { (step.side, (perp_len - depth, perp_len)) } else { (step.side.opposite(), (0, depth)) };
+        // Each stripe is `along = perp + k`, with its own `k` on each screen.
+        let ks: Vec<f64> = if role_a {
+            let last = ((along_len + depth) as f64 / period).ceil() as i32;
+            (0..=last).map(|n| n as f64 * period - perp_len as f64).collect()
+        } else {
+            let Some(m) = step.map() else { return };
+            let inv = m.inverse();
+            let first = (inv.apply(-depth as f64) / period).floor() as i32;
+            let last = (inv.apply(along_len as f64) / period).ceil() as i32;
+            (first..=last).map(|n| m.apply(n as f64 * period)).collect()
         };
-        let ((x0, y0), (x1, y1)) = (at(band.0), at(band.1));
-        let _ = MoveToEx(dc, x0, y0, None);
-        let _ = LineTo(dc, x1, y1);
+        if ks.len() > 4000 {
+            return;
+        }
+        let saved = SaveDC(dc);
+        let strip = edge_strip(w, h, edge, depth);
+        IntersectClipRect(dc, strip.left, strip.top, strip.right, strip.bottom);
+        let tone = dim((110, 116, 130));
+        let pen = CreatePen(PS_SOLID, ((2.0 * dpi_scale).round() as i32).max(1), rgb(tone.0, tone.1, tone.2));
+        let old = SelectObject(dc, pen.into());
+        for k in ks {
+            let at = |perp: i32| {
+                let along = (perp as f64 + k).round() as i32;
+                if step.side.along_is_y() { (perp, along) } else { (along, perp) }
+            };
+            let ((x0, y0), (x1, y1)) = (at(band.0), at(band.1));
+            let _ = MoveToEx(dc, x0, y0, None);
+            let _ = LineTo(dc, x1, y1);
+        }
+        SelectObject(dc, old);
+        let _ = DeleteObject(pen.into());
+        let _ = RestoreDC(dc, saved);
     }
-    SelectObject(dc, old);
-    let _ = DeleteObject(pen.into());
-    let _ = RestoreDC(dc, saved);
 }
 
 fn edge_strip(w: i32, h: i32, edge: Side, t: i32) -> RECT {
@@ -792,18 +790,19 @@ fn edge_strip(w: i32, h: i32, edge: Side, t: i32) -> RECT {
 }
 
 unsafe fn paint(hwnd: HWND, idx: usize) {
-    let mut ps = PAINTSTRUCT::default();
-    let hdc = BeginPaint(hwnd, &mut ps);
-    let mut client = RECT::default();
-    let _ = GetClientRect(hwnd, &mut client);
-    let (w, h) = (client.right, client.bottom);
-    let mem = CreateCompatibleDC(Some(hdc));
-    let bmp = CreateCompatibleBitmap(hdc, w, h);
-    let old = SelectObject(mem, bmp.into());
-    fill(mem, client, BG);
-    let s = GetDpiForWindow(hwnd).max(96) as f64 / 96.0;
+    unsafe {
+        let mut ps = PAINTSTRUCT::default();
+        let hdc = BeginPaint(hwnd, &mut ps);
+        let mut client = RECT::default();
+        let _ = GetClientRect(hwnd, &mut client);
+        let (w, h) = (client.right, client.bottom);
+        let mem = CreateCompatibleDC(Some(hdc));
+        let bmp = CreateCompatibleBitmap(hdc, w, h);
+        let old = SelectObject(mem, bmp.into());
+        fill(mem, client, BG);
+        let s = GetDpiForWindow(hwnd).max(96) as f64 / 96.0;
 
-    CALIB.with(|cell| {
+        CALIB.with(|cell| {
         let Ok(guard) = cell.try_borrow() else { return };
         let Some(c) = guard.as_ref() else { return };
         let Some(mon) = c.mons.get(idx) else { return };
@@ -827,15 +826,14 @@ unsafe fn paint(hwnd: HWND, idx: usize) {
             let shade = |c: (u8, u8, u8)| if step.adjustable() { c } else { dim(c) };
             // Faint guide lines through the physical overlap: they all straighten
             // out once the two main lines are right.
-            if let Some(m) = map {
-                if let Some((lo, hi)) = overlap_in_a(&m, la, lb) {
+            if let Some(m) = map
+                && let Some((lo, hi)) = overlap_in_a(&m, la, lb) {
                     for k in 0..=10 {
                         let a = lo + (hi - lo) * k as f64 / 10.0;
                         let pos = if role_a { a } else { m.apply(a) };
                         line(mem, w, h, along_y, pos, (1.0 * s).max(1.0) as i32, shade(GUIDE));
                     }
                 }
-            }
             let my_edge = if role_a { step.side } else { step.side.opposite() };
             if step.glue.is_some() {
                 dashed_edge(mem, w, h, my_edge, (6.0 * s) as i32, s, shade(EDGE));
@@ -961,9 +959,10 @@ unsafe fn paint(hwnd: HWND, idx: usize) {
         );
     });
 
-    let _ = BitBlt(hdc, 0, 0, w, h, Some(mem), 0, 0, SRCCOPY);
-    SelectObject(mem, old);
-    let _ = DeleteObject(bmp.into());
-    let _ = DeleteDC(mem);
-    let _ = EndPaint(hwnd, &ps);
+        let _ = BitBlt(hdc, 0, 0, w, h, Some(mem), 0, 0, SRCCOPY);
+        SelectObject(mem, old);
+        let _ = DeleteObject(bmp.into());
+        let _ = DeleteDC(mem);
+        let _ = EndPaint(hwnd, &ps);
+    }
 }

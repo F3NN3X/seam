@@ -81,9 +81,9 @@ pub fn colorref(rgb: u32) -> u32 {
 /// (0xAARRGGBB) is the fallback.
 #[cfg(windows)]
 pub fn accent_colorref() -> Option<u32> {
-    use windows::core::{w, BOOL};
     use windows::Win32::Graphics::Dwm::DwmGetColorizationColor;
-    use windows::Win32::System::Registry::{RegGetValueW, HKEY_CURRENT_USER, RRF_RT_REG_DWORD};
+    use windows::Win32::System::Registry::{HKEY_CURRENT_USER, RRF_RT_REG_DWORD, RegGetValueW};
+    use windows::core::{BOOL, w};
 
     let mut value = 0u32;
     let mut size = 4u32;

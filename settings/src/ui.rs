@@ -1,9 +1,9 @@
 //! The small set of parts every page is built from.
 
-use crate::theme::{palette, Palette};
+use crate::theme::{Palette, palette};
+use gpui_kit::component::ThemeStyled;
 use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::tooltip::Tooltip;
-use gpui_kit::component::ThemeStyled;
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 use std::cell::RefCell;
@@ -187,11 +187,7 @@ pub fn note(text: impl Into<SharedString>, action: Option<Button>, p: Palette) -
 /// Status is always a dot and a word. Filled for good, hollow otherwise.
 pub fn dot(color: Hsla, filled: bool) -> Div {
     let d = div().size(px(8.)).flex_none().rounded_full();
-    if filled {
-        d.bg(color)
-    } else {
-        d.border_1().border_color(color)
-    }
+    if filled { d.bg(color) } else { d.border_1().border_color(color) }
 }
 
 pub fn switch(
@@ -201,7 +197,7 @@ pub fn switch(
     window: &mut Window,
     cx: &mut App,
     change: impl Fn(bool, &mut Window, &mut App) + 'static,
-) -> impl IntoElement {
+) -> Stateful<Div> {
     let p = palette(cx);
     let id = id.into();
     let focus = focus_for(&id, window, cx);
@@ -248,7 +244,7 @@ pub fn segmented(
     window: &mut Window,
     cx: &mut App,
     change: impl Fn(usize, &mut Window, &mut App) + 'static,
-) -> impl IntoElement {
+) -> Stateful<Div> {
     let labels = options.iter().map(|label| SharedString::from(*label)).collect();
     choice(id, label, labels, None, selected, window, cx, change)
 }
@@ -265,7 +261,7 @@ pub fn choice(
     window: &mut Window,
     cx: &mut App,
     change: impl Fn(usize, &mut Window, &mut App) + 'static,
-) -> impl IntoElement {
+) -> Stateful<Div> {
     let p = palette(cx);
     let id = id.into();
     let focus = focus_for(&id, window, cx);
@@ -276,15 +272,7 @@ pub fn choice(
     // The next option in a direction, jumping over the blocked one.
     let neighbour = move |from: usize, back: bool| {
         let to = if back { from.checked_sub(1)? } else { from + 1 };
-        let to = if Some(to) == blocked_at {
-            if back {
-                to.checked_sub(1)?
-            } else {
-                to + 1
-            }
-        } else {
-            to
-        };
+        let to = if Some(to) == blocked_at { if back { to.checked_sub(1)? } else { to + 1 } } else { to };
         (to < count).then_some(to)
     };
     let mut track = div()

@@ -219,42 +219,48 @@ pub const HINT: &str = "Scroll to change  Right-click don't snap  Tab/1/2/3/0/Es
 /// A release is swallowed only when its press was. A press with Ctrl, Alt or Win
 /// held passes, unless that key is the drag's own; Shift is Shift+Tab's.
 unsafe extern "system" fn key_proc(code: i32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
-    if code >= 0 {
-        let key = &*(lparam.0 as *const KBDLLHOOKSTRUCT);
-        let slot = &DOWN[(key.vkCode & 0xFF) as usize];
-        let up = matches!(wparam.0 as u32, WM_KEYUP | WM_SYSKEYUP);
-        if up && slot.swap(false, Ordering::Relaxed) {
-            released();
-            return LRESULT(1);
-        }
-        let live = LIVE.load(Ordering::Relaxed);
-        if !up && live != 0 && live == MINE.get() && key_of(key.vkCode).is_some() && !foreign_modifier() {
-            // A held key repeats its press: swallow it, but it steers only once.
-            if !slot.swap(true, Ordering::Relaxed) {
-                let owner = HWND(OWNER.load(Ordering::Relaxed) as *mut _);
-                let _ = PostMessageW(Some(owner), WM_APP_DRAG_KEY, WPARAM(key.vkCode as usize), LPARAM(0));
+    unsafe {
+        if code >= 0 {
+            let key = &*(lparam.0 as *const KBDLLHOOKSTRUCT);
+            let slot = &DOWN[(key.vkCode & 0xFF) as usize];
+            let up = matches!(wparam.0 as u32, WM_KEYUP | WM_SYSKEYUP);
+            if up && slot.swap(false, Ordering::Relaxed) {
+                released();
+                return LRESULT(1);
             }
-            return LRESULT(1);
+            let live = LIVE.load(Ordering::Relaxed);
+            if !up && live != 0 && live == MINE.get() && key_of(key.vkCode).is_some() && !foreign_modifier() {
+                // A held key repeats its press: swallow it, but it steers only once.
+                if !slot.swap(true, Ordering::Relaxed) {
+                    let owner = HWND(OWNER.load(Ordering::Relaxed) as *mut _);
+                    let _ = PostMessageW(Some(owner), WM_APP_DRAG_KEY, WPARAM(key.vkCode as usize), LPARAM(0));
+                }
+                return LRESULT(1);
+            }
         }
+        CallNextHookEx(None, code, wparam, lparam)
     }
-    CallNextHookEx(None, code, wparam, lparam)
 }
 
 /// Ctrl, Alt or Win is held and isn't the drag's own show or span key, so what
 /// comes with it is the app's: Alt+Tab, Ctrl+wheel zoom.
 unsafe fn foreign_modifier() -> bool {
-    let pressed = |vk: VIRTUAL_KEY| GetAsyncKeyState(i32::from(vk.0)) < 0;
-    (pressed(VK_CONTROL) && !CTRL_OK.load(Ordering::Relaxed))
-        || (pressed(VK_MENU) && !ALT_OK.load(Ordering::Relaxed))
-        || pressed(VK_LWIN)
-        || pressed(VK_RWIN)
+    unsafe {
+        let pressed = |vk: VIRTUAL_KEY| GetAsyncKeyState(i32::from(vk.0)) < 0;
+        (pressed(VK_CONTROL) && !CTRL_OK.load(Ordering::Relaxed))
+            || (pressed(VK_MENU) && !ALT_OK.load(Ordering::Relaxed))
+            || pressed(VK_LWIN)
+            || pressed(VK_RWIN)
+    }
 }
 
 /// A swallowed release came. A hook whose drag is over ends once it owes none.
 unsafe fn released() {
-    let ending = ENDING.load(Ordering::Relaxed);
-    if ending != 0 && ending == MINE.get() && !owes() {
-        PostQuitMessage(0);
+    unsafe {
+        let ending = ENDING.load(Ordering::Relaxed);
+        if ending != 0 && ending == MINE.get() && !owes() {
+            PostQuitMessage(0);
+        }
     }
 }
 
@@ -267,39 +273,41 @@ fn owes() -> bool {
 /// before the hook went in, so a press seen now is always the other one. A release
 /// is swallowed only when its press was. Moves are let through at once.
 unsafe extern "system" fn mouse_proc(code: i32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
-    let msg = wparam.0 as u32;
-    if code >= 0 && msg != WM_MOUSEMOVE {
-        let button = match msg {
-            WM_LBUTTONDOWN | WM_LBUTTONUP => Some(&BUTTONS[0]),
-            WM_RBUTTONDOWN | WM_RBUTTONUP => Some(&BUTTONS[1]),
-            _ => None,
-        };
-        if matches!(msg, WM_LBUTTONUP | WM_RBUTTONUP) && button.is_some_and(|b| b.swap(false, Ordering::Relaxed)) {
-            released();
-            return LRESULT(1);
-        }
-        let live = LIVE.load(Ordering::Relaxed);
-        if live != 0 && live == MINE.get() {
-            let what = match msg {
-                WM_MOUSEWHEEL if foreign_modifier() => None,
-                WM_MOUSEWHEEL => {
-                    let info = &*(lparam.0 as *const MSLLHOOKSTRUCT);
-                    let delta = (info.mouseData >> 16) as u16 as i16;
-                    Some(if delta < 0 { WHEEL_NEXT } else { WHEEL_BACK })
-                }
-                WM_LBUTTONDOWN | WM_RBUTTONDOWN => {
-                    button.filter(|b| !b.swap(true, Ordering::Relaxed)).map(|_| OTHER_BUTTON)
-                }
+    unsafe {
+        let msg = wparam.0 as u32;
+        if code >= 0 && msg != WM_MOUSEMOVE {
+            let button = match msg {
+                WM_LBUTTONDOWN | WM_LBUTTONUP => Some(&BUTTONS[0]),
+                WM_RBUTTONDOWN | WM_RBUTTONUP => Some(&BUTTONS[1]),
                 _ => None,
             };
-            if let Some(what) = what {
-                let owner = HWND(OWNER.load(Ordering::Relaxed) as *mut _);
-                let _ = PostMessageW(Some(owner), WM_APP_DRAG_KEY, WPARAM(what as usize), LPARAM(0));
+            if matches!(msg, WM_LBUTTONUP | WM_RBUTTONUP) && button.is_some_and(|b| b.swap(false, Ordering::Relaxed)) {
+                released();
                 return LRESULT(1);
             }
+            let live = LIVE.load(Ordering::Relaxed);
+            if live != 0 && live == MINE.get() {
+                let what = match msg {
+                    WM_MOUSEWHEEL if foreign_modifier() => None,
+                    WM_MOUSEWHEEL => {
+                        let info = &*(lparam.0 as *const MSLLHOOKSTRUCT);
+                        let delta = (info.mouseData >> 16) as u16 as i16;
+                        Some(if delta < 0 { WHEEL_NEXT } else { WHEEL_BACK })
+                    }
+                    WM_LBUTTONDOWN | WM_RBUTTONDOWN => {
+                        button.filter(|b| !b.swap(true, Ordering::Relaxed)).map(|_| OTHER_BUTTON)
+                    }
+                    _ => None,
+                };
+                if let Some(what) = what {
+                    let owner = HWND(OWNER.load(Ordering::Relaxed) as *mut _);
+                    let _ = PostMessageW(Some(owner), WM_APP_DRAG_KEY, WPARAM(what as usize), LPARAM(0));
+                    return LRESULT(1);
+                }
+            }
         }
+        CallNextHookEx(None, code, wparam, lparam)
     }
-    CallNextHookEx(None, code, wparam, lparam)
 }
 
 fn run(generation: u64) {

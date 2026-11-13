@@ -13,8 +13,15 @@ export type SeamState = {
 	/** A game or other full-screen app is in front, so Seam waits. */
 	stepped_aside?: boolean;
 	desk: { sig: string; name: string };
-	/** Line Up numbers run from 1. `layout` is the id of the layout the screen has. */
-	screens?: { number: number; layout: string | null }[];
+	/** Line Up numbers run from 1. `layout` is the id of the layout the screen has. `name` is the
+	 * monitor's own name, and `rect` where it sits on the desktop, in pixels. */
+	screens?: {
+		number: number;
+		layout: string | null;
+		name?: string;
+		primary?: boolean;
+		rect?: { x: number; y: number; w: number; h: number };
+	}[];
 	/** `drifted`: a window of it was moved or minimized since, so Snap back has work to do. */
 	workspace: { id: string; name: string; drifted?: boolean } | null;
 };

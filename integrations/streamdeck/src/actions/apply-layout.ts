@@ -92,7 +92,7 @@ export class ApplyLayout extends TitledAction<Settings> {
 				items.push({ label: saved.name ?? saved.id, value: saved.id });
 			}
 		}
-		const screens = (seam.state?.screens ?? []).map((s) => s.number);
+		const screens = screenLabels(seam.state?.screens ?? []);
 		await streamDeck.ui.sendToPropertyInspector({ event: "getLayouts", items, screens });
 	}
 
@@ -109,4 +109,42 @@ export class ApplyLayout extends TitledAction<Settings> {
 		}
 		await super.onDidReceiveSettings(ev);
 	}
+}
+
+type StateScreen = NonNullable<SeamState["screens"]>[number];
+
+/**
+ * "1 · DELL U3423WE · 3440×1440 · left, main" for each screen, so the property inspector says
+ * which screen is which. The side comes from where the screens sit: left to right when they
+ * spread out more across than down, else top to bottom.
+ */
+function screenLabels(screens: StateScreen[]): { number: number; label: string }[] {
+	const placed = screens.filter((s) => s.rect);
+	const centre = (s: StateScreen, across: boolean): number =>
+		s.rect ? (across ? s.rect.x + s.rect.w / 2 : s.rect.y + s.rect.h / 2) : 0;
+	const spread = (across: boolean): number => {
+		const at = placed.map((s) => centre(s, across));
+		return at.length ? Math.max(...at) - Math.min(...at) : 0;
+	};
+	const across = spread(true) >= spread(false);
+	const order = [...placed].sort((a, b) => centre(a, across) - centre(b, across)).map((s) => s.number);
+	const side = (number: number): string | undefined => {
+		const at = order.indexOf(number);
+		if (order.length < 2 || at < 0) {
+			return undefined;
+		}
+		if (at === 0) {
+			return across ? "left" : "top";
+		}
+		if (at === order.length - 1) {
+			return across ? "right" : "bottom";
+		}
+		return order.length === 3 ? "middle" : `${at + 1} of ${order.length}`;
+	};
+	return screens.map((s) => {
+		const where = [side(s.number), s.primary ? "main" : undefined].filter(Boolean).join(", ");
+		const size = s.rect ? `${s.rect.w}×${s.rect.h}` : undefined;
+		const parts = [String(s.number), s.name?.trim() || undefined, size, where || undefined].filter(Boolean);
+		return { number: s.number, label: parts.join(" · ") };
+	});
 }

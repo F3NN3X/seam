@@ -72,13 +72,17 @@
 			function fillScreens() {
 				const chosen = settings.screen ?? "pointer";
 				screen.replaceChildren(new Option("Screen under the pointer", "pointer", false, chosen === "pointer"));
-				const shown = new Set(screens.map(String));
+				// Each screen comes as {number, label}; an older plugin sent bare numbers.
+				const labels = new Map(
+					screens.map((s) => (typeof s === "object" ? [String(s.number), s.label] : [String(s), `Screen ${s}`])),
+				);
+				const shown = new Set(labels.keys());
 				if (chosen !== "pointer") {
 					shown.add(chosen);
 				}
 				for (const number of [...shown].sort((a, b) => a - b)) {
-					const away = !screens.map(String).includes(number);
-					screen.append(new Option(away ? `Screen ${number}, not connected` : `Screen ${number}`, number, false, number === chosen));
+					const label = labels.get(number) ?? `Screen ${number}, not connected`;
+					screen.append(new Option(label, number, false, number === chosen));
 				}
 			}
 

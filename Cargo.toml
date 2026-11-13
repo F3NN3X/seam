@@ -3,7 +3,7 @@ members = ["settings"]
 
 [package]
 name = "seam"
-version = "0.6.5"
+version = "0.7.0"
 edition = "2024"
 rust-version = "1.100"
 description = "Line up your screens on Windows 11 so the pointer crosses where they physically meet."

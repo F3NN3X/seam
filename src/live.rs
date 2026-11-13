@@ -118,7 +118,12 @@ pub fn set_rules(rules: Option<AppRules>, standing_by: bool) {
 /// The rule is new, or has a pin it didn't have.
 fn gained(before: &[workspace::Rule], rule: &workspace::Rule) -> bool {
     let bits = |r: &workspace::Rule| r.pin.map_or(0, |p| p.bits());
-    let same = |p: &&workspace::Rule| p.exe.eq_ignore_ascii_case(&rule.exe) && p.aumid == rule.aumid;
+    let same = |p: &&workspace::Rule| {
+        p.exe.eq_ignore_ascii_case(&rule.exe)
+            && p.aumid == rule.aumid
+            && p.class == rule.class
+            && p.title_hint == rule.title_hint
+    };
     before.iter().find(same).is_none_or(|p| bits(rule) & !bits(p) != 0)
 }
 
@@ -241,8 +246,9 @@ fn work(jobs: Receiver<Job>) {
         if pin_open && !switcher::switching() {
             pin_open = false;
             let owner = live.as_ref().map(|l| &l.workspace);
-            let pinned =
-                rules.as_ref().map_or(0, |set| switcher::pin_by_rules(set, owner, &std::mem::take(&mut pin_fresh)));
+            // Taken even with no rules, so a stale list never pins a released window later.
+            let fresh = std::mem::take(&mut pin_fresh);
+            let pinned = rules.as_ref().map_or(0, |set| switcher::pin_by_rules(set, owner, &fresh));
             if pinned > 0 {
                 log::info!("app rules pinned {pinned} open windows");
             }

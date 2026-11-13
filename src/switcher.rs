@@ -1724,8 +1724,9 @@ fn rule_hit(set: &AppRules, owner: Option<&Workspace>, h: HWND, procs: &mut Proc
 /// Pin a window as its rule says, unless the rule did already. What the rule pinned
 /// stays on the window, so after Release or an unpin by hand the rule leaves it alone
 /// until it's opened anew or the rule gains a pin (`fresh`). Only a pin the seam-wm
-/// thread applied is kept and counts. Whether it pinned.
-fn pin_by_marker(h: HWND, rule: &Rule, fresh: bool) -> bool {
+/// thread applied is kept and counts. Whether it pinned. `stalled` is set when that
+/// thread didn't answer, and then no more is asked.
+fn pin_by_marker(h: HWND, rule: &Rule, fresh: bool, stalled: &mut bool) -> bool {
     if fresh {
         winutil::set_rule_pin_bits(h, 0);
     }
@@ -1733,7 +1734,7 @@ fn pin_by_marker(h: HWND, rule: &Rule, fresh: bool) -> bool {
     let want = rule.pin.map_or(0, |p| p.bits());
     let mut now = done;
     for (kind, bit) in [(PinKind::Top, winutil::PIN_TOP), (PinKind::Sticky, winutil::PIN_STICKY)] {
-        if want & !done & bit != 0 && pinned_by_wm(kind, h) {
+        if want & !done & bit != 0 && pinned_by_wm(kind, h, stalled) {
             now |= bit;
         }
     }
@@ -1742,10 +1743,15 @@ fn pin_by_marker(h: HWND, rule: &Rule, fresh: bool) -> bool {
 }
 
 /// Ask the seam-wm thread to pin a window and wait for its answer.
-fn pinned_by_wm(kind: PinKind, h: HWND) -> bool {
+fn pinned_by_wm(kind: PinKind, h: HWND, stalled: &mut bool) -> bool {
+    if *stalled {
+        return false;
+    }
     let (tx, rx) = std::sync::mpsc::channel();
     crate::wm::pin(kind, Some(true), h.0 as isize, Some(tx));
-    matches!(rx.recv_timeout(Duration::from_secs(1)), Ok(Ok(_)))
+    let answer = rx.recv_timeout(Duration::from_secs(1));
+    *stalled = answer.is_err();
+    matches!(answer, Ok(Ok(_)))
 }
 
 /// Put a window that just opened where its app's rule puts it, once, then pin it if
@@ -1769,7 +1775,7 @@ pub fn place_by_rule(set: &AppRules, owner: Option<&Workspace>, hwnd: isize) -> 
         winutil::set_ws_stamp(h, workspace::stamp_key("app_rule"), hit);
         done.push(if moved { "placed" } else { "already in place" });
     }
-    if pin_by_marker(h, rule, false) {
+    if pin_by_marker(h, rule, false, &mut false) {
         done.push("pinned");
     }
     if done.is_empty() {
@@ -1787,14 +1793,20 @@ pub fn pin_by_rules(set: &AppRules, owner: Option<&Workspace>, fresh: &[Rule]) -
     }
     let _com = Com::enter();
     let mut procs = Procs::new();
-    let mut pinned = 0;
+    let (mut pinned, mut stalled) = (0, false);
     for h in winutil::top_level_windows() {
+        if stalled {
+            log::info!("app rules: the window thread didn't answer, pass stopped");
+            break;
+        }
         // A workspace that isn't in use placed it, and the rule's own stamp doesn't count.
         if winutil::ws_stamp(h).is_some_and(|(key, _)| key != workspace::stamp_key("app_rule")) {
             continue;
         }
         let hit = rule_hit(set, owner, h, &mut procs);
-        pinned += usize::from(hit.is_some_and(|i| pin_by_marker(h, &set.rules[i], fresh.contains(&set.rules[i]))));
+        pinned += usize::from(
+            hit.is_some_and(|i| pin_by_marker(h, &set.rules[i], fresh.contains(&set.rules[i]), &mut stalled)),
+        );
     }
     pinned
 }

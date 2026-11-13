@@ -6,6 +6,8 @@ All notable changes to Seam. The format follows [Keep a Changelog](https://keepa
 
 ### Added
 
+- **Stream Deck plugin 0.8.1** carries the Apply layout and Pause Seam keys and Open alongside. Each plugin change now raises its version, since Stream Deck only replaces an installed plugin with a newer one.
+
 - Stream Deck: an **Apply layout** key (pick a screen and a layout; it lights while the screen has it), a **Pause Seam** key (lit while paused, "Full screen" while Seam waits for a full-screen app) and an **Open alongside** checkbox on the workspace key. `zones.apply` and `zones.layouts` in the API, and `layout` on each screen in the state.
 - **Step aside for games and full-screen apps** on General, on by default: while a game, a full-screen video or a slide show is in front, Seam unregisters its shortcuts so the app gets those keys, shows no zones and hides the divider handles, and turns Spotlight and the focus border off. Everything comes back when you leave it. Seam finds it from Windows' own full-screen state (`SHQueryUserNotificationState`) and from a window that covers a whole screen, on each focus change, with no polling. `step_aside_fullscreen` in `config.json`.
 - **Pause Seam**: a tray item (**Pause Seam** / **Resume Seam**), a shortcut (`hotkeys.pause_seam`, no key until you set one) and `seam.pause` in the API. It does all of the above, and also turns the pointer remap and edge resistance off (without changing your setting), stops app rules and auto-apply placing windows, and waits to check workspace drift. A pause isn't saved, so a restart resumes. `paused` and `stepped_aside` in the state, a grey tray icon and General say which.

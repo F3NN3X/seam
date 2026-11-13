@@ -40,6 +40,7 @@ jobs:
     outputs:
       rust: ${{ steps.filter.outputs.rust }}
       streamdeck: ${{ steps.filter.outputs.streamdeck }}
+      plugin: ${{ steps.filter.outputs.plugin }}
     steps:
       - id: filter
         env:
@@ -53,11 +54,14 @@ jobs:
           echo "$files"
           docs='(\.md$|^docs/|^LICENSE$)'
           plugin='^integrations/streamdeck/'
-          rust=false; streamdeck=false
+          rust=false; streamdeck=false; changed=false
           if echo "$files" | grep -Ev "$docs" | grep -Evq "$plugin"; then rust=true; fi
           if echo "$files" | grep -Ev "$docs" | grep -Eq "$plugin|^\.github/workflows/ci\.yml$"; then streamdeck=true; fi
+          # The plugin itself changed, not only its docs or this workflow.
+          if echo "$files" | grep -Ev "$docs" | grep -Eq "$plugin"; then changed=true; fi
           echo "rust=$rust" >> "$GITHUB_OUTPUT"; echo "streamdeck=$streamdeck" >> "$GITHUB_OUTPUT"
-          echo "rust=$rust streamdeck=$streamdeck"
+          echo "plugin=$changed" >> "$GITHUB_OUTPUT"
+          echo "rust=$rust streamdeck=$streamdeck plugin=$changed"
 
   build:
     needs: changes
@@ -161,6 +165,27 @@ jobs:
           node-version: 24
           cache: pnpm
           cache-dependency-path: integrations/streamdeck/pnpm-lock.yaml
+      # Stream Deck only replaces an installed plugin with a higher version, so a
+      # change to the plugin must raise it, and package.json must agree with it.
+      - name: Plugin version moved
+        if: github.event_name == 'pull_request'
+        env:
+          CHANGED: ${{ needs.changes.outputs.plugin }}
+          BASE: ${{ github.base_ref }}
+        run: |
+          manifest=co.f3nn3x.seam.sdPlugin/manifest.json
+          now=$(jq -r .Version "$manifest")
+          pkg=$(jq -r .version package.json)
+          [ "$pkg.0" = "$now" ] || { echo "::error::package.json is $pkg but the manifest is $now; they should read X.Y.Z and X.Y.Z.0"; exit 1; }
+          [ "$CHANGED" = "true" ] || { echo "The plugin didn't change"; exit 0; }
+          git fetch --quiet --depth=1 origin "$BASE"
+          was=$(git show "FETCH_HEAD:integrations/streamdeck/$manifest" | jq -r .Version)
+          higher=$(printf '%s\n%s\n' "$was" "$now" | sort -V | tail -n1)
+          if [ "$now" = "$was" ] || [ "$higher" != "$now" ]; then
+            echo "::error::The plugin changed, so raise its version above $was (manifest Version and package.json version)"
+            exit 1
+          fi
+          echo "Plugin version $was -> $now"
       - run: pnpm install --frozen-lockfile
       - run: pnpm typecheck
       - run: pnpm build

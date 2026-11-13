@@ -150,6 +150,10 @@ pub struct State {
     pub zones: Zones,
     /// Spotlight is dimming everything but the focused window.
     pub spotlight: bool,
+    /// Seam is paused: runtime only, a restart resumes.
+    pub paused: bool,
+    /// A game or other full-screen app is in front, so Seam waits (not set while paused).
+    pub stepped_aside: bool,
     pub wm: WmState,
     pub desk: DeskRef,
     pub screens: Vec<Screen>,

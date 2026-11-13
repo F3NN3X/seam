@@ -39,6 +39,8 @@ mod snap;
 #[cfg(windows)]
 mod spotlight;
 #[cfg(windows)]
+mod standby;
+#[cfg(windows)]
 mod switcher;
 #[cfg(windows)]
 mod wincontrol;

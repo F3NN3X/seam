@@ -29,6 +29,7 @@ pub(super) fn patch_config(app: &mut App, patch: &Value) -> Reply {
     sync_restart_apps(app);
     persist(app);
     log::apply(app.cfg.debug_log);
+    standby_configure(app);
     apply_hotkeys(app);
     relink(app);
     if remap_turned_on {
@@ -95,7 +96,7 @@ pub(super) fn run_command(app: &mut App, queued: Queued) {
         Command::ZonesSet(on) => {
             app.cfg.zones.enabled = on;
             persist(app);
-            snap::update(app.hwnd, &app.cfg, &app.sig, &app.mons, aside(app).as_deref());
+            snap::update(app.hwnd, &app.cfg, &app.sig, &app.mons, snap_aside(app).as_deref());
             publish(app);
             Ok(json!({ "on": on }))
         }
@@ -178,6 +179,7 @@ pub(super) fn run_command(app: &mut App, queued: Queued) {
             return;
         }
         Command::WindowSpotlight(on) => Ok(json!({ "on": set_spotlight(app, on) })),
+        Command::SeamPause(on) => Ok(json!({ "paused": set_paused(app, on) })),
         Command::WindowGroup(verb) => {
             start_group(app, verb, Some(reply));
             return;

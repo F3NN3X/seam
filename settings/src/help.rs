@@ -350,12 +350,25 @@ pub const TOPICS: &[Topic] = &[
         opens: Some(Page::General),
     },
     Topic {
+        title: "Pause and full-screen apps",
+        blocks: &[
+            Text(
+                "**Step aside for games and full-screen apps**, on General, is on by default. While a game, a video or a slide show fills a screen, Seam gives its shortcuts back to that app, shows no zones when you drag, and turns Spotlight and the focus border off. Everything comes back when you leave it.",
+            ),
+            Text(
+                "**Pause Seam**, in the tray menu or on a shortcut you set on Shortcuts, does the same by hand and also turns the pointer remap off and leaves new windows where they open. It isn't saved, so Seam is running again after a restart.",
+            ),
+        ],
+        opens: Some(Page::General),
+    },
+    Topic {
         title: "Shortcuts",
         blocks: &[
             Text("Shortcuts work anywhere in Windows, even with the Seam window closed."),
             List(&[
                 "Ctrl+Shift+Alt+L lines up your screens",
                 "Ctrl+Shift+Alt+P pauses or resumes the remap",
+                "Pause Seam has no key until you set one, and pauses or resumes everything",
                 "Shift+Win+Alt+arrows move the focused window, and Ctrl+Shift+Alt+arrows focus the window that way",
                 "Swap, grow, shrink, two thirds, tile, next and previous zone, the pins, capture, Snap back, Switch back, quick save, Focus on this window and Spotlight have no key until you set one",
             ]),

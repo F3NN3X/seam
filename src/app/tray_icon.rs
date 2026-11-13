@@ -3,7 +3,8 @@
 use super::*;
 
 /// Draw the tray icon: two screens of different sizes with a line running straight across.
-pub(super) fn make_icon() -> HICON {
+/// The quiet one, for while Seam stands by, is the same drawing in greys.
+pub(super) fn make_icon(quiet: bool) -> HICON {
     const N: usize = 32;
     let mut px = vec![0u32; N * N];
     let mut rect = |x0: usize, y0: usize, x1: usize, y1: usize, c: u32| {
@@ -13,8 +14,7 @@ pub(super) fn make_icon() -> HICON {
             }
         }
     };
-    let white = 0xFFF2F4F8;
-    let amber = 0xFFFFB020;
+    let (white, amber) = if quiet { (0xFF949494, 0xFF5C5C5C) } else { (0xFFF2F4F8, 0xFFFFB020) };
     // Left (smaller) screen outline.
     rect(1, 10, 13, 11, white);
     rect(1, 22, 13, 23, white);
@@ -46,13 +46,19 @@ pub(super) fn tray_data(app: &App) -> NOTIFYICONDATAW {
         uID: 1,
         uFlags: NIF_ICON | NIF_MESSAGE | NIF_TIP | NIF_SHOWTIP,
         uCallbackMessage: WM_APP_TRAY,
-        hIcon: app.icon,
+        hIcon: if standby::reason().is_some() { app.quiet_icon } else { app.icon },
         ..Default::default()
     };
-    let tip = if app.links.is_empty() {
+    let tip = if let Some(why) = standby::reason() {
+        match why {
+            standby::Standby::Paused => "Seam — paused",
+            standby::Standby::FullScreen => "Seam — waiting for the full-screen app",
+        }
+        .to_string()
+    } else if app.links.is_empty() {
         "Seam — screens not lined up yet".to_string()
     } else if !app.cfg.enabled {
-        "Seam — paused".to_string()
+        "Seam — remap paused".to_string()
     } else {
         format!("Seam — {} border(s) lined up", app.links.len())
     };
@@ -101,6 +107,8 @@ pub(super) fn show_menu(app: &mut App) {
         let _ = AppendMenuW(menu, MF_STRING | MF_GRAYED, 0, PCWSTR(status_w.as_ptr()));
         let _ = AppendMenuW(menu, MF_SEPARATOR, 0, None);
         let _ = AppendMenuW(menu, MF_STRING, ID_OPEN, w!("Open Seam…"));
+        let pause = if standby::paused() { w!("Resume Seam") } else { w!("Pause Seam") };
+        let _ = AppendMenuW(menu, MF_STRING, ID_PAUSE_SEAM, pause);
         let _ = AppendMenuW(menu, MF_STRING, ID_LINEUP, w!("Line Up Screens…"));
         let workspaces = desk_workspaces(app);
         // Only made when there is something to put in it, so no menu handle is dropped unused.
@@ -161,6 +169,9 @@ pub(super) fn show_menu(app: &mut App) {
                 open_panel(app, None);
             }
             ID_ENABLED => set_remap(app, !app.cfg.enabled),
+            ID_PAUSE_SEAM => {
+                set_paused(app, None);
+            }
             ID_RELEASE => wm::release(None),
             ID_SWITCH_BACK => {
                 if let Err(e) = switch_back(app) {

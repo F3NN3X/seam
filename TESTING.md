@@ -1021,6 +1021,23 @@ Use Narrator (Win+Ctrl+Enter) or Accessibility Insights for Windows, and open th
 - [ ] **Small screen.** On a screen smaller than the window (or with a very large taskbar), the window fits inside the work area.
 - [ ] **Already open.** With the window open on one screen, open Seam from another screen. The existing window comes forward where it is; it doesn't move.
 
+## Pause and full-screen apps
+
+Set a key for **Pause Seam** on Shortcuts and a key for **Spotlight**, turn on **Focus border** and have a workspace with an app rule in use. Turn on **Debug log** on General to see the lines.
+
+- [ ] **Borderless full-screen game.** Start one in borderless mode. The log shows one `full-screen app in front` line with its reason. Seam's shortcuts reach the game (press the Spotlight key: the game gets it, nothing dims). Shift-drag over another screen's window shows no zones. The tray icon is grey. On leaving it (Alt+Tab or quit), the log shows one `full-screen app gone` line, the shortcuts work again, Shift-drag shows zones, the handles between snapped windows come back once, and Spotlight and the focus border are back if they were on.
+- [ ] **Exclusive full-screen.** Same as above with a game in exclusive full-screen. Seam steps aside while it is in front, and everything returns when it closes or you Alt+Tab out.
+- [ ] **Browser video.** Open a YouTube video and press F11, then full-screen the player. Seam steps aside, and returns when you leave full screen.
+- [ ] **PowerPoint slide show.** Start a slide show. Seam steps aside, and returns when the show ends.
+- [ ] **Full-screen window closes or minimizes.** With Seam stepped aside, close the full-screen window, then repeat and minimize it instead. Seam returns each time, with a single `full-screen app gone` line.
+- [ ] **Display change.** With a full-screen app in front, change the display mode or unplug a screen. Seam stays stepped aside (or resumes if the app no longer covers a screen) after one line in the log.
+- [ ] **Pause from the tray.** Choose **Pause Seam**. The icon turns grey, the tooltip says paused, the menu item reads **Resume Seam**, General and the sidebar say Paused, the pointer no longer remaps at borders (Windows' own movement), Shift-drag shows no zones, the shortcuts stop working, and a new window of an app with a rule opens where it opens. Switching a workspace from the tray still works. **Resume Seam** brings everything back, and the remap setting is unchanged.
+- [ ] **Pause from the shortcut.** Press the **Pause Seam** key twice. It pauses, then resumes. While paused, no other shortcut works.
+- [ ] **Pause from the API.** `seam.pause` with `{"on":true}`, then no params (toggles back), then `{"on":"yes"}` (answers `-32602`). `state.get` shows `paused` as `true`, then `false`.
+- [ ] **A restart resumes.** Pause, quit Seam from the tray and start it again. It is not paused.
+- [ ] **Paused, then a game.** Pause Seam, start a game, leave it, then resume. Nothing is left unregistered: every shortcut works after the resume. A shortcut another app holds still shows as taken on Shortcuts.
+- [ ] **The setting off.** Turn **Step aside for games and full-screen apps** off. A full-screen app in front changes nothing: the shortcuts stay registered and Shift-drag shows zones. Pause Seam still works. Turn it on with a game in front: Seam steps aside at once.
+
 ## Report back
 
 For each failure, give the step, what you saw, and the matching lines from `seam.log`.

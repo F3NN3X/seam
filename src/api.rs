@@ -200,6 +200,8 @@ pub enum Command {
     WindowFocusOnly(FocusScope),
     /// `on` is None to toggle.
     WindowSpotlight(Option<bool>),
+    /// `seam.pause`: pause or resume everything Seam does. `on` is None to toggle.
+    SeamPause(Option<bool>),
     WmRelease,
     SessionRestore,
     LineupStart,
@@ -417,6 +419,10 @@ fn command(method: &str, p: &Value) -> Result<Command, RpcError> {
             },
         }),
         "window.spotlight" => Command::WindowSpotlight(match p.get("on") {
+            None | Some(Value::Null) => None,
+            Some(_) => Some(on_param(p)?),
+        }),
+        "seam.pause" => Command::SeamPause(match p.get("on") {
             None | Some(Value::Null) => None,
             Some(_) => Some(on_param(p)?),
         }),

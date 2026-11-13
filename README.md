@@ -176,6 +176,12 @@ When Seam starts at sign-in, it asks "Restore your last session? Click to restor
 
 **Who reopens the apps** picks between Windows' Restart apps (Seam starts nothing and puts each window back as it appears, for up to a minute) and Seam (it starts the missing apps, and turns Windows' Restart apps off until you switch back or turn restore off).
 
+### Pause and full-screen apps
+
+**Step aside for games and full-screen apps**, on General, is on by default. While a game, a full-screen video (F11 in a browser) or a slide show fills a screen, Seam gives its shortcuts back to that app, shows no zones when you drag, hides the handles between snapped windows, and turns Spotlight and the focus border off. They all come back when you leave it. The pointer remap and edge resistance don't change, since a game that holds the pointer already stops them. Seam finds these from Windows' own word for a busy or full-screen app, and from a window that covers a whole screen.
+
+**Pause Seam**, in the tray menu or on a shortcut you set on Shortcuts, pauses everything by hand. On top of the above it turns the pointer remap and edge resistance off, leaves newly opened windows where they open (no app rules or auto-apply), and waits to look for workspace drift. The tray, the Seam window, the API, the pause shortcut and switching workspaces still work. A pause isn't saved, so Seam is running again after a restart. The tray icon turns grey while Seam stands by, and General says why.
+
 ### Shortcuts
 
 ![The Shortcuts page](docs/images/shortcuts.png)
@@ -186,6 +192,7 @@ Shortcuts work anywhere in Windows, even with the Seam window closed. Each has i
 
 - A greyed line at the top says how many screens there are and how many borders are lined up.
 - **Open Seam...** opens the Seam window, which holds the other settings.
+- **Pause Seam** pauses everything Seam does, and then reads **Resume Seam**.
 - **Line Up Screens...** calibrates.
 - **Workspaces** switches to a workspace on this desk. It's only shown when the desk has some.
 - **Remap pointer at borders** pauses or resumes the hook.
@@ -318,7 +325,7 @@ Yes, through the [local API](docs/api.md), which is what the Stream Deck plugin 
 | Shift+Win+Alt+arrows | Move the focused window that way on the desk |
 | Ctrl+Shift+Alt+arrows | Focus the window that way |
 | Shift (while dragging) | Show the zones. Add Ctrl to cover several zones |
-| None until you set one | Swap, grow, shrink, two thirds, tile, next and previous zone, the three pin keys, one capture key, **Snap back to this workspace**, **Switch back to the previous workspace**, **Save windows to the active workspace**, **Focus on this window**, **Spotlight**, and one key per workspace |
+| None until you set one | **Pause Seam**, swap, grow, shrink, two thirds, tile, next and previous zone, the three pin keys, one capture key, **Snap back to this workspace**, **Switch back to the previous workspace**, **Save windows to the active workspace**, **Focus on this window**, **Spotlight**, and one key per workspace |
 
 Set these on the Shortcuts page. Ctrl+Shift+Alt plus a number is a good choice for workspaces, since Ctrl+Alt alone types characters on many keyboards.
 

@@ -684,6 +684,8 @@ impl Panel {
                 );
         };
         let (title, color, filled) = match state.remap {
+            _ if state.paused => ("Paused", p.muted, true),
+            _ if state.stepped_aside => ("Stepped aside", p.muted, false),
             Remap::On => ("Remap on", p.positive, true),
             Remap::Paused => ("Remap paused", p.muted, true),
             Remap::OffNoBorders => ("Not lined up", p.muted, false),

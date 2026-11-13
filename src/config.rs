@@ -83,6 +83,8 @@ pub struct Hotkeys {
     pub spotlight: Option<String>,
     /// "Size menu": share or take out the focused snapped window.
     pub divider_menu: Option<String>,
+    /// "Pause Seam": pause or resume everything Seam does, until it is pressed again or Seam restarts.
+    pub pause_seam: Option<String>,
 }
 
 impl Default for Hotkeys {
@@ -121,6 +123,7 @@ impl Default for Hotkeys {
             focus_only: None,
             spotlight: None,
             divider_menu: None,
+            pause_seam: None,
         }
     }
 }
@@ -371,6 +374,9 @@ pub struct Config {
     /// the mouse that didn't snap. Does nothing while the size is Windows'.
     pub window_size_on_drag: bool,
     pub tray_click: TrayClick,
+    /// "Step aside for games and full-screen apps": while one is in front, hotkeys, snapping
+    /// and Spotlight wait until it is gone (D390).
+    pub step_aside_fullscreen: bool,
     pub debug_log: bool,
     pub hotkeys: Hotkeys,
     pub zones: ZoneSettings,
@@ -429,6 +435,7 @@ impl Default for Config {
             window_size_on_move: WindowSize::Windows,
             window_size_on_drag: false,
             tray_click: TrayClick::Open,
+            step_aside_fullscreen: true,
             debug_log: false,
             hotkeys: Hotkeys::default(),
             zones: ZoneSettings::default(),

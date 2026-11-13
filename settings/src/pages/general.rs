@@ -223,6 +223,25 @@ pub fn render(panel: &mut Panel, window: &mut Window, cx: &mut Context<Panel>) -
                 view.update(cx, |panel, cx| panel.patch(json!({ "tray_click": value }), window, cx));
             }
         });
+    let step_aside = switch(
+        "step-aside-fullscreen",
+        "Step aside for games and full-screen apps",
+        panel.config.step_aside_fullscreen,
+        window,
+        cx,
+        setter(|on| json!({ "step_aside_fullscreen": on })),
+    );
+    // Paused or waiting for a full-screen app, in words, with the way out of a pause.
+    let standing_by = panel.state.as_ref().and_then(|s| {
+        if s.paused {
+            let resume = ui::secondary("resume-seam", "Resume", cx).on_click(cx.listener(|this, _, window, cx| {
+                this.command("seam.pause", json!({ "on": false }), window, cx);
+            }));
+            Some(ui::note("Paused. Resume to bring back shortcuts, snapping and the pointer remap", Some(resume), p))
+        } else {
+            s.stepped_aside.then(|| ui::note("Stepped aside for a full-screen app", None, p))
+        }
+    });
     let connected = panel.state.as_ref().map_or(0, |s| s.clients.iter().filter(|c| *c != "panel").count());
     let api_about =
         format!("Stream Deck and tools on this PC can read status and switch workspaces. {connected} connected");
@@ -272,6 +291,7 @@ pub fn render(panel: &mut Panel, window: &mut Window, cx: &mut Context<Panel>) -
         .flex_col()
         .gap(px(ui::SECTION_GAP))
         .child(ui::page_title("General", "How Seam starts and where it keeps its files", p))
+        .children(standing_by)
         .child(section(
             "Startup",
             div().flex().flex_col().gap(px(8.)).child(card(startup_rows, p)).children(restart_note),
@@ -280,6 +300,19 @@ pub fn render(panel: &mut Panel, window: &mut Window, cx: &mut Context<Panel>) -
         .child(section(
             "Tray icon",
             card(vec![row("Left-click", Some("Right-click always shows the menu".into()), left_click, p)], p),
+            p,
+        ))
+        .child(section(
+            "Full-screen apps",
+            card(
+                vec![row(
+                    "Step aside for games and full-screen apps",
+                    Some("Shortcuts, snapping and Spotlight wait until you leave it".into()),
+                    step_aside,
+                    p,
+                )],
+                p,
+            ),
             p,
         ))
         .child(section(

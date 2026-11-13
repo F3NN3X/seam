@@ -164,7 +164,10 @@ pub fn check() -> bool {
         Seen::Keep => changed,
         Seen::Full(why) => {
             follow(Some(foreground));
-            watch(Some(foreground));
+            // A window that is already gone has nothing to follow, and isn't full screen.
+            if !watch(Some(foreground)) {
+                return leave() || changed;
+            }
             let entered = !FULL_SCREEN.swap(true, Ordering::SeqCst);
             if entered {
                 log::info!("full-screen app in front ({why}): Seam steps aside");
@@ -180,7 +183,7 @@ pub fn check() -> bool {
 
 /// The watched window still exists, isn't minimized and still covers its screen.
 fn still_full(h: HWND) -> bool {
-    !h.0.is_null() && unsafe { IsWindow(Some(h)).as_bool() } && covers_screen(h)
+    !h.0.is_null() && unsafe { IsWindow(Some(h)).as_bool() } && covers_screen(h, false)
 }
 
 /// No full-screen app is in front. Returns whether there was one.
@@ -194,7 +197,7 @@ fn leave() -> bool {
 }
 
 /// The window covers the whole of the screen it is on, give or take a few pixels.
-fn covers_screen(h: HWND) -> bool {
+fn covers_screen(h: HWND, exact: bool) -> bool {
     let Some(window) = winutil::window_rect(h) else { return false };
     let mut info = MONITORINFO { cbSize: std::mem::size_of::<MONITORINFO>() as u32, ..Default::default() };
     unsafe {
@@ -204,11 +207,17 @@ fn covers_screen(h: HWND) -> bool {
         }
     }
     let screen = info.rcMonitor;
-    // Each edge on the screen's or beyond it, give or take a few pixels.
+    // Each edge on the screen's or beyond it, give or take a few pixels. Exact also
+    // keeps it from reaching further than that: a maximized window overhangs by more.
+    let beyond = |edge: i32, at: i32| !exact || (edge - at).abs() <= EDGE_SLACK;
     window.x <= screen.left + EDGE_SLACK
         && window.y <= screen.top + EDGE_SLACK
         && window.x + window.w >= screen.right - EDGE_SLACK
         && window.y + window.h >= screen.bottom - EDGE_SLACK
+        && beyond(window.x, screen.left)
+        && beyond(window.y, screen.top)
+        && beyond(window.x + window.w, screen.right)
+        && beyond(window.y + window.h, screen.bottom)
 }
 
 /// Whether the foreground window is a full-screen app. Only a window that covers its
@@ -221,13 +230,16 @@ fn look(foreground: HWND) -> Seen {
     if transient {
         return Seen::Keep;
     }
-    if !covers_screen(foreground) {
-        return Seen::Not;
-    }
-    // No title bar: an F11 page, a borderless, OpenGL or Vulkan game.
+    // No title bar and not maximized: an F11 page, a borderless, OpenGL or Vulkan game.
+    // A maximized app without one (Spotify, VS Code) overhangs its screen, so it needs
+    // Windows' word below.
     let style = unsafe { GetWindowLongW(foreground, GWL_STYLE) } as u32;
-    if style & WS_CAPTION.0 != WS_CAPTION.0 {
+    let captionless = style & WS_CAPTION.0 != WS_CAPTION.0;
+    if captionless && !unsafe { IsZoomed(foreground).as_bool() } && covers_screen(foreground, true) {
         return Seen::Full("window covers its screen");
+    }
+    if !covers_screen(foreground, false) {
+        return Seen::Not;
     }
     match unsafe { SHQueryUserNotificationState() } {
         Ok(QUNS_RUNNING_D3D_FULL_SCREEN) => Seen::Full("Direct3D full screen"),
@@ -271,21 +283,21 @@ fn follow(window: Option<HWND>) {
 }
 
 /// Follow this window's close and minimize, or none. The hooks are for its thread only.
-fn watch(window: Option<HWND>) {
+fn watch(window: Option<HWND>) -> bool {
     let key = window.map_or(0, |h| h.0 as isize);
     if WATCHED.swap(key, Ordering::SeqCst) == key {
-        return;
+        return true;
     }
     HOOKS.with(|hooks| {
         let mut hooks = hooks.borrow_mut();
         for hook in hooks.watched.drain(..) {
             let _ = unsafe { UnhookWinEvent(hook) };
         }
-        let Some(window) = window else { return };
+        let Some(window) = window else { return true };
         let thread = thread_of(window);
         if thread == 0 {
             WATCHED.store(0, Ordering::SeqCst);
-            return;
+            return false;
         }
         let flags = WINEVENT_OUTOFCONTEXT | WINEVENT_SKIPOWNPROCESS;
         for event in [EVENT_OBJECT_DESTROY, EVENT_SYSTEM_MINIMIZESTART] {
@@ -296,7 +308,8 @@ fn watch(window: Option<HWND>) {
                 hooks.watched.push(hook);
             }
         }
-    });
+        true
+    })
 }
 
 fn owner() -> Option<HWND> {

@@ -180,6 +180,12 @@ pub const TOPICS: &[Topic] = &[
                 "Between two snapped windows, the gap has a handle you can't see until the pointer is on it, then a slim bar shows. Drag it and the windows on both sides follow, with the same smallest sizes, and the layout is saved as **Changed** when you let go. Esc puts everything back. Right-click it to give the left or top window 1/2, 1/3, 2/3, 1/4 or 3/4 of the two, or to take one of them out: it leaves its zones with its old size, and the others stay. A gap under 4 px has no handles, so **Size menu** on Shortcuts opens the same choices for the focused window. It has no key until you set one. **Handles between snapped windows** turns the handles off.",
             ),
             Text(
+                "**Snap beside a window**: while zones show, or once the pointer rests with **Pause to snap**, point at the edge of another window and the outline shows the dragged window taking half of that window's place on that side, with the other window in the rest. The wheel, or 1, 2 and 3, change the share to 1/2, 1/3 or 2/3. On a screen with zones, the drop splits the zone that window holds, the layout shows as **Changed**, and a notification offers Undo for 8 seconds. On a screen with no zones, the two windows become a group: dragging the edge between them resizes both, the gap has a handle, and dropping a third window beside one of them adds it. A window you drag away, minimize, maximize or close leaves the group. Groups last until Seam restarts. The middle of a held zone still swaps. Turn off **Snap beside a window** on Zones to drop over windows as before.",
+            ),
+            Text(
+                "**Fit group to screen** stretches the focused window's group to fill its screen, keeping each window's share and order. A window in zones already fills its screen, and a window in no group takes the whole work area without being maximized. A notification offers Undo for 8 seconds. The shortcut has no key until you set one.",
+            ),
+            Text(
                 "**Edit layout** opens the editor on the screen itself. Click a zone to split it side by side or top and bottom, drag a divider, or merge two neighbours, then press **Done**. Esc throws the changes away and Ctrl+Z undoes the last one.",
             ),
             Text(

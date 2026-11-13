@@ -1,6 +1,7 @@
 //! Code shared by the tray app and the settings panel.
 
 pub mod api;
+pub mod beside;
 pub mod classify;
 pub mod config;
 pub mod desk;

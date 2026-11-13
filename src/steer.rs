@@ -70,7 +70,13 @@ impl Engine {
         Outcome { rect: zones::span(g.zones[a], g.zones[b]), split: None, swap: self.swap_plan(drag, s, (a, b)) }
     }
 
-    fn split_plan(&self, drag: &Drag, s: usize, (a, b): (usize, usize), (part, side): (Part, Side)) -> Option<Split> {
+    pub(super) fn split_plan(
+        &self,
+        drag: &Drag,
+        s: usize,
+        (a, b): (usize, usize),
+        (part, side): (Part, Side),
+    ) -> Option<Split> {
         let g = &drag.geometry[s];
         let before = self.screens.iter().find(|x| x.id == g.id)?.layout.clone()?;
         let leaves = refit::covered(&g.cells, a, b);
@@ -198,10 +204,13 @@ impl Engine {
     }
 
     /// Pause to snap: a pointer that rests over a screen with zones for a moment
-    /// shows them, and from then on the drag is as if the show key were held.
+    /// shows them, and from then on the drag is as if the show key were held. With
+    /// snap beside on, so does one that rests on a window's edge it can drop beside.
     pub(super) fn pause(&self, drag: &mut Drag, pt: POINT, pressed: bool) {
-        let over = drag.geometry.iter().any(|g| g.bounds.contains(pt.x, pt.y));
-        if !self.settings.pause_to_snap || drag.paused || pressed || !over {
+        let armed = self.settings.pause_to_snap && !drag.paused && !pressed;
+        let zoned = |drag: &Drag| drag.geometry.iter().any(|g| g.bounds.contains(pt.x, pt.y));
+        let over = armed && (zoned(drag) || (self.beside_on() && self.beside_at(drag, pt).is_some()));
+        if !over {
             drag.rest = None;
             return;
         }
@@ -227,18 +236,32 @@ impl Engine {
                 return;
             }
             (drag.keys.hooked, drag.keys.capped) = (false, true);
-            let view = drag.shown;
-            if view.is_some() {
-                self.present(&mut drag, view);
+            let (view, beside) = (drag.shown, drag.beside);
+            if view.is_some() || beside.is_some() {
+                self.present(&mut drag, view, beside);
             }
             self.drag = Some(drag);
             return;
         }
         let Some(key) = dragkeys::key_of(vk) else { return };
-        let Some(drag) = self.drag.as_mut().filter(|d| d.shown.is_some() && !d.keys.off) else { return };
+        let Some(drag) = self.drag.as_mut().filter(|d| (d.shown.is_some() || d.beside.is_some()) && !d.keys.off) else {
+            return;
+        };
         let name = dragkeys::name(key);
         if !drag.keys.used.contains(&name) {
             drag.keys.used.push(name);
+        }
+        // Beside a window, the wheel steps the share through 1/2, 1/3 and 2/3, stopping
+        // at the ends; the side is the edge's, so Tab and the arrows do nothing.
+        if drag.beside.is_some() && matches!(key, Key::Next | Key::Scroll(_) | Key::Side(_)) {
+            if let Key::Scroll(next) = key {
+                let shares = [Part::Half, Part::Third, Part::TwoThirds];
+                let i = shares.iter().position(|p| Some(*p) == drag.keys.part).unwrap_or(0);
+                let i = if next { (i + 1).min(shares.len() - 1) } else { i.saturating_sub(1) };
+                drag.keys.part = Some(shares[i]);
+            }
+            self.tick();
+            return;
         }
         match key {
             Key::Next => {

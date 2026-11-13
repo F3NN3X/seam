@@ -27,11 +27,14 @@ mod refit;
 mod edges;
 
 pub(crate) use edges::Member;
+#[path = "adhoc.rs"]
+mod adhoc;
 #[path = "steer.rs"]
 mod steer;
 #[path = "swap.rs"]
 mod swap;
 
+pub use adhoc::{adhoc_area, adhoc_dragged, fit, is_adhoc};
 pub use refit::{WM_APP_REFIT, display_changed, found as refit_found, line_up_ended};
 
 /// A window the tray couldn't move, probably because it runs as administrator.
@@ -133,6 +136,12 @@ struct Drag {
     landed: Vec<(isize, Rect)>,
     /// The pointer rested, so zones show as if the show key were held.
     paused: bool,
+    /// The window edge the pointer is on, while that is what a drop does.
+    beside: Option<adhoc::Beside>,
+    /// The last edge looked at, and what a drop there would show, if anything.
+    tried: Option<(adhoc::Beside, Option<usize>, Option<Option<View>>)>,
+    /// Windows looked at as targets, and whether Seam may move each.
+    allowed: Vec<(isize, bool)>,
 }
 
 struct Snapped {
@@ -187,6 +196,14 @@ struct Engine {
     refit: refit::Refit,
     /// Window control's moves, one at a time through the same steps.
     queued: VecDeque<Placement>,
+    /// Windows put side by side on screens with no zones, in memory only.
+    adhoc: Vec<adhoc::Adhoc>,
+    /// The last ad-hoc group's id.
+    adhoc_next: u64,
+    /// Hooks on closing, minimizing and moving, per thread of a group's windows.
+    member_hooks: Vec<(u32, Vec<HWINEVENTHOOK>)>,
+    /// Waits for a moved member to stay put.
+    adhoc_timer: usize,
 }
 
 /// Where window control wants a window, worked out on its worker.
@@ -279,6 +296,8 @@ pub fn update(owner: HWND, cfg: &Config, sig: &str, mons: &[Mon], aside: Option<
         e.exclude = exclude;
         e.drag_size = drag_size;
         e.screens = screens;
+        // An ad-hoc group is for a screen with no zones, as it was when it was made.
+        e.adhoc_screens_changed();
         if !e.settings.refit || e.aside.is_some() || e.standing_by {
             e.refit_stop();
         }
@@ -291,6 +310,7 @@ pub fn update(owner: HWND, cfg: &Config, sig: &str, mons: &[Mon], aside: Option<
 /// The work area changed (a moved taskbar, a scaling change), so the zones' pixels did.
 pub fn work_area_changed() {
     with_engine(|e| {
+        e.adhoc_screens_changed();
         e.sync_overlay();
         e.sync_dividers();
     });
@@ -298,6 +318,7 @@ pub fn work_area_changed() {
 
 /// The tray is quitting: free the overlay's windows and bitmaps, and the divider handles.
 pub fn shutdown() {
+    with_engine(Engine::end_adhoc);
     dragkeys::stop();
     zone_paint::clear();
     dividers::stop();
@@ -443,6 +464,11 @@ impl Engine {
         self.enabled && self.aside.is_none() && !self.standing_by
     }
 
+    /// A drop on a window's edge puts the two side by side.
+    fn beside_on(&self) -> bool {
+        self.active() && self.settings.snap_beside
+    }
+
     /// Have the overlay thread draw ahead of time what a drag will show, or free it all.
     fn sync_overlay(&mut self) {
         let wanted = self.active() && self.screens.iter().any(|s| s.layout.is_some());
@@ -455,8 +481,9 @@ impl Engine {
 
     fn sync_hook(&mut self) {
         let zoning = self.active() && self.screens.iter().any(|s| s.layout.is_some());
-        // A free drag between screens is seen at its end, zones or not.
-        let wanted = zoning || self.drags_sized();
+        // A free drag between screens is seen at its end, zones or not, and snap
+        // beside works on screens with no zones.
+        let wanted = zoning || self.drags_sized() || self.beside_on();
         match (wanted, self.hook) {
             (true, None) => unsafe {
                 let flags = WINEVENT_OUTOFCONTEXT | WINEVENT_SKIPOWNPROCESS;
@@ -525,8 +552,10 @@ impl Engine {
             let gap = (self.settings.gap.min(MAX_GAP) as f32 * g.dpi as f32 / 96.0).round() as i32;
             Some(dividers::Screen { id: g.id, bounds: g.bounds, work: g.work, dpi: g.dpi, gap, layout })
         };
-        let screens = self.geometry().into_iter().filter_map(screen).collect();
-        dividers::Scene { owner: self.owner, screens, known: self.zoned(), exclude: self.exclude.clone() }
+        let mut screens: Vec<dividers::Screen> = self.geometry().into_iter().filter_map(screen).collect();
+        let mut known = self.zoned();
+        self.adhoc_scene(&mut screens, &mut known);
+        dividers::Scene { owner: self.owner, screens, known, exclude: self.exclude.clone() }
     }
 
     /// Hand the divider handles the zones as they are now, or none with zones off,
@@ -536,7 +565,8 @@ impl Engine {
         if self.drag.is_some() {
             return;
         }
-        let on = self.active() && self.settings.divider_handles && self.screens.iter().any(|s| s.layout.is_some());
+        let zoned = self.screens.iter().any(|s| s.layout.is_some()) || !self.adhoc.is_empty();
+        let on = self.active() && self.settings.divider_handles && zoned;
         dividers::show(on.then(|| self.scene()));
     }
 
@@ -599,6 +629,9 @@ impl Engine {
 
     fn drag_start(&mut self, hwnd: HWND) {
         self.cancel_drag();
+        // Group members no longer where their group put them have left it. The moves
+        // that closing up makes land below like any other waiting move.
+        self.prune_adhoc(true);
         let key = hwnd.0 as isize;
         // A placement still waiting would yank the window back under the pointer.
         if self.pending.as_ref().is_some_and(|p| p.hwnd == key)
@@ -631,7 +664,7 @@ impl Engine {
         }
         let geometry = if self.active() { self.geometry() } else { Vec::new() };
         let Some(start) = winutil::window_rect(hwnd) else { return };
-        if geometry.is_empty() && !self.drags_sized() {
+        if geometry.is_empty() && !self.drags_sized() && !self.beside_on() {
             return;
         }
         if !geometry.is_empty() {
@@ -650,6 +683,7 @@ impl Engine {
         let old_zone =
             if geometry.is_empty() { zone.clone() } else { self.zones_held(hwnd, &geometry, frame, was_maximized) };
         let edges = self.edges_start(hwnd, &geometry, (zone, stamped), was_maximized);
+        let edges = edges.or_else(|| self.adhoc_edges_start(hwnd, was_maximized));
         // The handles stay out of the way of any drag, and come back at its end.
         dividers::hide();
         self.drag = Some(Drag {
@@ -673,6 +707,9 @@ impl Engine {
             others: Vec::new(),
             looked: false,
             landed,
+            beside: None,
+            tried: None,
+            allowed: Vec::new(),
         });
     }
 
@@ -743,8 +780,15 @@ impl Engine {
         self.pause(&mut drag, pt, pressed);
         let show = (pressed || drag.paused) && !drag.keys.off;
         let span = show && span_key.is_some_and(held);
+        // A window's edge under the pointer comes first, then the zones as usual.
+        let beside = (show && self.beside_on()).then(|| self.beside_at(&mut drag, pt)).flatten();
+        // A share picked beside a window is that edge's, and doesn't carry into the zones.
+        if beside.is_none() && drag.beside.is_some() {
+            drag.keys.part = None;
+        }
+        let zoned = show && beside.is_none();
         let view =
-            show.then(|| drag.geometry.iter().position(|g| g.bounds.contains(pt.x, pt.y))).flatten().map(|screen| {
+            zoned.then(|| drag.geometry.iter().position(|g| g.bounds.contains(pt.x, pt.y))).flatten().map(|screen| {
                 let cell = zones::zone_at(&drag.geometry[screen].cells, pt.x, pt.y);
                 let hit = cell.map(|zone| {
                     // Tab's choice holds while the pointer stays in the zone it was made in.
@@ -782,9 +826,13 @@ impl Engine {
                 });
                 View { screen, hit, cut }
             });
+        let (view, beside) = match beside {
+            Some((b, view)) => (view, Some(b)),
+            None => (view, None),
+        };
         // Repaint only when what is lit changes.
-        if view != drag.shown {
-            self.present(&mut drag, view);
+        if view != drag.shown || beside != drag.beside {
+            self.present(&mut drag, view, beside);
         }
         self.drag = Some(drag);
     }
@@ -793,18 +841,24 @@ impl Engine {
         zone_paint::hide_all();
     }
 
-    fn present(&mut self, drag: &mut Drag, view: Option<View>) {
+    fn present(&mut self, drag: &mut Drag, view: Option<View>, beside: Option<adhoc::Beside>) {
         let started = log::enabled().then(Instant::now);
-        if let Some(previous) = drag.shown.filter(|p| view.is_none_or(|v| v.screen != p.screen)) {
-            zone_paint::hide(&drag.geometry[previous.screen].id);
+        // The screen each shows on: a view's zones, or the screen of the window beside.
+        let on = |v: Option<View>, b: Option<adhoc::Beside>| {
+            v.map(|v| drag.geometry[v.screen].id.clone()).or_else(|| b.map(|b| self.screens[b.screen].id.clone()))
+        };
+        let (was, now) = (on(drag.shown, drag.beside), on(view, beside));
+        if let Some(was) = was.filter(|w| now.as_ref() != Some(w)) {
+            zone_paint::hide(&was);
         }
+        let live = view.is_some() || beside.is_some();
         // The keys are the drag's from the first time zones show, until it ends or Esc.
         // One look at the windows a drop could swap with, the first time zones show.
-        if view.is_some() && !drag.looked {
+        if live && !drag.looked {
             drag.others = self.snapshot(drag.hwnd, &drag.landed);
             drag.looked = true;
         }
-        if view.is_some() && !drag.keys.hooked && !drag.keys.off && !drag.keys.capped {
+        if live && !drag.keys.hooked && !drag.keys.off && !drag.keys.capped {
             let show_key = key_code(&self.settings.show_key).unwrap_or(VK_SHIFT);
             let span_key = key_code(&self.settings.span_key);
             let own = |vk: VIRTUAL_KEY| show_key == vk || span_key == Some(vk);
@@ -812,8 +866,9 @@ impl Engine {
             drag.keys.hooked = true;
         }
         if drag.keys.hooked && !drag.keys.off {
-            dragkeys::set_live(view.is_some());
+            dragkeys::set_live(live);
         }
+        let hint = (drag.keys.hooked && self.settings.drag_hints).then(|| dragkeys::HINT.to_string());
         if let Some(view) = view {
             let g = &drag.geometry[view.screen];
             // The whole span stays lit, and a share of it from the keys is lit again inside it.
@@ -825,10 +880,13 @@ impl Engine {
                 }
                 None => (None, None, Vec::new()),
             };
-            let hint = (drag.keys.hooked && self.settings.drag_hints).then(|| dragkeys::HINT.to_string());
             zone_paint::preview(&g.id, lit, part, others, hint);
+        } else if let Some((id, plan)) = now.zip(beside.and_then(|b| self.adhoc_plan(drag.hwnd, &b))) {
+            // Beside a window on a screen with no zones: the dropped window's part, and the other's.
+            zone_paint::preview(&id, None, Some(plan.rect), vec![plan.target], hint);
         }
         drag.shown = view;
+        drag.beside = beside;
         if let Some(started) = started {
             log::info!("zone overlay: main {:.0}us", started.elapsed().as_secs_f64() * 1e6);
         }
@@ -872,6 +930,10 @@ impl Engine {
     }
 
     fn finish_drag(&mut self, drag: &Drag, dropped: bool, hwnd: HWND) {
+        // Dragged away, a window leaves its ad-hoc group.
+        if drag.phase == Phase::Moving {
+            self.leave_adhoc(drag.hwnd);
+        }
         // A window in a group of zones stays snapped, and its neighbours land.
         if drag.phase == Phase::Resizing {
             let ended = dropped || drag.button.is_some_and(|b| !held(b));
@@ -879,9 +941,10 @@ impl Engine {
                 return;
             }
         }
-        // Resized by hand: it's no longer in its zone.
+        // Resized by hand: it's no longer in its zone, or its group.
         if dropped && drag.phase == Phase::Resizing {
             self.unsnap(hwnd, drag.stamped);
+            self.leave_adhoc(drag.hwnd);
             return;
         }
         // Maximized by the drag itself is Windows' top-edge snap, or a browser tab
@@ -891,6 +954,10 @@ impl Engine {
         }
         if winutil::is_maximized(hwnd) && !drag.was_maximized {
             self.unsnap(hwnd, drag.stamped);
+            return;
+        }
+        if let (None, Some(b)) = (drag.shown, drag.beside) {
+            self.beside_drop(drag, hwnd, b);
             return;
         }
         let lit = drag.shown.and_then(|view| Some((view.screen, view.hit?, view.cut)));
@@ -912,6 +979,9 @@ impl Engine {
         };
         let out = self.outcome(drag, screen, (a, b), cut);
         if let Some(split) = out.split {
+            if let Some(b) = drag.beside {
+                log::info!("snap beside: zone split on screen {}, {} {:?}", b.screen + 1, b.part.name(), b.side);
+            }
             self.split_drop(drag, hwnd, screen, split);
             return;
         }
@@ -973,6 +1043,8 @@ impl Engine {
         };
         // The screen's DPI, not the window's: a window that ignores DPI needs no extra step.
         let crosses = winutil::monitor_dpi(hwnd) != g.dpi;
+        // Into zones, it's out of any ad-hoc group.
+        self.leave_adhoc(key);
         self.place(hwnd, rect, crosses, false);
         self.snapped.insert(key, Snapped { old, screen: g.id.clone(), from, to, at: rect });
         // The zones the window covers, kept on the window so a restart of the tray remembers them.

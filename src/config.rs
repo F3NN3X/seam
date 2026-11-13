@@ -85,6 +85,8 @@ pub struct Hotkeys {
     pub divider_menu: Option<String>,
     /// "Pause Seam": pause or resume everything Seam does, until it is pressed again or Seam restarts.
     pub pause_seam: Option<String>,
+    /// "Fit group to screen": stretch the focused window's group to fill its screen.
+    pub fit_group: Option<String>,
 }
 
 impl Default for Hotkeys {
@@ -124,6 +126,7 @@ impl Default for Hotkeys {
             spotlight: None,
             divider_menu: None,
             pause_seam: None,
+            fit_group: None,
         }
     }
 }
@@ -186,6 +189,8 @@ pub struct ZoneSettings {
     pub pause_to_snap: bool,
     /// A strip on the lit screen lists the keys a drag takes while zones show.
     pub drag_hints: bool,
+    /// Dropping a window on another window's edge puts the two side by side.
+    pub snap_beside: bool,
     /// Exe file names, case-insensitive.
     pub exclude: Vec<String>,
 }
@@ -205,6 +210,7 @@ impl Default for ZoneSettings {
             swap_on_drop: true,
             pause_to_snap: false,
             drag_hints: false,
+            snap_beside: true,
             exclude: Vec::new(),
         }
     }

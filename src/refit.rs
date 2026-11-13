@@ -43,7 +43,10 @@ pub(super) fn covered(cells: &[Rect], from: usize, to: usize) -> Vec<usize> {
 /// Screens or resolution changed, or the PC woke up. Starts the debounce, and
 /// does nothing at all when the setting is off.
 pub fn display_changed() {
-    with_engine(Engine::refit_schedule);
+    with_engine(|e| {
+        e.adhoc_screens_changed();
+        e.refit_schedule();
+    });
 }
 
 /// Line Up closed, so a re-fit that was waiting for it can go.

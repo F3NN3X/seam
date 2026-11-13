@@ -22,7 +22,7 @@ use seam::zones::{self, Dir, Rect, ZoneLayout};
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::sync::Mutex;
-use std::sync::atomic::{AtomicU8, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use std::time::{Duration, Instant};
 use windows::Win32::Foundation::*;
 use windows::Win32::Graphics::Gdi::*;
@@ -107,6 +107,8 @@ static THREAD: AtomicU8 = AtomicU8::new(IDLE);
 const IDLE: u8 = 0;
 const STARTED: u8 = 1;
 const STOPPED: u8 = 2;
+/// A handle is being dragged, so the windows beside it move on purpose.
+static DRAGGING: AtomicBool = AtomicBool::new(false);
 /// The latest zones from the main thread. Some(None) means no handles.
 static SCENE: Mutex<Option<Option<Scene>>> = Mutex::new(None);
 
@@ -116,6 +118,11 @@ pub fn show(scene: Option<Scene>) {
     let start = scene.is_some();
     *SCENE.lock().unwrap_or_else(|e| e.into_inner()) = Some(scene);
     post(start, WM_APP_SCENE);
+}
+
+/// Whether a handle is being dragged now.
+pub fn dragging() -> bool {
+    DRAGGING.load(Ordering::SeqCst)
 }
 
 /// A drag began: the handles hide until the zones come back with `show`.
@@ -309,6 +316,7 @@ impl State {
             for m in &drag.members {
                 m.back();
             }
+            DRAGGING.store(false, Ordering::SeqCst);
         }
         for h in self.handles.drain(..) {
             unsafe {
@@ -541,6 +549,7 @@ impl State {
             moves: 0,
             longest: Duration::ZERO,
         });
+        DRAGGING.store(true, Ordering::SeqCst);
         unsafe {
             let _ = SetCapture(hwnd);
             SetTimer(Some(self.owner), TIMER_FOLLOW, FOLLOW_MS, None);
@@ -598,6 +607,7 @@ impl State {
         if !(commit && self.land(&drag)) {
             drag.members.iter().for_each(Member::back);
         }
+        DRAGGING.store(false, Ordering::SeqCst);
         match self.pending.take() {
             Some(scene) => self.apply(scene),
             None => self.schedule(),

@@ -18,7 +18,10 @@ use std::sync::mpsc::channel;
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Duration, Instant};
 use windows::Win32::Foundation::*;
-use windows::Win32::System::Threading::GetCurrentThreadId;
+use windows::Win32::System::Threading::{
+    GetCurrentThreadId, GetProcessTimes, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION,
+};
+use windows::Win32::UI::Accessibility::{HWINEVENTHOOK, SetWinEventHook, UnhookWinEvent};
 use windows::Win32::UI::HiDpi::GetDpiForWindow;
 use windows::Win32::UI::Input::KeyboardAndMouse::*;
 use windows::Win32::UI::WindowsAndMessaging::*;
@@ -43,8 +46,12 @@ const MSG_LOOK: u32 = WM_APP + 6;
 const MSG_CHECK: u32 = WM_APP + 7;
 /// How often the hook's thread looks, while it is in.
 const CHECK_MS: u32 = 60_000;
-/// How long what the worker found about an app counts.
-const VERDICT_FOR: Duration = Duration::from_secs(30);
+/// Look at the apps of every window on screen, ahead of a press on one.
+const MSG_SWEEP: u32 = WM_APP + 8;
+/// How often the worker looks at every window's app, while the hook is in.
+const SWEEP_MS: u32 = 60_000;
+/// Processes remembered before the oldest goes.
+const MAX_VERDICTS: usize = 512;
 /// How long quitting waits for the release of a drag still going.
 const QUIT_WAIT: Duration = Duration::from_millis(200);
 /// How long the app has to say how big it may get.
@@ -70,9 +77,17 @@ static OPEN: AtomicU32 = AtomicU32::new(0);
 static WORKER: AtomicU32 = AtomicU32::new(0);
 /// A hook owes a release, so quitting waits a moment for it.
 static OWING: AtomicBool = AtomicBool::new(false);
-/// By process: whether Seam may move its windows (not Seam's, not an administrator's,
-/// not excluded), and when the worker found it out. The hook only tries the lock.
-static VERDICTS: Mutex<Vec<(u32, bool, Instant)>> = Mutex::new(Vec::new());
+/// By process id and creation time, oldest first: whether Seam may move its windows
+/// (not Seam's, not an administrator's, not excluded). Neither changes in a process's
+/// life, so nothing expires: an entry goes when its process does. The worker fills it
+/// ahead of use, and the hook only tries the lock.
+static VERDICTS: Mutex<Vec<Verdict>> = Mutex::new(Vec::new());
+
+struct Verdict {
+    pid: u32,
+    created: u64,
+    ok: bool,
+}
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Button {
@@ -205,6 +220,12 @@ fn run(generation: u64) {
                 Ok(mut hook) => {
                     log::info!("alt-drag: hook installed");
                     SetTimer(None, 0, CHECK_MS, None);
+                    // The apps are looked at ahead of a press: those on screen now, then
+                    // each that comes to the foreground.
+                    let _ = PostThreadMessageW(worker, MSG_SWEEP, WPARAM(0), LPARAM(0));
+                    let foreground = EVENT_SYSTEM_FOREGROUND;
+                    let flags = WINEVENT_OUTOFCONTEXT | WINEVENT_SKIPOWNPROCESS;
+                    let watch = SetWinEventHook(foreground, foreground, None, Some(on_foreground), 0, 0, flags);
                     let mut seen = (CALLS.get(), cursor());
                     while (WANTED.load(Ordering::SeqCst) == generation || owes())
                         && GetMessageW(&mut msg, None, 0, 0).as_bool()
@@ -234,6 +255,9 @@ fn run(generation: u64) {
                         DispatchMessageW(&msg);
                     }
                     let _ = UnhookWindowsHookEx(hook);
+                    if !watch.0.is_null() {
+                        let _ = UnhookWinEvent(watch);
+                    }
                     log::info!("alt-drag: hook uninstalled");
                 }
                 Err(e) => {
@@ -381,9 +405,7 @@ unsafe fn target(pt: POINT, button: Button, look: impl Fn(HWND) -> bool) -> Opti
             return None;
         }
         let pid = winutil::process_id(window);
-        let known = VERDICTS.try_lock().ok().and_then(|list| {
-            list.iter().find(|(p, _, at)| *p == pid && at.elapsed() < VERDICT_FOR).map(|(_, ok, _)| *ok)
-        });
+        let known = VERDICTS.try_lock().ok().and_then(|list| list.iter().find(|v| v.pid == pid).map(|v| v.ok));
         match known {
             Some(ok) => ok.then_some(window),
             None => {
@@ -394,9 +416,18 @@ unsafe fn target(pt: POINT, button: Button, look: impl Fn(HWND) -> bool) -> Opti
     }
 }
 
-/// Find out whether Seam may move the windows of this window's app, for the hook.
+/// Find out whether Seam may move the windows of this window's app, for the hook,
+/// unless that process is known already. Worker only: it opens the process.
 fn look(h: HWND) {
     let pid = winutil::process_id(h);
+    if pid == 0 {
+        return;
+    }
+    let created = created(pid).unwrap_or(0);
+    let known = |list: &Vec<Verdict>| list.iter().any(|v| v.pid == pid && v.created == created);
+    if known(&VERDICTS.lock().unwrap_or_else(|e| e.into_inner())) {
+        return;
+    }
     let ok = {
         let exclude = EXCLUDE.read().unwrap_or_else(|e| e.into_inner());
         !wincontrol::is_seam(h)
@@ -404,8 +435,46 @@ fn look(h: HWND) {
             && (exclude.is_empty() || winutil::exe_name(h).is_none_or(|name| !exclude.contains(&name)))
     };
     let mut list = VERDICTS.lock().unwrap_or_else(|e| e.into_inner());
-    list.retain(|(p, _, at)| *p != pid && at.elapsed() < VERDICT_FOR);
-    list.push((pid, ok, Instant::now()));
+    // A process gone, its id now another's.
+    list.retain(|v| v.pid != pid);
+    list.push(Verdict { pid, created, ok });
+    if list.len() > MAX_VERDICTS {
+        list.remove(0);
+    }
+}
+
+/// Forget processes that are gone, then look at the apps of every window on screen.
+fn sweep() {
+    let pids: Vec<(u32, u64)> =
+        VERDICTS.lock().unwrap_or_else(|e| e.into_inner()).iter().map(|v| (v.pid, v.created)).collect();
+    let gone: Vec<u32> = pids.into_iter().filter(|(pid, at)| created(*pid) != Some(*at)).map(|(pid, _)| pid).collect();
+    if !gone.is_empty() {
+        VERDICTS.lock().unwrap_or_else(|e| e.into_inner()).retain(|v| !gone.contains(&v.pid));
+    }
+    let shown = winutil::top_level_windows().into_iter().filter(|h| unsafe { IsWindowVisible(*h) }.as_bool());
+    shown.for_each(look);
+}
+
+/// When the process started, which tells it from a later one given the same id.
+fn created(pid: u32) -> Option<u64> {
+    unsafe {
+        let process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid).ok()?;
+        let (mut start, mut exit, mut kernel, mut user) = Default::default();
+        let ok = GetProcessTimes(process, &mut start, &mut exit, &mut kernel, &mut user).is_ok();
+        let _ = CloseHandle(process);
+        let start: FILETIME = start;
+        ok.then(|| (u64::from(start.dwHighDateTime) << 32) | u64::from(start.dwLowDateTime))
+    }
+}
+
+/// The foreground changed: have the worker look at its app before a press on it.
+unsafe extern "system" fn on_foreground(_: HWINEVENTHOOK, _: u32, hwnd: HWND, object: i32, _: i32, _: u32, _: u32) {
+    if object == OBJID_WINDOW.0 && !hwnd.is_invalid() {
+        let worker = WORKER.load(Ordering::Relaxed);
+        unsafe {
+            let _ = PostThreadMessageW(worker, MSG_LOOK, WPARAM(hwnd.0 as usize), LPARAM(0));
+        }
+    }
 }
 
 /// A point in an lparam, each half a signed 16-bit coordinate.
@@ -591,6 +660,7 @@ fn work(pending: Arc<AtomicBool>, ready: std::sync::mpsc::Sender<u32>) {
         if ready.send(GetCurrentThreadId()).is_err() {
             return;
         }
+        SetTimer(None, 0, SWEEP_MS, None);
         let mut drag: Option<Drag> = None;
         while GetMessageW(&mut msg, None, 0, 0).as_bool() {
             match msg.message {
@@ -613,6 +683,8 @@ fn work(pending: Arc<AtomicBool>, ready: std::sync::mpsc::Sender<u32>) {
                     }
                 }
                 MSG_LOOK => look(HWND(msg.wParam.0 as *mut _)),
+                MSG_SWEEP => sweep(),
+                WM_TIMER if msg.hwnd.is_invalid() => sweep(),
                 _ => {}
             }
         }

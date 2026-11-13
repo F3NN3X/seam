@@ -351,7 +351,8 @@ Columns on screen 1 and no layout on screen 2, gap 8 px, **Snap beside a window*
 Columns on screen 1 with three windows snapped, one to a zone (A, B, C from the left), the debug log on.
 
 - [ ] **Pull the middle one.** Drag B off its zone, hold Ctrl and let go over no zone. B gets its old size back if **Restore size** is on, A stays, C grows to the whole right side, the layout shows as **Changed**, and a notice offers Undo. The log has one `pull out: screen 1, zone 2, 1 windows moved` line.
-- [ ] **Undo.** Click Undo within 8 seconds: the layout is back to three columns, C is back in its zone, and B is not moved back.
+- [ ] **Undo.** Click Undo within 8 seconds: the layout is back to three columns, C is back in its zone, and B is back in its zone too. Drag B out again with no Ctrl: it gets its original size back. Undo with B minimized or on another screen leaves B where it is, and the others are still renumbered. A window moved by hand after the pull-out is renumbered back but stays where it is.
+- [ ] **Ctrl as the show or span key.** With Ctrl as the show key or the span key, drop a snapped window in a gap between zones: a plain drop, never a pull-out.
 - [ ] **Without Ctrl.** Drag B off and let go over no zone without Ctrl: the gap stays, no notice, the layout is unchanged.
 - [ ] **A shared zone.** Snap two windows into one zone, drag one out with Ctrl: a plain drop, and the log says another window holds the zone. A window that spans two zones does the same.
 - [ ] **A subtree.** On Grid, pull one window out: the zone beside it takes its place and the windows there move, and the other two are left alone.

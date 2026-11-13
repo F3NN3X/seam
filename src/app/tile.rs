@@ -274,11 +274,12 @@ pub(super) fn undo_tile(app: &mut App) {
         log::info!("tile screen: too late to undo");
         return;
     }
+    let mut layout_back = false;
     if let Some(change) = undo.changed {
         let desk = app.cfg.desks.get(&app.sig);
         let now = desk.and_then(|d| d.zones.get(&undo.screen)).and_then(zones::layout_of);
         if desk.is_some() && now == change.now {
-            set_screen_layout(app, &undo.screen, change.before, false);
+            layout_back = set_screen_layout(app, &undo.screen, change.before, false);
         }
     }
     snap::rezone(undo.keep);
@@ -290,7 +291,14 @@ pub(super) fn undo_tile(app: &mut App) {
             .is_some_and(|r| near(r.x, set.x) && near(r.y, set.y) && (!sized || (near(r.w, set.w) && near(r.h, set.h))))
     };
     let all = undo.back.len();
-    let back: Vec<_> = undo.back.into_iter().filter(here).map(|b| b.place).collect();
+    let (pulled, rest): (Vec<_>, Vec<_>) = undo.back.into_iter().partition(|b| b.pulled.is_some());
+    // A window a pull-out took out goes back when the layout has its zone again.
+    for b in pulled.into_iter().filter(|_| layout_back) {
+        if let Some(old) = b.pulled {
+            snap::put_back(b.place, old);
+        }
+    }
+    let back: Vec<_> = rest.into_iter().filter(here).map(|b| b.place).collect();
     // A group gets its old area back only with every window back in it.
     if let (Some((id, area)), true) = (undo.group, back.len() == all) {
         snap::adhoc_area(id, area);

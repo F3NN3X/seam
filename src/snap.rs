@@ -449,6 +449,12 @@ pub fn place_more(list: Vec<Placement>) {
     });
 }
 
+/// Undo of a pull-out: the window goes back in its zone with the size it had before
+/// it was snapped, if it still exists, isn't minimized or maximized and is on that screen.
+pub fn put_back(place: Placement, old: Option<Old>) {
+    with_engine(|e| e.put_back(place, old));
+}
+
 unsafe extern "system" fn on_event(_: HWINEVENTHOOK, event: u32, hwnd: HWND, object: i32, _: i32, _: u32, _: u32) {
     if object != OBJID_WINDOW.0 {
         return;
@@ -953,6 +959,12 @@ impl Engine {
         self.refit_resume();
     }
 
+    /// Ctrl is the show key or the span key, so it can be held for a drag that never meant a pull-out.
+    fn ctrl_is_a_key(&self) -> bool {
+        let is_ctrl = |key: &str| key_code(key) == Some(VK_CONTROL);
+        is_ctrl(&self.settings.show_key) || is_ctrl(&self.settings.span_key)
+    }
+
     fn finish_drag(&mut self, drag: &Drag, dropped: bool, hwnd: HWND) {
         // Dragged away, a window leaves its ad-hoc group.
         if drag.phase == Phase::Moving {
@@ -987,7 +999,7 @@ impl Engine {
         let lit = drag.shown.and_then(|view| Some((view.screen, view.hit?, view.cut)));
         let Some((screen, (a, b), cut)) = lit else {
             // With Ctrl held, a window alone in its zone leaves the layout, and the others close the gap.
-            if held(VK_CONTROL) && !(drag.alt && self.alt_holds_ctrl) {
+            if held(VK_CONTROL) && !(drag.alt && self.alt_holds_ctrl) && !self.ctrl_is_a_key() {
                 self.pull_out(drag);
             }
             // Dropped outside every zone, so a snapped window gets its old size back.
@@ -1174,6 +1186,20 @@ impl Engine {
 
     /// Start one of window control's moves, recorded where it goes: snapped in its
     /// zones, or loose.
+    fn put_back(&mut self, p: Placement, old: Option<Old>) {
+        let hwnd = hwnd_of(p.hwnd);
+        let Some((id, from, to)) = p.zone else { return };
+        if !unsafe { IsWindow(Some(hwnd)) }.as_bool() || winutil::is_minimized(hwnd) || winutil::is_maximized(hwnd) {
+            return;
+        }
+        let geometry = self.geometry();
+        let Some(g) = geometry.iter().find(|g| g.id == id && to < g.zones.len()) else { return };
+        let on = winutil::visible_rect(hwnd).is_some_and(|r| g.bounds.contains(r.x + r.w / 2, r.y + r.h / 2));
+        if on {
+            self.snap_to(hwnd, g, (from, to), p.target, Some(old));
+        }
+    }
+
     fn place_queued(&mut self, p: Placement) {
         let hwnd = hwnd_of(p.hwnd);
         if !unsafe { IsWindow(Some(hwnd)) }.as_bool() {

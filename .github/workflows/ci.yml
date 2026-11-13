@@ -66,6 +66,11 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # The runner image can lag a Rust release by weeks, and Cargo.toml asks
+      # for 1.100, so take the newest stable first. Before the cache, which
+      # is keyed on the compiler version.
+      - name: Latest stable Rust
+        run: rustup update stable --no-self-update
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
@@ -113,6 +118,11 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # The runner image can lag a Rust release by weeks, and Cargo.toml asks
+      # for 1.100, so take the newest stable first. Before the cache, which
+      # is keyed on the compiler version.
+      - name: Latest stable Rust
+        run: rustup update stable --no-self-update
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}

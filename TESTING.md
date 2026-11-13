@@ -770,7 +770,7 @@ Turn the debug log on, and **Remember folders and pages** on at the bottom of Wo
 - [ ] **Export.** Export the workspace and open the file: no row has `place`. Add a `place` to a row in the file by hand and import it: the imported workspace has no `place`. The same for **Export** and **Import** of all settings on General.
 - [ ] **Setting off.** Turn the setting off and capture a new workspace: no `place`, and no `places:` line in the log. Switch to the earlier workspace with its apps closed: Explorer and the browsers start as usual, not on the saved folder or page, and the saved ones are still in `config.json`.
 - [ ] **Forget.** With the setting off, the row **Saved folders and pages** shows with **Forget saved folders and pages**. Press it: every `place` is gone from `config.json`, on every desk, and the row goes. With the setting on, or with none saved, the row isn't there.
-- [ ] **Last session.** With the setting on, sign out and back in: the last session in `config.json` has no `place`.
+- [ ] **Last session.** With **Offer my last session** set, sign out and back in: the last session in `config.json` has no `place`.
 
 ## Settings panel
 
@@ -806,11 +806,11 @@ Turn the debug log on, and **Remember folders and pages** on at the bottom of Wo
 ## Sidebar and Help
 
 - [ ] **Sidebar.** Displays, Zones and Workspaces are at the top. The App heading with Shortcuts, General, Help and About sits at the bottom, right above "Seam" and the version. Make the window as short as it goes: the two groups don't overlap. The update dot still shows on About.
-- [ ] **Open Help.** Click Help. The topics are on the left, in this order: Getting started, Pointer and borders, Line Up aids, Glue and Not on my desk, Layout views, Zones, Moving windows, Pins and borders, Workspaces, Last session, Shortcuts, Stream Deck, Local API, Updates. Getting started is picked the first time.
+- [ ] **Open Help.** Click Help. The topics are on the left, in this order: Getting started, Pointer and borders, Line Up aids, Glue and Not on my desk, Layout views, Zones, Moving windows, Pins and borders, Workspaces, When you sign in, Shortcuts, Stream Deck, Local API, Updates. Getting started is picked the first time.
 - [ ] **Accurate.** Read each topic against the app. Glue, 60 px, G, N, M, **Show on screens** and the **...** menu all behave as the text says, and nothing in it is planned.
 - [ ] **Every topic.** Click each one. The picked card is raised, its text shows on the right with the labels in bold, nothing is cut off at the panel's smallest size, and it reads correctly in light and dark.
 - [ ] **Getting started buttons.** **Open Displays**, **Open Zones** and **Open Workspaces** on the three steps each open that page.
-- [ ] **Topic buttons.** The button under each other topic opens its page: Pointer and borders, Line Up aids, Glue and Not on my desk and Layout views all open Displays, Zones Zones, Moving windows Shortcuts, Pins and borders Zones, Workspaces Workspaces, Last session General, Shortcuts Shortcuts, Stream Deck General, Local API General, Updates About.
+- [ ] **Topic buttons.** The button under each other topic opens its page: Pointer and borders, Line Up aids, Glue and Not on my desk and Layout views all open Displays, Zones Zones, Moving windows Shortcuts, Pins and borders Zones, Workspaces Workspaces, When you sign in General, Shortcuts Shortcuts, Stream Deck General, Local API General, Updates About.
 - [ ] **Search.** Type "snap back": the results include Help's Workspaces topic, and pressing it opens Help with that topic picked. Type "stream deck", "sign-in" and "pre-releases": each lists its Help topic. Type "glue", "not on my desk", "stripes", "offset" and "show on screens": each lists its Help topic. Type "help": every topic is listed.
 - [ ] **Remembered page.** Close the panel on Help and open it again: it opens on Help. Run `seam-settings.exe --page help`: it opens on Help.
 - [ ] **Page on an open panel.** With the panel open on Displays, run `seam-settings.exe --page help` and send `panel.open` with `{"page":"about"}`: each switches the open window to that page and brings it to the front, and no second window starts. On Zones, start a layout edit and run it again with another page: the "Discard layout changes?" dialog asks first, and Keep editing leaves the page as it was. An unknown page leaves the open window where it is.
@@ -826,9 +826,9 @@ Turn the debug log on, and **Remember folders and pages** on at the bottom of Wo
 
 ## Restoring the last session
 
-Set up first: turn on **Start with Windows** and **Offer to restore my windows after I sign in** on General, and the debug log. Have zones on two screens.
+Set up first: turn on **Start with Windows** and **When I sign in** on General set to **Offer my last session**, and the debug log. Have zones on two screens.
 
-- [ ] **Off by default.** On a fresh config the switch is off. Snap a few windows and wait a minute: `config.json` has no `last_session`, and the log has no `last session saved` line.
+- [ ] **Off by default.** On a fresh config **When I sign in** is **Do nothing**. Snap a few windows and wait a minute: `config.json` has no `last_session`, and the log has no `last session saved` line.
 - [ ] **Saved after changes.** Turn the switch on. Snap a window into a zone, pin another on top and make a third sticky. About 30 s after the last of these, the log says `last session saved: n windows`, and `config.json` holds `last_session` under the desk, with `"pin": "top"` and `"pin": "sticky"` on those rules. Keep snapping every few seconds: no save until 30 s after you stop. Leave the PC alone for 5 minutes: no more saves.
 - [ ] **Hidden.** The Workspaces page, the tray menu's Workspaces, Shortcuts and `workspaces.list` don't show a "Last session". `state.get` shows `session` with `saved_at` and `windows` for this desk, and `null` on a desk that has none.
 - [ ] **Sign out and in.** Arrange Notepad, Windows Terminal and a browser in zones, pin Notepad on top, and sign out within 30 s of the last change. The log ends with `last session saved`. Sign in: about 5 s after the desktop appears, "Last session" says "Restore your last session? Click to restore". Click it with **Who reopens the apps** on Seam: missing apps start, every window goes back to its zone, and Notepad is on top with the pin border again. Windows that were already open, and anything else on screen, are left where they are.
@@ -837,21 +837,39 @@ Set up first: turn on **Start with Windows** and **Offer to restore my windows a
 - [ ] **Apps that start themselves.** Have Discord or another app that starts at sign-in in the session. After sign-in, click the offer: Seam uses the window that's already open, starts no second copy, and puts it in its zone.
 - [ ] **Not at a hand start.** Quit Seam and start it from the Start menu: no offer. `seam.exe --updated-from x` after an update: no offer.
 - [ ] **Slow shell.** If the notification can't show yet at sign-in, Seam tries again every 5 s for a minute.
-- [ ] **Turned off.** Turn the switch off: `config.json` no longer has a `last_session` under any desk. Snap windows and sign out and in. No new save happens and no offer shows.
+- [ ] **Turned off.** Set **When I sign in** to **Do nothing**: `config.json` no longer has a `last_session` under any desk. Snap windows and sign out and in. No new save happens and no offer shows.
 - [ ] **Shutdown is quick.** Sign out with many apps open: Windows doesn't list Seam as preventing sign-out. A capture that takes longer than 2 s leaves the earlier session saved, and the log says so.
 - [ ] **Other desk.** Unplug to "Laptop only" and sign out and in. The offer is for that desk's own last session, or there is none.
 - [ ] **API.** `session.restore` from the panel token or a Seam process runs the restore and a subscribed client gets `workspace.switched` with id `last_session`. From another client it answers error 4. With nothing saved for the desk it answers error 1.
-- [ ] **Search.** Search for "restore": the General row is found, and opening it shows the row.
+- [ ] **Search.** Search for "sign in": **When I sign in** is found, and opening it shows the row.
+
+## When I sign in
+
+Set up first: turn on **Start with Windows** and the debug log. Have at least two workspaces on the desk, and one app that isn't running in the one you choose.
+
+- [ ] **Do nothing.** On a fresh config General shows **When I sign in** as **Do nothing**, and `config.json` has `"sign_in": {"mode": "nothing", "ask": true}` under each desk Seam has seen. Sign out and in: nothing opens, nothing is offered.
+- [ ] **Offer my last session.** Pick it. **Who reopens the apps** shows, `restore_session` is `true` and the desk has `"sign_in": {"mode": "last_session", "ask": true}`. Sign out and in: the last-session offer shows as before.
+- [ ] **Open a workspace, Ask first on.** Pick **Open a workspace**: a **Workspace** picker and **Ask first** (on) show, **Who reopens the apps** doesn't, and the picker holds this desk's workspaces. Until you choose one the picker says **Choose a workspace** and a sign-in does nothing, and the log says `none is chosen`. Choose one, then sign out and in. A notice "Open <name>? Click to open" shows for up to 3 minutes of retries. Nothing starts or moves until the click, and the click switches as a normal switch (launch settings, stages and Other windows apply). Let it go once: nothing happens.
+- [ ] **Ask first off.** Turn **Ask first** off, sign out and in. About 10 s after the taskbar is up the workspace switches with no notice, and the log says `switching to workspace <name>`.
+- [ ] **Deleted workspace.** Choose a workspace, delete it on Workspaces, sign out and in. Nothing opens, Seam retries for 3 minutes, and the log then has one `sign-in workspace: gave up after 3 minutes, the workspace isn't on this desk` line.
+- [ ] **Other desk.** Unplug to a desk that doesn't have that workspace and sign out and in. The same. Switching desks within the first minute makes the new desk's choice count, and a click on a notice made for another desk logs `the desk changed` and does nothing.
+- [ ] **By hand.** Quit Seam and start it from the Start menu, or `seam.exe --updated-from x`: nothing opens and nothing is offered, in every mode.
+- [ ] **Full-screen app.** With Ask first off, have a full-screen video in front at sign-in. Nothing opens until you leave it, then the workspace switches.
+- [ ] **Paused.** Pause Seam from the tray right after sign-in, before the switch: the log says `Seam was paused, so nothing opens` at once, and resuming does not open it. With Ask first on, pause after the notice shows and click it: nothing switches.
+- [ ] **Migration.** Put `"restore_session": true` in `config.json` with no `sign_in` under any desk and start Seam: General shows **Offer my last session** on each desk and `config.json` has `sign_in` on each. A desk seen later shows **Do nothing**. Pick **Do nothing** on one desk: its saved `last_session` is gone and the others keep theirs. An older client patching `restore_session` to `false` sets every desk to **Do nothing**, and `{"sign_in":{"ask":false}}` keeps the mode.
+- [ ] **Per desk.** Give one desk **Offer my last session** and another **Open a workspace**: each desk keeps its own choice, and the last session is only saved on the first.
+- [ ] **API.** `config.patch` with `{"desks": {"<sig>": {"sign_in": {"mode": "workspace", "workspace": "<id>", "ask": false}}}}` changes the choice and `config.get` shows it.
+- [ ] **Search.** Search for "sign in": **When I sign in** is found, and opening it shows the row.
 
 ## Who reopens the apps
 
-Set up first: turn on **Offer to restore my windows after I sign in** and the debug log. Check Windows' setting with `reg query "HKCU\Software\Microsoft\Windows NT\CurrentVersion\Winlogon" /v RestartApps` (Settings > Accounts > Sign-in options, "Automatically save my restartable apps and restart them when I sign back in").
+Set up first: set **When I sign in** to **Offer my last session** and the debug log. Check Windows' setting with `reg query "HKCU\Software\Microsoft\Windows NT\CurrentVersion\Winlogon" /v RestartApps` (Settings > Accounts > Sign-in options, "Automatically save my restartable apps and restart them when I sign back in").
 
-- [ ] **Shown with restore only.** **Who reopens the apps** shows under the restore switch only while it's on, set to **Windows reopens them**, with a one-line caption that changes with the choice. `config.json` has `"restore_apps": "windows"` and `"restore_apps_saved": null`.
+- [ ] **Shown with restore only.** **Who reopens the apps** shows under **When I sign in** only while it is set to **Offer my last session**, set to **Windows reopens them**, with a one-line caption that changes with the choice. `config.json` has `"restore_apps": "windows"` and `"restore_apps_saved": null`.
 - [ ] **Confirm, cancel.** With Restart apps on (`RestartApps` 0x1), pick **Seam reopens them**. "Turn off Windows' Restart apps?" opens. **Cancel**: the choice stays on Windows, and `reg query` still shows 0x1.
 - [ ] **Confirm, turn it off.** Pick it again and press **Turn it off**. `reg query` shows 0x0, the Sign-in options switch is off after reopening Settings, `config.json` has `"restore_apps": "seam"` and `"restore_apps_saved": 1`, and the log says `Windows' Restart apps turned off (was 0x1)`.
 - [ ] **Switch back.** Pick **Windows reopens them** (no dialog). `reg query` shows 0x1 again, `restore_apps_saved` is `null`, and the log says `given back`.
-- [ ] **Restore off gives it back.** Choose Seam again, then turn **Offer to restore my windows** off. `reg query` shows 0x1 and `restore_apps_saved` is `null`. Turn restore on again: the choice is still Seam, and the value is 0x0 again.
+- [ ] **Restore off gives it back.** Choose Seam again, then set **When I sign in** to **Do nothing**. `reg query` shows 0x1 and `restore_apps_saved` is `null`. Set it back to **Offer my last session**: the choice is still Seam, and the value is 0x0 again.
 - [ ] **Stored once.** Before picking Seam, set the value to 5 (`reg add "HKCU\Software\Microsoft\Windows NT\CurrentVersion\Winlogon" /v RestartApps /t REG_DWORD /d 5 /f`). Pick Seam: `restore_apps_saved` is 5. Quit and start Seam twice: it stays 5. Switch back: `reg query` shows 0x5.
 - [ ] **Value missing.** Switch to Windows mode, delete the value (`reg delete "HKCU\Software\Microsoft\Windows NT\CurrentVersion\Winlogon" /v RestartApps /f`), and pick Seam. `reg query` shows 0x0 and `restore_apps_saved` is `4294967295`. Switch back: the value is gone again, not 0.
 - [ ] **Turned back on by hand.** In Seam mode, turn Restart apps back on in Sign-in options, then quit and start Seam. Seam leaves it on, the log says `Windows' Restart apps is on again, so apps may open twice`, `state.get` shows `restart_apps: true`, and General shows that note under the choice with **Open Sign-in options**, which opens Settings on Sign-in options.

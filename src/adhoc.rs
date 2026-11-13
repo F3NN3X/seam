@@ -12,6 +12,7 @@ use crate::wincontrol::tile::Back;
 use dragkeys::Part;
 use seam::beside;
 use seam::zones::{Node, Template};
+use std::sync::atomic::{AtomicIsize, Ordering};
 
 /// An ad-hoc group's name where a screen's id goes: the divider handles and the
 /// layout saves of their drags.
@@ -125,22 +126,39 @@ pub fn fit(hwnd: HWND) -> Result<Fitted, String> {
 }
 
 /// A member's state changed while a group is about: closed, minimized, maximized or moved.
+/// The groups' windows, for the hooks to pass over every other window without
+/// taking the engine. Empty slots are 0; a group past this many windows isn't heard.
+static MEMBERS: [AtomicIsize; MAX_HEARD] = [const { AtomicIsize::new(0) }; MAX_HEARD];
+const MAX_HEARD: usize = 128;
+
 unsafe extern "system" fn on_member(_: HWINEVENTHOOK, event: u32, hwnd: HWND, object: i32, child: i32, _: u32, _: u32) {
-    if object == OBJID_WINDOW.0 && child == 0 {
-        with_engine(|e| e.member_changed(hwnd, event));
+    let key = hwnd.0 as isize;
+    if object != OBJID_WINDOW.0 || child != 0 || key == 0 || !MEMBERS.iter().any(|m| m.load(Ordering::Relaxed) == key) {
+        return;
     }
+    with_engine(|e| e.member_changed(hwnd, event));
 }
 
+/// The timer repeats until the engine is free to take it, so a busy moment drops nothing.
 unsafe extern "system" fn on_settled(_: HWND, _: u32, id: usize, _: u32) {
-    with_engine(|e| {
+    let taken = with_engine(|e| {
         if e.adhoc_timer == id {
             e.adhoc_timer = 0;
             e.adhoc_settled();
         }
     });
-    unsafe {
-        let _ = KillTimer(None, id);
+    if taken.is_some() {
+        unsafe {
+            let _ = KillTimer(None, id);
+        }
     }
+}
+
+/// A window's thread and process, or None when it is gone.
+fn thread_of(key: isize) -> Option<(u32, u32)> {
+    let mut pid = 0;
+    let tid = unsafe { GetWindowThreadProcessId(hwnd_of(key), Some(&mut pid)) };
+    (tid != 0).then_some((tid, pid))
 }
 
 /// How long a member has to stay put before Seam looks where it is.
@@ -222,29 +240,56 @@ impl Engine {
         self.queued.extend(moves);
         self.window_pump();
         self.sync_dividers();
+        self.sync_adhoc_hooks();
     }
 
     /// Hear of members closing, minimizing and moving while there is a group.
+    /// Only the threads of the groups' windows are hooked, so other windows' events never
+    /// reach the tray. Called whenever a group or Seam's standing changes.
     pub(super) fn sync_adhoc_hooks(&mut self) {
-        let wanted = self.active() && !self.adhoc.is_empty();
-        if wanted == !self.member_hooks.is_empty() {
-            return;
+        let active = self.active();
+        let members: Vec<isize> =
+            self.adhoc.iter().flat_map(|a| a.members.iter().map(|(k, _)| *k)).filter(|_| active).collect();
+        for (slot, key) in MEMBERS.iter().zip(members.iter().copied().chain(std::iter::repeat(0))) {
+            slot.store(key, Ordering::Relaxed);
         }
-        if !wanted {
-            for hook in self.member_hooks.drain(..) {
-                let _ = unsafe { UnhookWinEvent(hook) };
-            }
-            return;
+        let mut threads: Vec<(u32, u32)> = members.iter().filter_map(|k| thread_of(*k)).collect();
+        threads.sort_unstable();
+        threads.dedup();
+        let (keep, gone): (Vec<_>, Vec<_>) =
+            std::mem::take(&mut self.member_hooks).into_iter().partition(|(t, _)| threads.iter().any(|x| x.0 == *t));
+        for hook in gone.into_iter().flat_map(|(_, hooks)| hooks) {
+            let _ = unsafe { UnhookWinEvent(hook) };
         }
+        self.member_hooks = keep;
         let flags = WINEVENT_OUTOFCONTEXT | WINEVENT_SKIPOWNPROCESS;
-        for event in [EVENT_SYSTEM_MINIMIZESTART, EVENT_OBJECT_DESTROY, EVENT_OBJECT_LOCATIONCHANGE] {
-            let hook = unsafe { SetWinEventHook(event, event, None, Some(on_member), 0, 0, flags) };
-            if hook.0.is_null() {
-                log::info!("snap beside: a group hook wasn't installed");
-            } else {
-                self.member_hooks.push(hook);
+        for (tid, pid) in threads {
+            if self.member_hooks.iter().any(|(t, _)| *t == tid) {
+                continue;
             }
+            let events = [EVENT_SYSTEM_MINIMIZESTART, EVENT_OBJECT_DESTROY, EVENT_OBJECT_LOCATIONCHANGE];
+            let hooks: Vec<HWINEVENTHOOK> = events
+                .into_iter()
+                .map(|event| unsafe { SetWinEventHook(event, event, None, Some(on_member), pid, tid, flags) })
+                .filter(|hook| !hook.0.is_null())
+                .collect();
+            if hooks.len() < events.len() {
+                log::info!("snap beside: a group hook wasn't installed");
+            }
+            self.member_hooks.push((tid, hooks));
         }
+        if self.adhoc.is_empty() && self.adhoc_timer != 0 {
+            unsafe {
+                let _ = KillTimer(None, self.adhoc_timer);
+            }
+            self.adhoc_timer = 0;
+        }
+    }
+
+    /// The tray is quitting: the groups and their hooks go.
+    pub(super) fn end_adhoc(&mut self) {
+        self.adhoc.clear();
+        self.sync_adhoc_hooks();
     }
 
     /// A member closed, minimized or maximized leaves its group at once. One that

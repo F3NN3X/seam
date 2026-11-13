@@ -200,8 +200,8 @@ struct Engine {
     adhoc: Vec<adhoc::Adhoc>,
     /// The last ad-hoc group's id.
     adhoc_next: u64,
-    /// Hooks on closing, minimizing and moving while there is a group.
-    member_hooks: Vec<HWINEVENTHOOK>,
+    /// Hooks on closing, minimizing and moving, per thread of a group's windows.
+    member_hooks: Vec<(u32, Vec<HWINEVENTHOOK>)>,
     /// Waits for a moved member to stay put.
     adhoc_timer: usize,
 }
@@ -318,6 +318,7 @@ pub fn work_area_changed() {
 
 /// The tray is quitting: free the overlay's windows and bitmaps, and the divider handles.
 pub fn shutdown() {
+    with_engine(Engine::end_adhoc);
     dragkeys::stop();
     zone_paint::clear();
     dividers::stop();

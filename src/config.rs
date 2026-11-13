@@ -378,6 +378,10 @@ pub struct Config {
     /// shows and the page a browser shows, and a switch that starts the app opens it
     /// there (D330). Off by default. Off, nothing is read and saved ones aren't used.
     pub workspaces_remember_places: bool,
+    /// "Update from screen removes apps that aren't open": the rows a capture has no
+    /// window for are removed from the workspace, with Undo. Off keeps them. Only
+    /// Update from screen; a quick save never removes a row.
+    pub workspaces_update_removes_closed: bool,
     /// "Where apps open": an app's window goes to its place whenever it opens, with
     /// or without a workspace. Raw JSON like workspaces, so an entry this build
     /// can't read is kept as it is and ignored.
@@ -424,6 +428,7 @@ impl Default for Config {
             restore_apps: RestoreApps::Windows,
             auto_apply: false,
             workspaces_remember_places: false,
+            workspaces_update_removes_closed: false,
             app_rules: Vec::new(),
             custom_layouts: Vec::new(),
             cursor_easing_asked: false,

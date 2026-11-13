@@ -187,6 +187,12 @@ const ENTRIES: &[Entry] = &[
     ),
     entry(
         Page::Workspaces,
+        "Update from screen removes apps that aren't open",
+        "Off keeps them, so a closed app still starts when you switch",
+        "update capture remove closed delete keep",
+    ),
+    entry(
+        Page::Workspaces,
         "Put windows back",
         "Moved or minimized windows go back where the workspace puts them",
         "snap back drift status moved",

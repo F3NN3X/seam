@@ -564,6 +564,18 @@ Turn the debug log on. Close every app of a test workspace, with **Start missing
 - [ ] **Merge.** Set a delay and a wait on two apps, reorder them and add an app from Installed that isn't running. Move the running windows and choose **Update from screen**. The running rows take their new places and keep their delays, waits, Launch ticks and order. The app that isn't running is still there. A window that wasn't in the workspace is added at the end.
 - [ ] **Nothing deleted.** Close every app and choose Update from screen. Every row is still there.
 
+### Update from screen removes apps that aren't open
+
+- [ ] **Off keeps a closed app.** With the setting off, close one app of a workspace and choose **Update from screen**. Its row stays, not running.
+- [ ] **On removes it, Undo restores it.** Turn on **Update from screen removes apps that aren't open** on Workspaces. Close the middle app of three and choose **Update from screen**. Its row goes, the others keep their order and details, and a notification says "Removed 1 app that wasn't open. Click to undo". Click it within 8 seconds: the row is back in the same position with its delay, wait, place and zone.
+- [ ] **A place row.** With **Remember folders and pages** on, close the Explorer window of a row that holds a folder and choose **Update from screen**. The row goes. Click the notification: it comes back with its folder. With two such rows, the one after it still follows its own window after the removal and after Undo.
+- [ ] **Still open elsewhere.** With the setting on, move one app of the workspace to another virtual desktop and choose **Update from screen**. Its row stays. Close every app of the workspace and choose it again: nothing is removed.
+- [ ] **Suspended app.** With the setting on, a Store app that Windows has suspended may still have a cloaked window, and then its row stays. That is expected, not a fault.
+- [ ] **Undo straight away.** Remove an app with **Update from screen** and click the notification at once, without touching anything: the row is back, in place.
+- [ ] **A place row, a window held elsewhere.** With **Remember folders and pages** on, close a place row's Explorer window while another Explorer window is open: the row goes, and the open one is added as a row.
+- [ ] **Undo after a change.** Remove an app with **Update from screen**, then edit a row, or choose **Update from screen** again, before clicking the first notification. Clicking it does nothing, and the log says the workspace changed.
+- [ ] **Quick save is unaffected.** With the setting on, close an app of the workspace in use and press the **Save windows to the active workspace** shortcut. The row stays. **Where it is now** and Capture don't remove anything either.
+
 ### Pinned windows and switches
 
 - [ ] **Off.** With **Pinned windows stay when I switch workspaces** off on Zones, pin Notepad on top and switch to a workspace that puts Notepad in a zone: it moves, and stays on top. With **Other windows** on Minimize, a pinned window that isn't in the workspace is minimized.

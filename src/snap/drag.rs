@@ -261,8 +261,11 @@ impl Engine {
         if live && !drag.keys.hooked && !drag.keys.off && !drag.keys.capped {
             let show_key = key_code(&self.settings.show_key).unwrap_or(VK_SHIFT);
             let span_key = key_code(&self.settings.span_key);
-            let own = |vk: VIRTUAL_KEY| show_key == vk || span_key == Some(vk);
-            drag.keys.generation = dragkeys::start(self.owner, own(VK_CONTROL), own(VK_MENU));
+            // An Alt+drag's key is held for the whole drag, so it is the drag's own too.
+            let own =
+                |vk: VIRTUAL_KEY| show_key == vk || span_key == Some(vk) || (drag.alt && self.alt_keys.contains(&vk));
+            let own = (own(VK_CONTROL), own(VK_MENU), own(VK_LWIN));
+            drag.keys.generation = dragkeys::start(self.owner, own);
             drag.keys.hooked = true;
         }
         if drag.keys.hooked && !drag.keys.off {
@@ -375,7 +378,7 @@ impl Engine {
         let lit = drag.shown.and_then(|view| Some((view.screen, view.hit?, view.cut)));
         let Some((screen, (a, b), cut)) = lit else {
             // With Ctrl held, a window alone in its zone leaves the layout, and the others close the gap.
-            if held(VK_CONTROL) && !(drag.alt && self.alt_holds_ctrl) && !self.ctrl_is_a_key() {
+            if held(VK_CONTROL) && !(drag.alt && self.alt_keys.contains(&VK_CONTROL)) && !self.ctrl_is_a_key() {
                 self.pull_out(drag);
             }
             // Dropped outside every zone, so a snapped window gets its old size back.

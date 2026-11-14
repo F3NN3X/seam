@@ -176,6 +176,8 @@ struct Pending {
     retries: u8,
     /// A re-fit after a display change: say nothing if the window doesn't move.
     quiet: bool,
+    /// Maximize it once it has landed (Undo of a window that was maximized).
+    maximize: bool,
     timer: usize,
 }
 
@@ -226,6 +228,8 @@ pub struct Placement {
     pub zone: Option<(String, usize, usize)>,
     /// The effective DPI of the screen it lands on.
     pub dpi: u32,
+    /// Maximize it once it has landed (Undo of a window that was maximized).
+    pub maximize: bool,
 }
 
 thread_local! {

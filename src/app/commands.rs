@@ -32,6 +32,7 @@ pub(super) fn patch_config(app: &mut App, patch: &Value) -> Reply {
     standby_configure(app);
     apply_hotkeys(app);
     relink(app);
+    arm(app);
     if remap_turned_on {
         warn_about_ease(app);
     }

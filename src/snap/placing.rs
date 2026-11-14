@@ -76,7 +76,16 @@ impl Engine {
                 }
             }
         }
-        self.pending = Some(Pending { hwnd: hwnd.0 as isize, target, before, steps, retries: 0, quiet, timer: 0 });
+        self.pending = Some(Pending {
+            hwnd: hwnd.0 as isize,
+            target,
+            before,
+            steps,
+            retries: 0,
+            quiet,
+            maximize: false,
+            timer: 0,
+        });
         self.advance_step();
         unsafe {
             let _ = PostMessageW(Some(hwnd_of(self.owner)), WM_APP_WINDOWS_CHANGED, WPARAM(0), LPARAM(0));
@@ -172,6 +181,13 @@ impl Engine {
                 self.unsnap(hwnd, winutil::has_zone_stamp(hwnd));
             }
         }
+        if p.maximize {
+            // After its steps if it has some, else now.
+            match self.pending.as_mut().filter(|x| x.hwnd == p.hwnd) {
+                Some(pending) => pending.maximize = true,
+                None => winutil::maximize(hwnd),
+            }
+        }
     }
 
     fn advance_step(&mut self) {
@@ -209,6 +225,9 @@ impl Engine {
                         let t = p.target;
                         let (dx, dy, dw, dh) = (v.x - t.x, v.y - t.y, v.w - t.w, v.h - t.h);
                         log::info!("zone place: landed {dx},{dy} px off its place, {dw}x{dh} px in size");
+                    }
+                    if p.maximize {
+                        winutil::maximize(hwnd);
                     }
                     return;
                 }

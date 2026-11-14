@@ -1,11 +1,11 @@
 //! Small questions about other processes, for the updater.
 
 use std::path::PathBuf;
-use windows::Win32::Foundation::{CloseHandle, HANDLE, HLOCAL, LocalFree, WAIT_OBJECT_0};
+use windows::Win32::Foundation::{CloseHandle, FILETIME, HANDLE, HLOCAL, LocalFree, WAIT_OBJECT_0};
 use windows::Win32::Security::Authorization::ConvertSidToStringSidW;
 use windows::Win32::Security::{GetTokenInformation, TOKEN_QUERY, TOKEN_USER, TokenUser};
 use windows::Win32::System::Threading::{
-    GetCurrentProcess, OpenMutexW, OpenProcess, OpenProcessToken, PROCESS_NAME_WIN32,
+    GetCurrentProcess, GetProcessTimes, OpenMutexW, OpenProcess, OpenProcessToken, PROCESS_NAME_WIN32,
     PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_SYNCHRONIZE, QueryFullProcessImageNameW, SYNCHRONIZATION_SYNCHRONIZE,
     WaitForSingleObject,
 };
@@ -21,6 +21,18 @@ pub fn image_path(pid: u32) -> Option<PathBuf> {
         let _ = CloseHandle(process);
         read.ok()?;
         Some(PathBuf::from(String::from_utf16_lossy(&buf[..len as usize])))
+    }
+}
+
+/// When a process started, which tells it from a later one given the same id.
+pub fn started(pid: u32) -> Option<u64> {
+    unsafe {
+        let process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid).ok()?;
+        let (mut start, mut exit, mut kernel, mut user) = Default::default();
+        let ok = GetProcessTimes(process, &mut start, &mut exit, &mut kernel, &mut user).is_ok();
+        let _ = CloseHandle(process);
+        let start: FILETIME = start;
+        ok.then(|| (u64::from(start.dwHighDateTime) << 32) | u64::from(start.dwLowDateTime))
     }
 }
 

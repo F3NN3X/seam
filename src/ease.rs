@@ -5,6 +5,8 @@
 //! from Windows 11 build 22557, where the setting first came. Seam only ever
 //! turns it on, and only when asked to.
 
+use std::sync::Once;
+
 use windows::Win32::Foundation::{ERROR_FILE_NOT_FOUND, ERROR_SUCCESS, LPARAM, WIN32_ERROR, WPARAM};
 use windows::Win32::System::Registry::*;
 use windows::Win32::UI::WindowsAndMessaging::*;
@@ -14,6 +16,8 @@ const CURSORS: PCWSTR = w!("Control Panel\\Cursors");
 const NAME: PCWSTR = w!("CursorDeadzoneJumpingSetting");
 /// The first build with the setting.
 const FIRST_BUILD: u32 = 22557;
+/// The missing value is logged once per run.
+static MISSING_LOGGED: Once = Once::new();
 
 /// On or off, or `None` on a Windows without the setting.
 pub fn read() -> Option<bool> {
@@ -32,7 +36,11 @@ pub fn read() -> Option<bool> {
     };
     // Only a missing value needs the build.
     let build = if code == ERROR_FILE_NOT_FOUND { crate::winver::build().parse().ok() } else { None };
-    interpret(code, value, build)
+    let read = interpret(code, value, build);
+    if code == ERROR_FILE_NOT_FOUND && read == Some(true) {
+        MISSING_LOGGED.call_once(|| crate::log::info!("cursor easing: the value is missing, so it is read as on"));
+    }
+    read
 }
 
 /// What a registry read means: the value if there was one, else on from `FIRST_BUILD`.

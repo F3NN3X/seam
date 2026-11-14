@@ -237,6 +237,13 @@ pub fn restore(h: HWND) {
     }
 }
 
+/// Ask the window to maximize, on the screen it is on. Returns at once.
+pub fn maximize(h: HWND) {
+    unsafe {
+        let _ = ShowWindowAsync(h, SW_MAXIMIZE);
+    }
+}
+
 /// Resize and move so the visible frame lands on `target`. The margins are
 /// read now, so call it again after a DPI change. Returns at once.
 pub fn fit(h: HWND, target: Rect) {

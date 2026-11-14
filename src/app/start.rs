@@ -206,7 +206,6 @@ unsafe fn open_for_launch(hwnd: HWND, line_up: bool, updated_from: Option<&str>,
         // After a sign-in, do what I chose once the desktop has settled (D120).
         if login {
             with_app(begin);
-            SetTimer(Some(hwnd), TIMER_SESSION_OFFER, SESSION_OFFER_AFTER_MS, None);
         }
         if line_up {
             let _ = PostMessageW(Some(hwnd), WM_APP_LINEUP, WPARAM(0), LPARAM(0));

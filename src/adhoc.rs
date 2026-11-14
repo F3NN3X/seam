@@ -249,7 +249,13 @@ impl Engine {
             .iter()
             .filter_map(|&(k, r)| {
                 let now = winutil::visible_rect(hwnd_of(k))?;
-                (!near(now, r)).then_some(Placement { hwnd: k, target: r, zone: None, dpi: left.group.dpi })
+                (!near(now, r)).then_some(Placement {
+                    hwnd: k,
+                    target: r,
+                    zone: None,
+                    dpi: left.group.dpi,
+                    maximize: false,
+                })
             })
             .collect();
         log::info!("snap beside: a drag ended where it began, so the window is back in its group");
@@ -284,7 +290,7 @@ impl Engine {
             if let (Some(now), Some(set)) = (now, after.get(l).copied())
                 && !near(now, set)
             {
-                moves.push(Placement { hwnd: k, target: set, zone: None, dpi: a.dpi });
+                moves.push(Placement { hwnd: k, target: set, zone: None, dpi: a.dpi, maximize: false });
             }
         }
         log::info!("snap beside: a window left its group, {} stay", members.len());
@@ -571,7 +577,7 @@ impl Engine {
         let Some((work, dpi)) = work_area(screen.bounds) else { return };
         let id = screen.id.clone();
         self.place(hwnd, plan.rect, winutil::monitor_dpi(hwnd) != dpi, false);
-        self.queued.push_back(Placement { hwnd: b.target, target: plan.target, zone: None, dpi });
+        self.queued.push_back(Placement { hwnd: b.target, target: plan.target, zone: None, dpi, maximize: false });
         self.window_pump();
         let n = plan.members.len();
         match plan.group.and_then(|i| self.adhoc.get_mut(i)) {
@@ -611,9 +617,9 @@ impl Engine {
             return Err(FILLS.into());
         }
         let screen = s.id.clone();
-        let back =
-            vec![Back { place: Placement { hwnd: key, target: frame, zone: None, dpi }, set: work, pulled: None }];
-        self.queued.push_back(Placement { hwnd: key, target: work, zone: None, dpi });
+        let place = Placement { hwnd: key, target: frame, zone: None, dpi, maximize: false };
+        let back = vec![Back { place, set: work, maximized: winutil::is_maximized(hwnd), pulled: None }];
+        self.queued.push_back(Placement { hwnd: key, target: work, zone: None, dpi, maximize: false });
         self.window_pump();
         log::info!("fit group: a loose window on screen {}", number + 1);
         Ok(Fitted { number: number + 1, screen, back, group: None })
@@ -645,8 +651,9 @@ impl Engine {
         let mut back = Vec::new();
         for &(k, leaf) in &a.members {
             let (Some(was), Some(set)) = (before.get(leaf).copied(), after.get(leaf).copied()) else { continue };
-            self.queued.push_back(Placement { hwnd: k, target: set, zone: None, dpi });
-            back.push(Back { place: Placement { hwnd: k, target: was, zone: None, dpi }, set, pulled: None });
+            self.queued.push_back(Placement { hwnd: k, target: set, zone: None, dpi, maximize: false });
+            let place = Placement { hwnd: k, target: was, zone: None, dpi, maximize: false };
+            back.push(Back { place, set, maximized: false, pulled: None });
         }
         let (group, screen, n) = (Some((a.id, a.area)), a.screen.clone(), a.members.len());
         self.adhoc[i].area = work;

@@ -283,19 +283,25 @@ impl Engine {
                 Dest::Zones(old, from, to, span) => {
                     let zone = |f: usize, t: usize| Some((old.id.clone(), f, t));
                     if alone {
-                        return Placement { hwnd, target: *span, zone: zone(*from, *to), dpi: old.dpi };
+                        return Placement {
+                            hwnd,
+                            target: *span,
+                            zone: zone(*from, *to),
+                            dpi: old.dpi,
+                            maximize: false,
+                        };
                     }
                     let mut mapped = map_rect(*at, target, *span);
                     match zones_of(&old.zones, mapped) {
                         Some((f, t)) => {
                             let target = zones::span(old.zones[f], old.zones[t]);
-                            Placement { hwnd, target, zone: zone(f, t), dpi: old.dpi }
+                            Placement { hwnd, target, zone: zone(f, t), dpi: old.dpi, maximize: false }
                         }
                         None => {
                             let (w, ht) = minsize::cached(*h, old.dpi);
                             mapped.w = mapped.w.max(w);
                             mapped.h = mapped.h.max(ht);
-                            Placement { hwnd, target: mapped, zone: None, dpi: old.dpi }
+                            Placement { hwnd, target: mapped, zone: None, dpi: old.dpi, maximize: false }
                         }
                     }
                 }
@@ -304,7 +310,7 @@ impl Engine {
                     let (w, ht) = minsize::cached(*h, *dpi);
                     mapped.w = mapped.w.max(w);
                     mapped.h = mapped.h.max(ht);
-                    Placement { hwnd, target: mapped, zone: None, dpi: *dpi }
+                    Placement { hwnd, target: mapped, zone: None, dpi: *dpi, maximize: false }
                 }
             }
         };

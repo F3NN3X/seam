@@ -110,7 +110,54 @@ fn run_switch(job: &SwitchJob, mine: u64) -> Option<Switched> {
     let seen = snapshot(&mut procs);
     let mut known: Vec<Candidate> = seen.iter().map(|s| s.cand.clone()).collect();
     let mut found = workspace::assign_bound(&ws.windows, &known, &run.bound, &elsewhere);
-    // An unbound place row keeps the window it matched by app from now on.
+    bind_unbound(&run, &found);
+    if let Some(key) = stamp {
+        clear_stale_stamps(key, &found, &seen);
+    }
+    let mut starts = Starts::default();
+
+    let mut waits = Waits { found: &mut found, known: &mut known, procs: &mut procs, seen: &seen };
+    if let Some(wait) = job.arrange_for {
+        arrange_as_they_open(&run, wait, &mut waits, &elsewhere, &mut tally)?;
+    } else {
+        place_then_start(&run, mine, &mut waits, &mut starts, &mut tally)?;
+    }
+    if cancelled() {
+        return None;
+    }
+
+    // Stacking and focus last. A switch that waited up to a minute would take them from
+    // whatever the user opened since.
+    if job.arrange_for.is_none() {
+        restack_and_focus(&tally);
+    }
+
+    // Other windows on this desk's screens: only ones that were there before the switch began,
+    // and never anything that belongs to an app this workspace has or has started, whose
+    // splash screens, updaters and real main window may open late.
+    let other_windows = if job.alongside { OtherWindows::Leave } else { ws.other_windows };
+    if other_windows != OtherWindows::Leave && found.iter().all(Option::is_none) {
+        // Without a single match the workspace says nothing about what is on screen.
+        tally.skipped.push(("Other windows".into(), "nothing matched".into()));
+    } else if other_windows != OtherWindows::Leave {
+        deal_with_others(job, &run, other_windows, (&found, &known, &seen), &starts);
+    }
+
+    log::info!(
+        "{}: switched in {} ms, plan {} ms, {} moves, {} already in place",
+        ws.name,
+        begun.elapsed().as_millis(),
+        tally.plan.as_millis(),
+        tally.moves,
+        tally.in_place
+    );
+    let launched = starts.launched;
+    Some(Switched { id: ws.id.clone(), name: ws.name.clone(), launched, placed: tally.placed, skipped: tally.skipped })
+}
+
+/// An unbound place row keeps the window it matched by app from now on.
+fn bind_unbound(run: &Run, found: &[Option<isize>]) {
+    let ws = run.ws;
     for (i, b) in run.bound.iter().enumerate() {
         let app = app_name(&ws.windows[i]);
         match (b, found[i]) {
@@ -124,171 +171,164 @@ fn run_switch(job: &SwitchJob, mine: u64) -> Option<Switched> {
             _ => {}
         }
     }
-    // This workspace's stamps on windows it didn't match this time are out of date.
-    if let Some(key) = stamp {
-        let matched: HashSet<isize> = found.iter().flatten().copied().collect();
-        for s in seen.iter().filter(|s| !matched.contains(&s.cand.hwnd)) {
-            let h = hwnd_of(s.cand.hwnd);
-            if winutil::ws_stamp(h).is_some_and(|(k, _)| k == key) {
-                winutil::clear_ws_stamp(h);
-            }
+}
+
+/// This workspace's stamps on windows it didn't match this time are out of date.
+fn clear_stale_stamps(key: u32, found: &[Option<isize>], seen: &[Seen]) {
+    let matched: HashSet<isize> = found.iter().flatten().copied().collect();
+    for s in seen.iter().filter(|s| !matched.contains(&s.cand.hwnd)) {
+        let h = hwnd_of(s.cand.hwnd);
+        if winutil::ws_stamp(h).is_some_and(|(k, _)| k == key) {
+            winutil::clear_ws_stamp(h);
         }
     }
-    let mut starts = Starts::default();
+}
 
-    if let Some(wait) = job.arrange_for {
-        // Something else opens the windows, so place each one as it appears, once per rule.
-        let mut done = vec![false; ws.windows.len()];
-        let since = Instant::now();
-        loop {
-            let ready: Vec<usize> = (0..done.len()).filter(|i| !done[*i] && found[*i].is_some()).collect();
-            if !ready.is_empty() {
-                place_rules(&run, &found, &ready, &seen, &mut tally);
-                ready.iter().for_each(|i| done[*i] = true);
-            }
-            if done.iter().all(|d| *d) || since.elapsed() >= wait {
-                break;
-            }
-            std::thread::sleep(ARRANGE_POLL);
-            if cancelled() {
-                return None;
-            }
-            let claimed: HashSet<isize> = found.iter().flatten().copied().collect();
-            let fresh: Vec<Candidate> =
-                snapshot(&mut procs).into_iter().map(|s| s.cand).filter(|c| !claimed.contains(&c.hwnd)).collect();
-            let missing: Vec<usize> = (0..done.len()).filter(|i| found[*i].is_none()).collect();
-            let rules: Vec<Rule> = missing.iter().map(|i| ws.windows[*i].clone()).collect();
-            let bound: Vec<Option<Bound>> = missing.iter().map(|i| run.bound[*i]).collect();
-            for (i, hit) in missing.into_iter().zip(workspace::assign_bound(&rules, &fresh, &bound, &elsewhere)) {
-                found[i] = hit;
-            }
+/// Something else opens the windows, so place each one as it appears, once per rule.
+fn arrange_as_they_open(
+    run: &Run,
+    wait: Duration,
+    waits: &mut Waits,
+    elsewhere: &HashSet<isize>,
+    tally: &mut Tally,
+) -> Option<()> {
+    let ws = run.ws;
+    let mut done = vec![false; ws.windows.len()];
+    let since = Instant::now();
+    loop {
+        let ready: Vec<usize> = (0..done.len()).filter(|i| !done[*i] && waits.found[*i].is_some()).collect();
+        if !ready.is_empty() {
+            place_rules(run, waits.found, &ready, waits.seen, tally);
+            ready.iter().for_each(|i| done[*i] = true);
         }
-        let absent: Vec<&Rule> = ws.windows.iter().zip(&found).filter(|(_, h)| h.is_none()).map(|(r, _)| r).collect();
-        let names: Vec<String> = absent.iter().map(|r| app_name(r)).collect();
-        let shown = found.iter().flatten().count();
-        log::info!("{}: placed {shown} of {}, never showed: {}", ws.name, found.len(), names.join(", "));
-        let mut background = Background::default();
-        for rule in absent {
-            let why = if background.runs(rule, &mut procs) { RUNS_IN_BACKGROUND } else { "timeout" };
-            tally.skipped.push((app_name(rule), why.into()));
+        if done.iter().all(|d| *d) || since.elapsed() >= wait {
+            break;
         }
-    } else {
-        // What is running already goes in one pass, before anything starts.
-        let running: Vec<usize> = (0..found.len()).filter(|i| found[*i].is_some()).collect();
-        place_rules(&run, &found, &running, &seen, &mut tally);
-        if cancelled() {
+        std::thread::sleep(ARRANGE_POLL);
+        if (run.cancelled)() {
             return None;
         }
-        // A place row whose window is open but not one a switch takes (on another
-        // desktop, say) isn't started a second time.
-        let open = |i: usize| matches!(run.bound[i], Some(Bound::Alive(_)));
-        let wanted =
-            |(i, r): (usize, &Rule)| (ws.launch_missing && found[i].is_none() && r.launch && !open(i)).then_some(i);
-        let starting: Vec<usize> = ws.windows.iter().enumerate().filter_map(wanted).collect();
-        for &i in starting.iter().filter(|i| run.bound[**i] == Some(Bound::Gone)) {
-            let (app, kind) = (app_name(&ws.windows[i]), usable_place(&ws.windows[i]).map_or("place", place_kind));
-            log::info!("{app}: its window was closed, starting on its saved {kind}");
-        }
-        if !starting.is_empty() {
-            let mut waits = Waits { found: &mut found, known: &mut known, procs: &mut procs, seen: &seen };
-            run_stages(&run, mine, &starting, &mut waits, &mut starts, &mut tally)?;
-        }
-        // An app this switch doesn't start and that has no window is reported when its
-        // program still runs, closed to the tray.
-        let mut background = Background::default();
-        let idle = ws.windows.iter().enumerate().filter(|(i, _)| found[*i].is_none() && !starting.contains(i));
-        for (_, rule) in idle {
-            if background.runs(rule, &mut procs) {
-                tally.skipped.push((app_name(rule), RUNS_IN_BACKGROUND.into()));
-            }
+        let claimed: HashSet<isize> = waits.found.iter().flatten().copied().collect();
+        let fresh: Vec<Candidate> =
+            snapshot(waits.procs).into_iter().map(|s| s.cand).filter(|c| !claimed.contains(&c.hwnd)).collect();
+        let missing: Vec<usize> = (0..done.len()).filter(|i| waits.found[*i].is_none()).collect();
+        let rules: Vec<Rule> = missing.iter().map(|i| ws.windows[*i].clone()).collect();
+        let bound: Vec<Option<Bound>> = missing.iter().map(|i| run.bound[*i]).collect();
+        for (i, hit) in missing.into_iter().zip(workspace::assign_bound(&rules, &fresh, &bound, elsewhere)) {
+            waits.found[i] = hit;
         }
     }
-    if cancelled() {
+    let found = &*waits.found;
+    let absent: Vec<&Rule> = ws.windows.iter().zip(found).filter(|(_, h)| h.is_none()).map(|(r, _)| r).collect();
+    let names: Vec<String> = absent.iter().map(|r| app_name(r)).collect();
+    let shown = found.iter().flatten().count();
+    log::info!("{}: placed {shown} of {}, never showed: {}", ws.name, found.len(), names.join(", "));
+    let mut background = Background::default();
+    for rule in absent {
+        let why = if background.runs(rule, waits.procs) { RUNS_IN_BACKGROUND } else { "timeout" };
+        tally.skipped.push((app_name(rule), why.into()));
+    }
+    Some(())
+}
+
+/// What is running already goes in one pass, then the missing apps start in stages.
+fn place_then_start(run: &Run, mine: u64, waits: &mut Waits, starts: &mut Starts, tally: &mut Tally) -> Option<()> {
+    let ws = run.ws;
+    let running: Vec<usize> = (0..waits.found.len()).filter(|i| waits.found[*i].is_some()).collect();
+    place_rules(run, waits.found, &running, waits.seen, tally);
+    if (run.cancelled)() {
         return None;
     }
-
-    // Stacking and focus last. A switch that waited up to a minute would take them from
-    // whatever the user opened since.
-    if job.arrange_for.is_none() {
-        restack(&tally.stack, tally.moves > 0);
-        // The tray has foreground rights after a hotkey; otherwise the focus may be refused, and then it stays.
-        let foreground = unsafe { GetForegroundWindow() }.0 as isize;
-        if let Some(hwnd) = to_focus(&tally.stack).filter(|h| *h != foreground) {
-            wincontrol::focus(hwnd_of(hwnd), true);
+    // A place row whose window is open but not one a switch takes (on another
+    // desktop, say) isn't started a second time.
+    let open = |i: usize| matches!(run.bound[i], Some(Bound::Alive(_)));
+    let wanted =
+        |(i, r): (usize, &Rule)| (ws.launch_missing && waits.found[i].is_none() && r.launch && !open(i)).then_some(i);
+    let starting: Vec<usize> = ws.windows.iter().enumerate().filter_map(wanted).collect();
+    for &i in starting.iter().filter(|i| run.bound[**i] == Some(Bound::Gone)) {
+        let (app, kind) = (app_name(&ws.windows[i]), usable_place(&ws.windows[i]).map_or("place", place_kind));
+        log::info!("{app}: its window was closed, starting on its saved {kind}");
+    }
+    if !starting.is_empty() {
+        run_stages(run, mine, &starting, waits, starts, tally)?;
+    }
+    // An app this switch doesn't start and that has no window is reported when its
+    // program still runs, closed to the tray.
+    let mut background = Background::default();
+    let idle = ws.windows.iter().enumerate().filter(|(i, _)| waits.found[*i].is_none() && !starting.contains(i));
+    for (_, rule) in idle {
+        if background.runs(rule, waits.procs) {
+            tally.skipped.push((app_name(rule), RUNS_IN_BACKGROUND.into()));
         }
     }
+    Some(())
+}
 
-    // Other windows on this desk's screens: only ones that were there before the switch began,
-    // and never anything that belongs to an app this workspace has or has started, whose
-    // splash screens, updaters and real main window may open late.
-    let other_windows = if job.alongside { OtherWindows::Leave } else { ws.other_windows };
-    if other_windows != OtherWindows::Leave && found.iter().all(Option::is_none) {
-        // Without a single match the workspace says nothing about what is on screen.
-        tally.skipped.push(("Other windows".into(), "nothing matched".into()));
-    } else if other_windows != OtherWindows::Leave {
-        let claimed: HashSet<isize> = found.iter().flatten().copied().collect();
-        let (mut exes, mut aumids): (HashSet<String>, HashSet<String>) = (HashSet::new(), HashSet::new());
-        // A place row whose window is open but out of reach (on another desktop) still has its app here.
-        let open = |i: usize| matches!(run.bound[i], Some(Bound::Alive(_)));
-        let mine_rules = ws
-            .windows
-            .iter()
-            .enumerate()
-            .filter(|(i, _)| found[*i].is_some() || starts.started.contains(i) || open(*i));
-        for (_, rule) in mine_rules {
-            exes.insert(rule.exe.to_lowercase());
-            aumids.extend(rule.aumid.clone());
+fn restack_and_focus(tally: &Tally) {
+    restack(&tally.stack, tally.moves > 0);
+    // The tray has foreground rights after a hotkey; otherwise the focus may be refused, and then it stays.
+    let foreground = unsafe { GetForegroundWindow() }.0 as isize;
+    if let Some(hwnd) = to_focus(&tally.stack).filter(|h| *h != foreground) {
+        wincontrol::focus(hwnd_of(hwnd), true);
+    }
+}
+
+/// Minimizes or closes the windows on this desk's screens that the workspace doesn't use.
+fn deal_with_others(
+    job: &SwitchJob,
+    run: &Run,
+    other_windows: OtherWindows,
+    (found, known, seen): (&[Option<isize>], &[Candidate], &[Seen]),
+    starts: &Starts,
+) {
+    let ws = run.ws;
+    let claimed: HashSet<isize> = found.iter().flatten().copied().collect();
+    let (mut exes, mut aumids): (HashSet<String>, HashSet<String>) = (HashSet::new(), HashSet::new());
+    // A place row whose window is open but out of reach (on another desktop) still has its app here.
+    let open = |i: usize| matches!(run.bound[i], Some(Bound::Alive(_)));
+    let mine_rules =
+        ws.windows.iter().enumerate().filter(|(i, _)| found[*i].is_some() || starts.started.contains(i) || open(*i));
+    for (_, rule) in mine_rules {
+        exes.insert(rule.exe.to_lowercase());
+        aumids.extend(rule.aumid.clone());
+    }
+    for c in known.iter().filter(|c| claimed.contains(&c.hwnd)) {
+        exes.insert(c.exe.to_lowercase());
+        aumids.extend(c.aumid.clone());
+    }
+    let others = seen.iter().filter(|s| !s.elevated && !stays(s.pin, job.pins_stay) && !claimed.contains(&s.cand.hwnd));
+    for s in others.filter(|s| !exes.contains(&s.cand.exe.to_lowercase())) {
+        if s.cand.aumid.as_ref().is_some_and(|a| aumids.contains(a)) {
+            continue;
         }
-        for c in known.iter().filter(|c| claimed.contains(&c.hwnd)) {
-            exes.insert(c.exe.to_lowercase());
-            aumids.extend(c.aumid.clone());
+        let h = hwnd_of(s.cand.hwnd);
+        // A dialog of a claimed window, like a save prompt, goes with its owner.
+        let owner = unsafe { GetWindow(h, GW_OWNER) }.ok().filter(|o| !o.is_invalid());
+        if owner.is_some_and(|o| claimed.contains(&(o.0 as isize))) || !unsafe { IsWindow(Some(h)) }.as_bool() {
+            continue;
         }
-        let others =
-            seen.iter().filter(|s| !s.elevated && !stays(s.pin, job.pins_stay) && !claimed.contains(&s.cand.hwnd));
-        for s in others.filter(|s| !exes.contains(&s.cand.exe.to_lowercase())) {
-            if s.cand.aumid.as_ref().is_some_and(|a| aumids.contains(a)) {
-                continue;
-            }
-            let h = hwnd_of(s.cand.hwnd);
-            // A dialog of a claimed window, like a save prompt, goes with its owner.
-            let owner = unsafe { GetWindow(h, GW_OWNER) }.ok().filter(|o| !o.is_invalid());
-            if owner.is_some_and(|o| claimed.contains(&(o.0 as isize))) || !unsafe { IsWindow(Some(h)) }.as_bool() {
-                continue;
-            }
-            let on_desk = winutil::window_rect(h)
-                .is_some_and(|r| run.geos.iter().any(|g| g.bounds.contains(centre(r).0, centre(r).1)));
-            if !on_desk {
-                continue;
-            }
-            // Asks only. The app decides, so one with unsaved work keeps its window.
-            unsafe {
-                match other_windows {
-                    OtherWindows::Minimize => {
-                        let _ = ShowWindowAsync(h, SW_MINIMIZE);
-                    }
-                    OtherWindows::Close => {
-                        // Seam closing a pinned window isn't the news D119 tells about.
-                        if winutil::pin_bits(h) != 0 {
-                            crate::wm::closing(s.cand.hwnd);
-                        }
-                        let _ = PostMessageW(Some(h), WM_CLOSE, WPARAM(0), LPARAM(0));
-                    }
-                    OtherWindows::Leave => {}
+        let on_desk = winutil::window_rect(h)
+            .is_some_and(|r| run.geos.iter().any(|g| g.bounds.contains(centre(r).0, centre(r).1)));
+        if !on_desk {
+            continue;
+        }
+        // Asks only. The app decides, so one with unsaved work keeps its window.
+        unsafe {
+            match other_windows {
+                OtherWindows::Minimize => {
+                    let _ = ShowWindowAsync(h, SW_MINIMIZE);
                 }
+                OtherWindows::Close => {
+                    // Seam closing a pinned window isn't the news D119 tells about.
+                    if winutil::pin_bits(h) != 0 {
+                        crate::wm::closing(s.cand.hwnd);
+                    }
+                    let _ = PostMessageW(Some(h), WM_CLOSE, WPARAM(0), LPARAM(0));
+                }
+                OtherWindows::Leave => {}
             }
         }
     }
-
-    log::info!(
-        "{}: switched in {} ms, plan {} ms, {} moves, {} already in place",
-        ws.name,
-        begun.elapsed().as_millis(),
-        tally.plan.as_millis(),
-        tally.moves,
-        tally.in_place
-    );
-    let launched = starts.launched;
-    Some(Switched { id: ws.id.clone(), name: ws.name.clone(), launched, placed: tally.placed, skipped: tally.skipped })
 }
 
 /// The windows a workspace doesn't use, topmost first, matched as a switch does:

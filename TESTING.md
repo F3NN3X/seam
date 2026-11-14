@@ -1155,6 +1155,14 @@ Set a key for **Pause Seam** on Shortcuts and a key for **Spotlight**, turn on *
 - [ ] **Alt+drag steers.** With **Move and resize from anywhere in a window** on and Alt as its key, Alt-drag a window with the show key held. The wheel and 1, 2, 3, 0 steer while Alt is held, and Tab is Alt+Tab. With Win as the key, Win-drag with the show key held: the wheel, Tab and 1, 2, 3, 0 steer while Win is held, and Win+Tab or Win+1 don't reach Windows during that drag.
 - [ ] **Esc on a divider handle.** Focus a terminal or Notepad, drag a divider handle, press Esc. The windows go back, and the focused app gets no Esc (a terminal's line stays, a dialog stays open). A plain Esc after the drag reaches the app again.
 
+## State that drifts
+
+- [ ] **A split while busy.** Keep the tray menu open, and drop a window with a split (Tab or the wheel, then a part) on a screen with zones. Close the menu: the layout is saved and the Undo notice shows. The log has no `Seam was busy, so the new layout wasn't saved` line.
+- [ ] **After a restart.** With **Refit** off, snap three windows in a screen's zones, quit and start Seam, then split a zone before them with the drag's keys. Undo it: the three windows' zones are as before the split. Repeat with a pull-out.
+- [ ] **A swap occupant that moves.** Drop a window on a zone that two windows share with Swap on, and drag the second one a good way off within a quarter second. It stays where you put it, and the log has one `zone swap: a window moved` line.
+- [ ] **A reused handle.** With **Remember folders and pages** on and a workspace with a folder row, close that Explorer window and open other programs. The row starts its folder on the next switch, and takes no other window.
+- [ ] **Alt+drag verdicts.** With Alt+drag on, hold Alt and drag a window of an app, close the app, then start it again (it may get the same process id). The first Alt+drag on the new window works at once, with no wait for the next sweep.
+
 ## Report back
 
 For each failure, give the step, what you saw, and the matching lines from `seam.log`.

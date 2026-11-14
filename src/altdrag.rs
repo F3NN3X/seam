@@ -19,7 +19,8 @@ use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Duration, Instant};
 use windows::Win32::Foundation::*;
 use windows::Win32::System::Threading::{
-    GetCurrentThreadId, GetProcessTimes, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION,
+    GetCurrentThreadId, GetProcessTimes, INFINITE, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_SYNCHRONIZE,
+    RegisterWaitForSingleObject, UnregisterWait, WT_EXECUTEONLYONCE,
 };
 use windows::Win32::UI::Accessibility::{HWINEVENTHOOK, SetWinEventHook, UnhookWinEvent};
 use windows::Win32::UI::HiDpi::GetDpiForWindow;
@@ -79,7 +80,8 @@ static WORKER: AtomicU32 = AtomicU32::new(0);
 static OWING: AtomicBool = AtomicBool::new(false);
 /// By process id and creation time, oldest first: whether Seam may move its windows
 /// (not Seam's, not an administrator's, not excluded). Neither changes in a process's
-/// life, so nothing expires: an entry goes when its process does. The worker fills it
+/// life, so nothing expires: an entry goes when its process does, at once through the
+/// wait on its process, and at the latest at the next sweep. The worker fills it
 /// ahead of use, and the hook only tries the lock.
 static VERDICTS: Mutex<Vec<Verdict>> = Mutex::new(Vec::new());
 /// Counts changes of the exclude list, so a look begun before one isn't kept.
@@ -89,6 +91,53 @@ struct Verdict {
     pid: u32,
     created: u64,
     ok: bool,
+    /// Held for the entry's life: its drop ends the wait.
+    _exit: Option<ExitWatch>,
+}
+
+/// A wait on a process, which drops its verdict when the process exits.
+struct ExitWatch {
+    process: HANDLE,
+    wait: HANDLE,
+}
+
+// The handles are only used to end the wait, from whichever thread drops the verdict.
+unsafe impl Send for ExitWatch {}
+
+impl ExitWatch {
+    /// Call `exited` once when the process ends. None when it can't be waited on, which
+    /// leaves its verdict to the sweep.
+    fn new(pid: u32) -> Option<Self> {
+        unsafe {
+            let process = OpenProcess(PROCESS_SYNCHRONIZE, false, pid).ok()?;
+            let mut wait = HANDLE::default();
+            let context = Some(pid as usize as *const std::ffi::c_void);
+            match RegisterWaitForSingleObject(&mut wait, process, Some(exited), context, INFINITE, WT_EXECUTEONLYONCE) {
+                Ok(()) => Some(Self { process, wait }),
+                Err(_) => {
+                    let _ = CloseHandle(process);
+                    None
+                }
+            }
+        }
+    }
+}
+
+impl Drop for ExitWatch {
+    fn drop(&mut self) {
+        // Not waiting for a callback that is running: it may be what drops this.
+        unsafe {
+            let _ = UnregisterWait(self.wait);
+            let _ = CloseHandle(self.process);
+        }
+    }
+}
+
+/// The process of a verdict ended, on a thread of the pool: its verdict goes, so a
+/// process that gets its id isn't taken for it.
+unsafe extern "system" fn exited(context: *mut std::ffi::c_void, _: bool) {
+    let pid = context as usize as u32;
+    VERDICTS.lock().unwrap_or_else(|e| e.into_inner()).retain(|v| v.pid != pid);
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -159,9 +208,11 @@ pub fn configure(owner: isize, on: bool, key: &str, exclude: &[String]) {
 }
 
 /// The setting went off or Seam stands by: no new drag. A drag still going keeps
-/// the hook until its release comes, so no app gets a lone one.
+/// the hook until its release comes, so no app gets a lone one. The waits on the
+/// processes end, and the next sweep fills the verdicts again.
 pub fn stop() {
     ON.store(false, Ordering::SeqCst);
+    VERDICTS.lock().unwrap_or_else(|e| e.into_inner()).clear();
     WANTED.fetch_add(1, Ordering::SeqCst);
     let open = OPEN.swap(0, Ordering::SeqCst);
     if open != 0 {
@@ -445,7 +496,8 @@ fn look(h: HWND) {
     }
     // A process gone, its id now another's.
     list.retain(|v| v.pid != pid);
-    list.push(Verdict { pid, created, ok });
+    // Under the lock, so a process that has gone already finds its verdict to drop.
+    list.push(Verdict { pid, created, ok, _exit: ExitWatch::new(pid) });
     if list.len() > MAX_VERDICTS {
         list.remove(0);
     }

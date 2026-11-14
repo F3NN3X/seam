@@ -124,6 +124,10 @@ const SESSION_OFFER_TRIES: u8 = 12;
 /// or it was switched to, so a drag or a switch is checked once.
 const TIMER_DRIFT: usize = 11;
 const DRIFT_AFTER_MS: u32 = 400;
+/// Retries window control's plan that the app was too busy for.
+const TIMER_WINDOW: usize = 13;
+/// How long a plan an API client waits for is kept for the app before it is dropped.
+const WINDOW_WAIT: Duration = Duration::from_secs(2);
 /// How long the end of a Windows session waits for the last session's capture.
 const SESSION_END_WAIT: Duration = Duration::from_secs(2);
 /// How long a restore whose apps Windows reopens waits for their windows (D128).

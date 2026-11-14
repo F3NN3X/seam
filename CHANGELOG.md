@@ -16,6 +16,11 @@ All notable changes to Seam. The format follows [Keep a Changelog](https://keepa
 - **Keys during a drag** no longer slip through to the app when a drag starts right after the last one, and a key held past the drop no longer repeats into it. Esc during a divider handle's drag no longer reaches the focused app as well.
 - **Alt as the show key, or the Alt+drag key,** now lets Alt+Tab through to Windows, and the wheel and 1, 2, 3, 0 steer while it is held. With Win as the Alt+drag key, Win with the wheel, Tab and 1, 2, 3, 0 steers during that drag instead of reaching Windows.
 - Snipping Tool's capture overlay, the lock screen and the Xbox Game Bar no longer make Seam step aside for a moment. A Direct3D game on another screen no longer makes it step aside for a maximized app with an auto-hidden taskbar.
+- **A split or pull-out made while Seam was busy** is saved after all, with its Undo, instead of being dropped and leaving the saved layout old.
+- **Windows Seam only knows by their zone mark** (after a restart) are renumbered with the others on a split or pull-out, and Undo gives their numbers back.
+- **A zone swap** leaves a window alone that I moved by hand before its turn came, and says so in the log.
+- **A workspace row no longer keeps a window that isn't its own** when Windows reuses a window handle for another program's window.
+- **Alt+drag** forgets an app's verdict the moment the app exits, so a new program that gets its process id isn't judged by it.
 
 ### Changed
 

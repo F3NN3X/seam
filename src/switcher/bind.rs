@@ -6,17 +6,35 @@ use super::*;
 /// and row, in memory only. `None` once that window was closed. A row is its index,
 /// carried over edits by `workspace::moved_rows` as the switch stamps are. A window
 /// is one row's only.
-static BOUND: Mutex<Vec<(String, usize, Option<isize>)>> = Mutex::new(Vec::new());
+static BOUND: Mutex<Vec<(String, usize, Option<Held>)>> = Mutex::new(Vec::new());
 
-fn alive(hwnd: isize) -> bool {
-    unsafe { IsWindow(Some(hwnd_of(hwnd))) }.as_bool()
+/// A bound window with the process it belonged to, so a handle Windows gives to a new window isn't taken for it.
+#[derive(Clone, Copy)]
+struct Held {
+    hwnd: isize,
+    pid: u32,
+    started: u64,
+}
+
+fn held(hwnd: isize) -> Held {
+    let pid = winutil::process_id(hwnd_of(hwnd));
+    Held { hwnd, pid, started: seam::process::started(pid).unwrap_or(0) }
+}
+
+/// The window is still open and is the same one: its handle may since belong to another process's window.
+/// A start time that couldn't be read (0), then or now, doesn't tell them apart.
+fn alive(h: &Held) -> bool {
+    let started = |t: u64| t == 0 || h.started == 0 || t == h.started;
+    unsafe { IsWindow(Some(hwnd_of(h.hwnd))) }.as_bool()
+        && winutil::process_id(hwnd_of(h.hwnd)) == h.pid
+        && started(seam::process::started(h.pid).unwrap_or(0))
 }
 
 /// Remember `hwnd` as the window of row `row` of workspace `id`.
 pub(super) fn bind(id: &str, row: usize, hwnd: isize) {
     let mut bound = BOUND.lock().unwrap_or_else(|e| e.into_inner());
-    bound.retain(|(w, r, h)| !(w == id && *r == row) && *h != Some(hwnd));
-    bound.push((id.to_string(), row, Some(hwnd)));
+    bound.retain(|(w, r, h)| !(w == id && *r == row) && h.map(|h| h.hwnd) != Some(hwnd));
+    bound.push((id.to_string(), row, Some(held(hwnd))));
 }
 
 /// Bind the windows a capture read, each to its row, for the rows of `ws` with a place.
@@ -75,11 +93,11 @@ pub fn rebind(id: &str, moves: &[Option<usize>]) {
 pub(super) fn bound_windows() -> HashSet<isize> {
     let mut bound = BOUND.lock().unwrap_or_else(|e| e.into_inner());
     prune(&mut bound);
-    bound.iter().filter_map(|(_, _, h)| *h).collect()
+    bound.iter().filter_map(|(_, _, h)| h.map(|h| h.hwnd)).collect()
 }
 
-fn prune(bound: &mut [(String, usize, Option<isize>)]) {
-    for entry in bound.iter_mut().filter(|(_, _, h)| h.is_some_and(|h| !alive(h))) {
+fn prune(bound: &mut [(String, usize, Option<Held>)]) {
+    for entry in bound.iter_mut().filter(|(_, _, h)| h.as_ref().is_some_and(|h| !alive(h))) {
         entry.2 = None;
     }
 }
@@ -93,12 +111,12 @@ pub(super) fn bindings(ws: &Workspace, remember: bool) -> (Vec<Option<Bound>>, H
     let mut bound = BOUND.lock().unwrap_or_else(|e| e.into_inner());
     prune(&mut bound);
     let of = |row: usize| match bound.iter().find(|(w, r, _)| *w == ws.id && *r == row) {
-        Some((_, _, Some(h))) => Bound::Alive(*h),
+        Some((_, _, Some(h))) => Bound::Alive(h.hwnd),
         Some((_, _, None)) => Bound::Gone,
         None => Bound::Unbound,
     };
     let rows = ws.windows.iter().enumerate().map(|(i, r)| usable_place(r).map(|_| of(i))).collect();
-    let elsewhere = bound.iter().filter(|(w, _, _)| *w != ws.id).filter_map(|(_, _, h)| *h).collect();
+    let elsewhere = bound.iter().filter(|(w, _, _)| *w != ws.id).filter_map(|(_, _, h)| h.map(|h| h.hwnd)).collect();
     (rows, elsewhere)
 }
 

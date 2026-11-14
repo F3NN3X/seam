@@ -249,7 +249,13 @@ impl Engine {
             .iter()
             .filter_map(|&(k, r)| {
                 let now = winutil::visible_rect(hwnd_of(k))?;
-                (!near(now, r)).then_some(Placement { hwnd: k, target: r, zone: None, dpi: left.group.dpi })
+                (!near(now, r)).then_some(Placement {
+                    hwnd: k,
+                    target: r,
+                    zone: None,
+                    dpi: left.group.dpi,
+                    maximize: false,
+                })
             })
             .collect();
         log::info!("snap beside: a drag ended where it began, so the window is back in its group");

@@ -158,7 +158,7 @@ pub(super) unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARA
                 LRESULT(0)
             }
             snap::WM_APP_SWAP_LOOK => {
-                snap::look_ready(wparam.0 as u64);
+                snap::look_ready();
                 LRESULT(0)
             }
             wincontrol::WM_APP_WINDOW => {

@@ -139,6 +139,8 @@ struct Drag {
     /// The worker's look at the windows, with its generation, asked for with the drag and
     /// taken once it is there.
     ahead: Option<(u64, swap::Ahead)>,
+    /// Zones were painted without the look, so the worker's post paints them again.
+    bare: bool,
     /// Moves posted at drag start, and where to, as they may not have landed yet.
     landed: Vec<(isize, Rect)>,
     /// The pointer rested, so zones show as if the show key were held.

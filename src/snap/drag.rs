@@ -61,7 +61,11 @@ impl Engine {
         let edges = self.edges_start(hwnd, &geometry, (zone, stamped), was_maximized);
         let edges = edges.or_else(|| self.adhoc_edges_start(hwnd, was_maximized));
         // Zones or an edge to snap beside will want the windows, so read them now.
-        let ahead = (!geometry.is_empty() || self.beside_on()).then(|| self.look_ahead(key, &landed)).flatten();
+        let wants_look = !geometry.is_empty() || self.beside_on();
+        let ahead = wants_look.then(|| self.look_ahead(key, &landed)).flatten();
+        if !wants_look {
+            swap::forget_looks();
+        }
         // The handles stay out of the way of any drag, and come back at its end.
         dividers::hide();
         self.drag = Some(Drag {
@@ -85,6 +89,7 @@ impl Engine {
             others: Vec::new(),
             looked: false,
             ahead,
+            bare: false,
             landed,
             beside: None,
             tried: None,
@@ -245,6 +250,8 @@ impl Engine {
             drag.others = others;
             drag.looked = true;
         }
+        // Painted without the look, so the worker's post draws it again.
+        drag.bare = live && !drag.looked;
         if live && !drag.keys.hooked && !drag.keys.off && !drag.keys.capped {
             let show_key = key_code(&self.settings.show_key).unwrap_or(VK_SHIFT);
             let span_key = key_code(&self.settings.span_key);

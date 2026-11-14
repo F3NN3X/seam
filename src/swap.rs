@@ -133,8 +133,13 @@ struct Look {
 }
 
 /// The tray's handler of `WM_APP_SWAP_LOOK`.
-pub fn look_ready(generation: u64) {
-    with_engine(|e| e.look_posted(generation));
+pub fn look_ready() {
+    with_engine(|e| e.look_posted());
+}
+
+/// A drag that asks for no look: any job still waiting is for a drag that is over.
+pub(super) fn forget_looks() {
+    CURRENT.fetch_add(1, Ordering::SeqCst);
 }
 
 /// Look for the newest drag only: older jobs waiting, and one whose drag is over, are skipped.
@@ -255,11 +260,11 @@ impl Engine {
 
     /// The worker's look is ready: if its drag is still the one running and zones show,
     /// draw them again once, now with the windows they swap with.
-    fn look_posted(&mut self, generation: u64) {
+    fn look_posted(&mut self) {
         let Some(mut drag) = self.drag.take() else { return };
-        let mine = drag.ahead.as_ref().is_some_and(|(g, _)| *g == generation);
+        // A tick may have taken the look already, so it is the flag that says to draw.
         let (view, beside) = (drag.shown, drag.beside);
-        if mine && (view.is_some() || beside.is_some()) {
+        if drag.bare && (view.is_some() || beside.is_some()) {
             self.present(&mut drag, view, beside);
         }
         self.drag = Some(drag);

@@ -607,6 +607,40 @@ pub fn render(panel: &mut Panel, window: &mut Window, cx: &mut Context<Panel>) -
     let subtitle = format!("{screens} screen{} on {}", if screens == 1 { "" } else { "s" }, panel.desk_name());
     let one_screen = screens < 2;
 
+    let actions = header_actions(one_screen, cx);
+
+    let width = f64::from(window.viewport_size().width) - 240. - 64. - 34.;
+    let mut content = vec![];
+    if let Some(state) = panel.state.clone() {
+        content.push(layout_card(panel, &state, one_screen, width, p, window, cx));
+    }
+
+    let pointer = pointer_card(panel, p, window, cx);
+    let mut rows = desk_rows(panel, window, cx);
+    if rows.is_empty() {
+        rows.push(ui::row("No saved desks yet", Some("Line up your screens to save this one".into()), div(), p));
+    }
+    let desks = card(rows, p);
+
+    div()
+        .flex()
+        .flex_col()
+        .gap(px(ui::SECTION_GAP))
+        .child(ui::page_header("Displays", subtitle, p).child(actions))
+        .when(!panel.ease_on, |d| d.child(ease_alert(p, cx)))
+        .children(content)
+        .child(
+            div()
+                .flex()
+                .items_start()
+                .gap(px(24.))
+                .child(div().flex_1().min_w_0().child(section("Saved desks", desks, p)))
+                .child(div().flex_1().min_w_0().child(section("Pointer", pointer, p))),
+        )
+}
+
+/// Align arrangement and Line up screens, at the right of the page header.
+fn header_actions(one_screen: bool, cx: &mut Context<Panel>) -> Div {
     let align = ui::secondary("align", "Align arrangement", cx).on_click(cx.listener(|panel, _, window, cx| {
         panel.call("arrangement.align", json!({}), window, cx, |_, result, window, cx| match result {
             Ok(_) => window.push_notification(Notification::new().message("Aligned the arrangement"), cx),
@@ -620,65 +654,74 @@ pub fn render(panel: &mut Panel, window: &mut Window, cx: &mut Context<Panel>) -
         .disabled(one_screen)
         .when(one_screen, |b| b.tooltip("Only one screen is connected, so there's nothing to line up"))
         .on_click(cx.listener(|panel, _, window, cx| panel.command("lineup.start", json!({}), window, cx)));
+    div().flex().flex_none().gap(px(8.)).child(align).child(line_up)
+}
 
-    let width = f64::from(window.viewport_size().width) - 240. - 64. - 34.;
-    let mut content = vec![];
-    if let Some(state) = panel.state.clone() {
-        let seam_view = panel.layout_view == LayoutView::Seam;
-        let caption = if seam_view {
-            "Real sizes from each screen's EDID, joined where you lined them up"
-        } else {
-            "How Windows arranges them, in pixels"
-        };
-        let view = cx.entity();
-        let views = ui::segmented(
-            "layout-view",
-            "Layout view",
-            &["Windows", "Seam"],
-            usize::from(seam_view),
-            window,
-            cx,
-            move |at, _, cx| {
-                view.update(cx, |panel, cx| {
-                    panel.layout_view = if at == 1 { LayoutView::Seam } else { LayoutView::Windows };
-                    cx.notify();
-                });
-            },
-        );
-        let show = ui::secondary("show-layout", "Show on screens", cx).on_click(cx.listener(|panel, _, window, cx| {
-            let view = if panel.layout_view == LayoutView::Seam { "seam" } else { "windows" };
-            panel.command("layout.show", json!({ "view": view }), window, cx);
-        }));
-        let title = div()
-            .flex()
-            .items_center()
-            .justify_between()
-            .gap(px(16.))
-            .child(
-                div()
-                    .flex()
-                    .flex_col()
-                    .gap(px(2.))
-                    .child(div().text_size(px(16.)).child("Physical layout"))
-                    .child(div().text_size(px(12.)).text_color(p.muted).child(caption)),
-            )
-            .when(!one_screen, |d| {
-                d.child(div().flex().flex_none().items_center().gap(px(8.)).child(views).child(show))
+/// The physical layout: the map, then a row for each border.
+fn layout_card(
+    panel: &Panel,
+    state: &State,
+    one_screen: bool,
+    width: f64,
+    p: Palette,
+    window: &mut Window,
+    cx: &mut Context<Panel>,
+) -> AnyElement {
+    let seam_view = panel.layout_view == LayoutView::Seam;
+    let caption = if seam_view {
+        "Real sizes from each screen's EDID, joined where you lined them up"
+    } else {
+        "How Windows arranges them, in pixels"
+    };
+    let view = cx.entity();
+    let views = ui::segmented(
+        "layout-view",
+        "Layout view",
+        &["Windows", "Seam"],
+        usize::from(seam_view),
+        window,
+        cx,
+        move |at, _, cx| {
+            view.update(cx, |panel, cx| {
+                panel.layout_view = if at == 1 { LayoutView::Seam } else { LayoutView::Windows };
+                cx.notify();
             });
-        let body = if one_screen {
+        },
+    );
+    let show = ui::secondary("show-layout", "Show on screens", cx).on_click(cx.listener(|panel, _, window, cx| {
+        let view = if panel.layout_view == LayoutView::Seam { "seam" } else { "windows" };
+        panel.command("layout.show", json!({ "view": view }), window, cx);
+    }));
+    let title = div()
+        .flex()
+        .items_center()
+        .justify_between()
+        .gap(px(16.))
+        .child(
             div()
-                .text_size(px(13.))
-                .text_color(p.secondary)
-                .child("Only one screen is connected, so there's nothing to line up")
-        } else {
-            map(panel, &state, width, p, cx)
-        };
-        let top = div().flex().flex_col().gap(px(12.)).p(px(16.)).child(title).child(body).into_any_element();
-        let mut rows = vec![top];
-        rows.extend(border_rows(panel, &state, p, cx));
-        content.push(card(rows, p).into_any_element());
-    }
+                .flex()
+                .flex_col()
+                .gap(px(2.))
+                .child(div().text_size(px(16.)).child("Physical layout"))
+                .child(div().text_size(px(12.)).text_color(p.muted).child(caption)),
+        )
+        .when(!one_screen, |d| d.child(div().flex().flex_none().items_center().gap(px(8.)).child(views).child(show)));
+    let body = if one_screen {
+        div()
+            .text_size(px(13.))
+            .text_color(p.secondary)
+            .child("Only one screen is connected, so there's nothing to line up")
+    } else {
+        map(panel, state, width, p, cx)
+    };
+    let top = div().flex().flex_col().gap(px(12.)).p(px(16.)).child(title).child(body).into_any_element();
+    let mut rows = vec![top];
+    rows.extend(border_rows(panel, state, p, cx));
+    card(rows, p).into_any_element()
+}
 
+/// The Pointer card: the remap switch, the two sliders and the Line Up switches.
+fn pointer_card(panel: &Panel, p: Palette, window: &mut Window, cx: &mut Context<Panel>) -> Div {
     let view = cx.entity();
     let remap = switch("remap", "Remap pointer at borders", panel.config.enabled, window, cx, {
         let view = view.clone();
@@ -725,7 +768,7 @@ pub fn render(panel: &mut Panel, window: &mut Window, cx: &mut Context<Panel>) -
         div().flex().flex_col().child(ui::description(value, p)).child(ui::description(caption, p)).into_any_element()
     };
     let resistance_value = if resistance == 0 { "Off".into() } else { format!("{resistance} px") };
-    let pointer = card(
+    card(
         vec![
             row("Remap pointer at borders", Some("Cross where the screens physically meet".into()), remap, p),
             ui::row_with(
@@ -760,29 +803,5 @@ pub fn render(panel: &mut Panel, window: &mut Window, cx: &mut Context<Panel>) -
             ),
         ],
         p,
-    );
-    let mut rows = desk_rows(panel, window, cx);
-    if rows.is_empty() {
-        rows.push(ui::row("No saved desks yet", Some("Line up your screens to save this one".into()), div(), p));
-    }
-    let desks = card(rows, p);
-
-    div()
-        .flex()
-        .flex_col()
-        .gap(px(ui::SECTION_GAP))
-        .child(
-            ui::page_header("Displays", subtitle, p)
-                .child(div().flex().flex_none().gap(px(8.)).child(align).child(line_up)),
-        )
-        .when(!panel.ease_on, |d| d.child(ease_alert(p, cx)))
-        .children(content)
-        .child(
-            div()
-                .flex()
-                .items_start()
-                .gap(px(24.))
-                .child(div().flex_1().min_w_0().child(section("Saved desks", desks, p)))
-                .child(div().flex_1().min_w_0().child(section("Pointer", pointer, p))),
-        )
+    )
 }

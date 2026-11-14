@@ -95,7 +95,7 @@ pub(super) fn notify(app: &mut App, title: &str, body: &str, click: BalloonActio
     }
 }
 
-fn flag(on: bool) -> MENU_ITEM_FLAGS {
+fn checked_flag(on: bool) -> MENU_ITEM_FLAGS {
     if on { MF_STRING | MF_CHECKED } else { MF_STRING }
 }
 
@@ -120,7 +120,7 @@ unsafe fn add_workspaces_menu(app: &App, menu: HMENU, workspaces: &[Workspace]) 
                     label = format!("{label}\t{combo}");
                 }
                 let label: Vec<u16> = label.encode_utf16().chain(std::iter::once(0)).collect();
-                let _ = AppendMenuW(submenu, flag(active == Some(ws.id.as_str())), id, PCWSTR(label.as_ptr()));
+                let _ = AppendMenuW(submenu, checked_flag(active == Some(ws.id.as_str())), id, PCWSTR(label.as_ptr()));
             }
             if AppendMenuW(menu, MF_POPUP, submenu.0 as usize, w!("Workspaces")).is_err() {
                 let _ = DestroyMenu(submenu);
@@ -168,7 +168,7 @@ pub(super) fn show_menu(app: &mut App) {
         add_workspaces_menu(app, menu, &workspaces);
         add_tile_menu(app, menu);
         let _ = AppendMenuW(menu, MF_SEPARATOR, 0, None);
-        let _ = AppendMenuW(menu, flag(app.cfg.enabled), ID_ENABLED, w!("Remap pointer at borders"));
+        let _ = AppendMenuW(menu, checked_flag(app.cfg.enabled), ID_ENABLED, w!("Remap pointer at borders"));
         let _ = AppendMenuW(menu, MF_STRING, ID_RELEASE, w!("Release pinned windows"));
         let _ = AppendMenuW(menu, MF_SEPARATOR, 0, None);
         let _ = AppendMenuW(menu, MF_STRING, ID_QUIT, w!("Quit Seam"));

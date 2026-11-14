@@ -209,23 +209,10 @@ fn details(panel: &mut Panel, i: usize, ws: &Workspace, window: &mut Window, cx:
         ))
 }
 
-fn window_row(
-    panel: &mut Panel,
-    (i, cols): (usize, Cols),
-    ws: &Workspace,
-    screens: &[Screen],
-    window: &mut Window,
-    cx: &mut Context<Panel>,
-) -> AnyElement {
-    let p = palette(cx);
-    let rule = &ws.windows[i];
-    let title = app_title(rule);
-    let id = ws.id.clone();
-    let open = panel.editing.expanded.as_ref().is_some_and(|(e, row)| *e == id && *row == i);
-    let focus = row_focus(ws, i, window, cx);
-
-    let drag = DragRow { workspace: id.clone(), from: i, title: title.clone().into() };
-    let grip = div()
+/// The handle a row is dragged by.
+fn row_grip(ws: &Workspace, i: usize, title: &str, p: Palette) -> Stateful<Div> {
+    let drag = DragRow { workspace: ws.id.clone(), from: i, title: title.to_string().into() };
+    div()
         .id(("row-grip", i))
         .flex()
         .flex_none()
@@ -236,14 +223,19 @@ fn window_row(
         .on_drag(drag, |drag, _, _, cx| {
             cx.stop_propagation();
             cx.new(|_| drag.clone())
-        });
+        })
+}
 
+/// The app's name and where it runs from. A click opens or closes the launch details.
+fn name_cell(ws: &Workspace, i: usize, title: &str, open: bool, cols: Cols, cx: &mut Context<Panel>) -> Stateful<Div> {
+    let p = palette(cx);
+    let rule = &ws.windows[i];
     // What will run is shown in full on hover. A click opens the launch details.
     let path = if rule.exe.is_empty() { exe_line(rule) } else { rule.exe.clone() };
     let full_path = SharedString::from(format!("{title}: {path}"));
     let chevron = if open { assets::IconName::ChevronDown } else { assets::IconName::ChevronRight };
-    let toggle = id.clone();
-    let name = div()
+    let toggle = ws.id.clone();
+    div()
         .id(("app-name", i))
         .flex()
         .flex_grow(NAME_GROW)
@@ -259,7 +251,7 @@ fn window_row(
                 .flex()
                 .flex_col()
                 .min_w_0()
-                .child(div().text_size(px(14.)).truncate().child(title.clone()))
+                .child(div().text_size(px(14.)).truncate().child(title.to_string()))
                 .child(div().text_size(px(12.)).text_color(p.muted).truncate().child(exe_line(rule))),
         )
         .child(Icon::new(chevron).flex_none().size(px(16.)).text_color(p.muted))
@@ -267,14 +259,15 @@ fn window_row(
             let this = Some((toggle.clone(), i));
             panel.editing.expanded = if panel.editing.expanded == this { None } else { this };
             cx.notify();
-        }));
+        }))
+}
 
+/// Whether the app starts with the workspace.
+fn launch_checkbox(ws: &Workspace, i: usize, title: &str, cx: &mut Context<Panel>) -> Checkbox {
     let view = cx.entity();
-    let launch_id = id.clone();
-    let launch = Checkbox::new(("launch", i))
-        .checked(rule.launch)
-        .accessibility_label(format!("Start {title}"))
-        .on_click(move |on, window, cx| {
+    let launch_id = ws.id.clone();
+    Checkbox::new(("launch", i)).checked(ws.windows[i].launch).accessibility_label(format!("Start {title}")).on_click(
+        move |on, window, cx| {
             let (on, id) = (*on, launch_id.clone());
             view.update(cx, |panel, cx| {
                 let note = |title: &str| match on {
@@ -283,7 +276,28 @@ fn window_row(
                 };
                 update_row(panel, &id, i, note, window, cx, |rule| rule.launch = on);
             });
-        });
+        },
+    )
+}
+
+fn window_row(
+    panel: &mut Panel,
+    (i, cols): (usize, Cols),
+    ws: &Workspace,
+    screens: &[Screen],
+    window: &mut Window,
+    cx: &mut Context<Panel>,
+) -> AnyElement {
+    let p = palette(cx);
+    let rule = &ws.windows[i];
+    let title = app_title(rule);
+    let id = ws.id.clone();
+    let open = panel.editing.expanded.as_ref().is_some_and(|(e, row)| *e == id && *row == i);
+    let focus = row_focus(ws, i, window, cx);
+
+    let grip = row_grip(ws, i, &title, p);
+    let name = name_cell(ws, i, &title, open, cols, cx);
+    let launch = launch_checkbox(ws, i, &title, cx);
 
     let state = row_state(panel, ws, i);
     // A closed app that starts with the workspace says so under where it goes.

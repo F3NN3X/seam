@@ -291,7 +291,7 @@ Subscribe with `events.subscribe` and a list of topics. An event belongs to the 
 | `workspace` | The workspace in use on this desk, or `null`. `drifted` is true once one of its windows was moved or minimized, so Snap back has work to do |
 | `session` | The last session saved for this desk, or `null`. `saved_at` is Unix seconds and `windows` how many windows it holds |
 | `restart_apps` | Windows' "Restart apps" sign-in option was on when Seam last looked |
-| `windows_cursor_easing` | Windows' "Ease cursor movement between displays": `true`, `false`, or `null` on a Windows without the setting |
+| `windows_cursor_easing` | Windows' "Ease cursor movement between displays": `true`, `false`, or `null` on a Windows without the setting. Read from `CursorDeadzoneJumpingSetting` under `HKCU\Control Panel\Cursors` (see the README FAQ) |
 | `hotkey_errors` | Shortcuts Seam couldn't register because another app holds them. `action` names the shortcut and `combo` is its keys |
 | `last_align` | The result of the last change to Windows' arrangement, `{ok, message}`, or `null` |
 | `update` | An update waiting to install, `{available, ready}`, or `null`. `ready` means it is downloaded and checked |

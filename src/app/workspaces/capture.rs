@@ -135,6 +135,172 @@ pub(in crate::app) fn undo_quick_save(app: &mut App) {
     publish(app);
 }
 
+/// Where Update from screen sent the rows it kept, which old row each new one was,
+/// and how many it removed.
+type Removal = (Vec<Option<usize>>, Vec<Option<usize>>, usize);
+
+/// What saving a capture leaves for the steps after it.
+#[derive(Default)]
+struct Kept {
+    /// The workspace as it was, for a quick save's Undo.
+    before: Option<Value>,
+    /// The row each captured window has now, when the save stamps them.
+    rows: Option<Vec<usize>>,
+    /// "Where it is now" stamps its one window.
+    stamps: Option<Vec<(isize, usize)>>,
+    /// Rows Update from screen removed: where the others went, and how many.
+    removal: Option<Removal>,
+}
+
+/// A finished capture and what saving it reads.
+struct Saving<'a> {
+    job: &'a Capturing,
+    hwnds: &'a [isize],
+    others: &'a [workspace::Candidate],
+    layouts: &'a [(String, Option<zones::ZoneLayout>)],
+    remember: bool,
+    removes: bool,
+}
+
+/// Update the workspace `into` from the capture, a row of it or all of it. The error
+/// is the answer when that can't be done.
+fn update_existing(
+    saving: &Saving,
+    quick_undo: &mut Option<QuickUndo>,
+    workspaces: &mut [Value],
+    old: &Workspace,
+    into: &str,
+    rules: Vec<Rule>,
+    kept: &mut Kept,
+) -> Result<Workspace, Reply> {
+    let &Saving { job, hwnds, others, layouts, remember, removes } = saving;
+    // A place row pairs with the window it remembers, as in a switch (D336).
+    let (bound, elsewhere) = switcher::capture_bindings(old, hwnds, remember);
+    let updated = match (job.row, &job.pick) {
+        // "Add an app": only the picked window's folder or page, read here.
+        (Some(row), Some(pick)) => match workspace::take_window_place(old, row, &pick.exe, &pick.class, &rules) {
+            Some(updated) => updated,
+            None => return Err(refused("That window has no folder or page to remember")),
+        },
+        (Some(row), None) => match workspace::recapture_row(old, row, &rules, &bound, &elsewhere) {
+            Some((updated, hit)) => {
+                kept.stamps = Some(vec![(hwnds[hit], row)]);
+                updated
+            }
+            None => return Err(refused("That app isn't open, so where it goes stays as it was")),
+        },
+        (None, _) => {
+            // An earlier save's Undo would put back rows this one may have changed.
+            if quick_undo.as_ref().is_some_and(|u| u.id == *into) {
+                *quick_undo = None;
+            }
+            let zones = workspace::capture_zones(&old.zones, layouts);
+            let merged = workspace::merge_capture(old, rules, &bound, &elsewhere, others, removes);
+            kept.rows = Some(merged.rows);
+            if merged.removed > 0 {
+                // Where each old row went, exactly: the rows it kept, in order.
+                let mut moves = vec![None; old.windows.len()];
+                for (new, old) in merged.from.iter().enumerate() {
+                    if let Some(old) = old {
+                        moves[*old] = Some(new);
+                    }
+                }
+                kept.removal = Some((moves, merged.from, merged.removed));
+            }
+            Workspace { windows: merged.windows, zones, ..old.clone() }
+        }
+    };
+    let same = |v: &&mut Value| workspace::parse(v).is_some_and(|w| w.id == *into);
+    if let Some(slot) = workspaces.iter_mut().find(same) {
+        kept.before = Some(std::mem::replace(slot, workspace::to_value(&updated)));
+    }
+    Ok(updated)
+}
+
+/// Save the capture as a new workspace of the desk.
+fn create_workspace(
+    saving: &Saving,
+    existing: &[Workspace],
+    workspaces: &mut Vec<Value>,
+    rules: Vec<Rule>,
+    kept: &mut Kept,
+) -> Workspace {
+    let &Saving { job, layouts, .. } = saving;
+    let names: Vec<String> = existing.iter().map(|w| w.name.clone()).collect();
+    let ids: Vec<String> = existing.iter().map(|w| w.id.clone()).collect();
+    let name = match job.name.as_deref().map(str::trim) {
+        Some(name) if !name.is_empty() => workspace::unique_name(name, &names),
+        _ => workspace::next_name(&names),
+    };
+    if job.quick {
+        kept.rows = Some((0..rules.len()).collect());
+    }
+    let zones = workspace::capture_zones(&Default::default(), layouts);
+    let created = Workspace { id: workspace::new_id(&ids), name, windows: rules, zones, ..Workspace::default() };
+    workspaces.push(workspace::to_value(&created));
+    created
+}
+
+/// The saved windows hold their rows, as after a switch, so drift and auto-apply see them at once.
+fn stamp_saved(
+    job: &Capturing,
+    saved: &Workspace,
+    remember: bool,
+    hwnds: &[isize],
+    rows: Option<Vec<usize>>,
+    stamps: Option<Vec<(isize, usize)>>,
+) {
+    // A row with a place remembers the window it was read from (D336).
+    if remember {
+        let binds: Vec<(isize, usize)> = match (&job.pick, job.row, &rows, &stamps) {
+            (Some(pick), Some(row), _, _) => vec![(pick.hwnd, row)],
+            (_, _, Some(rows), _) => hwnds.iter().copied().zip(rows.iter().copied()).collect(),
+            (_, _, _, Some(windows)) => windows.clone(),
+            _ if job.into.is_none() => hwnds.iter().copied().zip(0..).collect(),
+            _ => Vec::new(),
+        };
+        switcher::bind_rows(saved, &binds);
+    }
+    let key = workspace::stamp_key(&saved.id);
+    if let Some(rows) = rows {
+        live::stamp(key, hwnds.iter().copied().zip(rows).collect(), true);
+    } else if let Some(windows) = stamps {
+        // The drift check comes below, once the worker has the updated workspace.
+        live::stamp(key, windows, false);
+    }
+}
+
+/// Say how the save went: the answer for the API client if there is one, else a notice.
+fn finish_capture(
+    app: &mut App,
+    job: &Capturing,
+    saved: &Workspace,
+    before: Option<Value>,
+    removal: Option<Removal>,
+) -> Option<Reply> {
+    if job.quick {
+        let created = before.is_none();
+        quick_saved(app, saved, before);
+        live::check_drift();
+        publish(app);
+        return Some(Ok(json!({ "id": saved.id, "created": created })));
+    }
+    if app.workspace.as_deref() == Some(saved.id.as_str()) {
+        sync_live(app);
+        live::check_drift();
+    }
+    publish(app);
+    if let Some((_, from, closed)) = removal {
+        update_removed(app, saved, before, from, closed);
+    }
+    if job.reply.is_some() {
+        return Some(Ok(json!({ "id": saved.id })));
+    }
+    let body = format!("{} windows saved as {}", saved.windows.len(), saved.name);
+    notify(app, "Workspace captured", &body, BalloonAction::OpenPanel("workspaces"));
+    None
+}
+
 /// A capture finished: save it as a new workspace, or over the one it was asked to update.
 pub(in crate::app) fn captured(app: &mut App) {
     let (Some((rules, hwnds, others)), Some(job)) = (switcher::take_captured(), app.capturing.take()) else { return };
@@ -152,123 +318,29 @@ pub(in crate::app) fn captured(app: &mut App) {
     let layouts: Vec<(String, Option<zones::ZoneLayout>)> =
         job.sig.split('|').map(|id| (id.to_string(), desk.zones.get(id).and_then(zones::layout_of))).collect();
     let existing = workspace::list(&desk.workspaces);
-    // The workspace as it was, for a quick save's Undo.
-    let mut before = None;
-    // The row each captured window has now, when the save stamps them.
-    let mut rows = None;
-    // "Where it is now" stamps its one window.
-    let mut stamps = None;
-    // Rows Update from screen removed: where the others went, and how many.
-    let mut removal = None;
+    let mut kept = Kept::default();
+    let saving = Saving { job: &job, hwnds: &hwnds, others: &others, layouts: &layouts, remember, removes };
     let saved = match &job.into {
         Some(into) => {
             let Some(old) = existing.iter().find(|w| w.id == *into) else {
                 return answer(Err(RpcError::new(api::NOT_FOUND, "no such workspace on this desk")));
             };
-            // A place row pairs with the window it remembers, as in a switch (D336).
-            let (bound, elsewhere) = switcher::capture_bindings(old, &hwnds, remember);
-            let updated = match (job.row, &job.pick) {
-                // "Add an app": only the picked window's folder or page, read here.
-                (Some(row), Some(pick)) => match workspace::take_window_place(old, row, &pick.exe, &pick.class, &rules)
-                {
-                    Some(updated) => updated,
-                    None => return answer(refused("That window has no folder or page to remember")),
-                },
-                (Some(row), None) => match workspace::recapture_row(old, row, &rules, &bound, &elsewhere) {
-                    Some((updated, hit)) => {
-                        stamps = Some(vec![(hwnds[hit], row)]);
-                        updated
-                    }
-                    None => return answer(refused("That app isn't open, so where it goes stays as it was")),
-                },
-                (None, _) => {
-                    // An earlier save's Undo would put back rows this one may have changed.
-                    if app.quick_undo.as_ref().is_some_and(|u| u.id == *into) {
-                        app.quick_undo = None;
-                    }
-                    let zones = workspace::capture_zones(&old.zones, &layouts);
-                    let merged = workspace::merge_capture(old, rules, &bound, &elsewhere, &others, removes);
-                    rows = Some(merged.rows);
-                    if merged.removed > 0 {
-                        // Where each old row went, exactly: the rows it kept, in order.
-                        let mut moves = vec![None; old.windows.len()];
-                        for (new, old) in merged.from.iter().enumerate() {
-                            if let Some(old) = old {
-                                moves[*old] = Some(new);
-                            }
-                        }
-                        removal = Some((moves, merged.from, merged.removed));
-                    }
-                    Workspace { windows: merged.windows, zones, ..old.clone() }
-                }
-            };
-            let same = |v: &&mut Value| workspace::parse(v).is_some_and(|w| w.id == *into);
-            if let Some(slot) = desk.workspaces.iter_mut().find(same) {
-                before = Some(std::mem::replace(slot, workspace::to_value(&updated)));
+            match update_existing(&saving, &mut app.quick_undo, &mut desk.workspaces, old, into, rules, &mut kept) {
+                Ok(updated) => updated,
+                Err(reply) => return answer(reply),
             }
-            updated
         }
-        None => {
-            let names: Vec<String> = existing.iter().map(|w| w.name.clone()).collect();
-            let ids: Vec<String> = existing.iter().map(|w| w.id.clone()).collect();
-            let name = match job.name.as_deref().map(str::trim) {
-                Some(name) if !name.is_empty() => workspace::unique_name(name, &names),
-                _ => workspace::next_name(&names),
-            };
-            if job.quick {
-                rows = Some((0..rules.len()).collect());
-            }
-            let zones = workspace::capture_zones(&Default::default(), &layouts);
-            let created =
-                Workspace { id: workspace::new_id(&ids), name, windows: rules, zones, ..Workspace::default() };
-            desk.workspaces.push(workspace::to_value(&created));
-            created
-        }
+        None => create_workspace(&saving, &existing, &mut desk.workspaces, rules, &mut kept),
     };
     persist(app);
     // The rows left follow their places in the list, as after an edit (D336).
-    if let Some((moves, ..)) = &removal {
+    if let Some((moves, ..)) = &kept.removal {
         switcher::rebind(&saved.id, moves);
     }
-    // A row with a place remembers the window it was read from (D336).
-    if app.cfg.workspaces_remember_places {
-        let binds: Vec<(isize, usize)> = match (&job.pick, job.row, &rows, &stamps) {
-            (Some(pick), Some(row), _, _) => vec![(pick.hwnd, row)],
-            (_, _, Some(rows), _) => hwnds.iter().copied().zip(rows.iter().copied()).collect(),
-            (_, _, _, Some(windows)) => windows.clone(),
-            _ if job.into.is_none() => hwnds.iter().copied().zip(0..).collect(),
-            _ => Vec::new(),
-        };
-        switcher::bind_rows(&saved, &binds);
+    stamp_saved(&job, &saved, app.cfg.workspaces_remember_places, &hwnds, kept.rows, kept.stamps);
+    if let Some(reply) = finish_capture(app, &job, &saved, kept.before, kept.removal) {
+        answer(reply);
     }
-    // The saved windows hold their rows, as after a switch, so drift and auto-apply see them at once.
-    let key = workspace::stamp_key(&saved.id);
-    if let Some(rows) = rows {
-        live::stamp(key, hwnds.into_iter().zip(rows).collect(), true);
-    } else if let Some(windows) = stamps {
-        // The drift check comes below, once the worker has the updated workspace.
-        live::stamp(key, windows, false);
-    }
-    if job.quick {
-        let created = before.is_none();
-        quick_saved(app, &saved, before);
-        live::check_drift();
-        publish(app);
-        return answer(Ok(json!({ "id": saved.id, "created": created })));
-    }
-    if app.workspace.as_deref() == Some(saved.id.as_str()) {
-        sync_live(app);
-        live::check_drift();
-    }
-    publish(app);
-    if let Some((_, from, closed)) = removal {
-        update_removed(app, &saved, before, from, closed);
-    }
-    if job.reply.is_some() {
-        return answer(Ok(json!({ "id": saved.id })));
-    }
-    let body = format!("{} windows saved as {}", saved.windows.len(), saved.name);
-    notify(app, "Workspace captured", &body, BalloonAction::OpenPanel("workspaces"));
 }
 
 /// The editor saved a workspace of this desk. It's checked as `checked_update`

@@ -221,11 +221,11 @@ impl Engine {
         let Some(number) = self.screens.iter().position(|x| x.id == id) else { return };
         let Some(before) = self.screens[number].layout.clone() else { return };
         let Some(tree) = zones::remove_leaf(&before.tree, k) else { return };
-        let stamped = self.stamped_only(g.bounds, &[drag.hwnd]);
-        let shared =
-            self.snapped.iter().any(|(key, x)| {
-                *key != drag.hwnd && x.screen == id && refit::covered(&g.cells, x.from, x.to).contains(&k)
-            }) || stamped.iter().any(|(_, from, to, _)| refit::covered(&g.cells, *from, *to).contains(&k));
+        let held = |from: usize, to: usize| refit::covered(&g.cells, from, to).contains(&k);
+        let mut shared = self.snapped.iter().any(|(key, x)| *key != drag.hwnd && x.screen == id && held(x.from, x.to));
+        // The windows only a stamp knows are looked for only when nothing else holds the zone.
+        let stamped = if shared { Vec::new() } else { self.stamped_only(g.bounds, &[drag.hwnd]) };
+        shared = shared || stamped.iter().any(|(_, from, to, _)| held(*from, *to));
         if shared {
             log::info!("pull out: screen {}, zone {}, another window holds it, so a plain drop", number + 1, k + 1);
             return;

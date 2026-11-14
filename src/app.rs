@@ -126,6 +126,13 @@ const TIMER_DRIFT: usize = 11;
 const DRIFT_AFTER_MS: u32 = 400;
 /// Retries window control's plan that the app was too busy for.
 const TIMER_WINDOW: usize = 13;
+/// How long a plan waits for the app before it is dropped, so an API caller is answered.
+const WINDOW_WAIT: Duration = Duration::from_secs(2);
+
+thread_local! {
+    /// When the plan now waiting for a retry first found the app busy.
+    static WINDOW_SINCE: std::cell::Cell<Option<Instant>> = const { std::cell::Cell::new(None) };
+}
 /// How long the end of a Windows session waits for the last session's capture.
 const SESSION_END_WAIT: Duration = Duration::from_secs(2);
 /// How long a restore whose apps Windows reopens waits for their windows (D128).

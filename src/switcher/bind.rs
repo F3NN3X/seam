@@ -22,10 +22,12 @@ fn held(hwnd: isize) -> Held {
 }
 
 /// The window is still open and is the same one: its handle may since belong to another process's window.
+/// A start time that couldn't be read (0), then or now, doesn't tell them apart.
 fn alive(h: &Held) -> bool {
+    let started = |t: u64| t == 0 || h.started == 0 || t == h.started;
     unsafe { IsWindow(Some(hwnd_of(h.hwnd))) }.as_bool()
         && winutil::process_id(hwnd_of(h.hwnd)) == h.pid
-        && seam::process::started(h.pid).unwrap_or(0) == h.started
+        && started(seam::process::started(h.pid).unwrap_or(0))
 }
 
 /// Remember `hwnd` as the window of row `row` of workspace `id`.

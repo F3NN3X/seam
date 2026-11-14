@@ -142,14 +142,14 @@ pub fn planned(mut save: impl FnMut(&str, ZoneLayout, bool) -> bool) -> Option<R
         if save(&screen, layout, false) {
             regroup::saved(&screen, None);
         } else {
-            log::info!("zone edges: Seam was busy, so the new layout wasn't saved");
+            log::info!("zone edges: the new layout wasn't saved, Seam was busy or has no desk for these screens");
         }
     }
     let note = NOTE.lock().unwrap_or_else(|e| e.into_inner()).take();
     let Some(plan) = PLANNED.lock().unwrap_or_else(|e| e.into_inner()).take() else { return note.map(Err) };
     if let Some((screen, layout, keep)) = plan.layout {
         if !save(&screen, layout, plan.fresh.is_some()) {
-            answer(plan.reply, Err(RpcError::new(api::BUSY, "Seam is busy, try again")));
+            answer(plan.reply, Err(RpcError::new(api::BUSY, "The layout couldn't be saved, try again")));
             return None;
         }
         regroup::saved(&screen, keep);

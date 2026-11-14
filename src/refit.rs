@@ -84,7 +84,8 @@ unsafe extern "system" fn collect(h: HWND, data: LPARAM) -> BOOL {
     }
 }
 
-/// Runs on the worker.
+/// Runs on the worker for a re-fit, and on the tray for a split or pull-out that
+/// looks for stamps the snapping holds no record of.
 fn stamped_windows() -> Vec<isize> {
     let mut list: Vec<isize> = Vec::new();
     unsafe {
@@ -97,7 +98,13 @@ impl Engine {
     /// Windows on the screen at `bounds` that carry a zone stamp the snapping holds
     /// no record of, as after a restart of the tray: the window, its zones' first
     /// and last, and where it is. `skip` are left out.
-    pub(super) fn stamped_only(&self, bounds: Rect, skip: &[isize]) -> Vec<(isize, usize, usize, Rect)> {
+    /// Only stamps from an earlier run can be such, so once a pass finds none the
+    /// windows aren't listed again.
+    pub(super) fn stamped_only(&mut self, bounds: Rect, skip: &[isize]) -> Vec<(isize, usize, usize, Rect)> {
+        if self.no_stray_stamps {
+            return Vec::new();
+        }
+        let started = log::enabled().then(Instant::now);
         let known = |key: &isize| self.snapped.contains_key(key) || skip.contains(key);
         let found = |key: isize| {
             let h = hwnd_of(key);
@@ -106,7 +113,14 @@ impl Engine {
             let at = if winutil::is_minimized(h) { winutil::normal_rect(h) } else { winutil::visible_rect(h) }?;
             bounds.contains(at.x + at.w / 2, at.y + at.h / 2).then_some((key, from, to, at))
         };
-        stamped_windows().into_iter().filter(|key| !known(key)).filter_map(found).collect()
+        let strays: Vec<isize> = stamped_windows().into_iter().filter(|key| !known(key)).collect();
+        let list = strays.iter().copied().filter_map(found).collect();
+        if let Some(started) = started {
+            let us = started.elapsed().as_secs_f64() * 1e6;
+            log::info!("zone stamps: looked at {} unrecorded windows in {us:.0}us", strays.len());
+        }
+        self.no_stray_stamps = strays.is_empty();
+        list
     }
 
     fn refit_schedule(&mut self) {

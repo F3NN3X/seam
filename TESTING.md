@@ -1147,6 +1147,14 @@ Set a key for **Pause Seam** on Shortcuts and a key for **Spotlight**, turn on *
 - [ ] **Alt+drag at quit.** With Alt+drag on, hold a window with Alt and the left button, quit Seam from the tray, and let go 1 second later. The app under the pointer gets no stray click or release. A release after 2 seconds may reach it.
 - [ ] **Ease value missing.** On a Windows 11 build from 22557, delete `CursorDeadzoneJumpingSetting` under `HKCU\Control Panel\Cursors` and start Seam. The log has one line that the value is missing and read as on, and only one however many times it is read.
 
+## State that drifts
+
+- [ ] **A split while busy.** Keep the tray menu open, and drop a window with a split (Tab or the wheel, then a part) on a screen with zones. Close the menu: the layout is saved and the Undo notice shows. The log has no `Seam was busy, so the new layout wasn't saved` line.
+- [ ] **After a restart.** With **Refit** off, snap three windows in a screen's zones, quit and start Seam, then split a zone before them with the drag's keys. Undo it: the three windows' zones are as before the split. Repeat with a pull-out.
+- [ ] **A swap occupant that moves.** Drop a window on a zone that two windows share with Swap on, and drag the second one a good way off within a quarter second. It stays where you put it, and the log has one `zone swap: a window moved` line.
+- [ ] **A reused handle.** With **Remember folders and pages** on and a workspace with a folder row, close that Explorer window and open other programs. The row starts its folder on the next switch, and takes no other window.
+- [ ] **Alt+drag verdicts.** With Alt+drag on, hold Alt and drag a window of an app, close the app, then start it again (it may get the same process id). The first Alt+drag on the new window works at once, with no wait for the next sweep.
+
 ## Report back
 
 For each failure, give the step, what you saw, and the matching lines from `seam.log`.

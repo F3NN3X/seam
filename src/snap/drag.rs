@@ -22,6 +22,7 @@ impl Engine {
         // under the dropped one, and the snapping's records no longer what is on screen.
         // The dragged window's own is dropped, as the drag takes it. Each is only
         // posted, so a slow app can't hold up the drag.
+        self.saw.clear();
         let landed: Vec<(isize, Rect)> = std::mem::take(&mut self.queued)
             .into_iter()
             .filter(|p| p.hwnd != key)

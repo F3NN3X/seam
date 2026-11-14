@@ -213,6 +213,10 @@ struct Engine {
     refit: refit::Refit,
     /// Window control's moves, one at a time through the same steps.
     queued: VecDeque<Placement>,
+    /// For a swap's moves still waiting: the window, its target, and where the plan saw it.
+    saw: Vec<swap::Saw>,
+    /// A look found no window with a stamp the snapping has no record of, so none is looked for again.
+    no_stray_stamps: bool,
     /// Windows put side by side on screens with no zones, in memory only.
     adhoc: Vec<adhoc::Adhoc>,
     /// The last ad-hoc group's id.
@@ -454,6 +458,7 @@ pub fn zoned() -> Vec<Zoned> {
 pub fn place_all(list: Vec<Placement>) {
     with_engine(|e| {
         e.queued = list.into();
+        e.saw.clear();
         e.window_pump();
     });
 }

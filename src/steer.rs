@@ -147,7 +147,7 @@ impl Engine {
             let on = self.screens.iter().find(|on| on.bounds.contains(x, y));
             let dpi = on.and_then(|on| work_area(on.bounds)).map_or(g.dpi, |(_, dpi)| dpi);
             let place = Placement { hwnd: drag.hwnd, target: frame, zone: drag.old_zone.clone(), dpi };
-            back.push(Back { place, set: split.zones[split.at], pulled: None });
+            back.push(Back { place, set: split.zones[split.at], maximized: drag.was_maximized, pulled: None });
         }
         let placed = Placed {
             id: id.clone(),
@@ -162,7 +162,7 @@ impl Engine {
             let key = h.0 as isize;
             if let Some(x) = self.snapped.get(&key) {
                 let place = Placement { hwnd: key, target: at, zone: Some((id.clone(), x.from, x.to)), dpi: g.dpi };
-                back.push(Back { place, set: split.zones[split.rest], pulled: None });
+                back.push(Back { place, set: split.zones[split.rest], maximized: false, pulled: None });
             }
             let target = split.zones[split.rest];
             let zone = Some((id.clone(), split.rest, split.rest));
@@ -238,7 +238,7 @@ impl Engine {
             keep.push(Zoned { hwnd: *key, zone: zone.clone(), at: x.at, moving: false });
             if new != old && !winutil::is_minimized(hwnd_of(*key)) {
                 let place = Placement { hwnd: *key, target: x.at, zone: Some(zone), dpi: g.dpi };
-                back.push(Back { place, set: new, pulled: None });
+                back.push(Back { place, set: new, maximized: false, pulled: None });
                 queue.push(Placement { hwnd: *key, target: new, zone: Some((id.clone(), from, to)), dpi: g.dpi });
             }
             (x.from, x.to) = (from, to);
@@ -246,7 +246,7 @@ impl Engine {
         }
         // Undo puts the pulled window back in its zone too, and with the size it had before it was snapped.
         let place = Placement { hwnd: drag.hwnd, target: g.zones[k], zone: Some((id.clone(), k, k)), dpi: g.dpi };
-        back.push(Back { place, set: g.zones[k], pulled: drag.was_snapped });
+        back.push(Back { place, set: g.zones[k], maximized: false, pulled: drag.was_snapped });
         self.unsnap(hwnd_of(drag.hwnd), drag.stamped);
         let moved = queue.len();
         self.queued.extend(queue);

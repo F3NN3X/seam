@@ -52,8 +52,12 @@ impl Engine {
     /// Put the window's visible frame on `target`, a step at a time with the
     /// app's own reactions in between (D8).
     pub(super) fn place(&mut self, hwnd: HWND, target: Rect, crosses_dpi: bool, quiet: bool) -> bool {
+        let maximize = self.maximize.remove(&(hwnd.0 as isize));
         let Some(before) = winutil::window_rect(hwnd) else { return false };
         if winutil::visible_rect(hwnd) == Some(target) {
+            if maximize {
+                winutil::maximize(hwnd);
+            }
             return false;
         }
         let mut steps = VecDeque::new();
@@ -76,7 +80,7 @@ impl Engine {
                 }
             }
         }
-        self.pending = Some(Pending { hwnd: hwnd.0 as isize, target, before, steps, retries: 0, quiet, timer: 0 });
+        self.pending = Some(Pending { hwnd: hwnd.0 as isize, target, before, steps, retries: 0, quiet, maximize, timer: 0 });
         self.advance_step();
         unsafe {
             let _ = PostMessageW(Some(hwnd_of(self.owner)), WM_APP_WINDOWS_CHANGED, WPARAM(0), LPARAM(0));
@@ -209,6 +213,9 @@ impl Engine {
                         let t = p.target;
                         let (dx, dy, dw, dh) = (v.x - t.x, v.y - t.y, v.w - t.w, v.h - t.h);
                         log::info!("zone place: landed {dx},{dy} px off its place, {dw}x{dh} px in size");
+                    }
+                    if p.maximize {
+                        winutil::maximize(hwnd);
                     }
                     return;
                 }

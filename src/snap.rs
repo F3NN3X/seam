@@ -174,6 +174,8 @@ struct Pending {
     retries: u8,
     /// A re-fit after a display change: say nothing if the window doesn't move.
     quiet: bool,
+    /// Maximize it once it has landed (Undo of a window that was maximized).
+    maximize: bool,
     timer: usize,
 }
 
@@ -203,6 +205,8 @@ struct Engine {
     refit: refit::Refit,
     /// Window control's moves, one at a time through the same steps.
     queued: VecDeque<Placement>,
+    /// Windows to maximize once their queued move has landed.
+    maximize: HashSet<isize>,
     /// Windows put side by side on screens with no zones, in memory only.
     adhoc: Vec<adhoc::Adhoc>,
     /// The last ad-hoc group's id.
@@ -440,6 +444,7 @@ pub fn zoned() -> Vec<Zoned> {
 pub fn place_all(list: Vec<Placement>) {
     with_engine(|e| {
         e.queued = list.into();
+        e.maximize.clear();
         e.window_pump();
     });
 }
@@ -450,6 +455,11 @@ pub fn place_more(list: Vec<Placement>) {
         e.queued.extend(list);
         e.window_pump();
     });
+}
+
+/// These windows are maximized once their next move, from `place_more`, has landed.
+pub fn maximize_after(windows: Vec<isize>) {
+    with_engine(|e| e.maximize.extend(windows));
 }
 
 /// Undo of a pull-out: the window goes back in its zone with the size it had before

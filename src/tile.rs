@@ -75,6 +75,8 @@ pub struct Back {
     pub place: Placement,
     /// Where the tile put it, to tell whether it has moved since.
     pub set: Rect,
+    /// It was maximized: Undo maximizes it again once it is back at `place`, on that screen.
+    pub maximized: bool,
     /// A window a pull-out took out of its zone: Undo puts it back whether or not it
     /// is where it was left, with the size it had before it was snapped.
     pub pulled: Option<Option<(i32, i32, u32)>>,
@@ -243,7 +245,12 @@ pub(super) fn run(job: &Job, at: At) -> Result<Outcome, String> {
     let list = picks.iter().map(|(w, z)| into_zone(loose[*w].0, g, *z, *z, zones[*z])).collect();
     let back = picks
         .iter()
-        .map(|(w, z)| Back { place: free(loose[*w].0, g, loose[*w].1), set: zones[*z], pulled: None })
+        .map(|(w, z)| Back {
+            place: free(loose[*w].0, g, loose[*w].1),
+            set: zones[*z],
+            maximized: winutil::is_maximized(loose[*w].0),
+            pulled: None,
+        })
         .collect();
     let done = Done {
         number: g.number,
@@ -297,7 +304,7 @@ pub(super) fn pick(job: &Job, p: &Pick) -> Result<Outcome, String> {
                 Some((a, b)) => into_zone(h, g, a, b, span((a, b))),
                 None => free(h, g, rect),
             };
-            Back { place, set: zones[*z], pulled: None }
+            Back { place, set: zones[*z], maximized: winutil::is_maximized(h), pulled: None }
         })
         .collect();
     let done = Done {

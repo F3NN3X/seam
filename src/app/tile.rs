@@ -266,8 +266,7 @@ pub(super) fn pick_layout(
 /// The notice was clicked: give the screen back the layout it had before the tile
 /// or the pick, if it still has the one they gave it, and put each window that is
 /// still where it was set back where it was, while that's still within 8 s. A window
-/// that was maximized comes back at its size from then, not maximized: placement
-/// has no way to maximize.
+/// that was maximized is maximized again on that screen, once it is back.
 pub(super) fn undo_tile(app: &mut App) {
     let Some(undo) = app.tile_undo.take() else { return };
     if Instant::now() > undo.until || undo.sig != app.sig {
@@ -299,7 +298,9 @@ pub(super) fn undo_tile(app: &mut App) {
             snap::put_back(b.place, old);
         }
     }
-    let back: Vec<_> = rest.into_iter().filter(here).map(|b| b.place).collect();
+    let rest: Vec<_> = rest.into_iter().filter(here).collect();
+    snap::maximize_after(rest.iter().filter(|b| b.maximized).map(|b| b.place.hwnd).collect());
+    let back: Vec<_> = rest.into_iter().map(|b| b.place).collect();
     // A group gets its old area back only with every window back in it.
     if let (Some((id, area)), true) = (undo.group, back.len() == all) {
         snap::adhoc_area(id, area);

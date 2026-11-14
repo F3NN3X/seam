@@ -434,7 +434,7 @@ unsafe fn on_destroy() {
             wm::release_before_exit();
         }
         snap::shutdown();
-        altdrag::shutdown();
+        altdrag::stop();
         spotlight::stop();
         with_app(|a| {
             let nid = tray_data(a);
@@ -443,6 +443,8 @@ unsafe fn on_destroy() {
                 saver.finish();
             }
         });
+        // Last, so the tray icon doesn't linger while the hook waits for a release.
+        altdrag::shutdown();
         PostQuitMessage(0);
     }
 }

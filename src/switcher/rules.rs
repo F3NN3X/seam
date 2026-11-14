@@ -77,6 +77,13 @@ fn refuse(h: HWND, rule: &Rule) {
         return;
     }
     if list.len() >= MAX_REFUSED {
+        // Windows that closed, or whose handle another one took, go before the oldest.
+        list.retain(|r| {
+            let gone = hwnd_of(r.hwnd);
+            unsafe { IsWindow(Some(gone)) }.as_bool() && started_of(gone) == r.started
+        });
+    }
+    if list.len() >= MAX_REFUSED {
         list.remove(0);
     }
     list.push(Refused { hwnd: h.0 as isize, started: started_of(h), retried: false });

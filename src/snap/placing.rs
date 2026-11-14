@@ -52,12 +52,8 @@ impl Engine {
     /// Put the window's visible frame on `target`, a step at a time with the
     /// app's own reactions in between (D8).
     pub(super) fn place(&mut self, hwnd: HWND, target: Rect, crosses_dpi: bool, quiet: bool) -> bool {
-        let maximize = self.maximize.remove(&(hwnd.0 as isize));
         let Some(before) = winutil::window_rect(hwnd) else { return false };
         if winutil::visible_rect(hwnd) == Some(target) {
-            if maximize {
-                winutil::maximize(hwnd);
-            }
             return false;
         }
         let mut steps = VecDeque::new();
@@ -80,8 +76,16 @@ impl Engine {
                 }
             }
         }
-        self.pending =
-            Some(Pending { hwnd: hwnd.0 as isize, target, before, steps, retries: 0, quiet, maximize, timer: 0 });
+        self.pending = Some(Pending {
+            hwnd: hwnd.0 as isize,
+            target,
+            before,
+            steps,
+            retries: 0,
+            quiet,
+            maximize: false,
+            timer: 0,
+        });
         self.advance_step();
         unsafe {
             let _ = PostMessageW(Some(hwnd_of(self.owner)), WM_APP_WINDOWS_CHANGED, WPARAM(0), LPARAM(0));
@@ -175,6 +179,13 @@ impl Engine {
                 // The screen's DPI, as in `snap_to`.
                 self.place(hwnd, p.target, winutil::monitor_dpi(hwnd) != p.dpi, false);
                 self.unsnap(hwnd, winutil::has_zone_stamp(hwnd));
+            }
+        }
+        if p.maximize {
+            // After its steps if it has some, else now.
+            match self.pending.as_mut().filter(|x| x.hwnd == p.hwnd) {
+                Some(pending) => pending.maximize = true,
+                None => winutil::maximize(hwnd),
             }
         }
     }

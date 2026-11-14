@@ -429,11 +429,11 @@ fn resized(job: &Job, h: HWND, size: Rect, from: &Geo, to: &Geo, placed: Rect) -
 }
 
 fn into_zone(h: HWND, g: &Geo, from: usize, to: usize, target: Rect) -> Placement {
-    Placement { hwnd: h.0 as isize, target, zone: Some((g.id.clone(), from, to)), dpi: g.dpi }
+    Placement { hwnd: h.0 as isize, target, zone: Some((g.id.clone(), from, to)), dpi: g.dpi, maximize: false }
 }
 
 fn free(h: HWND, g: &Geo, target: Rect) -> Placement {
-    Placement { hwnd: h.0 as isize, target, zone: None, dpi: g.dpi }
+    Placement { hwnd: h.0 as isize, target, zone: None, dpi: g.dpi, maximize: false }
 }
 
 /// Give a window focus. A caller with no input of its own first sends an

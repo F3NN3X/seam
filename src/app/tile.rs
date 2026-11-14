@@ -298,9 +298,8 @@ pub(super) fn undo_tile(app: &mut App) {
             snap::put_back(b.place, old);
         }
     }
-    let rest: Vec<_> = rest.into_iter().filter(here).collect();
-    snap::maximize_after(rest.iter().filter(|b| b.maximized).map(|b| b.place.hwnd).collect());
-    let back: Vec<_> = rest.into_iter().map(|b| b.place).collect();
+    let back: Vec<_> =
+        rest.into_iter().filter(here).map(|b| snap::Placement { maximize: b.maximized, ..b.place }).collect();
     // A group gets its old area back only with every window back in it.
     if let (Some((id, area)), true) = (undo.group, back.len() == all) {
         snap::adhoc_area(id, area);

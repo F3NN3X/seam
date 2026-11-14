@@ -30,7 +30,7 @@ function chosen(settings: Settings, offered: ScreenLayouts): ScreenLayouts["layo
  */
 @action({ UUID: "co.f3nn3x.seam.apply-layout" })
 export class ApplyLayout extends TitledAction<Settings> {
-	/** Each screen's layouts, by Line Up number or "pointer", so a redraw doesn't ask Seam again. */
+	/** Each fixed screen's layouts, by Line Up number, so a redraw doesn't ask Seam again. */
 	readonly #offered = new Map<string, Promise<ScreenLayouts>>();
 	/** Which layout each screen had at the last draw. A change drops the cache. */
 	#screens = "";
@@ -44,9 +44,17 @@ export class ApplyLayout extends TitledAction<Settings> {
 		});
 	}
 
-	/** A screen's layouts, asked for once until the cache is dropped. A failed ask isn't kept. */
+	/**
+	 * A fixed screen's layouts, asked for once until the cache is dropped. A failed ask isn't kept.
+	 * The screen under the pointer changes without a state event, so it is asked for every time.
+	 * Nothing in the state says a layout was renamed: that shows when the key next appears or is
+	 * pressed, or a screen's layout changes.
+	 */
 	#layouts(number: number | undefined): Promise<ScreenLayouts> {
-		const at = String(number ?? "pointer");
+		if (number === undefined) {
+			return seam.layouts();
+		}
+		const at = String(number);
 		let offered = this.#offered.get(at);
 		if (!offered) {
 			offered = seam.layouts(number);
@@ -57,7 +65,7 @@ export class ApplyLayout extends TitledAction<Settings> {
 	}
 
 	override async onWillAppear(ev: WillAppearEvent<Settings>): Promise<void> {
-		this.#offered.delete(String(screenNumber(ev.payload.settings) ?? "pointer"));
+		this.#offered.delete(String(screenNumber(ev.payload.settings)));
 		await super.onWillAppear(ev);
 	}
 
@@ -67,7 +75,7 @@ export class ApplyLayout extends TitledAction<Settings> {
 			await key.setState(0);
 			return;
 		}
-		// The layouts give the current name, so a rename in the library shows. A screen that isn't connected has none.
+		// The layouts give the current name. A screen that isn't connected has none.
 		const number = screenNumber(settings);
 		// A screen given another layout, or one that came or went, makes the lists worth asking for again.
 		const screens = state.screens?.map((s) => `${s.number}:${s.layout}`).join(",") ?? "";

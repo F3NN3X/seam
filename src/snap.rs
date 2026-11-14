@@ -147,6 +147,8 @@ struct Drag {
     allowed: Vec<(isize, bool)>,
     /// It began in `altdrag`, from anywhere in the window.
     alt: bool,
+    /// The ad-hoc group it left once the drag was a move, to go back if it ends where it began.
+    left: Option<adhoc::Left>,
 }
 
 struct Snapped {

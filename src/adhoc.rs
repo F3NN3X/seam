@@ -21,10 +21,19 @@ const PREFIX: &str = "adhoc:";
 /// What a group, a window in zones or a window as big as its screen answers.
 const FILLS: &str = "Already fills its screen";
 
+/// What a drag needs to put a member back in its group: the group, where the
+/// others were, and the members the group had once the window left.
+pub(super) struct Left {
+    group: Adhoc,
+    rects: Vec<(isize, Rect)>,
+    after: Option<Members>,
+}
+
 /// Each window of a group and its zone in the tree.
 type Members = Vec<(isize, usize)>;
 
 /// Windows put side by side on a screen with no zones.
+#[derive(Clone)]
 pub(super) struct Adhoc {
     pub(super) id: u64,
     /// The screen it's on.
@@ -168,7 +177,7 @@ const SETTLED_MS: u32 = 250;
 /// A window this close to its new place isn't moved there.
 const NEAR_PX: i32 = 2;
 
-fn near(a: Rect, b: Rect) -> bool {
+pub(super) fn near(a: Rect, b: Rect) -> bool {
     [(a.x, b.x), (a.y, b.y), (a.w, b.w), (a.h, b.h)].iter().all(|(p, q)| (p - q).abs() <= NEAR_PX)
 }
 
@@ -209,6 +218,48 @@ impl Engine {
         }
         let (tree, area) = beside::remove(&a.tree, a.area, a.gap, leaf)?;
         Some((tree, area, members))
+    }
+
+    /// A member that a drag turned into a move leaves its group, keeping what puts
+    /// it back, as a drag cancelled with Esc ends where it began.
+    pub(super) fn leave_adhoc_dragged(&mut self, key: isize) -> Option<Left> {
+        let (i, _) = self.adhoc_of(key)?;
+        let group = self.adhoc[i].clone();
+        let rects: Vec<(isize, Rect)> = group
+            .members
+            .iter()
+            .filter(|(k, _)| *k != key)
+            .filter_map(|&(k, _)| winutil::visible_rect(hwnd_of(k)).map(|r| (k, r)))
+            .collect();
+        self.leave_adhoc(key);
+        let after = self.adhoc.iter().find(|a| a.id == group.id).map(|a| a.members.clone());
+        Some(Left { group, rects, after })
+    }
+
+    /// The drag ended with the window back where it began: its group is put back,
+    /// and the windows that closed up go back to their places, unless the group
+    /// changed meanwhile. False when nothing was restored.
+    pub(super) fn rejoin_adhoc(&mut self, key: isize, left: Left) -> bool {
+        let now = self.adhoc.iter().find(|a| a.id == left.group.id).map(|a| &a.members);
+        if now != left.after.as_ref() || self.adhoc_of(key).is_some() {
+            return false;
+        }
+        let moves: Vec<Placement> = left
+            .rects
+            .iter()
+            .filter_map(|&(k, r)| {
+                let now = winutil::visible_rect(hwnd_of(k))?;
+                (!near(now, r)).then_some(Placement { hwnd: k, target: r, zone: None, dpi: left.group.dpi })
+            })
+            .collect();
+        log::info!("snap beside: a drag ended where it began, so the window is back in its group");
+        self.adhoc.retain(|a| a.id != left.group.id);
+        self.adhoc.push(left.group);
+        self.queued.extend(moves);
+        self.window_pump();
+        self.sync_dividers();
+        self.sync_adhoc_hooks();
+        true
     }
 
     /// Take a window out of its ad-hoc group. The windows that close up move to
@@ -284,7 +335,9 @@ impl Engine {
     }
 
     /// One hook for every window's closing and minimizing, on while a group has
-    /// members. The callback drops the events of windows that aren't members.
+    /// members. Every window's destroy reaches the tray meanwhile, so the callback
+    /// stays cheap: the object and child check first, then one hash lookup, and the
+    /// engine is only taken for a member.
     fn sync_member_hook(&mut self, wanted: bool) {
         if !wanted {
             for hook in std::mem::take(&mut self.member_global) {

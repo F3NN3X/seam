@@ -147,6 +147,8 @@ struct Drag {
     allowed: Vec<(isize, bool)>,
     /// It began in `altdrag`, from anywhere in the window.
     alt: bool,
+    /// The ad-hoc group it left once the drag was a move, to go back if it ends where it began.
+    left: Option<adhoc::Left>,
 }
 
 struct Snapped {
@@ -207,8 +209,10 @@ struct Engine {
     adhoc: Vec<adhoc::Adhoc>,
     /// The last ad-hoc group's id.
     adhoc_next: u64,
-    /// Hooks on closing, minimizing and moving, per thread of a group's windows.
+    /// Hooks on moving, per thread of a group's windows.
     member_hooks: Vec<(u32, Vec<HWINEVENTHOOK>)>,
+    /// Hooks on closing and minimizing, for any window.
+    member_global: Vec<HWINEVENTHOOK>,
     /// Waits for a moved member to stay put.
     adhoc_timer: usize,
 }

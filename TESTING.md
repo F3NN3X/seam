@@ -345,6 +345,9 @@ Columns on screen 1 and no layout on screen 2, gap 8 px, **Snap beside a window*
 - [ ] **Fit group to screen.** Record a key for **Fit group to screen**. Press it on a member of the group on screen 2: the group stretches over the work area with the same shares and order, a notice offers Undo, and clicking it puts the windows back. Press it on Notepad snapped on screen 1: a notice says "Already fills its screen". Press it on a loose window: it fills the work area without being maximized, with Undo. `window.fit` with `{}` and with `hwnd` does the same, answering error 3 with the reason.
 - [ ] **While paused.** Pause Seam: an edge band does nothing during a Shift drag, and the Fit key is given back to the app. `window.fit` still works. Resume: snap beside works again.
 - [ ] **An elevated window.** Point at the edge of Task Manager running as administrator: no beside outline, the zones show as usual. A group member that runs as administrator stops Fit with the reason.
+- [ ] **Leaves as you drag.** Make a group of two windows. Drag one by its title bar a little: the other closes up to fill the room while the button is still down, not after you let go. Resize the group by an edge instead: nobody leaves.
+- [ ] **Esc puts it back.** Drag a group member a little, then press Esc: the window returns to its place, the other closes up no more, and the group is whole again (log: `a drag ended where it began`).
+- [ ] **Many windows.** Make groups on screen 2 until they hold more than 128 windows between them, or as many as you can. Close or minimize the last one made: its group closes up. With `--log`, no `a group hook wasn't installed` line.
 - [ ] **Turned off.** Turn off **Snap beside a window**: an edge band shows the zones as usual and nothing groups. Search for "beside" finds the row, and "fit" finds the shortcut.
 
 ### Pull a window out of its zone
@@ -1134,6 +1137,15 @@ Set a key for **Pause Seam** on Shortcuts and a key for **Spotlight**, turn on *
 - [ ] **Overlays don't count.** Press Win+Shift+S, lock with Win+L and unlock, and open the Xbox Game Bar with Win+G. With no game in front, Seam doesn't step aside for any of them (no `full-screen app in front` line). With a game in front, they don't end its step aside.
 - [ ] **Game on another screen.** With two screens, start a Direct3D game on one and maximize an app with an auto-hidden taskbar on the other, then click that app. Seam doesn't step aside. Click back into the game: it does.
 - [ ] **The setting off.** Turn **Step aside for games and full-screen apps** off. A full-screen app in front changes nothing: the shortcuts stay registered and Shift-drag shows zones. Pause Seam still works. Turn it on with a game in front: Seam steps aside at once.
+
+## Quick fixes
+
+- [ ] **Sign-in timer with Do nothing.** With every desk on **Do nothing**, sign out and in (or start Seam with `--autostart`). With **Debug log** on, no sign-in line appears and no 3-minute wait is logged. Then set one desk to **Open a workspace** within 3 minutes of the start: the workspace opens or is offered as before.
+- [ ] **A refused pin.** Add an app rule with **Keep on top** for an app that runs as administrator. The log has one line that the window thread refused it. Open or close other windows: no more such lines for that window. Close the app and open it again: one more try, one line.
+- [ ] **Undo of Tile with a maximized window.** Maximize a window on a screen with zones, press Tile, then click Undo in the notice. The window is back and maximized on that screen. Repeat with a layout pick on the Zones page, and with a split by the drag's keys.
+- [ ] **Apply layout key.** With Stream Deck open and the key on a screen, the plugin log shows one `zones.layouts` call when the key appears, none on redraws (change another key's state or desk), and one again after pressing the key or giving a screen another layout on the Zones page.
+- [ ] **Alt+drag at quit.** With Alt+drag on, hold a window with Alt and the left button, quit Seam from the tray, and let go 1 second later. The app under the pointer gets no stray click or release. A release after 2 seconds may reach it.
+- [ ] **Ease value missing.** On a Windows 11 build from 22557, delete `CursorDeadzoneJumpingSetting` under `HKCU\Control Panel\Cursors` and start Seam. The log has one line that the value is missing and read as on, and only one however many times it is read.
 
 ## Report back
 

@@ -6,6 +6,13 @@ All notable changes to Seam. The format follows [Keep a Changelog](https://keepa
 
 ### Fixed
 
+- **Undo of Tile or a layout pick maximizes again** the windows that were maximized before. Undo of a split does too.
+- **"When I sign in" with Do nothing on every desk** no longer starts the sign-in timer. Changing a desk's choice later in that start starts it.
+- **A pin the window manager refuses** is no longer tried again on every pass over the open windows. A window gets one more try when it is shown again, then I leave it alone, with one line in the log.
+- **Alt+drag at quit** keeps its hook until you let go of the button, for at most 2 seconds, so the release doesn't reach the app.
+- **Stream Deck plugin 0.8.2:** the Apply layout key asks Seam for a screen's layouts once, not on every redraw.
+- **The log says when Ease cursor movement is missing** from the registry on a Windows that has the setting, and that Seam reads it as on.
+- A window in a snap-beside group now leaves it as soon as I drag it away, not a moment after. Closing or minimizing a window in a group is now noticed however many windows the groups hold, where only the first 128 were.
 - Snipping Tool's capture overlay, the lock screen and the Xbox Game Bar no longer make Seam step aside for a moment. A Direct3D game on another screen no longer makes it step aside for a maximized app with an auto-hidden taskbar.
 
 ### Changed

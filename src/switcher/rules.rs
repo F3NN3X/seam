@@ -30,22 +30,90 @@ fn rule_hit(set: &AppRules, owner: Option<&Workspace>, h: HWND, procs: &mut Proc
     workspace::assign(&set.rules, cand).iter().position(Option::is_some)
 }
 
+/// A window the seam-wm thread refused to pin, by handle and its process's start time,
+/// so a reused handle isn't skipped. The passes leave it alone; its next show gets one
+/// more try (`retried`), and then it is left alone for good.
+struct Refused {
+    hwnd: isize,
+    started: u64,
+    retried: bool,
+}
+
+static REFUSED: Mutex<Vec<Refused>> = Mutex::new(Vec::new());
+/// Refused windows remembered before the oldest goes.
+const MAX_REFUSED: usize = 64;
+
+fn started_of(h: HWND) -> u64 {
+    seam::process::started(winutil::process_id(h)).unwrap_or(0)
+}
+
+/// Forget a window's refusal: it took the pin, or its rule changed.
+fn forgive(h: HWND) {
+    REFUSED.lock().unwrap_or_else(|e| e.into_inner()).retain(|r| r.hwnd != h.0 as isize);
+}
+
+/// Whether to leave a window alone because the wm refused it. A `retry` (the window was
+/// just shown) is let through once.
+fn is_refused(h: HWND, retry: bool) -> bool {
+    let (key, started) = (h.0 as isize, started_of(h));
+    let mut list = REFUSED.lock().unwrap_or_else(|e| e.into_inner());
+    // Another window under the same handle isn't the one that was refused.
+    list.retain(|r| r.hwnd != key || r.started == started);
+    match list.iter_mut().find(|r| r.hwnd == key) {
+        Some(r) if retry && !r.retried => {
+            r.retried = true;
+            false
+        }
+        Some(_) => true,
+        None => false,
+    }
+}
+
+/// Remember that the wm refused this window, and say so once.
+fn refuse(h: HWND, rule: &Rule) {
+    let mut list = REFUSED.lock().unwrap_or_else(|e| e.into_inner());
+    // A retry that was refused again is already in the list and already said.
+    if list.iter().any(|r| r.hwnd == h.0 as isize) {
+        return;
+    }
+    if list.len() >= MAX_REFUSED {
+        // Windows that closed, or whose handle another one took, go before the oldest.
+        list.retain(|r| {
+            let gone = hwnd_of(r.hwnd);
+            unsafe { IsWindow(Some(gone)) }.as_bool() && started_of(gone) == r.started
+        });
+    }
+    if list.len() >= MAX_REFUSED {
+        list.remove(0);
+    }
+    list.push(Refused { hwnd: h.0 as isize, started: started_of(h), retried: false });
+    log::info!("app rules: the window thread refused to pin {}, so the passes stop asking", app_name(rule));
+}
+
 /// Pin a window as its rule says, unless the rule did already. What the rule pinned
 /// stays on the window, so after Release or an unpin by hand the rule leaves it alone
 /// until it's opened anew or the rule gains a pin (`fresh`). Only a pin the seam-wm
 /// thread applied is kept and counts. Whether it pinned. `stalled` is set when that
-/// thread didn't answer, and then no more is asked.
-fn pin_by_marker(h: HWND, rule: &Rule, fresh: bool, stalled: &mut bool) -> bool {
+/// thread didn't answer, and then no more is asked. A pin that thread refuses isn't
+/// asked for again on a pass, only once more when the window is shown (`retry`).
+fn pin_by_marker(h: HWND, rule: &Rule, fresh: bool, retry: bool, stalled: &mut bool) -> bool {
     if fresh {
         winutil::set_rule_pin_bits(h, 0);
+        forgive(h);
     }
     let done = winutil::rule_pin_bits(h);
     let want = rule.pin.map_or(0, |p| p.bits());
+    let skip = want & !done != 0 && is_refused(h, retry);
     let mut now = done;
     for (kind, bit) in [(PinKind::Top, winutil::PIN_TOP), (PinKind::Sticky, winutil::PIN_STICKY)] {
-        if want & !done & bit != 0 && pinned_by_wm(kind, h, stalled) {
+        if !skip && want & !done & bit != 0 && pinned_by_wm(kind, h, stalled) {
             now |= bit;
         }
+    }
+    if !skip && !*stalled && want & !now != 0 {
+        refuse(h, rule);
+    } else if want & !now == 0 {
+        forgive(h);
     }
     winutil::set_rule_pin_bits(h, now);
     now != done
@@ -84,7 +152,7 @@ pub fn place_by_rule(set: &AppRules, owner: Option<&Workspace>, hwnd: isize) -> 
         winutil::set_ws_stamp(h, workspace::stamp_key("app_rule"), hit);
         done.push(if moved { "placed" } else { "already in place" });
     }
-    if pin_by_marker(h, rule, false, &mut false) {
+    if pin_by_marker(h, rule, false, true, &mut false) {
         done.push("pinned");
     }
     if done.is_empty() {
@@ -114,7 +182,7 @@ pub fn pin_by_rules(set: &AppRules, owner: Option<&Workspace>, fresh: &[Rule]) -
         }
         let hit = rule_hit(set, owner, h, &mut procs);
         pinned += usize::from(
-            hit.is_some_and(|i| pin_by_marker(h, &set.rules[i], fresh.contains(&set.rules[i]), &mut stalled)),
+            hit.is_some_and(|i| pin_by_marker(h, &set.rules[i], fresh.contains(&set.rules[i]), false, &mut stalled)),
         );
     }
     pinned

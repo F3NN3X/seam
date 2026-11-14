@@ -12,7 +12,8 @@ use crate::wincontrol::tile::Back;
 use dragkeys::Part;
 use seam::beside;
 use seam::zones::{Node, Template};
-use std::sync::atomic::{AtomicIsize, Ordering};
+use std::cell::RefCell;
+use std::collections::HashSet;
 
 /// An ad-hoc group's name where a screen's id goes: the divider handles and the
 /// layout saves of their drags.
@@ -20,10 +21,19 @@ const PREFIX: &str = "adhoc:";
 /// What a group, a window in zones or a window as big as its screen answers.
 const FILLS: &str = "Already fills its screen";
 
+/// What a drag needs to put a member back in its group: the group, where the
+/// others were, and the members the group had once the window left.
+pub(super) struct Left {
+    group: Adhoc,
+    rects: Vec<(isize, Rect)>,
+    after: Option<Members>,
+}
+
 /// Each window of a group and its zone in the tree.
 type Members = Vec<(isize, usize)>;
 
 /// Windows put side by side on a screen with no zones.
+#[derive(Clone)]
 pub(super) struct Adhoc {
     pub(super) id: u64,
     /// The screen it's on.
@@ -125,15 +135,16 @@ pub fn fit(hwnd: HWND) -> Result<Fitted, String> {
     with_engine(|e| e.fit(hwnd)).unwrap_or_else(|| Err("Seam is busy, try again".into()))
 }
 
-/// A member's state changed while a group is about: closed, minimized, maximized or moved.
-/// The groups' windows, for the hooks to pass over every other window without
-/// taking the engine. Empty slots are 0; a group past this many windows isn't heard.
-static MEMBERS: [AtomicIsize; MAX_HEARD] = [const { AtomicIsize::new(0) }; MAX_HEARD];
-const MAX_HEARD: usize = 128;
+thread_local! {
+    /// The groups' windows, for the hooks to pass over every other window without
+    /// taking the engine. The hooks run on this thread.
+    static MEMBERS: RefCell<HashSet<isize>> = RefCell::new(HashSet::new());
+}
 
+/// A member's state changed while a group is about: closed, minimized, maximized or moved.
 unsafe extern "system" fn on_member(_: HWINEVENTHOOK, event: u32, hwnd: HWND, object: i32, child: i32, _: u32, _: u32) {
     let key = hwnd.0 as isize;
-    if object != OBJID_WINDOW.0 || child != 0 || key == 0 || !MEMBERS.iter().any(|m| m.load(Ordering::Relaxed) == key) {
+    if object != OBJID_WINDOW.0 || child != 0 || key == 0 || !MEMBERS.with_borrow(|m| m.contains(&key)) {
         return;
     }
     with_engine(|e| e.member_changed(hwnd, event));
@@ -166,7 +177,7 @@ const SETTLED_MS: u32 = 250;
 /// A window this close to its new place isn't moved there.
 const NEAR_PX: i32 = 2;
 
-fn near(a: Rect, b: Rect) -> bool {
+pub(super) fn near(a: Rect, b: Rect) -> bool {
     [(a.x, b.x), (a.y, b.y), (a.w, b.w), (a.h, b.h)].iter().all(|(p, q)| (p - q).abs() <= NEAR_PX)
 }
 
@@ -209,6 +220,54 @@ impl Engine {
         Some((tree, area, members))
     }
 
+    /// A member that a drag turned into a move leaves its group, keeping what puts
+    /// it back, as a drag cancelled with Esc ends where it began.
+    pub(super) fn leave_adhoc_dragged(&mut self, key: isize) -> Option<Left> {
+        let (i, _) = self.adhoc_of(key)?;
+        let group = self.adhoc[i].clone();
+        let rects: Vec<(isize, Rect)> = group
+            .members
+            .iter()
+            .filter(|(k, _)| *k != key)
+            .filter_map(|&(k, _)| winutil::visible_rect(hwnd_of(k)).map(|r| (k, r)))
+            .collect();
+        self.leave_adhoc(key);
+        let after = self.adhoc.iter().find(|a| a.id == group.id).map(|a| a.members.clone());
+        Some(Left { group, rects, after })
+    }
+
+    /// The drag ended with the window back where it began: its group is put back,
+    /// and the windows that closed up go back to their places, unless the group
+    /// changed meanwhile. False when nothing was restored.
+    pub(super) fn rejoin_adhoc(&mut self, key: isize, left: Left) -> bool {
+        let now = self.adhoc.iter().find(|a| a.id == left.group.id).map(|a| &a.members);
+        if now != left.after.as_ref() || self.adhoc_of(key).is_some() {
+            return false;
+        }
+        let moves: Vec<Placement> = left
+            .rects
+            .iter()
+            .filter_map(|&(k, r)| {
+                let now = winutil::visible_rect(hwnd_of(k))?;
+                (!near(now, r)).then_some(Placement {
+                    hwnd: k,
+                    target: r,
+                    zone: None,
+                    dpi: left.group.dpi,
+                    maximize: false,
+                })
+            })
+            .collect();
+        log::info!("snap beside: a drag ended where it began, so the window is back in its group");
+        self.adhoc.retain(|a| a.id != left.group.id);
+        self.adhoc.push(left.group);
+        self.queued.extend(moves);
+        self.window_pump();
+        self.sync_dividers();
+        self.sync_adhoc_hooks();
+        true
+    }
+
     /// Take a window out of its ad-hoc group. The windows that close up move to
     /// their new places, and a group of one is no group.
     pub(super) fn leave_adhoc(&mut self, key: isize) {
@@ -231,7 +290,7 @@ impl Engine {
             if let (Some(now), Some(set)) = (now, after.get(l).copied())
                 && !near(now, set)
             {
-                moves.push(Placement { hwnd: k, target: set, zone: None, dpi: a.dpi });
+                moves.push(Placement { hwnd: k, target: set, zone: None, dpi: a.dpi, maximize: false });
             }
         }
         log::info!("snap beside: a window left its group, {} stay", members.len());
@@ -244,15 +303,14 @@ impl Engine {
     }
 
     /// Hear of members closing, minimizing and moving while there is a group.
-    /// Only the threads of the groups' windows are hooked, so other windows' events never
-    /// reach the tray. Called whenever a group or Seam's standing changes.
+    /// Moves are hooked on the threads of the groups' windows only. Closing and
+    /// minimizing have no thread to narrow to, so the callback filters them. Called whenever a group or Seam's standing changes.
     pub(super) fn sync_adhoc_hooks(&mut self) {
         let active = self.active();
         let members: Vec<isize> =
             self.adhoc.iter().flat_map(|a| a.members.iter().map(|(k, _)| *k)).filter(|_| active).collect();
-        for (slot, key) in MEMBERS.iter().zip(members.iter().copied().chain(std::iter::repeat(0))) {
-            slot.store(key, Ordering::Relaxed);
-        }
+        MEMBERS.with_borrow_mut(|m| *m = members.iter().copied().collect());
+        self.sync_member_hook(!members.is_empty());
         let mut threads: Vec<(u32, u32)> = members.iter().filter_map(|k| thread_of(*k)).collect();
         threads.sort_unstable();
         threads.dedup();
@@ -267,22 +325,40 @@ impl Engine {
             if self.member_hooks.iter().any(|(t, _)| *t == tid) {
                 continue;
             }
-            let events = [EVENT_SYSTEM_MINIMIZESTART, EVENT_OBJECT_DESTROY, EVENT_OBJECT_LOCATIONCHANGE];
-            let hooks: Vec<HWINEVENTHOOK> = events
-                .into_iter()
-                .map(|event| unsafe { SetWinEventHook(event, event, None, Some(on_member), pid, tid, flags) })
-                .filter(|hook| !hook.0.is_null())
-                .collect();
-            if hooks.len() < events.len() {
+            let event = EVENT_OBJECT_LOCATIONCHANGE;
+            let hook = unsafe { SetWinEventHook(event, event, None, Some(on_member), pid, tid, flags) };
+            if hook.0.is_null() {
                 log::info!("snap beside: a group hook wasn't installed");
             }
-            self.member_hooks.push((tid, hooks));
+            self.member_hooks.push((tid, Some(hook).filter(|h| !h.0.is_null()).into_iter().collect()));
         }
         if self.adhoc.is_empty() && self.adhoc_timer != 0 {
             unsafe {
                 let _ = KillTimer(None, self.adhoc_timer);
             }
             self.adhoc_timer = 0;
+        }
+    }
+
+    /// One hook for every window's closing and minimizing, on while a group has
+    /// members. Every window's destroy reaches the tray meanwhile, so the callback
+    /// stays cheap: the object and child check first, then one hash lookup, and the
+    /// engine is only taken for a member.
+    fn sync_member_hook(&mut self, wanted: bool) {
+        if !wanted {
+            for hook in std::mem::take(&mut self.member_global) {
+                let _ = unsafe { UnhookWinEvent(hook) };
+            }
+        } else if self.member_global.is_empty() {
+            let flags = WINEVENT_OUTOFCONTEXT | WINEVENT_SKIPOWNPROCESS;
+            for event in [EVENT_SYSTEM_MINIMIZESTART, EVENT_OBJECT_DESTROY] {
+                let hook = unsafe { SetWinEventHook(event, event, None, Some(on_member), 0, 0, flags) };
+                if hook.0.is_null() {
+                    log::info!("snap beside: a group hook wasn't installed");
+                } else {
+                    self.member_global.push(hook);
+                }
+            }
         }
     }
 
@@ -503,7 +579,7 @@ impl Engine {
         let Some((work, dpi)) = work_area(screen.bounds) else { return };
         let id = screen.id.clone();
         self.place(hwnd, plan.rect, winutil::monitor_dpi(hwnd) != dpi, false);
-        self.queued.push_back(Placement { hwnd: b.target, target: plan.target, zone: None, dpi });
+        self.queued.push_back(Placement { hwnd: b.target, target: plan.target, zone: None, dpi, maximize: false });
         self.window_pump();
         let n = plan.members.len();
         match plan.group.and_then(|i| self.adhoc.get_mut(i)) {
@@ -543,9 +619,9 @@ impl Engine {
             return Err(FILLS.into());
         }
         let screen = s.id.clone();
-        let back =
-            vec![Back { place: Placement { hwnd: key, target: frame, zone: None, dpi }, set: work, pulled: None }];
-        self.queued.push_back(Placement { hwnd: key, target: work, zone: None, dpi });
+        let place = Placement { hwnd: key, target: frame, zone: None, dpi, maximize: false };
+        let back = vec![Back { place, set: work, maximized: winutil::is_maximized(hwnd), pulled: None }];
+        self.queued.push_back(Placement { hwnd: key, target: work, zone: None, dpi, maximize: false });
         self.window_pump();
         log::info!("fit group: a loose window on screen {}", number + 1);
         Ok(Fitted { number: number + 1, screen, back, group: None })
@@ -577,8 +653,9 @@ impl Engine {
         let mut back = Vec::new();
         for &(k, leaf) in &a.members {
             let (Some(was), Some(set)) = (before.get(leaf).copied(), after.get(leaf).copied()) else { continue };
-            self.queued.push_back(Placement { hwnd: k, target: set, zone: None, dpi });
-            back.push(Back { place: Placement { hwnd: k, target: was, zone: None, dpi }, set, pulled: None });
+            self.queued.push_back(Placement { hwnd: k, target: set, zone: None, dpi, maximize: false });
+            let place = Placement { hwnd: k, target: was, zone: None, dpi, maximize: false };
+            back.push(Back { place, set, maximized: false, pulled: None });
         }
         let (group, screen, n) = (Some((a.id, a.area)), a.screen.clone(), a.members.len());
         self.adhoc[i].area = work;

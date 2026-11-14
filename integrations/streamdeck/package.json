@@ -1,6 +1,6 @@
 {
   "name": "co.f3nn3x.seam",
-  "version": "0.8.1",
+  "version": "0.8.2",
   "private": true,
   "description": "Stream Deck plugin for Seam.",
   "type": "module",

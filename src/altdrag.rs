@@ -52,8 +52,8 @@ const MSG_SWEEP: u32 = WM_APP + 8;
 const SWEEP_MS: u32 = 60_000;
 /// Processes remembered before the oldest goes.
 const MAX_VERDICTS: usize = 512;
-/// How long quitting waits for the release of a drag still going.
-const QUIT_WAIT: Duration = Duration::from_millis(200);
+/// The longest quitting waits for the release of a drag still going.
+const QUIT_WAIT: Duration = Duration::from_secs(2);
 /// How long the app has to say how big it may get.
 const ASK_MS: u32 = 100;
 
@@ -171,9 +171,9 @@ pub fn stop() {
     }
 }
 
-/// The tray is quitting. The worker ends a drag still going, and this waits up to
-/// 200 ms for its release so the hook can swallow it. A release after that reaches
-/// the app, as the hook goes with the process.
+/// The tray is quitting. The worker ends a drag still going, and this keeps the hook
+/// until the button is released so the hook can swallow it, for at most 2 s. A release
+/// after that reaches the app, as the hook goes with the process.
 pub fn shutdown() {
     stop();
     if !OWING.load(Ordering::SeqCst) {

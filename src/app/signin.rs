@@ -14,11 +14,28 @@ pub(super) struct SignInRun {
     started: Instant,
     /// When the taskbar was first seen.
     shell_up: Option<Instant>,
+    /// Whether the timer is running.
+    armed: bool,
 }
 
 /// The tray started at sign-in: begin the clock for what I chose.
 pub(super) fn begin(app: &mut App) {
-    app.sign_in_run = Some(SignInRun { started: Instant::now(), shell_up: None });
+    app.sign_in_run = Some(SignInRun { started: Instant::now(), shell_up: None, armed: false });
+    arm(app);
+}
+
+/// Start the timer if some desk does more than nothing at sign-in, the run is still on
+/// and its time isn't up. A change to a desk's mode calls this too.
+pub(super) fn arm(app: &mut App) {
+    let wanted = app.cfg.desks.values().any(|d| d.choice().mode != SignInMode::Nothing);
+    let Some(run) = app.sign_in_run.as_mut() else { return };
+    if !wanted || run.armed || run.started.elapsed() >= SIGN_IN_WINDOW {
+        return;
+    }
+    run.armed = true;
+    unsafe {
+        SetTimer(Some(app.hwnd), TIMER_SESSION_OFFER, SESSION_OFFER_AFTER_MS, None);
+    }
 }
 
 /// One tick of the sign-in timer, for the mode of this desk. Returns whether that's

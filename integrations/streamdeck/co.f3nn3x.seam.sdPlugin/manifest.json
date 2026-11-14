@@ -1,7 +1,7 @@
 {
 	"UUID": "co.f3nn3x.seam",
 	"Name": "Seam",
-	"Version": "0.8.1.0",
+	"Version": "0.8.2.0",
 	"Author": "F3NN3X",
 	"Description": "Switch workspaces, line up screens, and pause the pointer remap or the zones from a Stream Deck key. Needs Seam running.",
 	"URL": "https://github.com/F3NN3X/seam",

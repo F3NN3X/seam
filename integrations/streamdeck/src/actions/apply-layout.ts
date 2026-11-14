@@ -3,6 +3,7 @@ import streamDeck, {
 	type DidReceiveSettingsEvent,
 	type KeyAction,
 	type SendToPluginEvent,
+	type WillAppearEvent,
 } from "@elgato/streamdeck";
 import type { JsonValue } from "@elgato/utils";
 import { NOT_FOUND, REFUSED, seam, SeamError, type ScreenLayouts, type SeamState } from "../seam.js";
@@ -29,8 +30,35 @@ function chosen(settings: Settings, offered: ScreenLayouts): ScreenLayouts["layo
  */
 @action({ UUID: "co.f3nn3x.seam.apply-layout" })
 export class ApplyLayout extends TitledAction<Settings> {
+	/** Each screen's layouts, by Line Up number or "pointer", so a redraw doesn't ask Seam again. */
+	readonly #offered = new Map<string, Promise<ScreenLayouts>>();
+	/** Which layout each screen had at the last draw. A change drops the cache. */
+	#screens = "";
+
 	constructor() {
 		super(["Apply layout"]);
+		seam.onChange(() => {
+			if (seam.status !== "online") {
+				this.#offered.clear();
+			}
+		});
+	}
+
+	/** A screen's layouts, asked for once until the cache is dropped. A failed ask isn't kept. */
+	#layouts(number: number | undefined): Promise<ScreenLayouts> {
+		const at = String(number ?? "pointer");
+		let offered = this.#offered.get(at);
+		if (!offered) {
+			offered = seam.layouts(number);
+			this.#offered.set(at, offered);
+			offered.catch(() => this.#offered.delete(at));
+		}
+		return offered;
+	}
+
+	override async onWillAppear(ev: WillAppearEvent<Settings>): Promise<void> {
+		this.#offered.delete(String(screenNumber(ev.payload.settings) ?? "pointer"));
+		await super.onWillAppear(ev);
 	}
 
 	protected async render(key: KeyAction<Settings>, settings: Settings, state: SeamState): Promise<void> {
@@ -41,7 +69,13 @@ export class ApplyLayout extends TitledAction<Settings> {
 		}
 		// The layouts give the current name, so a rename in the library shows. A screen that isn't connected has none.
 		const number = screenNumber(settings);
-		const offered = await seam.layouts(number).catch(() => undefined);
+		// A screen given another layout, or one that came or went, makes the lists worth asking for again.
+		const screens = state.screens?.map((s) => `${s.number}:${s.layout}`).join(",") ?? "";
+		if (screens !== this.#screens) {
+			this.#screens = screens;
+			this.#offered.clear();
+		}
+		const offered = await this.#layouts(number).catch(() => undefined);
 		const layout = offered && chosen(settings, offered);
 		await this.titleKey(key, layout?.name ?? settings.name);
 		if (number !== undefined) {
@@ -67,6 +101,8 @@ export class ApplyLayout extends TitledAction<Settings> {
 				throw error;
 			}
 			await send(settings.name);
+		} finally {
+			this.#offered.clear();
 		}
 	}
 

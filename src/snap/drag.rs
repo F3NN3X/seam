@@ -60,6 +60,12 @@ impl Engine {
             if geometry.is_empty() { zone.clone() } else { self.zones_held(hwnd, &geometry, frame, was_maximized) };
         let edges = self.edges_start(hwnd, &geometry, (zone, stamped), was_maximized);
         let edges = edges.or_else(|| self.adhoc_edges_start(hwnd, was_maximized));
+        // Zones or an edge to snap beside will want the windows, so read them now.
+        let wants_look = !geometry.is_empty() || self.beside_on();
+        let ahead = wants_look.then(|| self.look_ahead(key, &landed)).flatten();
+        if !wants_look {
+            swap::forget_looks();
+        }
         // The handles stay out of the way of any drag, and come back at its end.
         dividers::hide();
         self.drag = Some(Drag {
@@ -82,6 +88,8 @@ impl Engine {
             paused: false,
             others: Vec::new(),
             looked: false,
+            ahead,
+            bare: false,
             landed,
             beside: None,
             tried: None,
@@ -241,10 +249,15 @@ impl Engine {
         let live = view.is_some() || beside.is_some();
         // The keys are the drag's from the first time zones show, until it ends or Esc.
         // One look at the windows a drop could swap with, the first time zones show.
-        if live && !drag.looked {
-            drag.others = self.snapshot(drag.hwnd, &drag.landed);
+        if live
+            && !drag.looked
+            && let Some(others) = self.others(drag)
+        {
+            drag.others = others;
             drag.looked = true;
         }
+        // Painted without the look, so the worker's post draws it again.
+        drag.bare = live && !drag.looked;
         if live && !drag.keys.hooked && !drag.keys.off && !drag.keys.capped {
             let show_key = key_code(&self.settings.show_key).unwrap_or(VK_SHIFT);
             let span_key = key_code(&self.settings.span_key);

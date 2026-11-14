@@ -7,6 +7,8 @@
 
 use super::*;
 use crate::wincontrol;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, OnceLock, mpsc};
 
 /// A mapped rect this close to a span of zones counts as being that span.
 const MATCH_SLOP: i32 = 12;
@@ -91,6 +93,90 @@ fn zones_of(placed: &[Rect], r: Rect) -> Option<(usize, usize)> {
         .find(|(i, j)| near(zones::span(placed[*i], placed[*j])))
 }
 
+/// Every window a drop could swap with, topmost first, and where each is. Win32 reads
+/// only, so it runs on the main thread or a worker. The time it took is logged once.
+fn look(dragged: isize, landed: &[(isize, Rect)], exclude: &[String], how: &str) -> Vec<(isize, Rect)> {
+    let started = log::enabled().then(Instant::now);
+    let own = std::process::id();
+    let list: Vec<(isize, Rect)> = winutil::top_level_windows()
+        .into_iter()
+        .filter(|h| h.0 as isize != dragged && winutil::is_snappable(*h, own, exclude))
+        .filter_map(|h| {
+            let key = h.0 as isize;
+            let at = landed.iter().find(|(k, _)| *k == key).map(|(_, r)| *r);
+            Some((key, at.or_else(|| winutil::visible_rect(h))?))
+        })
+        .collect();
+    if let Some(started) = started {
+        let us = started.elapsed().as_secs_f64() * 1e6;
+        log::info!("zone swap: looked at {} windows {how} in {us:.0}us", list.len());
+    }
+    list
+}
+
+/// The worker's answer to a look.
+pub(super) type Ahead = mpsc::Receiver<Vec<(isize, Rect)>>;
+
+/// The drag the worker is looking for now. An older job is for a drag that is over.
+static CURRENT: AtomicU64 = AtomicU64::new(0);
+/// The look is ready, for the drag whose generation is in `wparam`.
+pub const WM_APP_SWAP_LOOK: u32 = WM_APP + 35;
+
+/// A look at the screen for a drag, and where to send it.
+struct Look {
+    generation: u64,
+    owner: isize,
+    dragged: isize,
+    landed: Vec<(isize, Rect)>,
+    exclude: Arc<[String]>,
+    reply: mpsc::Sender<Vec<(isize, Rect)>>,
+}
+
+/// The tray's handler of `WM_APP_SWAP_LOOK`.
+pub fn look_ready() {
+    with_engine(|e| e.look_posted());
+}
+
+/// A drag that asks for no look: any job still waiting is for a drag that is over.
+pub(super) fn forget_looks() {
+    CURRENT.fetch_add(1, Ordering::SeqCst);
+}
+
+/// Look for the newest drag only: older jobs waiting, and one whose drag is over, are skipped.
+fn serve(rx: mpsc::Receiver<Look>) {
+    while let Ok(mut job) = rx.recv() {
+        while let Ok(newer) = rx.try_recv() {
+            job = newer;
+        }
+        if job.generation != CURRENT.load(Ordering::SeqCst) {
+            continue;
+        }
+        let list = look(job.dragged, &job.landed, &job.exclude, "on a worker");
+        // A reply nobody is waiting for means the drag ended.
+        if job.reply.send(list).is_ok() {
+            unsafe {
+                let _ = PostMessageW(
+                    Some(hwnd_of(job.owner)),
+                    WM_APP_SWAP_LOOK,
+                    WPARAM(job.generation as usize),
+                    LPARAM(0),
+                );
+            }
+        }
+    }
+}
+
+/// The one worker that makes the looks, started the first time one is asked for.
+fn worker() -> Option<&'static mpsc::Sender<Look>> {
+    static WORKER: OnceLock<Option<mpsc::Sender<Look>>> = OnceLock::new();
+    WORKER
+        .get_or_init(|| {
+            let (tx, rx) = mpsc::channel::<Look>();
+            std::thread::Builder::new().name("zone-swap-look".into()).spawn(move || serve(rx)).ok().map(|_| tx)
+        })
+        .as_ref()
+}
+
 impl Engine {
     /// The windows on the screen in the zones `target` covers on `g`, and where each
     /// is. None when one of them can't be moved or is hung, which leaves the drop as
@@ -140,22 +226,48 @@ impl Engine {
     /// The look at the screen a drag starts with: every window a drop could swap
     /// with, topmost first, and where each is. `landed` were just sent elsewhere.
     pub(super) fn snapshot(&self, dragged: isize, landed: &[(isize, Rect)]) -> Vec<(isize, Rect)> {
-        let started = log::enabled().then(Instant::now);
-        let own = std::process::id();
-        let list: Vec<(isize, Rect)> = winutil::top_level_windows()
-            .into_iter()
-            .filter(|h| h.0 as isize != dragged && winutil::is_snappable(*h, own, &self.exclude))
-            .filter_map(|h| {
-                let key = h.0 as isize;
-                let at = landed.iter().find(|(k, _)| *k == key).map(|(_, r)| *r);
-                Some((key, at.or_else(|| winutil::visible_rect(h))?))
-            })
-            .collect();
-        if let Some(started) = started {
-            let us = started.elapsed().as_secs_f64() * 1e6;
-            log::info!("zone swap: looked at {} windows at drag start in {us:.0}us", list.len());
+        look(dragged, landed, &self.exclude, "on the spot")
+    }
+
+    /// Ask the worker for the look at drag start, so it is ready before zones first show.
+    /// None when the worker can't be had: the look is then read on the spot.
+    pub(super) fn look_ahead(&self, dragged: isize, landed: &[(isize, Rect)]) -> Option<(u64, Ahead)> {
+        let (reply, rx) = mpsc::channel();
+        let generation = CURRENT.fetch_add(1, Ordering::SeqCst) + 1;
+        let (landed, exclude) = (landed.to_vec(), Arc::clone(&self.exclude));
+        let job = Look { generation, owner: self.owner, dragged, landed, exclude, reply };
+        worker()?.send(job).ok()?;
+        Some((generation, rx))
+    }
+
+    /// The drag's look at the screen, if it is there. The tray never waits for the
+    /// worker: until it answers there is no look, and the worker posts when it has. Read on
+    /// the spot only when there is no worker, or it is gone.
+    pub(super) fn others(&self, drag: &mut Drag) -> Option<Vec<(isize, Rect)>> {
+        let Some((_, rx)) = &drag.ahead else { return Some(self.snapshot(drag.hwnd, &drag.landed)) };
+        match rx.try_recv() {
+            Ok(list) => {
+                drag.ahead = None;
+                Some(list)
+            }
+            Err(mpsc::TryRecvError::Empty) => None,
+            Err(mpsc::TryRecvError::Disconnected) => {
+                drag.ahead = None;
+                Some(self.snapshot(drag.hwnd, &drag.landed))
+            }
         }
-        list
+    }
+
+    /// The worker's look is ready: if its drag is still the one running and zones show,
+    /// draw them again once, now with the windows they swap with.
+    fn look_posted(&mut self) {
+        let Some(mut drag) = self.drag.take() else { return };
+        // A tick may have taken the look already, so it is the flag that says to draw.
+        let (view, beside) = (drag.shown, drag.beside);
+        if drag.bare && (view.is_some() || beside.is_some()) {
+            self.present(&mut drag, view, beside);
+        }
+        self.drag = Some(drag);
     }
 
     /// At the drop: where the windows on the screen it was dropped on are now, as
@@ -163,6 +275,11 @@ impl Engine {
     pub(super) fn refresh(&self, drag: &mut Drag) {
         let Some(view) = drag.shown else { return };
         let bounds = drag.geometry[view.screen].bounds;
+        // Dropped before the worker's look came: read it now.
+        if !drag.looked {
+            drag.others = self.snapshot(drag.hwnd, &drag.landed);
+            drag.looked = true;
+        }
         // One closed, minimized or hidden since is no longer there to swap with.
         drag.others.retain_mut(|(key, r)| {
             if !overlaps(*r, bounds) {

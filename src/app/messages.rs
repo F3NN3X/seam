@@ -157,6 +157,10 @@ pub(super) unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARA
                 snap::refit_found();
                 LRESULT(0)
             }
+            snap::WM_APP_SWAP_LOOK => {
+                snap::look_ready();
+                LRESULT(0)
+            }
             wincontrol::WM_APP_WINDOW => {
                 // Busy elsewhere: the moves wait for nothing, but a layout can't be saved.
                 if with_app(window_planned).is_none() {

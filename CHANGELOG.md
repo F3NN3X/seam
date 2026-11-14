@@ -13,6 +13,11 @@ All notable changes to Seam. The format follows [Keep a Changelog](https://keepa
 - **Stream Deck plugin 0.8.2:** the Apply layout key asks Seam for a screen's layouts once, not on every redraw.
 - **The log says when Ease cursor movement is missing** from the registry on a Windows that has the setting, and that Seam reads it as on.
 - A window in a snap-beside group now leaves it as soon as I drag it away, not a moment after. Closing or minimizing a window in a group is now noticed however many windows the groups hold, where only the first 128 were.
+- Snipping Tool's capture overlay, the lock screen and the Xbox Game Bar no longer make Seam step aside for a moment. A Direct3D game on another screen no longer makes it step aside for a maximized app with an auto-hidden taskbar.
+
+### Changed
+
+- With the debug log on, each step aside and return says what decided it: the window's class and exe, its rect against its screen and Windows' full-screen state. The zone swap's look at the open windows now starts when a drag does, so it is ready when zones show.
 
 ## [0.7.0] - 2026-11-13
 

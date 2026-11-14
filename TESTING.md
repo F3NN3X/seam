@@ -290,6 +290,7 @@ Set up first: Priority zones on screen 1, Grid on screen 2, none on the U3477. O
 - [ ] **Twenty swaps.** Pick Rows with gap 0, snap Notepad top and Calculator bottom, then Shift-drag whichever is in zone 2 onto zone 1 and back, 20 times in a row and quickly: every drop swaps, both windows end in zones, and the log has no `skipped` and no `the snapping had` line.
 - [ ] **Swap from bottom to top.** Pick Rows with gap 0 on the stacked screen, snap Notepad top and Calculator bottom, and Shift-drag Calculator onto the top zone, ten times each way: every drop swaps. With `--log`, a drop that doesn't swap writes a `zone swap: skipped,` line with its reason.
 - [ ] **Hook gone after the drop.** Drop a window, then press Tab and Esc in Notepad: both arrive. Start a drag, hold it over a minute: the log says the hook took itself out, the key strip goes away, and keys reach apps again.
+- [ ] **The read is ready before zones show.** With `--log` and about 40 windows open, Shift-drag a window so zones show. The log has one `zone swap: looked at N windows on a worker in Xus` line for the drag, and no `on the spot` line unless you drop before the worker answers. Grey outlines for the windows a drop would swap show as soon as it has, and the tray never waits for it.
 - [ ] **Drop back into its own zone.** Shift-drag a snapped window and drop it back into the zone it came from: nothing else moves and the log has no `zone swap` line.
 - [ ] **Resize neighbours off.** Turn off **Resize neighbours with a window** on Zones and drag the middle window's border: only that window changes size, as before, and it's no longer snapped. Turn it back on.
 - [ ] **Corner drag in Grid.** Pick Grid and snap four windows. Drag the top-left window's bottom-right corner: the window to its right, the one below and the one diagonally across all follow, and the two dividers end where you let go.
@@ -1132,6 +1133,9 @@ Set a key for **Pause Seam** on Shortcuts and a key for **Spotlight**, turn on *
 - [ ] **Pause from the API.** `seam.pause` with `{"on":true}`, then no params (toggles back), then `{"on":"yes"}` (answers `-32602`). `state.get` shows `paused` as `true`, then `false`.
 - [ ] **A restart resumes.** Pause, quit Seam from the tray and start it again. It is not paused.
 - [ ] **Paused, then a game.** Pause Seam, start a game, leave it, then resume. Nothing is left unregistered: every shortcut works after the resume. A shortcut another app holds still shows as taken on Shortcuts.
+- [ ] **The log says why.** Each `full-screen app in front` and `full-screen app gone` line ends with the foreground window's class, its exe, its rect against its screen and the QUNS number. One line per change, none for each event.
+- [ ] **Overlays don't count.** Press Win+Shift+S, lock with Win+L and unlock, and open the Xbox Game Bar with Win+G. With no game in front, Seam doesn't step aside for any of them (no `full-screen app in front` line). With a game in front, they don't end its step aside.
+- [ ] **Game on another screen.** With two screens, start a Direct3D game on one and maximize an app with an auto-hidden taskbar on the other, then click that app. Seam doesn't step aside. Click back into the game: it does.
 - [ ] **The setting off.** Turn **Step aside for games and full-screen apps** off. A full-screen app in front changes nothing: the shortcuts stay registered and Shift-drag shows zones. Pause Seam still works. Turn it on with a game in front: Seam steps aside at once.
 
 ## Quick fixes

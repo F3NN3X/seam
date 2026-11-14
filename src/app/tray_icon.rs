@@ -95,22 +95,13 @@ pub(super) fn notify(app: &mut App, title: &str, body: &str, click: BalloonActio
     }
 }
 
-pub(super) fn show_menu(app: &mut App) {
+fn checked_flag(on: bool) -> MENU_ITEM_FLAGS {
+    if on { MF_STRING | MF_CHECKED } else { MF_STRING }
+}
+
+/// The Workspaces submenu, made only when there are workspaces to put in it.
+unsafe fn add_workspaces_menu(app: &App, menu: HMENU, workspaces: &[Workspace]) {
     unsafe {
-        let Ok(menu) = CreatePopupMenu() else { return };
-        let flag = |on: bool| if on { MF_STRING | MF_CHECKED } else { MF_STRING };
-        let status = match (app.mons.len(), app.links.len()) {
-            (n, 0) => format!("{n} screen(s), not lined up yet"),
-            (n, k) => format!("{n} screens, {k} border(s) lined up"),
-        };
-        let status_w: Vec<u16> = status.encode_utf16().chain(std::iter::once(0)).collect();
-        let _ = AppendMenuW(menu, MF_STRING | MF_GRAYED, 0, PCWSTR(status_w.as_ptr()));
-        let _ = AppendMenuW(menu, MF_SEPARATOR, 0, None);
-        let _ = AppendMenuW(menu, MF_STRING, ID_OPEN, w!("Open Seam…"));
-        let pause = if standby::paused() { w!("Resume Seam") } else { w!("Pause Seam") };
-        let _ = AppendMenuW(menu, MF_STRING, ID_PAUSE_SEAM, pause);
-        let _ = AppendMenuW(menu, MF_STRING, ID_LINEUP, w!("Line Up Screens…"));
-        let workspaces = desk_workspaces(app);
         // Only made when there is something to put in it, so no menu handle is dropped unused.
         let submenu = if workspaces.is_empty() { None } else { CreatePopupMenu().ok() };
         if let Some(submenu) = submenu {
@@ -122,20 +113,25 @@ pub(super) fn show_menu(app: &mut App) {
                 let _ = AppendMenuW(submenu, MF_STRING, ID_SWITCH_BACK, PCWSTR(label.as_ptr()));
                 let _ = AppendMenuW(submenu, MF_SEPARATOR, 0, None);
             }
-            for (id, ws) in (ID_WORKSPACE..).zip(&workspaces) {
+            for (id, ws) in (ID_WORKSPACE..).zip(workspaces) {
                 // A tab puts the shortcut at the right edge, and && is how a menu spells &.
                 let mut label = ws.name.replace('&', "&&");
                 if let Some(combo) = &ws.hotkey {
                     label = format!("{label}\t{combo}");
                 }
                 let label: Vec<u16> = label.encode_utf16().chain(std::iter::once(0)).collect();
-                let _ = AppendMenuW(submenu, flag(active == Some(ws.id.as_str())), id, PCWSTR(label.as_ptr()));
+                let _ = AppendMenuW(submenu, checked_flag(active == Some(ws.id.as_str())), id, PCWSTR(label.as_ptr()));
             }
             if AppendMenuW(menu, MF_POPUP, submenu.0 as usize, w!("Workspaces")).is_err() {
                 let _ = DestroyMenu(submenu);
             }
         }
-        // Several screens get a submenu naming them as Line Up does; one is tiled from the item itself.
+    }
+}
+
+/// Several screens get a submenu naming them as Line Up does; one is tiled from the item itself.
+unsafe fn add_tile_menu(app: &App, menu: HMENU) {
+    unsafe {
         let tile_menu = if app.mons.len() > 1 { CreatePopupMenu().ok() } else { None };
         match tile_menu {
             Some(sub) => {
@@ -151,8 +147,28 @@ pub(super) fn show_menu(app: &mut App) {
                 let _ = AppendMenuW(menu, MF_STRING, ID_TILE, w!("Tile windows"));
             }
         }
+    }
+}
+
+pub(super) fn show_menu(app: &mut App) {
+    unsafe {
+        let Ok(menu) = CreatePopupMenu() else { return };
+        let status = match (app.mons.len(), app.links.len()) {
+            (n, 0) => format!("{n} screen(s), not lined up yet"),
+            (n, k) => format!("{n} screens, {k} border(s) lined up"),
+        };
+        let status_w: Vec<u16> = status.encode_utf16().chain(std::iter::once(0)).collect();
+        let _ = AppendMenuW(menu, MF_STRING | MF_GRAYED, 0, PCWSTR(status_w.as_ptr()));
         let _ = AppendMenuW(menu, MF_SEPARATOR, 0, None);
-        let _ = AppendMenuW(menu, flag(app.cfg.enabled), ID_ENABLED, w!("Remap pointer at borders"));
+        let _ = AppendMenuW(menu, MF_STRING, ID_OPEN, w!("Open Seam…"));
+        let pause = if standby::paused() { w!("Resume Seam") } else { w!("Pause Seam") };
+        let _ = AppendMenuW(menu, MF_STRING, ID_PAUSE_SEAM, pause);
+        let _ = AppendMenuW(menu, MF_STRING, ID_LINEUP, w!("Line Up Screens…"));
+        let workspaces = desk_workspaces(app);
+        add_workspaces_menu(app, menu, &workspaces);
+        add_tile_menu(app, menu);
+        let _ = AppendMenuW(menu, MF_SEPARATOR, 0, None);
+        let _ = AppendMenuW(menu, checked_flag(app.cfg.enabled), ID_ENABLED, w!("Remap pointer at borders"));
         let _ = AppendMenuW(menu, MF_STRING, ID_RELEASE, w!("Release pinned windows"));
         let _ = AppendMenuW(menu, MF_SEPARATOR, 0, None);
         let _ = AppendMenuW(menu, MF_STRING, ID_QUIT, w!("Quit Seam"));

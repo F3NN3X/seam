@@ -6,49 +6,7 @@ pub(super) unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARA
     unsafe {
         match msg {
             WM_APP_TRAY => {
-                let event = (lparam.0 & 0xffff) as u32;
-                match event {
-                    WM_CONTEXTMENU | WM_RBUTTONUP => {
-                        // The menu runs a nested loop; take the app out of the cell
-                        // only through with_app, and do it after this message returns.
-                        let _ = PostMessageW(Some(hwnd), WM_APP + 10, WPARAM(0), LPARAM(0));
-                    }
-                    NIN_SELECT | NIN_KEYSELECT => {
-                        let _ = PostMessageW(Some(hwnd), WM_APP + 12, WPARAM(0), LPARAM(0));
-                    }
-                    NIN_BALLOONUSERCLICK => {
-                        let click = with_app(|a| std::mem::replace(&mut a.balloon_action, BalloonAction::None));
-                        match click {
-                            Some(BalloonAction::LineUp) => {
-                                let _ = PostMessageW(Some(hwnd), WM_APP_LINEUP, WPARAM(0), LPARAM(0));
-                            }
-                            Some(BalloonAction::OpenPanel(page)) => {
-                                with_app(|a| open_panel(a, Some(page)));
-                            }
-                            Some(BalloonAction::Reopen) => {
-                                with_app(reopen_closed);
-                            }
-                            Some(BalloonAction::UndoQuickSave) => {
-                                with_app(undo_quick_save);
-                            }
-                            Some(BalloonAction::UndoTile) => {
-                                with_app(undo_tile);
-                            }
-                            Some(BalloonAction::OpenWorkspace) => {
-                                with_app(open_offered);
-                            }
-                            Some(BalloonAction::RestoreSession) => {
-                                with_app(|a| {
-                                    if let Some(Err(e)) = a.session_offer.take().map(|s| restore_session(a, s)) {
-                                        log::info!("last session: {}", e.message);
-                                    }
-                                });
-                            }
-                            _ => {}
-                        }
-                    }
-                    _ => {}
-                }
+                on_tray_event(hwnd, lparam);
                 LRESULT(0)
             }
             m if m == WM_APP + 10 => {
@@ -60,97 +18,7 @@ pub(super) unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARA
                 LRESULT(0)
             }
             WM_HOTKEY => {
-                match wparam.0 as i32 {
-                    HOTKEY_LINE_UP => {
-                        with_app(start_lineup);
-                    }
-                    HOTKEY_PAUSE => {
-                        with_app(|a| set_remap(a, !a.cfg.enabled));
-                    }
-                    HOTKEY_PAUSE_SEAM => {
-                        with_app(|a| set_paused(a, None));
-                    }
-                    id @ (HOTKEY_NEXT_ZONE | HOTKEY_PREV_ZONE) => {
-                        if let Err(why) = snap::move_foreground(id == HOTKEY_NEXT_ZONE) {
-                            log::info!("zone hotkey: {why}");
-                        }
-                    }
-                    HOTKEY_CAPTURE => {
-                        with_app(|a| start_capture(a, None, None, None, None, None));
-                    }
-                    id @ (HOTKEY_PIN_TOP | HOTKEY_PIN_STICKY) => {
-                        let kind = if id == HOTKEY_PIN_TOP { PinKind::Top } else { PinKind::Sticky };
-                        wm::pin(kind, None, GetForegroundWindow().0 as isize, None);
-                    }
-                    HOTKEY_RELEASE => wm::release(None),
-                    HOTKEY_SNAP_BACK => {
-                        if let Some(Err(e)) = with_app(snap_back) {
-                            log::info!("snap back hotkey: {}", e.message);
-                        }
-                    }
-                    HOTKEY_SWITCH_BACK => {
-                        with_app(|a| {
-                            if let Err(e) = switch_back(a) {
-                                log::info!("switch back hotkey: {}", e.message);
-                                notify(a, "Switch back", &e.message, BalloonAction::None);
-                            }
-                        });
-                    }
-                    HOTKEY_FOCUS_ONLY => {
-                        with_app(|a| start_focus_only(a, FocusScope::Screen, None));
-                    }
-                    HOTKEY_SPOTLIGHT => {
-                        with_app(|a| set_spotlight(a, None));
-                    }
-                    HOTKEY_QUICK_SAVE => {
-                        if let Some(Some(Err(e))) = with_app(|a| quick_save(a, None)) {
-                            log::info!("quick save hotkey: {}", e.message);
-                        }
-                    }
-                    HOTKEY_TILE_SCREEN => {
-                        with_app(|a| start_tile(a, tile::pointer(), None));
-                    }
-                    HOTKEY_FIT_GROUP => {
-                        with_app(|a| fit_group(a, None, None));
-                    }
-                    HOTKEY_DIVIDER_MENU => {
-                        if let Err(why) = snap::size_menu(GetForegroundWindow()) {
-                            log::info!("size menu hotkey: {why}");
-                        }
-                    }
-                    HOTKEY_QUICK_LAYOUT => {
-                        if let Some(Err(why)) = with_app(|a| tile::open_quick_layout(a, None, false)) {
-                            log::info!("quick layout hotkey: {why}");
-                        }
-                    }
-                    id @ (HOTKEY_GROW | HOTKEY_SHRINK | HOTKEY_PRIORITY) => {
-                        let verb = match id {
-                            HOTKEY_GROW => GroupVerb::Grow(None),
-                            HOTKEY_SHRINK => GroupVerb::Shrink(None),
-                            _ => GroupVerb::Priority,
-                        };
-                        with_app(|a| start_group(a, verb, None));
-                    }
-                    id if (HOTKEY_WINDOW..HOTKEY_WINDOW + WINDOW_KEYS).contains(&id) => {
-                        with_app(|a| {
-                            let (verb, dir, _) = a.cfg.hotkeys.directional()[(id - HOTKEY_WINDOW) as usize];
-                            if let (Some(verb), Some(dir)) = (WindowVerb::parse(verb), Dir::parse(dir)) {
-                                start_window(a, verb, dir, None);
-                            }
-                        });
-                    }
-                    slot if slot >= HOTKEY_WORKSPACE => {
-                        with_app(|a| {
-                            let action =
-                                a.bound.iter().find(|(id, ..)| *id == slot).map(|(_, action, _)| action.clone());
-                            let id = action.as_deref().and_then(|action| action.strip_prefix("workspace:"));
-                            if let Some(Err(e)) = id.map(|id| start_switch(a, Some(id), None, false)) {
-                                log::info!("workspace hotkey: {}", e.message);
-                            }
-                        });
-                    }
-                    _ => {}
-                }
+                on_hotkey(wparam.0 as i32);
                 LRESULT(0)
             }
             WM_APP_STANDBY => {
@@ -351,18 +219,7 @@ pub(super) unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARA
                 LRESULT(0)
             }
             WM_DISPLAYCHANGE => {
-                log::info!(
-                    "display change: {}x{}, overlay active: {}",
-                    lparam.0 & 0xffff,
-                    (lparam.0 >> 16) & 0xffff,
-                    overlay::is_active()
-                );
-                // Screens changed under us: a half-finished line-up no longer applies.
-                if overlay::is_active() {
-                    overlay::cancel();
-                }
-                SetTimer(Some(hwnd), TIMER_REFRESH, 800, None);
-                snap::display_changed();
+                on_display_change(hwnd, lparam);
                 LRESULT(0)
             }
             WM_POWERBROADCAST => {
@@ -388,21 +245,7 @@ pub(super) unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARA
                 LRESULT(0)
             }
             WM_DESTROY => {
-                hook::enable(false);
-                if with_app(|a| a.release_on_exit).unwrap_or(false) {
-                    wm::release_before_exit();
-                }
-                snap::shutdown();
-                altdrag::shutdown();
-                spotlight::stop();
-                with_app(|a| {
-                    let nid = tray_data(a);
-                    let _ = Shell_NotifyIconW(NIM_DELETE, &nid);
-                    if let Some(saver) = a.saver.take() {
-                        saver.finish();
-                    }
-                });
-                PostQuitMessage(0);
+                on_destroy();
                 LRESULT(0)
             }
             m if with_app(|a| a.taskbar_created == m).unwrap_or(false) => {
@@ -416,5 +259,190 @@ pub(super) unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARA
             }
             _ => DefWindowProcW(hwnd, msg, wparam, lparam),
         }
+    }
+}
+
+/// A tray icon event: the menu and clicks are posted on, a balloon click runs its action.
+unsafe fn on_tray_event(hwnd: HWND, lparam: LPARAM) {
+    unsafe {
+        let event = (lparam.0 & 0xffff) as u32;
+        match event {
+            WM_CONTEXTMENU | WM_RBUTTONUP => {
+                // The menu runs a nested loop; take the app out of the cell
+                // only through with_app, and do it after this message returns.
+                let _ = PostMessageW(Some(hwnd), WM_APP + 10, WPARAM(0), LPARAM(0));
+            }
+            NIN_SELECT | NIN_KEYSELECT => {
+                let _ = PostMessageW(Some(hwnd), WM_APP + 12, WPARAM(0), LPARAM(0));
+            }
+            NIN_BALLOONUSERCLICK => on_balloon_click(hwnd),
+            _ => {}
+        }
+    }
+}
+
+unsafe fn on_balloon_click(hwnd: HWND) {
+    unsafe {
+        let click = with_app(|a| std::mem::replace(&mut a.balloon_action, BalloonAction::None));
+        match click {
+            Some(BalloonAction::LineUp) => {
+                let _ = PostMessageW(Some(hwnd), WM_APP_LINEUP, WPARAM(0), LPARAM(0));
+            }
+            Some(BalloonAction::OpenPanel(page)) => {
+                with_app(|a| open_panel(a, Some(page)));
+            }
+            Some(BalloonAction::Reopen) => {
+                with_app(reopen_closed);
+            }
+            Some(BalloonAction::UndoQuickSave) => {
+                with_app(undo_quick_save);
+            }
+            Some(BalloonAction::UndoTile) => {
+                with_app(undo_tile);
+            }
+            Some(BalloonAction::OpenWorkspace) => {
+                with_app(open_offered);
+            }
+            Some(BalloonAction::RestoreSession) => {
+                with_app(|a| {
+                    if let Some(Err(e)) = a.session_offer.take().map(|s| restore_session(a, s)) {
+                        log::info!("last session: {}", e.message);
+                    }
+                });
+            }
+            _ => {}
+        }
+    }
+}
+
+unsafe fn on_hotkey(id: i32) {
+    unsafe {
+        match id {
+            HOTKEY_LINE_UP => {
+                with_app(start_lineup);
+            }
+            HOTKEY_PAUSE => {
+                with_app(|a| set_remap(a, !a.cfg.enabled));
+            }
+            HOTKEY_PAUSE_SEAM => {
+                with_app(|a| set_paused(a, None));
+            }
+            id @ (HOTKEY_NEXT_ZONE | HOTKEY_PREV_ZONE) => {
+                if let Err(why) = snap::move_foreground(id == HOTKEY_NEXT_ZONE) {
+                    log::info!("zone hotkey: {why}");
+                }
+            }
+            HOTKEY_CAPTURE => {
+                with_app(|a| start_capture(a, None, None, None, None, None));
+            }
+            id @ (HOTKEY_PIN_TOP | HOTKEY_PIN_STICKY) => {
+                let kind = if id == HOTKEY_PIN_TOP { PinKind::Top } else { PinKind::Sticky };
+                wm::pin(kind, None, GetForegroundWindow().0 as isize, None);
+            }
+            HOTKEY_RELEASE => wm::release(None),
+            HOTKEY_SNAP_BACK => {
+                if let Some(Err(e)) = with_app(snap_back) {
+                    log::info!("snap back hotkey: {}", e.message);
+                }
+            }
+            HOTKEY_SWITCH_BACK => {
+                with_app(|a| {
+                    if let Err(e) = switch_back(a) {
+                        log::info!("switch back hotkey: {}", e.message);
+                        notify(a, "Switch back", &e.message, BalloonAction::None);
+                    }
+                });
+            }
+            HOTKEY_FOCUS_ONLY => {
+                with_app(|a| start_focus_only(a, FocusScope::Screen, None));
+            }
+            HOTKEY_SPOTLIGHT => {
+                with_app(|a| set_spotlight(a, None));
+            }
+            HOTKEY_QUICK_SAVE => {
+                if let Some(Some(Err(e))) = with_app(|a| quick_save(a, None)) {
+                    log::info!("quick save hotkey: {}", e.message);
+                }
+            }
+            HOTKEY_TILE_SCREEN => {
+                with_app(|a| start_tile(a, tile::pointer(), None));
+            }
+            HOTKEY_FIT_GROUP => {
+                with_app(|a| fit_group(a, None, None));
+            }
+            HOTKEY_DIVIDER_MENU => {
+                if let Err(why) = snap::size_menu(GetForegroundWindow()) {
+                    log::info!("size menu hotkey: {why}");
+                }
+            }
+            HOTKEY_QUICK_LAYOUT => {
+                if let Some(Err(why)) = with_app(|a| tile::open_quick_layout(a, None, false)) {
+                    log::info!("quick layout hotkey: {why}");
+                }
+            }
+            id @ (HOTKEY_GROW | HOTKEY_SHRINK | HOTKEY_PRIORITY) => {
+                let verb = match id {
+                    HOTKEY_GROW => GroupVerb::Grow(None),
+                    HOTKEY_SHRINK => GroupVerb::Shrink(None),
+                    _ => GroupVerb::Priority,
+                };
+                with_app(|a| start_group(a, verb, None));
+            }
+            id if (HOTKEY_WINDOW..HOTKEY_WINDOW + WINDOW_KEYS).contains(&id) => {
+                with_app(|a| {
+                    let (verb, dir, _) = a.cfg.hotkeys.directional()[(id - HOTKEY_WINDOW) as usize];
+                    if let (Some(verb), Some(dir)) = (WindowVerb::parse(verb), Dir::parse(dir)) {
+                        start_window(a, verb, dir, None);
+                    }
+                });
+            }
+            slot if slot >= HOTKEY_WORKSPACE => {
+                with_app(|a| {
+                    let action = a.bound.iter().find(|(id, ..)| *id == slot).map(|(_, action, _)| action.clone());
+                    let id = action.as_deref().and_then(|action| action.strip_prefix("workspace:"));
+                    if let Some(Err(e)) = id.map(|id| start_switch(a, Some(id), None, false)) {
+                        log::info!("workspace hotkey: {}", e.message);
+                    }
+                });
+            }
+            _ => {}
+        }
+    }
+}
+
+unsafe fn on_display_change(hwnd: HWND, lparam: LPARAM) {
+    unsafe {
+        log::info!(
+            "display change: {}x{}, overlay active: {}",
+            lparam.0 & 0xffff,
+            (lparam.0 >> 16) & 0xffff,
+            overlay::is_active()
+        );
+        // Screens changed under us: a half-finished line-up no longer applies.
+        if overlay::is_active() {
+            overlay::cancel();
+        }
+        SetTimer(Some(hwnd), TIMER_REFRESH, 800, None);
+        snap::display_changed();
+    }
+}
+
+unsafe fn on_destroy() {
+    unsafe {
+        hook::enable(false);
+        if with_app(|a| a.release_on_exit).unwrap_or(false) {
+            wm::release_before_exit();
+        }
+        snap::shutdown();
+        altdrag::shutdown();
+        spotlight::stop();
+        with_app(|a| {
+            let nid = tray_data(a);
+            let _ = Shell_NotifyIconW(NIM_DELETE, &nid);
+            if let Some(saver) = a.saver.take() {
+                saver.finish();
+            }
+        });
+        PostQuitMessage(0);
     }
 }

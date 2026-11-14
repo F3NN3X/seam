@@ -183,71 +183,14 @@ impl Panel {
         let glue_push = cx.new(|_| {
             SliderState::new().min(0.).max(MAX_GLUE_PUSH_PX as f32).step(10.).default_value(pointer.glue_push_px as f32)
         });
-        let subscriptions = vec![
-            cx.subscribe_in(&edge_resistance, window, |this, _, event: &SliderEvent, window, cx| match event {
-                SliderEvent::Change(value) => {
-                    this.config.pointer.edge_resistance_px = value.end() as u32;
-                    cx.notify();
-                }
-                SliderEvent::Release(value) => {
-                    this.patch(json!({ "pointer": { "edge_resistance_px": value.end() as u32 } }), window, cx);
-                }
-            }),
-            cx.subscribe_in(&glue_push, window, |this, _, event: &SliderEvent, window, cx| match event {
-                SliderEvent::Change(value) => {
-                    this.config.pointer.glue_push_px = value.end() as u32;
-                    cx.notify();
-                }
-                SliderEvent::Release(value) => {
-                    this.patch(json!({ "pointer": { "glue_push_px": value.end() as u32 } }), window, cx);
-                }
-            }),
-            cx.subscribe_in(&gap, window, |this, _, event: &SliderEvent, window, cx| match event {
-                SliderEvent::Change(value) => {
-                    this.config.zones.gap = value.end() as u32;
-                    cx.notify();
-                }
-                SliderEvent::Release(value) => {
-                    this.patch(json!({ "zones": { "gap": value.end() as u32 } }), window, cx);
-                }
-            }),
-            cx.subscribe_in(&name_input, window, |this, _, event: &InputEvent, window, cx| {
-                if matches!(event, InputEvent::PressEnter { .. } | InputEvent::Blur) {
-                    pages::workspaces::finish_naming(this, window, cx);
-                }
-            }),
-            cx.subscribe_in(&focus_picker, window, |this, _, event: &ColorPickerEvent, window, cx| {
-                let ColorPickerEvent::Change(colour) = event;
-                pages::zones::picked("focus_color", *colour, this, window, cx);
-            }),
-            cx.subscribe_in(&pin_picker, window, |this, _, event: &ColorPickerEvent, window, cx| {
-                let ColorPickerEvent::Change(colour) = event;
-                pages::zones::picked("pin_color", *colour, this, window, cx);
-            }),
-            cx.subscribe_in(&search, window, |this, input, event: &InputEvent, _, cx| {
-                if matches!(event, InputEvent::Change) {
-                    this.query = input.read(cx).value();
-                    cx.notify();
-                }
-            }),
-            cx.observe_window_appearance(window, |_, window, cx| Theme::sync_system_appearance(Some(window), cx)),
-            // The Ease setting has no change event, so look again on coming back.
-            cx.observe_window_activation(window, |this, window, cx| {
-                if window.is_window_active() {
-                    this.ease_on = seam::ease::is_on();
-                    if this.screen_window.is_some() {
-                        pages::screen_editor::restack();
-                    }
-                    cx.notify();
-                }
-            }),
-        ];
+        let mut subscriptions = slider_subscriptions(&edge_resistance, &glue_push, &gap, window, cx);
+        subscriptions.extend(field_subscriptions(&name_input, &focus_picker, &pin_picker, &search, window, cx));
+        subscriptions.extend(window_subscriptions(window, cx));
         let focus = cx.focus_handle();
         focus.focus(window, cx);
         // The editor's window is the panel's, so it goes with it.
         let release = cx.on_release(|panel, cx| pages::screen_editor::close_all(panel.screen_window.as_ref(), cx));
         let (editing, editing_subscriptions) = pages::workspace_editor::Editing::new(window, cx);
-        let mut subscriptions = subscriptions;
         subscriptions.push(release);
         subscriptions.extend(editing_subscriptions);
         let mut panel = Panel {
@@ -305,6 +248,94 @@ impl Panel {
         }
         panel
     }
+}
+
+/// The pointer and gap sliders: they show the value as it moves and send it when let go.
+fn slider_subscriptions(
+    edge_resistance: &Entity<SliderState>,
+    glue_push: &Entity<SliderState>,
+    gap: &Entity<SliderState>,
+    window: &mut Window,
+    cx: &mut Context<Panel>,
+) -> Vec<Subscription> {
+    vec![
+        cx.subscribe_in(edge_resistance, window, |this, _, event: &SliderEvent, window, cx| match event {
+            SliderEvent::Change(value) => {
+                this.config.pointer.edge_resistance_px = value.end() as u32;
+                cx.notify();
+            }
+            SliderEvent::Release(value) => {
+                this.patch(json!({ "pointer": { "edge_resistance_px": value.end() as u32 } }), window, cx);
+            }
+        }),
+        cx.subscribe_in(glue_push, window, |this, _, event: &SliderEvent, window, cx| match event {
+            SliderEvent::Change(value) => {
+                this.config.pointer.glue_push_px = value.end() as u32;
+                cx.notify();
+            }
+            SliderEvent::Release(value) => {
+                this.patch(json!({ "pointer": { "glue_push_px": value.end() as u32 } }), window, cx);
+            }
+        }),
+        cx.subscribe_in(gap, window, |this, _, event: &SliderEvent, window, cx| match event {
+            SliderEvent::Change(value) => {
+                this.config.zones.gap = value.end() as u32;
+                cx.notify();
+            }
+            SliderEvent::Release(value) => {
+                this.patch(json!({ "zones": { "gap": value.end() as u32 } }), window, cx);
+            }
+        }),
+    ]
+}
+
+/// The name, colour and search fields.
+fn field_subscriptions(
+    name_input: &Entity<InputState>,
+    focus_picker: &Entity<ColorPickerState>,
+    pin_picker: &Entity<ColorPickerState>,
+    search: &Entity<InputState>,
+    window: &mut Window,
+    cx: &mut Context<Panel>,
+) -> Vec<Subscription> {
+    vec![
+        cx.subscribe_in(name_input, window, |this, _, event: &InputEvent, window, cx| {
+            if matches!(event, InputEvent::PressEnter { .. } | InputEvent::Blur) {
+                pages::workspaces::finish_naming(this, window, cx);
+            }
+        }),
+        cx.subscribe_in(focus_picker, window, |this, _, event: &ColorPickerEvent, window, cx| {
+            let ColorPickerEvent::Change(colour) = event;
+            pages::zones::picked("focus_color", *colour, this, window, cx);
+        }),
+        cx.subscribe_in(pin_picker, window, |this, _, event: &ColorPickerEvent, window, cx| {
+            let ColorPickerEvent::Change(colour) = event;
+            pages::zones::picked("pin_color", *colour, this, window, cx);
+        }),
+        cx.subscribe_in(search, window, |this, input, event: &InputEvent, _, cx| {
+            if matches!(event, InputEvent::Change) {
+                this.query = input.read(cx).value();
+                cx.notify();
+            }
+        }),
+    ]
+}
+
+/// The theme follows Windows, and the Ease setting is looked at again on coming back.
+fn window_subscriptions(window: &mut Window, cx: &mut Context<Panel>) -> Vec<Subscription> {
+    vec![
+        cx.observe_window_appearance(window, |_, window, cx| Theme::sync_system_appearance(Some(window), cx)),
+        // The Ease setting has no change event, so look again on coming back.
+        cx.observe_window_activation(window, |this, window, cx| {
+            if window.is_window_active() {
+                this.ease_on = seam::ease::is_on();
+                if this.screen_window.is_some() {
+                    pages::screen_editor::restack();
+                }
+                cx.notify();
+            }
+        }),
+    ]
 }
 
 /// One line for a refused command, saying what happened and why.

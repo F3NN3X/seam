@@ -7,7 +7,7 @@ use super::zone_editor::{
     CONTEXT, DiscardEdit, DragDivider, UndoEdit, begin_drag, discard, drag_to, end_drag, select, undo,
 };
 use crate::panel::{Page, Panel};
-use crate::theme::palette;
+use crate::theme::{Palette, palette};
 use crate::ui;
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
@@ -185,103 +185,13 @@ impl Render for ScreenEditor {
         let (tree, selected) = (editor.tree.clone(), editor.selected);
         let dragging = editor.dragging.as_ref().map(|d| d.path.clone());
 
-        // One window pixel is 1 / scale logical pixels, so a screen pixel is one.
-        let at = |v: i32| px(v as f32 / scale);
         let area = Rect { x: 0, y: 0, w: self.area.w, h: self.area.h };
         let ratio = f64::from(1. / scale);
         let (cells, drawn) = (zones::rects(&tree, area, 0), zones::rects(&tree, area, gap as i32));
         let mirror = self.mirror;
-        let mut root = div().relative().size_full();
-        for (i, (cell, r)) in cells.iter().zip(&drawn).enumerate() {
-            let chosen = i == selected;
-            let panel = self.panel.clone();
-            let label = div()
-                .flex()
-                .flex_col()
-                .items_center()
-                .px(px(12.))
-                .py(px(6.))
-                .rounded(px(8.))
-                .bg(p.raised.opacity(0.85))
-                .text_color(p.text)
-                .child(div().text_size(px(24.)).child((i + 1).to_string()))
-                .child(ui::tabular(div().text_size(px(13.)).text_color(p.secondary).child(format!("{} px", cell.w))));
-            root = root.child(
-                div()
-                    .id(("screen-zone", i))
-                    .absolute()
-                    .left(at(r.x))
-                    .top(at(r.y))
-                    .w(at(r.w))
-                    .h(at(r.h))
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .overflow_hidden()
-                    .border_1()
-                    .rounded(px(6.))
-                    .when(chosen, |d| d.bg(p.accent.opacity(0.18)).border_color(p.accent))
-                    .when(!chosen, |d| d.bg(p.raised.opacity(0.3)).border_color(p.hairline_strong))
-                    .when(!mirror, |d| {
-                        d.cursor_pointer().on_mouse_down(MouseButton::Left, move |_, _, cx| {
-                            panel.update(cx, |panel, cx| select(panel, i, cx));
-                        })
-                    })
-                    .child(label),
-            );
-        }
-        for (k, d) in zones::dividers(&tree, area).into_iter().enumerate() {
-            let vertical = d.dir == Dir::Vertical;
-            let along = if vertical { d.area.w } else { d.area.h };
-            let first = (along as f32 * d.ratio).round() as i32;
-            let held = dragging.as_ref() == Some(&d.path);
-            let (x, y) = if vertical { (d.area.x + first, d.area.y) } else { (d.area.x, d.area.y + first) };
-            let (length_w, length_h) = (at(d.area.w), at(d.area.h));
-            let line = div().bg(if held { p.accent } else { p.secondary });
-            let thin = px(2. / scale);
-            let mut handle =
-                div().id(("screen-divider", k)).absolute().flex().items_center().justify_center().child(if vertical {
-                    line.w(thin).h_full()
-                } else {
-                    line.h(thin).w_full()
-                });
-            handle = if vertical {
-                handle.left(at(x) - px(GRAB / 2.)).top(at(y)).w(px(GRAB)).h(length_h)
-            } else {
-                handle.top(at(y) - px(GRAB / 2.)).left(at(x)).h(px(GRAB)).w(length_w)
-            };
-            if !mirror {
-                let panel = self.panel.clone();
-                let path = d.path.clone();
-                handle = if vertical { handle.cursor_col_resize() } else { handle.cursor_row_resize() }
-                    .hover(|d| d.bg(p.accent.opacity(0.25)))
-                    .on_mouse_down(MouseButton::Left, move |_, _, cx| {
-                        panel.update(cx, |panel, _| begin_drag(panel, path.clone()));
-                    })
-                    .on_drag(DragDivider, |drag, _, _, cx| {
-                        cx.stop_propagation();
-                        cx.new(|_| drag.clone())
-                    });
-            }
-            root = root.child(handle);
-            if held {
-                // The widths either side, in real pixels.
-                let tag = div()
-                    .absolute()
-                    .left(at(x) + px(if vertical { 12. } else { 8. }))
-                    .top(at(y) + px(if vertical { 8. } else { 12. }))
-                    .px(px(8.))
-                    .py(px(4.))
-                    .bg(p.raised)
-                    .border_1()
-                    .border_color(p.hairline_strong)
-                    .rounded(px(6.))
-                    .text_size(px(12.))
-                    .text_color(p.text)
-                    .child(ui::tabular(div().child(format!("{} px and {} px", first, along - first))));
-                root = root.child(tag);
-            }
-        }
+        let root = div().relative().size_full();
+        let root = self.zone_tiles(root, &cells, &drawn, selected, scale, p);
+        let root = self.divider_handles(root, &tree, area, dragging.as_ref(), scale, p);
         if mirror {
             return root.into_any_element();
         }
@@ -312,5 +222,130 @@ impl Render for ScreenEditor {
                 out.update(cx, end_drag);
             })
             .into_any_element()
+    }
+}
+
+/// One window pixel is 1 / scale logical pixels, so a screen pixel is one.
+fn at(scale: f32, v: i32) -> Pixels {
+    px(v as f32 / scale)
+}
+
+impl ScreenEditor {
+    /// One tile for each zone, clickable unless the window only mirrors.
+    fn zone_tiles(
+        &self,
+        mut root: Div,
+        cells: &[Rect],
+        drawn: &[Rect],
+        selected: usize,
+        scale: f32,
+        p: Palette,
+    ) -> Div {
+        let mirror = self.mirror;
+        for (i, (cell, r)) in cells.iter().zip(drawn).enumerate() {
+            let chosen = i == selected;
+            let panel = self.panel.clone();
+            let label = div()
+                .flex()
+                .flex_col()
+                .items_center()
+                .px(px(12.))
+                .py(px(6.))
+                .rounded(px(8.))
+                .bg(p.raised.opacity(0.85))
+                .text_color(p.text)
+                .child(div().text_size(px(24.)).child((i + 1).to_string()))
+                .child(ui::tabular(div().text_size(px(13.)).text_color(p.secondary).child(format!("{} px", cell.w))));
+            root = root.child(
+                div()
+                    .id(("screen-zone", i))
+                    .absolute()
+                    .left(at(scale, r.x))
+                    .top(at(scale, r.y))
+                    .w(at(scale, r.w))
+                    .h(at(scale, r.h))
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .overflow_hidden()
+                    .border_1()
+                    .rounded(px(6.))
+                    .when(chosen, |d| d.bg(p.accent.opacity(0.18)).border_color(p.accent))
+                    .when(!chosen, |d| d.bg(p.raised.opacity(0.3)).border_color(p.hairline_strong))
+                    .when(!mirror, |d| {
+                        d.cursor_pointer().on_mouse_down(MouseButton::Left, move |_, _, cx| {
+                            panel.update(cx, |panel, cx| select(panel, i, cx));
+                        })
+                    })
+                    .child(label),
+            );
+        }
+        root
+    }
+
+    /// The handle on each divider, and the widths tag on the one held.
+    fn divider_handles(
+        &self,
+        mut root: Div,
+        tree: &zones::Node,
+        area: Rect,
+        dragging: Option<&Vec<bool>>,
+        scale: f32,
+        p: Palette,
+    ) -> Div {
+        let mirror = self.mirror;
+        for (k, d) in zones::dividers(tree, area).into_iter().enumerate() {
+            let vertical = d.dir == Dir::Vertical;
+            let along = if vertical { d.area.w } else { d.area.h };
+            let first = (along as f32 * d.ratio).round() as i32;
+            let held = dragging == Some(&d.path);
+            let (x, y) = if vertical { (d.area.x + first, d.area.y) } else { (d.area.x, d.area.y + first) };
+            let (length_w, length_h) = (at(scale, d.area.w), at(scale, d.area.h));
+            let line = div().bg(if held { p.accent } else { p.secondary });
+            let thin = px(2. / scale);
+            let mut handle =
+                div().id(("screen-divider", k)).absolute().flex().items_center().justify_center().child(if vertical {
+                    line.w(thin).h_full()
+                } else {
+                    line.h(thin).w_full()
+                });
+            handle = if vertical {
+                handle.left(at(scale, x) - px(GRAB / 2.)).top(at(scale, y)).w(px(GRAB)).h(length_h)
+            } else {
+                handle.top(at(scale, y) - px(GRAB / 2.)).left(at(scale, x)).h(px(GRAB)).w(length_w)
+            };
+            if !mirror {
+                let panel = self.panel.clone();
+                let path = d.path.clone();
+                handle = if vertical { handle.cursor_col_resize() } else { handle.cursor_row_resize() }
+                    .hover(|d| d.bg(p.accent.opacity(0.25)))
+                    .on_mouse_down(MouseButton::Left, move |_, _, cx| {
+                        panel.update(cx, |panel, _| begin_drag(panel, path.clone()));
+                    })
+                    .on_drag(DragDivider, |drag, _, _, cx| {
+                        cx.stop_propagation();
+                        cx.new(|_| drag.clone())
+                    });
+            }
+            root = root.child(handle);
+            if held {
+                // The widths either side, in real pixels.
+                let tag = div()
+                    .absolute()
+                    .left(at(scale, x) + px(if vertical { 12. } else { 8. }))
+                    .top(at(scale, y) + px(if vertical { 8. } else { 12. }))
+                    .px(px(8.))
+                    .py(px(4.))
+                    .bg(p.raised)
+                    .border_1()
+                    .border_color(p.hairline_strong)
+                    .rounded(px(6.))
+                    .text_size(px(12.))
+                    .text_color(p.text)
+                    .child(ui::tabular(div().child(format!("{} px and {} px", first, along - first))));
+                root = root.child(tag);
+            }
+        }
+        root
     }
 }

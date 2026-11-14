@@ -2,7 +2,7 @@
 
 use crate::pages::workspaces::{all, desk_sig};
 use crate::panel::{Panel, error_text, refusal};
-use crate::theme::palette;
+use crate::theme::{Palette, palette};
 use crate::ui::{self, card, row, row_with, section, switch};
 use gpui_kit::component::menu::{DropdownMenu, PopupMenuItem};
 use gpui_kit::component::notification::Notification;
@@ -127,13 +127,85 @@ fn folder_label() -> String {
 pub fn render(panel: &mut Panel, window: &mut Window, cx: &mut Context<Panel>) -> impl IntoElement + use<> {
     let p = palette(cx);
     let view = cx.entity();
-    let setter = |patch: fn(bool) -> serde_json::Value| {
-        let view = view.clone();
-        move |on: bool, window: &mut Window, cx: &mut App| {
-            view.update(cx, |panel, cx| panel.patch(patch(on), window, cx));
-        }
-    };
 
+    let startup = startup_section(panel, &view, p, window, cx);
+    let tray_icon = tray_icon_section(panel, &view, p, window, cx);
+    let step_aside = switch(
+        "step-aside-fullscreen",
+        "Step aside for games and full-screen apps",
+        panel.config.step_aside_fullscreen,
+        window,
+        cx,
+        setter(&view, |on| json!({ "step_aside_fullscreen": on })),
+    );
+    let standing_by = standing_by_note(panel, p, cx);
+    let connected = panel.state.as_ref().map_or(0, |s| s.clients.iter().filter(|c| *c != "panel").count());
+    let api_about =
+        format!("Stream Deck and tools on this PC can read status and switch workspaces. {connected} connected");
+    let api = switch(
+        "api-enabled",
+        "Let other apps control Seam",
+        panel.config.api.enabled,
+        window,
+        cx,
+        setter(&view, |on| json!({ "api": { "enabled": on } })),
+    );
+    let debug_log = switch(
+        "debug-log",
+        "Debug log",
+        panel.config.debug_log,
+        window,
+        cx,
+        setter(&view, |on| json!({ "debug_log": on })),
+    );
+    let files = files_section(debug_log, p, cx);
+
+    div()
+        .flex()
+        .flex_col()
+        .gap(px(ui::SECTION_GAP))
+        .child(ui::page_title("General", "How Seam starts and where it keeps its files", p))
+        .children(standing_by)
+        .child(startup)
+        .child(tray_icon)
+        .child(section(
+            "Full-screen apps",
+            card(
+                vec![row(
+                    "Step aside for games and full-screen apps",
+                    Some("Shortcuts, snapping and Spotlight wait until you leave it".into()),
+                    step_aside,
+                    p,
+                )],
+                p,
+            ),
+            p,
+        ))
+        .child(section(
+            "Other apps",
+            card(vec![row("Let other apps control Seam", Some(api_about.into()), api, p)], p),
+            p,
+        ))
+        .child(files)
+        .child(div().text_size(px(12.)).text_color(p.muted).child("Seam follows your Windows light or dark mode"))
+}
+
+/// A switch's change handler that patches one boolean setting.
+fn setter(view: &Entity<Panel>, patch: fn(bool) -> Value) -> impl Fn(bool, &mut Window, &mut App) + 'static + use<> {
+    let view = view.clone();
+    move |on: bool, window: &mut Window, cx: &mut App| {
+        view.update(cx, |panel, cx| panel.patch(patch(on), window, cx));
+    }
+}
+
+/// The Startup section: Windows start-up, new screens, and what happens at sign-in.
+fn startup_section(
+    panel: &Panel,
+    view: &Entity<Panel>,
+    p: Palette,
+    window: &mut Window,
+    cx: &mut Context<Panel>,
+) -> AnyElement {
     // The Store copy asks Windows, which can keep the task off. Until it
     // answers, the switch can't be used.
     let packaged = package::is_packaged();
@@ -174,7 +246,7 @@ pub fn render(panel: &mut Panel, window: &mut Window, cx: &mut Context<Panel>) -
         panel.config.ask_new_desks,
         window,
         cx,
-        setter(|on| json!({ "ask_new_desks": on })),
+        setter(view, |on| json!({ "ask_new_desks": on })),
     );
     let sig = desk_sig(panel);
     let sign_in = panel.config.desks.get(&sig).map(|d| d.choice()).unwrap_or_default();
@@ -203,28 +275,7 @@ pub fn render(panel: &mut Panel, window: &mut Window, cx: &mut Context<Panel>) -
             }
         },
     );
-    let workspace_choice = {
-        let shown = workspaces.iter().find(|w| Some(&w.id) == sign_in.workspace.as_ref());
-        let label = shown.map_or("Choose a workspace".to_string(), |w| w.name.clone());
-        let weak = cx.entity().downgrade();
-        let sig = sig.clone();
-        let current = sign_in.workspace.clone();
-        let menu = move |mut menu: gpui_kit::component::menu::PopupMenu, _: &mut Window, _: &mut Context<_>| {
-            for w in &workspaces {
-                let (weak, sig, id) = (weak.clone(), sig.clone(), w.id.clone());
-                let checked = current.as_deref() == Some(w.id.as_str());
-                menu = menu.item(PopupMenuItem::new(w.name.clone()).checked(checked).on_click(move |_, window, cx| {
-                    let patch = json!({ "desks": { sig.clone(): { "sign_in": { "workspace": id.clone() } } } });
-                    let _ = weak.update(cx, |panel, cx| panel.patch(patch, window, cx));
-                }));
-            }
-            menu
-        };
-        ui::secondary("sign-in-workspace", label.clone(), cx)
-            .dropdown_caret(true)
-            .accessibility_label(format!("Workspace to open: {label}"))
-            .dropdown_menu(menu)
-    };
+    let workspace_choice = workspace_choice(&sig, sign_in.workspace.clone(), workspaces, cx);
     let ask_first = switch("sign-in-ask", "Ask first", sign_in.ask, window, cx, {
         let (view, sig) = (view.clone(), sig.clone());
         move |on, window, cx| {
@@ -264,63 +315,6 @@ pub fn render(panel: &mut Panel, window: &mut Window, cx: &mut Context<Panel>) -
             .on_click(|_, _, cx| cx.open_url("ms-settings:signinoptions"));
         ui::note("Windows' Restart apps is on again, so apps may open twice", Some(open), p)
     });
-    let selected = usize::from(panel.config.tray_click == TrayClick::LineUp);
-    let left_click =
-        ui::segmented("tray-click", "Left-click", &["Open Seam", "Start Line Up"], selected, window, cx, {
-            let view = view.clone();
-            move |i, window, cx| {
-                let value = if i == 0 { "open" } else { "line_up" };
-                view.update(cx, |panel, cx| panel.patch(json!({ "tray_click": value }), window, cx));
-            }
-        });
-    let step_aside = switch(
-        "step-aside-fullscreen",
-        "Step aside for games and full-screen apps",
-        panel.config.step_aside_fullscreen,
-        window,
-        cx,
-        setter(|on| json!({ "step_aside_fullscreen": on })),
-    );
-    // Paused or waiting for a full-screen app, in words, with the way out of a pause.
-    let standing_by = panel.state.as_ref().and_then(|s| {
-        if s.paused {
-            let resume = ui::secondary("resume-seam", "Resume", cx).on_click(cx.listener(|this, _, window, cx| {
-                this.command("seam.pause", json!({ "on": false }), window, cx);
-            }));
-            Some(ui::note("Paused. Resume to bring back shortcuts, snapping and the pointer remap", Some(resume), p))
-        } else {
-            s.stepped_aside.then(|| ui::note("Stepped aside for a full-screen app", None, p))
-        }
-    });
-    let connected = panel.state.as_ref().map_or(0, |s| s.clients.iter().filter(|c| *c != "panel").count());
-    let api_about =
-        format!("Stream Deck and tools on this PC can read status and switch workspaces. {connected} connected");
-    let api = switch(
-        "api-enabled",
-        "Let other apps control Seam",
-        panel.config.api.enabled,
-        window,
-        cx,
-        setter(|on| json!({ "api": { "enabled": on } })),
-    );
-    let debug_log =
-        switch("debug-log", "Debug log", panel.config.debug_log, window, cx, setter(|on| json!({ "debug_log": on })));
-
-    let folder = div()
-        .flex()
-        .gap(px(8.))
-        .child(
-            ui::secondary("export", "Export…", cx)
-                .on_click(cx.listener(|panel, _, window, cx| export(panel, window, cx))),
-        )
-        .child(ui::secondary("import", "Import…", cx).on_click(cx.listener(|_, _, window, cx| import(window, cx))))
-        .child(ui::secondary("open-folder", "Open", cx).on_click(|_, _, _| open_folder()));
-    let folder_path = div()
-        .font_family(cx.theme().mono_font_family.clone())
-        .font_weight(FontWeight::NORMAL)
-        .text_size(px(13.))
-        .text_color(p.secondary)
-        .child(folder_label());
 
     let mut startup_rows = vec![
         row("Start with Windows", Some(start_about.into()), start_with_windows, p),
@@ -359,51 +353,102 @@ pub fn render(panel: &mut Panel, window: &mut Window, cx: &mut Context<Panel>) -
             ));
         }
     }
+    section("Startup", div().flex().flex_col().gap(px(8.)).child(card(startup_rows, p)).children(restart_note), p)
+}
 
-    div()
+/// The menu that picks the workspace to open at sign-in.
+fn workspace_choice(
+    sig: &str,
+    current: Option<String>,
+    workspaces: Vec<workspace::Workspace>,
+    cx: &mut Context<Panel>,
+) -> AnyElement {
+    let shown = workspaces.iter().find(|w| Some(&w.id) == current.as_ref());
+    let label = shown.map_or("Choose a workspace".to_string(), |w| w.name.clone());
+    let weak = cx.entity().downgrade();
+    let sig = sig.to_string();
+    let menu = move |mut menu: gpui_kit::component::menu::PopupMenu, _: &mut Window, _: &mut Context<_>| {
+        for w in &workspaces {
+            let (weak, sig, id) = (weak.clone(), sig.clone(), w.id.clone());
+            let checked = current.as_deref() == Some(w.id.as_str());
+            menu = menu.item(PopupMenuItem::new(w.name.clone()).checked(checked).on_click(move |_, window, cx| {
+                let patch = json!({ "desks": { sig.clone(): { "sign_in": { "workspace": id.clone() } } } });
+                let _ = weak.update(cx, |panel, cx| panel.patch(patch, window, cx));
+            }));
+        }
+        menu
+    };
+    ui::secondary("sign-in-workspace", label.clone(), cx)
+        .dropdown_caret(true)
+        .accessibility_label(format!("Workspace to open: {label}"))
+        .dropdown_menu(menu)
+        .into_any_element()
+}
+
+/// The Tray icon section.
+fn tray_icon_section(
+    panel: &Panel,
+    view: &Entity<Panel>,
+    p: Palette,
+    window: &mut Window,
+    cx: &mut Context<Panel>,
+) -> AnyElement {
+    let selected = usize::from(panel.config.tray_click == TrayClick::LineUp);
+    let left_click =
+        ui::segmented("tray-click", "Left-click", &["Open Seam", "Start Line Up"], selected, window, cx, {
+            let view = view.clone();
+            move |i, window, cx| {
+                let value = if i == 0 { "open" } else { "line_up" };
+                view.update(cx, |panel, cx| panel.patch(json!({ "tray_click": value }), window, cx));
+            }
+        });
+    section(
+        "Tray icon",
+        card(vec![row("Left-click", Some("Right-click always shows the menu".into()), left_click, p)], p),
+        p,
+    )
+}
+
+/// Paused or waiting for a full-screen app, in words, with the way out of a pause.
+fn standing_by_note(panel: &Panel, p: Palette, cx: &mut Context<Panel>) -> Option<Div> {
+    panel.state.as_ref().and_then(|s| {
+        if s.paused {
+            let resume = ui::secondary("resume-seam", "Resume", cx).on_click(cx.listener(|this, _, window, cx| {
+                this.command("seam.pause", json!({ "on": false }), window, cx);
+            }));
+            Some(ui::note("Paused. Resume to bring back shortcuts, snapping and the pointer remap", Some(resume), p))
+        } else {
+            s.stepped_aside.then(|| ui::note("Stepped aside for a full-screen app", None, p))
+        }
+    })
+}
+
+/// The Files and troubleshooting section, around the debug log switch.
+fn files_section(debug_log: Stateful<Div>, p: Palette, cx: &mut Context<Panel>) -> AnyElement {
+    let folder = div()
         .flex()
-        .flex_col()
-        .gap(px(ui::SECTION_GAP))
-        .child(ui::page_title("General", "How Seam starts and where it keeps its files", p))
-        .children(standing_by)
-        .child(section(
-            "Startup",
-            div().flex().flex_col().gap(px(8.)).child(card(startup_rows, p)).children(restart_note),
+        .gap(px(8.))
+        .child(
+            ui::secondary("export", "Export…", cx)
+                .on_click(cx.listener(|panel, _, window, cx| export(panel, window, cx))),
+        )
+        .child(ui::secondary("import", "Import…", cx).on_click(cx.listener(|_, _, window, cx| import(window, cx))))
+        .child(ui::secondary("open-folder", "Open", cx).on_click(|_, _, _| open_folder()));
+    let folder_path = div()
+        .font_family(cx.theme().mono_font_family.clone())
+        .font_weight(FontWeight::NORMAL)
+        .text_size(px(13.))
+        .text_color(p.secondary)
+        .child(folder_label());
+    section(
+        "Files and troubleshooting",
+        card(
+            vec![
+                row_with("Settings folder", Some(folder_path.into_any_element()), folder),
+                row("Debug log", Some("Writes remaps and screen changes to seam.log".into()), debug_log, p),
+            ],
             p,
-        ))
-        .child(section(
-            "Tray icon",
-            card(vec![row("Left-click", Some("Right-click always shows the menu".into()), left_click, p)], p),
-            p,
-        ))
-        .child(section(
-            "Full-screen apps",
-            card(
-                vec![row(
-                    "Step aside for games and full-screen apps",
-                    Some("Shortcuts, snapping and Spotlight wait until you leave it".into()),
-                    step_aside,
-                    p,
-                )],
-                p,
-            ),
-            p,
-        ))
-        .child(section(
-            "Other apps",
-            card(vec![row("Let other apps control Seam", Some(api_about.into()), api, p)], p),
-            p,
-        ))
-        .child(section(
-            "Files and troubleshooting",
-            card(
-                vec![
-                    row_with("Settings folder", Some(folder_path.into_any_element()), folder),
-                    row("Debug log", Some("Writes remaps and screen changes to seam.log".into()), debug_log, p),
-                ],
-                p,
-            ),
-            p,
-        ))
-        .child(div().text_size(px(12.)).text_color(p.muted).child("Seam follows your Windows light or dark mode"))
+        ),
+        p,
+    )
 }

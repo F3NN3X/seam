@@ -480,7 +480,34 @@ fn removes_row(panel: &Panel, window: &mut Window, cx: &mut Context<Panel>) -> A
 
 fn detail(panel: &mut Panel, ws: Workspace, window: &mut Window, cx: &mut Context<Panel>) -> Div {
     let p = palette(cx);
-    let summary = summary(panel, &ws);
+    let header = detail_header(panel, &ws, p, window, cx);
+
+    let mut rows = vec![header];
+    rows.extend(workspace_editor::rows(panel, &ws, window, cx));
+    let mut states = (0..ws.windows.len()).filter_map(|i| workspace_editor::row_state(panel, &ws, i));
+    let moved = states.any(|s| matches!(s, RowState::Moved | RowState::Minimized));
+    if moved || workspace_editor::zones_moved(panel, &ws) {
+        rows.push(div().flex().px(px(16.)).py(px(12.)).child(snap_back_button(panel, &ws, cx)).into_any_element());
+    }
+    let id = ws.id.clone();
+    let add_app: app_picker::Add =
+        Rc::new(move |panel, rule, hwnd, window, cx| workspace_editor::add_app(panel, &id, rule, hwnd, window, cx));
+    let add = app_picker::button(panel, &ws.windows, "In this workspace", add_app, cx);
+    rows.push(div().flex().px(px(16.)).py(px(12.)).child(add).into_any_element());
+    rows.extend(workspace_editor::zones_section(panel, &ws, window, cx));
+    rows.extend(switch_rows(&ws, p, window, cx));
+    div().flex_1().min_w_0().child(card(rows, p))
+}
+
+/// The name, with Update from screen, Switch now and the more menu.
+fn detail_header(
+    panel: &mut Panel,
+    ws: &Workspace,
+    p: Palette,
+    window: &mut Window,
+    cx: &mut Context<Panel>,
+) -> AnyElement {
+    let summary = summary(panel, ws);
 
     // A new or renamed workspace opens its name for editing.
     if panel.focus_name {
@@ -505,10 +532,26 @@ fn detail(panel: &mut Panel, ws: Workspace, window: &mut Window, cx: &mut Contex
         ui::secondary("switch-workspace", "Switch now", cx).on_click(cx.listener(move |panel, _, window, cx| {
             panel.command("workspace.switch", json!({ "id": id }), window, cx);
         }));
+    let more = more_button(panel, ws, cx);
+    div()
+        .flex()
+        .items_center()
+        .gap(px(8.))
+        .px(px(16.))
+        .py(px(12.))
+        .child(div().flex().flex_col().gap(px(2.)).flex_1().min_w_0().child(title).child(ui::description(summary, p)))
+        .child(div().flex_none().child(update))
+        .child(div().flex_none().child(switch_now))
+        .child(div().flex_none().child(more))
+        .into_any_element()
+}
+
+/// The menu behind the ellipsis: open alongside, rename, default, export, import, delete.
+fn more_button(panel: &Panel, ws: &Workspace, cx: &mut Context<Panel>) -> impl IntoElement + use<> {
     let view = cx.entity().downgrade();
     let more_ws = ws.clone();
     let is_default = default_id(panel).as_deref() == Some(ws.id.as_str());
-    let more = ui::secondary("more-workspace", "", cx)
+    ui::secondary("more-workspace", "", cx)
         .ghost()
         .icon(Icon::new(assets::IconName::Ellipsis))
         .accessibility_label(format!("More for {}", ws.name))
@@ -542,33 +585,11 @@ fn detail(panel: &mut Panel, ws: Workspace, window: &mut Window, cx: &mut Contex
                 let id = id.clone();
                 let _ = deleting.update(cx, |panel, cx| delete(panel, &id, window, cx));
             }))
-        });
-    let header = div()
-        .flex()
-        .items_center()
-        .gap(px(8.))
-        .px(px(16.))
-        .py(px(12.))
-        .child(div().flex().flex_col().gap(px(2.)).flex_1().min_w_0().child(title).child(ui::description(summary, p)))
-        .child(div().flex_none().child(update))
-        .child(div().flex_none().child(switch_now))
-        .child(div().flex_none().child(more))
-        .into_any_element();
+        })
+}
 
-    let mut rows = vec![header];
-    rows.extend(workspace_editor::rows(panel, &ws, window, cx));
-    let mut states = (0..ws.windows.len()).filter_map(|i| workspace_editor::row_state(panel, &ws, i));
-    let moved = states.any(|s| matches!(s, RowState::Moved | RowState::Minimized));
-    if moved || workspace_editor::zones_moved(panel, &ws) {
-        rows.push(div().flex().px(px(16.)).py(px(12.)).child(snap_back_button(panel, &ws, cx)).into_any_element());
-    }
-    let id = ws.id.clone();
-    let add_app: app_picker::Add =
-        Rc::new(move |panel, rule, hwnd, window, cx| workspace_editor::add_app(panel, &id, rule, hwnd, window, cx));
-    let add = app_picker::button(panel, &ws.windows, "In this workspace", add_app, cx);
-    rows.push(div().flex().px(px(16.)).py(px(12.)).child(add).into_any_element());
-    rows.extend(workspace_editor::zones_section(panel, &ws, window, cx));
-
+/// Start missing apps, and what happens to the other windows.
+fn switch_rows(ws: &Workspace, p: Palette, window: &mut Window, cx: &mut Context<Panel>) -> [AnyElement; 2] {
     let view = cx.entity();
     let id = ws.id.clone();
     let start_missing = switch("start-missing", "Start missing apps", ws.launch_missing, window, cx, {
@@ -597,14 +618,10 @@ fn detail(panel: &mut Panel, ws: Workspace, window: &mut Window, cx: &mut Contex
             view.update(cx, |panel, cx| edit(panel, &id, window, cx, |ws| ws.other_windows = mode));
         },
     );
-    rows.push(row("Start missing apps", Some("Ticked apps open if they're closed".into()), start_missing, p));
-    rows.push(row(
-        "Other windows",
-        Some("When you switch. Close asks each app first, so it can save".into()),
-        others,
-        p,
-    ));
-    div().flex_1().min_w_0().child(card(rows, p))
+    [
+        row("Start missing apps", Some("Ticked apps open if they're closed".into()), start_missing, p),
+        row("Other windows", Some("When you switch. Close asks each app first, so it can save".into()), others, p),
+    ]
 }
 
 fn empty_state(panel: &Panel, p: Palette, cx: &mut Context<Panel>) -> Div {

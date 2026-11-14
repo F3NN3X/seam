@@ -411,9 +411,8 @@ pub fn view(
     let undo_name = editor.history.last().map(|s| s.name);
 
     let (cells, drawn) = (zones::rects(&tree, area, 0), zones::rects(&tree, area, gap as i32));
-    let at = |v: i32| px((f64::from(v) * scale) as f32);
     let count = cells.len();
-    let mut surface = div()
+    let surface = div()
         .id("zone-editor-surface")
         .track_focus(&focus)
         .tab_index(0)
@@ -431,17 +430,65 @@ pub fn view(
         }))
         .on_mouse_up(MouseButton::Left, cx.listener(|panel, _, _, cx| end_drag(panel, cx)))
         .on_mouse_up_out(MouseButton::Left, cx.listener(|panel, _, _, cx| end_drag(panel, cx)));
-    for (i, (cell, r)) in cells.iter().zip(&drawn).enumerate() {
+    let surface = zone_tiles(surface, &cells, &drawn, selected, &focus, scale, cx);
+    let surface = divider_handles(surface, &tree, area, dragging.as_ref(), scale, cx);
+    let card = div()
+        .flex()
+        .items_center()
+        .justify_center()
+        .h(px(height))
+        .p(px(16.))
+        .bg(p.card)
+        .border_1()
+        .border_color(p.hairline)
+        .rounded(px(12.))
+        .child(surface);
+
+    let split_side = split_blocked(&tree, selected, &cells, Dir::Vertical);
+    let split_stack = split_blocked(&tree, selected, &cells, Dir::Horizontal);
+    let can_merge = zones::merge_leaf(&tree, selected).is_some();
+    let can_reset = tree != editor.base;
+    let toolbar = toolbar(split_side, split_stack, can_merge, can_reset, undo_name, cx);
+
+    div()
+        .key_context(CONTEXT)
+        .on_action(cx.listener(|panel, _: &DiscardEdit, _, cx| discard(panel, cx)))
+        .on_action(cx.listener(|panel, _: &UndoEdit, _, cx| undo(panel, cx)))
+        .flex()
+        .flex_col()
+        .gap(px(12.))
+        .child(card)
+        .child(toolbar)
+        .into_any_element()
+}
+
+/// A length on the editor's surface, drawn at `scale`.
+fn at(scale: f64, v: i32) -> Pixels {
+    px((f64::from(v) * scale) as f32)
+}
+
+/// One clickable tile for each zone.
+fn zone_tiles(
+    mut surface: Stateful<Div>,
+    cells: &[Rect],
+    drawn: &[Rect],
+    selected: usize,
+    focus: &FocusHandle,
+    scale: f64,
+    cx: &mut Context<Panel>,
+) -> Stateful<Div> {
+    let p = palette(cx);
+    for (i, (cell, r)) in cells.iter().zip(drawn).enumerate() {
         let chosen = i == selected;
         let focus = focus.clone();
         surface = surface.child(
             div()
                 .id(("edit-zone", i))
                 .absolute()
-                .left(at(r.x))
-                .top(at(r.y))
-                .w(at(r.w))
-                .h(at(r.h))
+                .left(at(scale, r.x))
+                .top(at(scale, r.y))
+                .w(at(scale, r.w))
+                .h(at(scale, r.h))
                 .flex()
                 .flex_col()
                 .items_center()
@@ -464,13 +511,26 @@ pub fn view(
                 })),
         );
     }
-    for (k, d) in zones::dividers(&tree, area).into_iter().enumerate() {
+    surface
+}
+
+/// The draggable handle on each divider, and the widths tag on the one held.
+fn divider_handles(
+    mut surface: Stateful<Div>,
+    tree: &Node,
+    area: Rect,
+    dragging: Option<&Vec<bool>>,
+    scale: f64,
+    cx: &mut Context<Panel>,
+) -> Stateful<Div> {
+    let p = palette(cx);
+    for (k, d) in zones::dividers(tree, area).into_iter().enumerate() {
         let vertical = d.dir == Dir::Vertical;
         let along = if vertical { d.area.w } else { d.area.h };
         let first = (along as f32 * d.ratio).round() as i32;
-        let held = dragging.as_ref() == Some(&d.path);
+        let held = dragging == Some(&d.path);
         let (x, y) = if vertical { (d.area.x + first, d.area.y) } else { (d.area.x, d.area.y + first) };
-        let (length_w, length_h) = (at(d.area.w), at(d.area.h));
+        let (length_w, length_h) = (at(scale, d.area.w), at(scale, d.area.h));
         let path = d.path.clone();
         let line = div().bg(if held { p.accent } else { p.secondary });
         let handle = div()
@@ -480,8 +540,12 @@ pub fn view(
             .items_center()
             .justify_center()
             .hover(|d| d.bg(p.accent.opacity(0.25)))
-            .when(vertical, |d| d.left(at(x) - px(GRAB / 2.)).top(at(y)).w(px(GRAB)).h(length_h).cursor_col_resize())
-            .when(!vertical, |d| d.top(at(y) - px(GRAB / 2.)).left(at(x)).h(px(GRAB)).w(length_w).cursor_row_resize())
+            .when(vertical, |d| {
+                d.left(at(scale, x) - px(GRAB / 2.)).top(at(scale, y)).w(px(GRAB)).h(length_h).cursor_col_resize()
+            })
+            .when(!vertical, |d| {
+                d.top(at(scale, y) - px(GRAB / 2.)).left(at(scale, x)).h(px(GRAB)).w(length_w).cursor_row_resize()
+            })
             .child(if vertical { line.w(px(2.)).h_full() } else { line.h(px(2.)).w_full() })
             .on_mouse_down(
                 MouseButton::Left,
@@ -497,8 +561,8 @@ pub fn view(
             let (a, b) = (first, along - first);
             let tag = div()
                 .absolute()
-                .left(at(x) + px(if vertical { 12. } else { 8. }))
-                .top(at(y) + px(if vertical { 8. } else { 12. }))
+                .left(at(scale, x) + px(if vertical { 12. } else { 8. }))
+                .top(at(scale, y) + px(if vertical { 8. } else { 12. }))
                 .px(px(8.))
                 .py(px(4.))
                 .bg(p.raised)
@@ -510,26 +574,22 @@ pub fn view(
             surface = surface.child(tag);
         }
     }
-    let card = div()
-        .flex()
-        .items_center()
-        .justify_center()
-        .h(px(height))
-        .p(px(16.))
-        .bg(p.card)
-        .border_1()
-        .border_color(p.hairline)
-        .rounded(px(12.))
-        .child(surface);
+    surface
+}
 
-    let split_side = split_blocked(&tree, selected, &cells, Dir::Vertical);
-    let split_stack = split_blocked(&tree, selected, &cells, Dir::Horizontal);
-    let can_merge = zones::merge_leaf(&tree, selected).is_some();
-    let can_reset = tree != editor.base;
+/// Split, merge, undo, reset and Done, each disabled with its reason when it can't be used.
+fn toolbar(
+    split_side: Option<&'static str>,
+    split_stack: Option<&'static str>,
+    can_merge: bool,
+    can_reset: bool,
+    undo_name: Option<&'static str>,
+    cx: &mut Context<Panel>,
+) -> Div {
     let button = |id: &'static str, label: &'static str, why: Option<&'static str>, cx: &mut Context<Panel>| {
         ui::secondary(id, label, cx).disabled(why.is_some()).when_some(why, |b, why| b.tooltip(why))
     };
-    let toolbar = div()
+    div()
         .flex()
         .flex_wrap()
         .items_center()
@@ -580,16 +640,5 @@ pub fn view(
                     ui::primary("edit-done", "Done")
                         .on_click(cx.listener(|panel, _, window, cx| done(panel, window, cx))),
                 ),
-        );
-
-    div()
-        .key_context(CONTEXT)
-        .on_action(cx.listener(|panel, _: &DiscardEdit, _, cx| discard(panel, cx)))
-        .on_action(cx.listener(|panel, _: &UndoEdit, _, cx| undo(panel, cx)))
-        .flex()
-        .flex_col()
-        .gap(px(12.))
-        .child(card)
-        .child(toolbar)
-        .into_any_element()
+        )
 }

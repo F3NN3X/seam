@@ -39,112 +39,137 @@ fn key(o: &mut Overlay, vk: u32) -> bool {
     true
 }
 
+fn redraw(hwnd: HWND, changed: bool) {
+    if changed {
+        let _ = unsafe { InvalidateRect(Some(hwnd), None, false) };
+    }
+}
+
+unsafe fn on_paint(hwnd: HWND) -> LRESULT {
+    unsafe {
+        let mut ps = PAINTSTRUCT::default();
+        let dc = BeginPaint(hwnd, &mut ps);
+        let mut client = RECT::default();
+        let _ = GetClientRect(hwnd, &mut client);
+        // Drawn off screen and copied over, so a change doesn't flicker.
+        let back = CreateCompatibleDC(Some(dc));
+        let bitmap = CreateCompatibleBitmap(dc, client.right, client.bottom);
+        let old = SelectObject(back, bitmap.into());
+        STATE.with(|s| {
+            if let Some(o) = s.borrow().as_ref() {
+                draw(back, o, client, scale_of(hwnd));
+            }
+        });
+        let _ = BitBlt(dc, 0, 0, client.right, client.bottom, Some(back), 0, 0, SRCCOPY);
+        SelectObject(back, old);
+        let _ = DeleteObject(bitmap.into());
+        let _ = DeleteDC(back);
+        let _ = EndPaint(hwnd, &ps);
+        LRESULT(0)
+    }
+}
+
+unsafe fn on_key_down(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
+    unsafe {
+        let used = STATE.with(|s| s.borrow_mut().as_mut().is_some_and(|o| key(o, wparam.0 as u32)));
+        redraw(hwnd, used);
+        if used { LRESULT(0) } else { DefWindowProcW(hwnd, msg, wparam, lparam) }
+    }
+}
+
+fn on_mouse_move(hwnd: HWND, lparam: LPARAM) -> LRESULT {
+    let (x, y) = ((lparam.0 & 0xffff) as i16 as i32, ((lparam.0 >> 16) & 0xffff) as i16 as i32);
+    let moved = STATE.with(|s| {
+        let mut s = s.borrow_mut();
+        let Some(o) = s.as_mut() else { return false };
+        match slot_at(o, hwnd, x, y).map(|slot| o.first + slot) {
+            Some(at) if at != o.selected => {
+                o.selected = at;
+                true
+            }
+            _ => false,
+        }
+    });
+    redraw(hwnd, moved);
+    LRESULT(0)
+}
+
+fn on_left_button(hwnd: HWND, lparam: LPARAM) -> LRESULT {
+    let (x, y) = ((lparam.0 & 0xffff) as i16 as i32, ((lparam.0 >> 16) & 0xffff) as i16 as i32);
+    STATE.with(|s| {
+        if let Some(o) = s.borrow_mut().as_mut()
+            && let Some(slot) = slot_at(o, hwnd, x, y)
+        {
+            o.pick(o.first + slot);
+        }
+    });
+    redraw(hwnd, true);
+    LRESULT(0)
+}
+
+unsafe fn on_focus_timer(hwnd: HWND) -> LRESULT {
+    unsafe {
+        let _ = KillTimer(Some(hwnd), TIMER_FOCUS);
+        if GetForegroundWindow() != hwnd {
+            let _ = SetForegroundWindow(hwnd);
+            let _ = SetTimer(Some(hwnd), TIMER_FOCUS_LAST, FOCUS_LAST_MS, None);
+        }
+        LRESULT(0)
+    }
+}
+
+unsafe fn on_focus_last_timer(hwnd: HWND) -> LRESULT {
+    unsafe {
+        let _ = KillTimer(Some(hwnd), TIMER_FOCUS_LAST);
+        if GetForegroundWindow() != hwnd {
+            log::info!("quick layout: Windows kept the focus elsewhere, so it closes");
+            quit();
+        }
+        LRESULT(0)
+    }
+}
+
+fn on_settle_timer(hwnd: HWND) -> LRESULT {
+    STATE.with(|s| {
+        if let Some(o) = s.borrow_mut().as_mut() {
+            o.give_up();
+        }
+    });
+    redraw(hwnd, true);
+    LRESULT(0)
+}
+
+fn on_activate(wparam: WPARAM) -> LRESULT {
+    let inactive = (wparam.0 & 0xffff) as u32 == WA_INACTIVE;
+    let was_active = STATE.with(|s| {
+        let mut s = s.borrow_mut();
+        let Some(o) = s.as_mut() else { return false };
+        let was = o.active;
+        o.active |= !inactive;
+        was
+    });
+    if inactive && was_active {
+        quit();
+    }
+    LRESULT(0)
+}
+
 unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
     unsafe {
-        let redraw = |changed: bool| {
-            if changed {
-                let _ = InvalidateRect(Some(hwnd), None, false);
-            }
-        };
         match msg {
-            WM_PAINT => {
-                let mut ps = PAINTSTRUCT::default();
-                let dc = BeginPaint(hwnd, &mut ps);
-                let mut client = RECT::default();
-                let _ = GetClientRect(hwnd, &mut client);
-                // Drawn off screen and copied over, so a change doesn't flicker.
-                let back = CreateCompatibleDC(Some(dc));
-                let bitmap = CreateCompatibleBitmap(dc, client.right, client.bottom);
-                let old = SelectObject(back, bitmap.into());
-                STATE.with(|s| {
-                    if let Some(o) = s.borrow().as_ref() {
-                        draw(back, o, client, scale_of(hwnd));
-                    }
-                });
-                let _ = BitBlt(dc, 0, 0, client.right, client.bottom, Some(back), 0, 0, SRCCOPY);
-                SelectObject(back, old);
-                let _ = DeleteObject(bitmap.into());
-                let _ = DeleteDC(back);
-                let _ = EndPaint(hwnd, &ps);
-                LRESULT(0)
-            }
+            WM_PAINT => on_paint(hwnd),
             WM_ERASEBKGND => LRESULT(1),
-            WM_KEYDOWN | WM_SYSKEYDOWN => {
-                let used = STATE.with(|s| s.borrow_mut().as_mut().is_some_and(|o| key(o, wparam.0 as u32)));
-                redraw(used);
-                if used { LRESULT(0) } else { DefWindowProcW(hwnd, msg, wparam, lparam) }
-            }
-            WM_MOUSEMOVE => {
-                let (x, y) = ((lparam.0 & 0xffff) as i16 as i32, ((lparam.0 >> 16) & 0xffff) as i16 as i32);
-                let moved = STATE.with(|s| {
-                    let mut s = s.borrow_mut();
-                    let Some(o) = s.as_mut() else { return false };
-                    match slot_at(o, hwnd, x, y).map(|slot| o.first + slot) {
-                        Some(at) if at != o.selected => {
-                            o.selected = at;
-                            true
-                        }
-                        _ => false,
-                    }
-                });
-                redraw(moved);
-                LRESULT(0)
-            }
-            WM_LBUTTONDOWN => {
-                let (x, y) = ((lparam.0 & 0xffff) as i16 as i32, ((lparam.0 >> 16) & 0xffff) as i16 as i32);
-                STATE.with(|s| {
-                    if let Some(o) = s.borrow_mut().as_mut()
-                        && let Some(slot) = slot_at(o, hwnd, x, y)
-                    {
-                        o.pick(o.first + slot);
-                    }
-                });
-                redraw(true);
-                LRESULT(0)
-            }
+            WM_KEYDOWN | WM_SYSKEYDOWN => on_key_down(hwnd, msg, wparam, lparam),
+            WM_MOUSEMOVE => on_mouse_move(hwnd, lparam),
+            WM_LBUTTONDOWN => on_left_button(hwnd, lparam),
             WM_DISPLAYCHANGE => {
                 quit();
                 LRESULT(0)
             }
-            WM_TIMER if wparam.0 == TIMER_FOCUS => {
-                let _ = KillTimer(Some(hwnd), TIMER_FOCUS);
-                if GetForegroundWindow() != hwnd {
-                    let _ = SetForegroundWindow(hwnd);
-                    let _ = SetTimer(Some(hwnd), TIMER_FOCUS_LAST, FOCUS_LAST_MS, None);
-                }
-                LRESULT(0)
-            }
-            WM_TIMER if wparam.0 == TIMER_FOCUS_LAST => {
-                let _ = KillTimer(Some(hwnd), TIMER_FOCUS_LAST);
-                if GetForegroundWindow() != hwnd {
-                    log::info!("quick layout: Windows kept the focus elsewhere, so it closes");
-                    quit();
-                }
-                LRESULT(0)
-            }
-            WM_TIMER if wparam.0 == TIMER_SETTLE => {
-                STATE.with(|s| {
-                    if let Some(o) = s.borrow_mut().as_mut() {
-                        o.give_up();
-                    }
-                });
-                redraw(true);
-                LRESULT(0)
-            }
-            WM_ACTIVATE => {
-                let inactive = (wparam.0 & 0xffff) as u32 == WA_INACTIVE;
-                let was_active = STATE.with(|s| {
-                    let mut s = s.borrow_mut();
-                    let Some(o) = s.as_mut() else { return false };
-                    let was = o.active;
-                    o.active |= !inactive;
-                    was
-                });
-                if inactive && was_active {
-                    quit();
-                }
-                LRESULT(0)
-            }
+            WM_TIMER if wparam.0 == TIMER_FOCUS => on_focus_timer(hwnd),
+            WM_TIMER if wparam.0 == TIMER_FOCUS_LAST => on_focus_last_timer(hwnd),
+            WM_TIMER if wparam.0 == TIMER_SETTLE => on_settle_timer(hwnd),
+            WM_ACTIVATE => on_activate(wparam),
             _ => DefWindowProcW(hwnd, msg, wparam, lparam),
         }
     }

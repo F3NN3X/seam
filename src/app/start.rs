@@ -62,6 +62,27 @@ pub fn run() {
         log::apply(cfg.debug_log);
         log::info!("seam {} started", env!("CARGO_PKG_VERSION"));
 
+        let Some(hwnd) = create_window() else {
+            return;
+        };
+
+        APP.with(|a| *a.borrow_mut() = Some(new_app(hwnd, cfg)));
+        start_services(hwnd);
+        open_for_launch(hwnd, line_up, updated_from.as_deref(), has_flag("--tray-only"));
+
+        let mut msg = MSG::default();
+        while GetMessageW(&mut msg, None, 0, 0).as_bool() {
+            let _ = TranslateMessage(&msg);
+            DispatchMessageW(&msg);
+        }
+        log::info!("seam exiting");
+        log::flush();
+    }
+}
+
+/// The hidden window the tray lives in. None if Windows refuses to make it.
+unsafe fn create_window() -> Option<HWND> {
+    unsafe {
         let hinst = GetModuleHandleW(None).unwrap_or_default();
         let wc = WNDCLASSEXW {
             cbSize: std::mem::size_of::<WNDCLASSEXW>() as u32,
@@ -87,10 +108,15 @@ pub fn run() {
             Some(hinst.into()),
             None,
         ) else {
-            return;
+            return None;
         };
+        Some(hwnd)
+    }
+}
 
-        let app = App {
+unsafe fn new_app(hwnd: HWND, cfg: Config) -> App {
+    unsafe {
+        App {
             hwnd,
             icon: make_icon(false),
             quiet_icon: make_icon(true),
@@ -131,8 +157,13 @@ pub fn run() {
             session_ending: false,
             restart_apps: false,
             spotlight_resume: false,
-        };
-        APP.with(|a| *a.borrow_mut() = Some(app));
+        }
+    }
+}
+
+/// Put the icon, shortcuts, API and timers up, and do the first-run work for a GitHub copy.
+unsafe fn start_services(hwnd: HWND) {
+    unsafe {
         with_app(|a| {
             add_icon(a);
             migrate_hotkeys(a);
@@ -153,7 +184,13 @@ pub fn run() {
             }
             with_app(|a| read_update_state(a));
         }
-        if let Some(from) = &updated_from {
+    }
+}
+
+/// Open the window, or do what the launch was for. `tray_only` is the `--tray-only` flag.
+unsafe fn open_for_launch(hwnd: HWND, line_up: bool, updated_from: Option<&str>, tray_only: bool) {
+    unsafe {
+        if let Some(from) = updated_from {
             log::info!("updated from {from}");
             let _ = std::thread::Builder::new().name("seam-update-clean".into()).spawn(clean_up_after_update);
             let body = format!("Updated to {}", env!("CARGO_PKG_VERSION"));
@@ -162,7 +199,7 @@ pub fn run() {
         // A launch from the Start menu or by hand opens the window too. A
         // sign-in launch, a restart after an update and a `--line-up` start don't.
         let login = package::login_launch();
-        let quiet = line_up || updated_from.is_some() || has_flag("--tray-only") || login;
+        let quiet = line_up || updated_from.is_some() || tray_only || login;
         if !quiet {
             with_app(|a| open_panel(a, None));
         }
@@ -174,13 +211,5 @@ pub fn run() {
         if line_up {
             let _ = PostMessageW(Some(hwnd), WM_APP_LINEUP, WPARAM(0), LPARAM(0));
         }
-
-        let mut msg = MSG::default();
-        while GetMessageW(&mut msg, None, 0, 0).as_bool() {
-            let _ = TranslateMessage(&msg);
-            DispatchMessageW(&msg);
-        }
-        log::info!("seam exiting");
-        log::flush();
     }
 }

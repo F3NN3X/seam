@@ -7,6 +7,8 @@
 
 use super::*;
 use crate::wincontrol;
+use std::sync::mpsc;
+use std::time::Duration;
 
 /// A mapped rect this close to a span of zones counts as being that span.
 const MATCH_SLOP: i32 = 12;
@@ -91,6 +93,27 @@ fn zones_of(placed: &[Rect], r: Rect) -> Option<(usize, usize)> {
         .find(|(i, j)| near(zones::span(placed[*i], placed[*j])))
 }
 
+/// Every window a drop could swap with, topmost first, and where each is. Win32 reads
+/// only, so it runs on the main thread or a worker. The time it took is logged once.
+fn look(dragged: isize, landed: &[(isize, Rect)], exclude: &[String], how: &str) -> Vec<(isize, Rect)> {
+    let started = log::enabled().then(Instant::now);
+    let own = std::process::id();
+    let list: Vec<(isize, Rect)> = winutil::top_level_windows()
+        .into_iter()
+        .filter(|h| h.0 as isize != dragged && winutil::is_snappable(*h, own, exclude))
+        .filter_map(|h| {
+            let key = h.0 as isize;
+            let at = landed.iter().find(|(k, _)| *k == key).map(|(_, r)| *r);
+            Some((key, at.or_else(|| winutil::visible_rect(h))?))
+        })
+        .collect();
+    if let Some(started) = started {
+        let us = started.elapsed().as_secs_f64() * 1e6;
+        log::info!("zone swap: looked at {} windows {how} in {us:.0}us", list.len());
+    }
+    list
+}
+
 impl Engine {
     /// The windows on the screen in the zones `target` covers on `g`, and where each
     /// is. None when one of them can't be moved or is hung, which leaves the drop as
@@ -140,22 +163,24 @@ impl Engine {
     /// The look at the screen a drag starts with: every window a drop could swap
     /// with, topmost first, and where each is. `landed` were just sent elsewhere.
     pub(super) fn snapshot(&self, dragged: isize, landed: &[(isize, Rect)]) -> Vec<(isize, Rect)> {
-        let started = log::enabled().then(Instant::now);
-        let own = std::process::id();
-        let list: Vec<(isize, Rect)> = winutil::top_level_windows()
-            .into_iter()
-            .filter(|h| h.0 as isize != dragged && winutil::is_snappable(*h, own, &self.exclude))
-            .filter_map(|h| {
-                let key = h.0 as isize;
-                let at = landed.iter().find(|(k, _)| *k == key).map(|(_, r)| *r);
-                Some((key, at.or_else(|| winutil::visible_rect(h))?))
-            })
-            .collect();
-        if let Some(started) = started {
-            let us = started.elapsed().as_secs_f64() * 1e6;
-            log::info!("zone swap: looked at {} windows at drag start in {us:.0}us", list.len());
-        }
-        list
+        look(dragged, landed, &self.exclude, "on the spot")
+    }
+
+    /// Start the look at drag start, on a worker, so it is ready before zones first show.
+    pub(super) fn look_ahead(&self, dragged: isize, landed: &[(isize, Rect)]) -> mpsc::Receiver<Vec<(isize, Rect)>> {
+        let (tx, rx) = mpsc::channel();
+        let (landed, exclude) = (landed.to_vec(), self.exclude.clone());
+        std::thread::spawn(move || {
+            let _ = tx.send(look(dragged, &landed, &exclude, "on a worker"));
+        });
+        rx
+    }
+
+    /// The drag's look at the screen: the worker's if it is ready, or comes within about
+    /// a millisecond, or else read on the spot.
+    pub(super) fn others(&self, drag: &mut Drag) -> Vec<(isize, Rect)> {
+        let ahead = drag.ahead.take().and_then(|rx| rx.recv_timeout(Duration::from_millis(1)).ok());
+        ahead.unwrap_or_else(|| self.snapshot(drag.hwnd, &drag.landed))
     }
 
     /// At the drop: where the windows on the screen it was dropped on are now, as

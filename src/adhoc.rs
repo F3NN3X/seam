@@ -407,7 +407,7 @@ impl Engine {
     /// the drag's one look at the windows; what it works out is kept until it changes.
     pub(super) fn beside_at(&self, drag: &mut Drag, pt: POINT) -> Option<(Beside, Option<View>)> {
         if !drag.looked {
-            drag.others = self.snapshot(drag.hwnd, &drag.landed);
+            drag.others = self.others(drag);
             drag.looked = true;
         }
         let (target, at) = drag.others.iter().copied().find(|(_, r)| r.contains(pt.x, pt.y))?;

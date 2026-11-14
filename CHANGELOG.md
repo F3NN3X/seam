@@ -4,6 +4,14 @@ All notable changes to Seam. The format follows [Keep a Changelog](https://keepa
 
 ## [Unreleased]
 
+### Fixed
+
+- Snipping Tool's capture overlay, the lock screen and the Xbox Game Bar no longer make Seam step aside for a moment. A Direct3D game on another screen no longer makes it step aside for a maximized app with an auto-hidden taskbar.
+
+### Changed
+
+- With the debug log on, each step aside and return says what decided it: the window's class and exe, its rect against its screen and Windows' full-screen state. The zone swap's look at the open windows now starts when a drag does, so it is ready when zones show.
+
 ## [0.7.0] - 2026-11-13
 
 ### Added

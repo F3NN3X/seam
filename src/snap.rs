@@ -135,6 +135,8 @@ struct Drag {
     others: Vec<(isize, Rect)>,
     /// `others` was read, the first time zones showed.
     looked: bool,
+    /// The worker's look at the windows, started with the drag, until zones first show.
+    ahead: Option<std::sync::mpsc::Receiver<Vec<(isize, Rect)>>>,
     /// Moves posted at drag start, and where to, as they may not have landed yet.
     landed: Vec<(isize, Rect)>,
     /// The pointer rested, so zones show as if the show key were held.

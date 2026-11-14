@@ -44,6 +44,11 @@ const TRANSIENT_CLASSES: [&str; 13] = [
     "#32768",
     "NotifyIconOverflowWindow",
 ];
+/// System overlays that cover a screen for a moment and are never a game or a full-screen
+/// app: Snipping Tool's capture overlay, the lock screen and the Xbox Game Bar. Exe names
+/// in lower case, since their window classes change between builds. Like the shell's own
+/// windows, they leave the answer as it was.
+const OVERLAY_EXES: [&str; 4] = ["screenclippinghost.exe", "snippingtool.exe", "lockapp.exe", "gamebar.exe"];
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Standby {
@@ -170,7 +175,7 @@ pub fn check() -> bool {
             }
             let entered = !FULL_SCREEN.swap(true, Ordering::SeqCst);
             if entered {
-                log::info!("full-screen app in front ({why}): Seam steps aside");
+                log::info!("full-screen app in front ({why}): Seam steps aside, {}", describe(foreground));
             }
             changed || entered
         }
@@ -191,9 +196,31 @@ fn leave() -> bool {
     watch(None);
     let changed = FULL_SCREEN.swap(false, Ordering::SeqCst);
     if changed {
-        log::info!("full-screen app gone: Seam resumes");
+        log::info!("full-screen app gone: Seam resumes, {}", describe(unsafe { GetForegroundWindow() }));
     }
     changed
+}
+
+/// What decided a step aside or a return, for the log: the window's class and exe, its
+/// rect against its screen, and Windows' notification state. No title.
+fn describe(h: HWND) -> String {
+    let window = winutil::window_rect(h).map_or("none".to_string(), |r| format!("{},{} {}x{}", r.x, r.y, r.w, r.h));
+    let mut info = MONITORINFO { cbSize: std::mem::size_of::<MONITORINFO>() as u32, ..Default::default() };
+    let found = unsafe { GetMonitorInfoW(MonitorFromWindow(h, MONITOR_DEFAULTTONEAREST), &mut info) }.as_bool();
+    let s = info.rcMonitor;
+    let screen = if found {
+        format!("{},{} {}x{}", s.left, s.top, s.right - s.left, s.bottom - s.top)
+    } else {
+        "none".to_string()
+    };
+    let quns = unsafe { SHQueryUserNotificationState() }.map_or(-1, |state| state.0);
+    let exe = winutil::exe_name(h).unwrap_or_default();
+    format!("class {}, exe {exe}, rect {window} on screen {screen}, QUNS {quns}", winutil::class_name(h))
+}
+
+/// The exe is one of the system overlays that count for nothing.
+fn is_overlay(exe: Option<&str>) -> bool {
+    exe.is_some_and(|exe| OVERLAY_EXES.contains(&exe))
 }
 
 /// The window covers the whole of the screen it is on, give or take a few pixels.
@@ -230,6 +257,14 @@ fn look(foreground: HWND) -> Seen {
     if transient {
         return Seen::Keep;
     }
+    // Only a window that covers its screen can pass for full screen, so only it is asked
+    // what it is.
+    if !covers_screen(foreground, false) {
+        return Seen::Not;
+    }
+    if is_overlay(winutil::exe_name(foreground).as_deref()) {
+        return Seen::Keep;
+    }
     // No title bar and not maximized: an F11 page, a borderless, OpenGL or Vulkan game.
     // A maximized app without one (Spotify, VS Code) overhangs its screen, so it needs
     // Windows' word below.
@@ -238,11 +273,10 @@ fn look(foreground: HWND) -> Seen {
     if captionless && !unsafe { IsZoomed(foreground).as_bool() } && covers_screen(foreground, true) {
         return Seen::Full("window covers its screen");
     }
-    if !covers_screen(foreground, false) {
-        return Seen::Not;
-    }
+    // Windows' word for Direct3D covers every screen: with a game on another one, a
+    // maximized app that overhangs this one is no game, so it must fit the screen.
     match unsafe { SHQueryUserNotificationState() } {
-        Ok(QUNS_RUNNING_D3D_FULL_SCREEN) => Seen::Full("Direct3D full screen"),
+        Ok(QUNS_RUNNING_D3D_FULL_SCREEN) if covers_screen(foreground, true) => Seen::Full("Direct3D full screen"),
         Ok(QUNS_PRESENTATION_MODE) => Seen::Full("presentation mode"),
         _ => Seen::Not,
     }
@@ -342,5 +376,18 @@ unsafe extern "system" fn on_watched(_: HWINEVENTHOOK, _: u32, hwnd: HWND, objec
     {
         GONE.store(true, Ordering::SeqCst);
         unsafe { SetTimer(Some(owner), TIMER_STANDBY, GONE_AFTER_MS, None) };
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn system_overlays_are_known_by_their_exe() {
+        assert!(is_overlay(Some("screenclippinghost.exe")));
+        assert!(is_overlay(Some("lockapp.exe")));
+        assert!(!is_overlay(Some("game.exe")));
+        assert!(!is_overlay(None));
     }
 }

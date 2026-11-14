@@ -12,9 +12,9 @@
 //! a window lying over the gap keeps its clicks, and it never takes focus. Only a
 //! menu does, while it is open.
 
-use crate::log;
 use crate::snap::{Member, Zoned};
 use crate::wincontrol;
+use crate::{dragkeys, log};
 use seam::api::{Axis, GroupVerb};
 use seam::groups::{self, Edge, Side};
 use seam::winutil;
@@ -200,6 +200,8 @@ struct Dragging {
     solved: Option<(zones::Node, Vec<Rect>)>,
     moves: u32,
     longest: Duration,
+    /// The id the drag-keys hook gave it, which its Esc carries.
+    keys: u64,
 }
 
 struct State {
@@ -316,6 +318,7 @@ impl State {
             for m in &drag.members {
                 m.back();
             }
+            dragkeys::release();
             DRAGGING.store(false, Ordering::SeqCst);
         }
         for h in self.handles.drain(..) {
@@ -548,6 +551,8 @@ impl State {
             solved: None,
             moves: 0,
             longest: Duration::ZERO,
+            // Esc is the drag's, so it doesn't reach the focused app as well.
+            keys: dragkeys::start_esc(self.owner.0 as isize),
         });
         DRAGGING.store(true, Ordering::SeqCst);
         unsafe {
@@ -598,6 +603,7 @@ impl State {
     /// cut short or Esc, they go back. Zones that came meanwhile are taken now.
     fn release(&mut self, commit: bool) {
         let Some(drag) = self.drag.take() else { return };
+        dragkeys::release();
         unsafe {
             let _ = KillTimer(Some(self.owner), TIMER_FOLLOW);
             let _ = ReleaseCapture();
@@ -697,6 +703,14 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
             // Capture taken away mid-drag. Its own release comes here too, and finds no drag.
             WM_CAPTURECHANGED => {
                 with_state(|s| s.release(false));
+            }
+            // Esc from the drag-keys hook, which swallowed it: the drag goes back.
+            dragkeys::WM_APP_DRAG_KEY if wparam.0 == usize::from(VK_ESCAPE.0) => {
+                with_state(|s| {
+                    if s.drag.as_ref().is_some_and(|d| d.keys == lparam.0 as u64) {
+                        s.release(false);
+                    }
+                });
             }
             WM_RBUTTONUP => menu::handle_menu(hwnd),
             WM_CLOSE if with_state(|s| s.owner == hwnd) == Some(true) => {

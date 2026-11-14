@@ -165,7 +165,7 @@ pub const TOPICS: &[Topic] = &[
             List(&[
                 "**Scroll the mouse wheel** to step through the whole zone, 1/2, 1/3, 2/3, the zone with its neighbour, and the whole screen. It stops at either end. A share sits on the side of the zone nearest the pointer and follows it",
                 "**Right-click** drops the window where you let go, without a zone",
-                "**Tab** steps through the zone, the zone with its neighbour on the side you lean to, and the whole screen. **Shift+Tab** goes back, unless Shift is your show key",
+                "**Tab** steps through the zone, the zone with its neighbour on the side you lean to, and the whole screen. **Shift+Tab** goes back, unless Shift is your show key. With Alt held, Tab is Windows' Alt+Tab",
                 "**1**, **2** or **3** give the window a half, a third or two thirds of it, and **0** all of it. The rest becomes a zone of its own, and a window that was there moves into it. The layout is saved as **Changed**, and a notification offers Undo for 8 seconds",
                 "The **arrows** pick the side the part sits on, until the pointer moves to another zone",
                 "**Esc** drops the window where you let go, without a zone",

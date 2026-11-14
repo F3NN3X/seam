@@ -344,6 +344,9 @@ Columns on screen 1 and no layout on screen 2, gap 8 px, **Snap beside a window*
 - [ ] **Fit group to screen.** Record a key for **Fit group to screen**. Press it on a member of the group on screen 2: the group stretches over the work area with the same shares and order, a notice offers Undo, and clicking it puts the windows back. Press it on Notepad snapped on screen 1: a notice says "Already fills its screen". Press it on a loose window: it fills the work area without being maximized, with Undo. `window.fit` with `{}` and with `hwnd` does the same, answering error 3 with the reason.
 - [ ] **While paused.** Pause Seam: an edge band does nothing during a Shift drag, and the Fit key is given back to the app. `window.fit` still works. Resume: snap beside works again.
 - [ ] **An elevated window.** Point at the edge of Task Manager running as administrator: no beside outline, the zones show as usual. A group member that runs as administrator stops Fit with the reason.
+- [ ] **Leaves as you drag.** Make a group of two windows. Drag one by its title bar a little: the other closes up to fill the room while the button is still down, not after you let go. Resize the group by an edge instead: nobody leaves.
+- [ ] **Esc puts it back.** Drag a group member a little, then press Esc: the window returns to its place, the other closes up no more, and the group is whole again (log: `a drag ended where it began`).
+- [ ] **Many windows.** Make groups on screen 2 until they hold more than 128 windows between them, or as many as you can. Close or minimize the last one made: its group closes up. With `--log`, no `a group hook wasn't installed` line.
 - [ ] **Turned off.** Turn off **Snap beside a window**: an edge band shows the zones as usual and nothing groups. Search for "beside" finds the row, and "fit" finds the shortcut.
 
 ### Pull a window out of its zone

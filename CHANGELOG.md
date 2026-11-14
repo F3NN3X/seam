@@ -12,6 +12,7 @@ All notable changes to Seam. The format follows [Keep a Changelog](https://keepa
 - **Alt+drag at quit** keeps its hook until you let go of the button, for at most 2 seconds, so the release doesn't reach the app.
 - **Stream Deck plugin 0.8.2:** the Apply layout key asks Seam for a screen's layouts once, not on every redraw.
 - **The log says when Ease cursor movement is missing** from the registry on a Windows that has the setting, and that Seam reads it as on.
+- A window in a snap-beside group now leaves it as soon as I drag it away, not a moment after. Closing or minimizing a window in a group is now noticed however many windows the groups hold, where only the first 128 were.
 
 ## [0.7.0] - 2026-11-13
 

@@ -87,6 +87,7 @@ impl Engine {
             tried: None,
             allowed: Vec::new(),
             alt: false,
+            left: None,
         });
     }
 
@@ -133,6 +134,11 @@ impl Engine {
             if now != drag.start {
                 let resized = !drag.was_maximized && (now.w != drag.start.w || now.h != drag.start.h);
                 drag.phase = if resized { Phase::Resizing } else { Phase::Moving };
+                // A member dragged away leaves its group now, not once it has stayed put.
+                // A resize can be the group's own, through its edges, so that waits for the drop.
+                if !resized {
+                    drag.left = self.leave_adhoc_dragged(drag.hwnd);
+                }
                 if resized && drag.edges.is_none() {
                     // Zones have nothing to do with a resize, unless the neighbours follow it.
                     unsafe {
@@ -304,7 +310,7 @@ impl Engine {
         if dropped {
             self.refresh(&mut drag);
         }
-        self.finish_drag(&drag, dropped, hwnd);
+        self.finish_drag(&mut drag, dropped, hwnd);
         self.sync_dividers();
         // A re-fit that had to wait for this drag can go now.
         self.refit_resume();
@@ -315,7 +321,14 @@ impl Engine {
         key_code(&self.settings.show_key) == Some(VK_CONTROL)
     }
 
-    fn finish_drag(&mut self, drag: &Drag, dropped: bool, hwnd: HWND) {
+    fn finish_drag(&mut self, drag: &mut Drag, dropped: bool, hwnd: HWND) {
+        // Cancelled with Esc, Windows puts the window back, and so does its group.
+        if let Some(left) = drag.left.take()
+            && winutil::window_rect(hwnd).is_some_and(|r| adhoc::near(r, drag.start))
+            && self.rejoin_adhoc(drag.hwnd, left)
+        {
+            return;
+        }
         // Dragged away, a window leaves its ad-hoc group.
         if drag.phase == Phase::Moving {
             self.leave_adhoc(drag.hwnd);

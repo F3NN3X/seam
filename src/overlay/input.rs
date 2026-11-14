@@ -42,7 +42,6 @@ pub(super) fn handle(hwnd: HWND, idx: usize, msg: u32, wparam: WPARAM, lparam: L
         let mut guard = cell.try_borrow_mut().ok()?;
         let c = guard.as_mut()?;
         let cur = c.cur;
-        let n_steps = c.steps.len();
         let step = &mut c.steps[cur];
         let is_b = idx == step.b;
         let side = step.side;
@@ -51,28 +50,7 @@ pub(super) fn handle(hwnd: HWND, idx: usize, msg: u32, wparam: WPARAM, lparam: L
         let mut after = After::Nothing;
         let mut changed = false;
         match msg {
-            WM_LBUTTONDOWN if is_b && live => {
-                let x = (lparam.0 & 0xffff) as i16 as f64;
-                let y = ((lparam.0 >> 16) & 0xffff) as i16 as f64;
-                let pos = if side.along_is_y() { y } else { x };
-                let dpi = unsafe { GetDpiForWindow(hwnd) }.max(96) as f64;
-                let reach = 24.0 * dpi / 96.0;
-                let (d0, d1) = ((pos - step.b_pts.0).abs(), (pos - step.b_pts.1).abs());
-                let which = if key_down(VK_CONTROL.0) {
-                    Which::Both
-                } else if d0.min(d1) <= reach {
-                    Which::One(if d0 <= d1 { 0 } else { 1 })
-                } else {
-                    Which::Both
-                };
-                c.sel = match which {
-                    Which::One(i) => i,
-                    Which::Both => 2,
-                };
-                c.drag = Some(Drag { which, start: pointer_along(side), b0: step.b_pts });
-                after = After::Capture(hwnd);
-                changed = true;
-            }
+            WM_LBUTTONDOWN if is_b && live => (changed, after) = on_button_down(hwnd, c, lparam),
             WM_MOUSEMOVE => {
                 if let Some(d) = &c.drag {
                     let delta = (pointer_along(side) - d.start) as f64;
@@ -90,105 +68,10 @@ pub(super) fn handle(hwnd: HWND, idx: usize, msg: u32, wparam: WPARAM, lparam: L
             WM_CAPTURECHANGED => {
                 c.drag = None;
             }
-            WM_CHAR if c.typing.is_some() => {
-                let ch = char::from_u32(wparam.0 as u32).unwrap_or('\0');
-                if let Some(t) = c.typing.as_mut() {
-                    let separator = (ch == ',' || ch == '.') && !t.text.contains([',', '.']);
-                    if (ch.is_ascii_digit() || separator) && t.text.len() < 8 {
-                        t.text.push(ch);
-                        changed = true;
-                    }
-                }
-            }
+            WM_CHAR if c.typing.is_some() => changed = on_char(c, wparam),
             // Enter and Backspace mean next and back everywhere but in the field.
-            WM_KEYDOWN if c.typing.is_some() => match VIRTUAL_KEY(wparam.0 as u16) {
-                VK_ESCAPE => {
-                    c.typing = None;
-                    changed = true;
-                }
-                VK_TAB => {
-                    if let Some(t) = c.typing.as_mut() {
-                        t.after = !t.after;
-                    }
-                    changed = true;
-                }
-                VK_BACK => {
-                    if let Some(t) = c.typing.as_mut() {
-                        t.text.pop();
-                    }
-                    changed = true;
-                }
-                VK_RETURN => {
-                    if let Some(m) = c.typing.as_ref().and_then(|t| typed_map(&c.mons, step, t)) {
-                        set_map(&c.mons, step, m);
-                        c.typing = None;
-                        changed = true;
-                    }
-                }
-                _ => return None,
-            },
-            WM_KEYDOWN => {
-                let vk = VIRTUAL_KEY(wparam.0 as u16);
-                let amount = if key_down(VK_SHIFT.0) { 10.0 } else { 1.0 };
-                let nudge = match vk {
-                    VK_UP | VK_LEFT => Some(-amount),
-                    VK_DOWN | VK_RIGHT => Some(amount),
-                    _ => None,
-                };
-                if let (Some(delta), true) = (nudge, live) {
-                    let which = if key_down(VK_CONTROL.0) || c.sel == 2 { Which::Both } else { Which::One(c.sel) };
-                    let base = step.b_pts;
-                    set_b(step, which, base, delta);
-                    changed = true;
-                } else {
-                    match vk {
-                        VK_ESCAPE => after = After::Finish(false),
-                        VK_RETURN => {
-                            if cur + 1 < n_steps {
-                                c.cur += 1;
-                                c.sel = 0;
-                                c.drag = None;
-                                after = After::Focus(c.wins[c.steps[c.cur].b]);
-                                changed = true;
-                            } else {
-                                after = After::Finish(true);
-                            }
-                        }
-                        VK_BACK if cur > 0 => {
-                            c.cur -= 1;
-                            c.sel = 0;
-                            c.drag = None;
-                            after = After::Focus(c.wins[c.steps[c.cur].b]);
-                            changed = true;
-                        }
-                        VK_G if step.glue.is_some() => {
-                            step.glue = step.glue.map(|on| !on);
-                            c.drag = None;
-                            changed = true;
-                        }
-                        VK_N if step.glue.is_none() => {
-                            step.not_on_desk = !step.not_on_desk;
-                            c.drag = None;
-                            changed = true;
-                        }
-                        VK_TAB if live => {
-                            c.sel = (c.sel + 1) % 3;
-                            changed = true;
-                        }
-                        VK_R if live => {
-                            let m = step.guess;
-                            set_map(&c.mons, step, m);
-                            changed = true;
-                        }
-                        VK_M if c.measure && live && sizes(&c.mons, step).is_some() => {
-                            c.typing = Some(Typing { text: String::new(), after: true });
-                            c.drag = None;
-                            changed = true;
-                        }
-                        _ => return None,
-                    }
-                }
-            }
+            WM_KEYDOWN if c.typing.is_some() => changed = on_typing_key(c, wparam)?,
+            WM_KEYDOWN => (changed, after) = on_key(c, wparam, live)?,
             WM_SETCURSOR => {
                 let id = if is_b && live { if side.along_is_y() { IDC_SIZENS } else { IDC_SIZEWE } } else { IDC_ARROW };
                 unsafe {
@@ -204,4 +87,146 @@ pub(super) fn handle(hwnd: HWND, idx: usize, msg: u32, wparam: WPARAM, lparam: L
         }
         Some((LRESULT(0), after))
     })
+}
+
+/// Grab B's nearest line, or both. Returns whether to redraw, and what the window does next.
+fn on_button_down(hwnd: HWND, c: &mut Calib, lparam: LPARAM) -> (bool, After) {
+    let step = &mut c.steps[c.cur];
+    let side = step.side;
+    let x = (lparam.0 & 0xffff) as i16 as f64;
+    let y = ((lparam.0 >> 16) & 0xffff) as i16 as f64;
+    let pos = if side.along_is_y() { y } else { x };
+    let dpi = unsafe { GetDpiForWindow(hwnd) }.max(96) as f64;
+    let reach = 24.0 * dpi / 96.0;
+    let (d0, d1) = ((pos - step.b_pts.0).abs(), (pos - step.b_pts.1).abs());
+    let which = if key_down(VK_CONTROL.0) {
+        Which::Both
+    } else if d0.min(d1) <= reach {
+        Which::One(if d0 <= d1 { 0 } else { 1 })
+    } else {
+        Which::Both
+    };
+    c.sel = match which {
+        Which::One(i) => i,
+        Which::Both => 2,
+    };
+    c.drag = Some(Drag { which, start: pointer_along(side), b0: step.b_pts });
+    (true, After::Capture(hwnd))
+}
+
+/// A character typed into the offset field. Returns whether it went in.
+fn on_char(c: &mut Calib, wparam: WPARAM) -> bool {
+    let ch = char::from_u32(wparam.0 as u32).unwrap_or('\0');
+    if let Some(t) = c.typing.as_mut() {
+        let separator = (ch == ',' || ch == '.') && !t.text.contains([',', '.']);
+        if (ch.is_ascii_digit() || separator) && t.text.len() < 8 {
+            t.text.push(ch);
+            return true;
+        }
+    }
+    false
+}
+
+/// A key in the offset field. Returns whether to redraw, or `None` for a key it ignores.
+fn on_typing_key(c: &mut Calib, wparam: WPARAM) -> Option<bool> {
+    let step = &mut c.steps[c.cur];
+    let mut changed = false;
+    match VIRTUAL_KEY(wparam.0 as u16) {
+        VK_ESCAPE => {
+            c.typing = None;
+            changed = true;
+        }
+        VK_TAB => {
+            if let Some(t) = c.typing.as_mut() {
+                t.after = !t.after;
+            }
+            changed = true;
+        }
+        VK_BACK => {
+            if let Some(t) = c.typing.as_mut() {
+                t.text.pop();
+            }
+            changed = true;
+        }
+        VK_RETURN => {
+            if let Some(m) = c.typing.as_ref().and_then(|t| typed_map(&c.mons, step, t)) {
+                set_map(&c.mons, step, m);
+                c.typing = None;
+                changed = true;
+            }
+        }
+        _ => return None,
+    }
+    Some(changed)
+}
+
+/// A key outside the field. Returns whether to redraw and what the window does next,
+/// or `None` for a key it ignores.
+fn on_key(c: &mut Calib, wparam: WPARAM, live: bool) -> Option<(bool, After)> {
+    let cur = c.cur;
+    let n_steps = c.steps.len();
+    let step = &mut c.steps[cur];
+    let mut after = After::Nothing;
+    let mut changed = false;
+    let vk = VIRTUAL_KEY(wparam.0 as u16);
+    let amount = if key_down(VK_SHIFT.0) { 10.0 } else { 1.0 };
+    let nudge = match vk {
+        VK_UP | VK_LEFT => Some(-amount),
+        VK_DOWN | VK_RIGHT => Some(amount),
+        _ => None,
+    };
+    if let (Some(delta), true) = (nudge, live) {
+        let which = if key_down(VK_CONTROL.0) || c.sel == 2 { Which::Both } else { Which::One(c.sel) };
+        let base = step.b_pts;
+        set_b(step, which, base, delta);
+        changed = true;
+    } else {
+        match vk {
+            VK_ESCAPE => after = After::Finish(false),
+            VK_RETURN => {
+                if cur + 1 < n_steps {
+                    c.cur += 1;
+                    c.sel = 0;
+                    c.drag = None;
+                    after = After::Focus(c.wins[c.steps[c.cur].b]);
+                    changed = true;
+                } else {
+                    after = After::Finish(true);
+                }
+            }
+            VK_BACK if cur > 0 => {
+                c.cur -= 1;
+                c.sel = 0;
+                c.drag = None;
+                after = After::Focus(c.wins[c.steps[c.cur].b]);
+                changed = true;
+            }
+            VK_G if step.glue.is_some() => {
+                step.glue = step.glue.map(|on| !on);
+                c.drag = None;
+                changed = true;
+            }
+            VK_N if step.glue.is_none() => {
+                step.not_on_desk = !step.not_on_desk;
+                c.drag = None;
+                changed = true;
+            }
+            VK_TAB if live => {
+                c.sel = (c.sel + 1) % 3;
+                changed = true;
+            }
+            VK_R if live => {
+                let m = step.guess;
+                set_map(&c.mons, step, m);
+                changed = true;
+            }
+            VK_M if c.measure && live && sizes(&c.mons, step).is_some() => {
+                c.typing = Some(Typing { text: String::new(), after: true });
+                c.drag = None;
+                changed = true;
+            }
+            _ => return None,
+        }
+    }
+    Some((changed, after))
 }

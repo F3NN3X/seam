@@ -240,152 +240,211 @@ pub(super) unsafe fn paint(hwnd: HWND, idx: usize) {
         let s = GetDpiForWindow(hwnd).max(96) as f64 / 96.0;
 
         CALIB.with(|cell| {
-        let Ok(guard) = cell.try_borrow() else { return };
-        let Some(c) = guard.as_ref() else { return };
-        let Some(mon) = c.mons.get(idx) else { return };
-        let step = &c.steps[c.cur];
-        let along_y = step.side.along_is_y();
-        if step.adjustable() && (idx == step.a || idx == step.b) {
-            stripes(mem, w, h, c, step, idx, s);
-        }
+            let Ok(guard) = cell.try_borrow() else { return };
+            let Some(c) = guard.as_ref() else { return };
+            let Some(mon) = c.mons.get(idx) else { return };
+            let step = &c.steps[c.cur];
+            if step.adjustable() && (idx == step.a || idx == step.b) {
+                stripes(mem, w, h, c, step, idx, s);
+            }
+            corner_labels(mem, idx, &mon.name, (w, h), s);
 
-        // Big screen number, like Shim.
+            let role_a = idx == step.a;
+            let role_b = idx == step.b;
+            let center = RECT { left: w / 6, top: h / 2 - (110.0 * s) as i32, right: w - w / 6, bottom: h };
+            if role_a || role_b {
+                step_marks(mem, (w, h), c, step, (role_a, role_b), s);
+                let msg = step_message(c, step, role_b);
+                text(mem, &msg, center, (20.0 * s) as i32, false, (226, 230, 238), DT_CENTER | DT_WORDBREAK, true);
+            } else {
+                text(
+                    mem,
+                    "Not part of this step",
+                    center,
+                    (22.0 * s) as i32,
+                    false,
+                    (110, 116, 130),
+                    DT_CENTER | DT_WORDBREAK,
+                    false,
+                );
+            }
+            footer(mem, c, (w, h), s);
+        });
+
+        let _ = BitBlt(hdc, 0, 0, w, h, Some(mem), 0, 0, SRCCOPY);
+        SelectObject(mem, old);
+        let _ = DeleteObject(bmp.into());
+        let _ = DeleteDC(mem);
+        let _ = EndPaint(hwnd, &ps);
+    }
+}
+
+/// Big screen number, like Shim, and the screen's name under it.
+unsafe fn corner_labels(dc: HDC, idx: usize, name: &str, (w, h): (i32, i32), s: f64) {
+    unsafe {
         let pad = (36.0 * s) as i32;
-        text(mem, &format!("{}", idx + 1), RECT { left: pad, top: pad / 2, right: w, bottom: h }, (150.0 * s) as i32, true, (58, 63, 74), DT_LEFT | DT_TOP | DT_SINGLELINE, false);
-        text(mem, &mon.name, RECT { left: pad, top: pad / 2 + (170.0 * s) as i32, right: w, bottom: h }, (22.0 * s) as i32, false, (110, 116, 130), DT_LEFT | DT_TOP | DT_SINGLELINE, false);
-
-        let role_a = idx == step.a;
-        let role_b = idx == step.b;
-        let center = RECT { left: w / 6, top: h / 2 - (110.0 * s) as i32, right: w - w / 6, bottom: h };
-        if role_a || role_b {
-            let (la, lb) = (c.mons[step.a].rect.along_len(step.side), c.mons[step.b].rect.along_len(step.side));
-            let map = step.map();
-            let shade = |c: (u8, u8, u8)| if step.adjustable() { c } else { dim(c) };
-            // Faint guide lines through the physical overlap: they all straighten
-            // out once the two main lines are right.
-            if let Some(m) = map
-                && let Some((lo, hi)) = overlap_in_a(&m, la, lb) {
-                    for k in 0..=10 {
-                        let a = lo + (hi - lo) * k as f64 / 10.0;
-                        let pos = if role_a { a } else { m.apply(a) };
-                        line(mem, w, h, along_y, pos, (1.0 * s).max(1.0) as i32, shade(GUIDE));
-                    }
-                }
-            let my_edge = if role_a { step.side } else { step.side.opposite() };
-            if step.glue.is_some() {
-                dashed_edge(mem, w, h, my_edge, (6.0 * s) as i32, s, shade(EDGE));
-                gap_hint(mem, w, h, my_edge, windows_gap(c, step), s);
-            } else {
-                fill(mem, edge_strip(w, h, my_edge, (6.0 * s) as i32), shade(EDGE));
-            }
-            let pts = if role_a { step.a_pts } else { step.b_pts };
-            for (i, pos) in [pts.0, pts.1].into_iter().enumerate() {
-                let selected = role_b && step.adjustable() && (c.sel == i || c.sel == 2);
-                let thick = ((if selected { 5.0 } else { 3.0 }) * s) as i32;
-                line(mem, w, h, along_y, pos, thick.max(2), shade(LINE_COLORS[i]));
-                tag(mem, w, h, my_edge, pos, &format!("{}", i + 1), s, shade(LINE_COLORS[i]));
-            }
-            let last = c.cur + 1 == c.steps.len();
-            let (a, b) = (screen_name(c, step.a), screen_name(c, step.b));
-            // The stripes' one line, or why there are none.
-            let stripe_note = if !step.adjustable() {
-                ""
-            } else if sizes(&c.mons, step).is_some() {
-                "\nIf the stripes run on straight across the edge, the screens are lined up"
-            } else {
-                "\nNo stripe check: a screen on this pair reports no size"
-            };
-            let measure_note = if !c.measure || !step.adjustable() {
-                String::new()
-            } else if sizes(&c.mons, step).is_none() {
-                "\nTyping an offset isn't offered: a screen on this pair reports no size".to_string()
-            } else if let Some(t) = &c.typing {
-                let (an, bn) = (step.a + 1, step.b + 1);
-                let (edge, phrase, flip) = match (along_y, t.after) {
-                    (true, true) => ("top", "below", "below/above"),
-                    (true, false) => ("top", "above", "below/above"),
-                    (false, true) => ("left", "to the right of", "right/left"),
-                    (false, false) => ("left", "to the left of", "right/left"),
-                };
-                format!(
-                    "\n\nScreen {bn}'s {edge} edge is [ {}_ ] cm {phrase} screen {an}'s {edge} edge\n\
-                     Tab flips {flip}  ·  Enter: apply  ·  Esc: close",
-                    t.text
-                )
-            } else {
-                "\nM: type the offset in cm".to_string()
-            };
-            let next = if last { "done" } else { "next border" };
-            // Where B is from A, and the reverse, in desk words: "straight below" reads
-            // better than "continues across the bezel" when the screens are far apart.
-            let (b_from_a, a_from_b, lands) = match step.side {
-                Side::Bottom => ("below", "above", "straight below"),
-                Side::Top => ("above", "below", "straight above"),
-                Side::Right => ("to the right", "to the left", "level with"),
-                Side::Left => ("to the left", "to the right", "level with"),
-            };
-            let msg = match (role_b, step.glue, step.not_on_desk) {
-                (true, Some(false), _) => format!(
-                    "Glue screen {b} to screen {a}?\n\n\
-                     Do this if this screen touches screen {a} on your desk. Windows has a gap \
-                     between them, so today the pointer stops at the edge.\n\n\
-                     Press G, then line them up as they stand on your desk.\n\n\
-                     Enter: skip   ·   Backspace: back   ·   Esc: cancel"
-                ),
-                (true, None, true) => format!(
-                    "Screen {b} doesn't touch screen {a} on your desk\n\n\
-                     Windows has them touching, so Seam stops the pointer crossing here. \
-                     Where you've glued a screen past this edge, the pointer goes there instead.\n\n\
-                     N says they do touch\n\n\
-                     Enter: {next}   ·   Backspace: back   ·   Esc: cancel"
-                ),
-                (true, glue, _) => format!(
-                    "{title}\n\n\
-                     Screen {a}, {a_from_b}, has a blue line 1 and a pink line 2.\n\
-                     Move this screen's blue line 1 until it sits {lands} screen {a}'s blue line, \
-                     as if one line ran across both screens. Then do the same with the pink line 2.{gap}\n\n\
-                     Grab a line to move just that one, or drag anywhere else to move both.\n\
-                     Arrows nudge  ·  Shift ×10  ·  Ctrl = both  ·  Tab switches line  ·  R resets\n\
-                     The pointer follows your lines already, so cross over to check.{toggle}{stripe_note}{measure_note}\n\n\
-                     Enter: {next}   ·   Backspace: back   ·   Esc: cancel",
-                    title = if glue.is_some() {
-                        format!("Glue screen {b} to screen {a}")
-                    } else {
-                        format!("Line up screen {b} with screen {a}")
-                    },
-                    gap = if glue.is_some() {
-                        "\nThe gap doesn't matter: line them up as the screens stand on your desk."
-                    } else {
-                        ""
-                    },
-                    toggle = if glue.is_some() {
-                        "\nG unglues them".to_string()
-                    } else {
-                        format!(
-                            "\nScreen {b} doesn't touch screen {a} on your desk? \
-                             Press N, and Seam stops the pointer crossing here"
-                        )
-                    },
-                ),
-                (false, Some(false), _) => format!(
-                    "Reference screen\n\nScreen {b}, {b_from_a}, may touch this one on your desk. Look at screen {b} to glue them."
-                ),
-                (false, None, true) => format!(
-                    "Reference screen\n\nScreen {b}, {b_from_a}, doesn't touch this one on your desk, \
-                     so Seam stops the pointer crossing here."
-                ),
-                (false, ..) => format!(
-                    "Reference screen\n\nThe blue and pink lines here stay put.\n\
-                     On screen {b}, {b_from_a}, move its lines until each sits {lands} the matching line here.{stripe_note}"
-                ),
-            };
-            text(mem, &msg, center, (20.0 * s) as i32, false, (226, 230, 238), DT_CENTER | DT_WORDBREAK, true);
-        } else {
-            text(mem, "Not part of this step", center, (22.0 * s) as i32, false, (110, 116, 130), DT_CENTER | DT_WORDBREAK, false);
-        }
-        let footer = RECT { left: 0, top: h - (64.0 * s) as i32, right: w, bottom: h };
         text(
-            mem,
+            dc,
+            &format!("{}", idx + 1),
+            RECT { left: pad, top: pad / 2, right: w, bottom: h },
+            (150.0 * s) as i32,
+            true,
+            (58, 63, 74),
+            DT_LEFT | DT_TOP | DT_SINGLELINE,
+            false,
+        );
+        text(
+            dc,
+            name,
+            RECT { left: pad, top: pad / 2 + (170.0 * s) as i32, right: w, bottom: h },
+            (22.0 * s) as i32,
+            false,
+            (110, 116, 130),
+            DT_LEFT | DT_TOP | DT_SINGLELINE,
+            false,
+        );
+    }
+}
+
+/// The faint guide lines, the edge and the two numbered lines of a screen in this step.
+unsafe fn step_marks(mem: HDC, (w, h): (i32, i32), c: &Calib, step: &Step, (role_a, role_b): (bool, bool), s: f64) {
+    unsafe {
+        let along_y = step.side.along_is_y();
+        let (la, lb) = (c.mons[step.a].rect.along_len(step.side), c.mons[step.b].rect.along_len(step.side));
+        let map = step.map();
+        let shade = |c: (u8, u8, u8)| if step.adjustable() { c } else { dim(c) };
+        // Faint guide lines through the physical overlap: they all straighten
+        // out once the two main lines are right.
+        if let Some(m) = map
+            && let Some((lo, hi)) = overlap_in_a(&m, la, lb)
+        {
+            for k in 0..=10 {
+                let a = lo + (hi - lo) * k as f64 / 10.0;
+                let pos = if role_a { a } else { m.apply(a) };
+                line(mem, w, h, along_y, pos, (1.0 * s).max(1.0) as i32, shade(GUIDE));
+            }
+        }
+        let my_edge = if role_a { step.side } else { step.side.opposite() };
+        if step.glue.is_some() {
+            dashed_edge(mem, w, h, my_edge, (6.0 * s) as i32, s, shade(EDGE));
+            gap_hint(mem, w, h, my_edge, windows_gap(c, step), s);
+        } else {
+            fill(mem, edge_strip(w, h, my_edge, (6.0 * s) as i32), shade(EDGE));
+        }
+        let pts = if role_a { step.a_pts } else { step.b_pts };
+        for (i, pos) in [pts.0, pts.1].into_iter().enumerate() {
+            let selected = role_b && step.adjustable() && (c.sel == i || c.sel == 2);
+            let thick = ((if selected { 5.0 } else { 3.0 }) * s) as i32;
+            line(mem, w, h, along_y, pos, thick.max(2), shade(LINE_COLORS[i]));
+            tag(mem, w, h, my_edge, pos, &format!("{}", i + 1), s, shade(LINE_COLORS[i]));
+        }
+    }
+}
+
+/// What the centre of a screen says in this step.
+fn step_message(c: &Calib, step: &Step, role_b: bool) -> String {
+    let along_y = step.side.along_is_y();
+    let last = c.cur + 1 == c.steps.len();
+    let (a, b) = (screen_name(c, step.a), screen_name(c, step.b));
+    // The stripes' one line, or why there are none.
+    let stripe_note = if !step.adjustable() {
+        ""
+    } else if sizes(&c.mons, step).is_some() {
+        "\nIf the stripes run on straight across the edge, the screens are lined up"
+    } else {
+        "\nNo stripe check: a screen on this pair reports no size"
+    };
+    let measure_note = if !c.measure || !step.adjustable() {
+        String::new()
+    } else if sizes(&c.mons, step).is_none() {
+        "\nTyping an offset isn't offered: a screen on this pair reports no size".to_string()
+    } else if let Some(t) = &c.typing {
+        let (an, bn) = (step.a + 1, step.b + 1);
+        let (edge, phrase, flip) = match (along_y, t.after) {
+            (true, true) => ("top", "below", "below/above"),
+            (true, false) => ("top", "above", "below/above"),
+            (false, true) => ("left", "to the right of", "right/left"),
+            (false, false) => ("left", "to the left of", "right/left"),
+        };
+        format!(
+            "\n\nScreen {bn}'s {edge} edge is [ {}_ ] cm {phrase} screen {an}'s {edge} edge\n\
+             Tab flips {flip}  ·  Enter: apply  ·  Esc: close",
+            t.text
+        )
+    } else {
+        "\nM: type the offset in cm".to_string()
+    };
+    let next = if last { "done" } else { "next border" };
+    // Where B is from A, and the reverse, in desk words: "straight below" reads
+    // better than "continues across the bezel" when the screens are far apart.
+    let (b_from_a, a_from_b, lands) = match step.side {
+        Side::Bottom => ("below", "above", "straight below"),
+        Side::Top => ("above", "below", "straight above"),
+        Side::Right => ("to the right", "to the left", "level with"),
+        Side::Left => ("to the left", "to the right", "level with"),
+    };
+    match (role_b, step.glue, step.not_on_desk) {
+        (true, Some(false), _) => format!(
+            "Glue screen {b} to screen {a}?\n\n\
+             Do this if this screen touches screen {a} on your desk. Windows has a gap \
+             between them, so today the pointer stops at the edge.\n\n\
+             Press G, then line them up as they stand on your desk.\n\n\
+             Enter: skip   ·   Backspace: back   ·   Esc: cancel"
+        ),
+        (true, None, true) => format!(
+            "Screen {b} doesn't touch screen {a} on your desk\n\n\
+             Windows has them touching, so Seam stops the pointer crossing here. \
+             Where you've glued a screen past this edge, the pointer goes there instead.\n\n\
+             N says they do touch\n\n\
+             Enter: {next}   ·   Backspace: back   ·   Esc: cancel"
+        ),
+        (true, glue, _) => format!(
+            "{title}\n\n\
+             Screen {a}, {a_from_b}, has a blue line 1 and a pink line 2.\n\
+             Move this screen's blue line 1 until it sits {lands} screen {a}'s blue line, \
+             as if one line ran across both screens. Then do the same with the pink line 2.{gap}\n\n\
+             Grab a line to move just that one, or drag anywhere else to move both.\n\
+             Arrows nudge  ·  Shift ×10  ·  Ctrl = both  ·  Tab switches line  ·  R resets\n\
+             The pointer follows your lines already, so cross over to check.{toggle}{stripe_note}{measure_note}\n\n\
+             Enter: {next}   ·   Backspace: back   ·   Esc: cancel",
+            title = if glue.is_some() {
+                format!("Glue screen {b} to screen {a}")
+            } else {
+                format!("Line up screen {b} with screen {a}")
+            },
+            gap = if glue.is_some() {
+                "\nThe gap doesn't matter: line them up as the screens stand on your desk."
+            } else {
+                ""
+            },
+            toggle = if glue.is_some() {
+                "\nG unglues them".to_string()
+            } else {
+                format!(
+                    "\nScreen {b} doesn't touch screen {a} on your desk? \
+                     Press N, and Seam stops the pointer crossing here"
+                )
+            },
+        ),
+        (false, Some(false), _) => format!(
+            "Reference screen\n\nScreen {b}, {b_from_a}, may touch this one on your desk. Look at screen {b} to glue them."
+        ),
+        (false, None, true) => format!(
+            "Reference screen\n\nScreen {b}, {b_from_a}, doesn't touch this one on your desk, \
+             so Seam stops the pointer crossing here."
+        ),
+        (false, ..) => format!(
+            "Reference screen\n\nThe blue and pink lines here stay put.\n\
+             On screen {b}, {b_from_a}, move its lines until each sits {lands} the matching line here.{stripe_note}"
+        ),
+    }
+}
+
+fn footer(dc: HDC, c: &Calib, (w, h): (i32, i32), s: f64) {
+    let footer = RECT { left: 0, top: h - (64.0 * s) as i32, right: w, bottom: h };
+    unsafe {
+        text(
+            dc,
             &format!("Seam  ·  border {} of {}", c.cur + 1, c.steps.len()),
             footer,
             (16.0 * s) as i32,
@@ -394,12 +453,5 @@ pub(super) unsafe fn paint(hwnd: HWND, idx: usize) {
             DT_CENTER | DT_SINGLELINE,
             false,
         );
-    });
-
-        let _ = BitBlt(hdc, 0, 0, w, h, Some(mem), 0, 0, SRCCOPY);
-        SelectObject(mem, old);
-        let _ = DeleteObject(bmp.into());
-        let _ = DeleteDC(mem);
-        let _ = EndPaint(hwnd, &ps);
     }
 }

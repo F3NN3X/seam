@@ -40,11 +40,7 @@ fn on_param(params: &Value) -> Result<bool, RpcError> {
 
 fn command(method: &str, p: &Value) -> Result<Command, RpcError> {
     Ok(match method {
-        "hello" => Command::Hello {
-            client: str_param(p, "client")?.unwrap_or_else(|| "anonymous".into()),
-            version: str_param(p, "version")?.unwrap_or_default(),
-            token: str_param(p, "token")?,
-        },
+        "hello" => hello(p)?,
         "app.info" => Command::AppInfo,
         "state.get" => Command::StateGet,
         "config.get" => Command::ConfigGet,
@@ -56,55 +52,9 @@ fn command(method: &str, p: &Value) -> Result<Command, RpcError> {
         ),
         "desks.list" => Command::DesksList,
         "workspaces.list" => Command::WorkspacesList { desk: str_param(p, "desk")? },
-        "workspace.switch" => {
-            let (id, name) = (str_param(p, "id")?, str_param(p, "name")?);
-            if id.is_none() && name.is_none() {
-                return Err(RpcError::new(INVALID_PARAMS, "id or name is required"));
-            }
-            let alongside = p.get("alongside").and_then(Value::as_bool).unwrap_or(false);
-            Command::WorkspaceSwitch { id, name, alongside }
-        }
-        "workspace.capture" => {
-            let row = match p.get("row") {
-                None | Some(Value::Null) => None,
-                Some(v) => Some(
-                    v.as_u64()
-                        .and_then(|n| usize::try_from(n).ok())
-                        .ok_or_else(|| RpcError::new(INVALID_PARAMS, "row must be a row number"))?,
-                ),
-            };
-            let into = str_param(p, "into")?;
-            if row.is_some() && into.is_none() {
-                return Err(RpcError::new(INVALID_PARAMS, "row needs into"));
-            }
-            let hwnd = match p.get("hwnd") {
-                None | Some(Value::Null) => None,
-                Some(v) => Some(
-                    v.as_i64()
-                        .and_then(|n| isize::try_from(n).ok())
-                        .ok_or_else(|| RpcError::new(INVALID_PARAMS, "hwnd must be a window handle"))?,
-                ),
-            };
-            let pick = match (hwnd, row) {
-                (None, _) => None,
-                (Some(_), None) => return Err(RpcError::new(INVALID_PARAMS, "hwnd needs into and row")),
-                (Some(hwnd), Some(_)) => {
-                    let need = |key| {
-                        str_param(p, key)?.ok_or_else(|| RpcError::new(INVALID_PARAMS, "hwnd needs exe and class"))
-                    };
-                    Some(Pick { hwnd, exe: need("exe")?, class: need("class")? })
-                }
-            };
-            Command::WorkspaceCapture { name: str_param(p, "name")?, into, row, pick }
-        }
-        "workspace.update" => Command::WorkspaceUpdate {
-            id: str_param(p, "id")?.ok_or_else(|| RpcError::new(INVALID_PARAMS, "id is required"))?,
-            workspace: p
-                .get("workspace")
-                .filter(|v| v.is_object())
-                .cloned()
-                .ok_or_else(|| RpcError::new(INVALID_PARAMS, "workspace must be an object"))?,
-        },
+        "workspace.switch" => workspace_switch(p)?,
+        "workspace.capture" => workspace_capture(p)?,
+        "workspace.update" => workspace_update(p)?,
         "workspace.status" => Command::WorkspaceStatus {
             id: str_param(p, "id")?.ok_or_else(|| RpcError::new(INVALID_PARAMS, "id is required"))?,
         },
@@ -121,66 +71,14 @@ fn command(method: &str, p: &Value) -> Result<Command, RpcError> {
             Some("prev") => Command::ZoneMove(Dir::Prev),
             _ => return Err(RpcError::new(INVALID_PARAMS, "dir must be next or prev")),
         },
-        "window.focus" | "window.move" | "window.swap" => {
-            let verb = method.strip_prefix("window.").and_then(WindowVerb::parse);
-            match (verb, p.get("dir").and_then(Value::as_str).and_then(direction::Dir::parse)) {
-                (Some(verb), Some(dir)) => Command::Window(verb, dir),
-                _ => return Err(RpcError::new(INVALID_PARAMS, "dir must be left, right, up or down")),
-            }
-        }
-        "window.resize" => {
-            let step = match p.get("step") {
-                None | Some(Value::Null) => None,
-                Some(v) => Some(
-                    v.as_u64()
-                        .and_then(|n| i32::try_from(n).ok())
-                        .filter(|n| (1..=MAX_STEP_PX).contains(n))
-                        .ok_or_else(|| RpcError::new(INVALID_PARAMS, "step must be 1 to 10000 pixels"))?,
-                ),
-            };
-            match p.get("by").and_then(Value::as_str) {
-                Some("grow") => Command::WindowGroup(GroupVerb::Grow(step)),
-                Some("shrink") => Command::WindowGroup(GroupVerb::Shrink(step)),
-                _ => return Err(RpcError::new(INVALID_PARAMS, "by must be grow or shrink")),
-            }
-        }
+        "window.focus" | "window.move" | "window.swap" => window_verb(method, p)?,
+        "window.resize" => window_resize(p)?,
         "window.priority" => Command::WindowGroup(GroupVerb::Priority),
-        "window.share" => Command::WindowShare {
-            hwnd: hwnd_param(p)?,
-            axis: match p.get("axis").and_then(Value::as_str) {
-                Some("width") => Axis::Width,
-                Some("height") => Axis::Height,
-                _ => return Err(RpcError::new(INVALID_PARAMS, "axis must be width or height")),
-            },
-            fraction: p
-                .get("fraction")
-                .and_then(Value::as_f64)
-                .filter(|f| (MIN_SHARE..=MAX_SHARE).contains(f))
-                .ok_or_else(|| RpcError::new(INVALID_PARAMS, "fraction must be 0.1 to 0.9"))?
-                as f32,
-        },
+        "window.share" => window_share(p)?,
         "window.ungroup" => Command::WindowUngroup { hwnd: hwnd_param(p)? },
         "window.fit" => Command::WindowFit { hwnd: hwnd_param(p)? },
-        "window.pin" => {
-            let kind = match p.get("kind").and_then(Value::as_str) {
-                Some("top") => PinKind::Top,
-                Some("sticky") => PinKind::Sticky,
-                _ => return Err(RpcError::new(INVALID_PARAMS, "kind must be top or sticky")),
-            };
-            let on = match p.get("on") {
-                None | Some(Value::Null) => None,
-                Some(_) => Some(on_param(p)?),
-            };
-            Command::WindowPin { kind, on }
-        }
-        "window.focus_only" => Command::WindowFocusOnly(match p.get("scope") {
-            None | Some(Value::Null) => FocusScope::Screen,
-            Some(v) => match v.as_str() {
-                Some("screen") => FocusScope::Screen,
-                Some("workspace") => FocusScope::Workspace,
-                _ => return Err(RpcError::new(INVALID_PARAMS, "scope must be screen or workspace")),
-            },
-        }),
+        "window.pin" => window_pin(p)?,
+        "window.focus_only" => window_focus_only(p)?,
         "window.spotlight" => Command::WindowSpotlight(match p.get("on") {
             None | Some(Value::Null) => None,
             Some(_) => Some(on_param(p)?),
@@ -202,22 +100,8 @@ fn command(method: &str, p: &Value) -> Result<Command, RpcError> {
         "screen.tile" => Command::ScreenTile(screen_param(p)?),
         "zones.from_windows" => Command::ZonesFromWindows(screen_param(p)?),
         "zones.quick" => Command::ZonesQuick(screen_param(p)?),
-        "zones.pick" => Command::ZonesPick {
-            number: screen_param(p)?.ok_or_else(|| RpcError::new(INVALID_PARAMS, "number is required"))?,
-            layout: match p.get("layout") {
-                None | Some(Value::Null) => None,
-                Some(v) if v.is_object() => Some(v.clone()),
-                Some(_) => return Err(RpcError::new(INVALID_PARAMS, "layout must be a layout or null")),
-            },
-        },
-        "zones.apply" => Command::ZonesApply {
-            number: screen_param(p)?,
-            layout: match p.get("layout") {
-                Some(Value::Null) => None,
-                Some(Value::String(s)) => Some(s.clone()),
-                _ => return Err(RpcError::new(INVALID_PARAMS, "layout must be a layout id or name, or null")),
-            },
-        },
+        "zones.pick" => zones_pick(p)?,
+        "zones.apply" => zones_apply(p)?,
         "zones.layouts" => Command::ZonesLayouts(screen_param(p)?),
         "layout.show" => match p.get("view").and_then(Value::as_str) {
             Some("seam") => Command::LayoutShow(LayoutView::Seam),
@@ -234,6 +118,155 @@ fn command(method: &str, p: &Value) -> Result<Command, RpcError> {
         "update.ready" => Command::UpdateReady,
         "app.quit" => Command::AppQuit,
         _ => return Err(RpcError::new(METHOD_NOT_FOUND, format!("no method {method}"))),
+    })
+}
+
+fn hello(p: &Value) -> Result<Command, RpcError> {
+    Ok(Command::Hello {
+        client: str_param(p, "client")?.unwrap_or_else(|| "anonymous".into()),
+        version: str_param(p, "version")?.unwrap_or_default(),
+        token: str_param(p, "token")?,
+    })
+}
+
+fn workspace_switch(p: &Value) -> Result<Command, RpcError> {
+    let (id, name) = (str_param(p, "id")?, str_param(p, "name")?);
+    if id.is_none() && name.is_none() {
+        return Err(RpcError::new(INVALID_PARAMS, "id or name is required"));
+    }
+    let alongside = p.get("alongside").and_then(Value::as_bool).unwrap_or(false);
+    Ok(Command::WorkspaceSwitch { id, name, alongside })
+}
+
+fn workspace_capture(p: &Value) -> Result<Command, RpcError> {
+    let row = match p.get("row") {
+        None | Some(Value::Null) => None,
+        Some(v) => Some(
+            v.as_u64()
+                .and_then(|n| usize::try_from(n).ok())
+                .ok_or_else(|| RpcError::new(INVALID_PARAMS, "row must be a row number"))?,
+        ),
+    };
+    let into = str_param(p, "into")?;
+    if row.is_some() && into.is_none() {
+        return Err(RpcError::new(INVALID_PARAMS, "row needs into"));
+    }
+    let hwnd = match p.get("hwnd") {
+        None | Some(Value::Null) => None,
+        Some(v) => Some(
+            v.as_i64()
+                .and_then(|n| isize::try_from(n).ok())
+                .ok_or_else(|| RpcError::new(INVALID_PARAMS, "hwnd must be a window handle"))?,
+        ),
+    };
+    let pick = match (hwnd, row) {
+        (None, _) => None,
+        (Some(_), None) => return Err(RpcError::new(INVALID_PARAMS, "hwnd needs into and row")),
+        (Some(hwnd), Some(_)) => {
+            let need =
+                |key| str_param(p, key)?.ok_or_else(|| RpcError::new(INVALID_PARAMS, "hwnd needs exe and class"));
+            Some(Pick { hwnd, exe: need("exe")?, class: need("class")? })
+        }
+    };
+    Ok(Command::WorkspaceCapture { name: str_param(p, "name")?, into, row, pick })
+}
+
+fn workspace_update(p: &Value) -> Result<Command, RpcError> {
+    Ok(Command::WorkspaceUpdate {
+        id: str_param(p, "id")?.ok_or_else(|| RpcError::new(INVALID_PARAMS, "id is required"))?,
+        workspace: p
+            .get("workspace")
+            .filter(|v| v.is_object())
+            .cloned()
+            .ok_or_else(|| RpcError::new(INVALID_PARAMS, "workspace must be an object"))?,
+    })
+}
+
+/// `window.focus`, `window.move` and `window.swap`: the verb is the method's suffix.
+fn window_verb(method: &str, p: &Value) -> Result<Command, RpcError> {
+    let verb = method.strip_prefix("window.").and_then(WindowVerb::parse);
+    match (verb, p.get("dir").and_then(Value::as_str).and_then(direction::Dir::parse)) {
+        (Some(verb), Some(dir)) => Ok(Command::Window(verb, dir)),
+        _ => Err(RpcError::new(INVALID_PARAMS, "dir must be left, right, up or down")),
+    }
+}
+
+fn window_resize(p: &Value) -> Result<Command, RpcError> {
+    let step = match p.get("step") {
+        None | Some(Value::Null) => None,
+        Some(v) => Some(
+            v.as_u64()
+                .and_then(|n| i32::try_from(n).ok())
+                .filter(|n| (1..=MAX_STEP_PX).contains(n))
+                .ok_or_else(|| RpcError::new(INVALID_PARAMS, "step must be 1 to 10000 pixels"))?,
+        ),
+    };
+    match p.get("by").and_then(Value::as_str) {
+        Some("grow") => Ok(Command::WindowGroup(GroupVerb::Grow(step))),
+        Some("shrink") => Ok(Command::WindowGroup(GroupVerb::Shrink(step))),
+        _ => Err(RpcError::new(INVALID_PARAMS, "by must be grow or shrink")),
+    }
+}
+
+fn window_share(p: &Value) -> Result<Command, RpcError> {
+    Ok(Command::WindowShare {
+        hwnd: hwnd_param(p)?,
+        axis: match p.get("axis").and_then(Value::as_str) {
+            Some("width") => Axis::Width,
+            Some("height") => Axis::Height,
+            _ => return Err(RpcError::new(INVALID_PARAMS, "axis must be width or height")),
+        },
+        fraction: p
+            .get("fraction")
+            .and_then(Value::as_f64)
+            .filter(|f| (MIN_SHARE..=MAX_SHARE).contains(f))
+            .ok_or_else(|| RpcError::new(INVALID_PARAMS, "fraction must be 0.1 to 0.9"))? as f32,
+    })
+}
+
+fn window_pin(p: &Value) -> Result<Command, RpcError> {
+    let kind = match p.get("kind").and_then(Value::as_str) {
+        Some("top") => PinKind::Top,
+        Some("sticky") => PinKind::Sticky,
+        _ => return Err(RpcError::new(INVALID_PARAMS, "kind must be top or sticky")),
+    };
+    let on = match p.get("on") {
+        None | Some(Value::Null) => None,
+        Some(_) => Some(on_param(p)?),
+    };
+    Ok(Command::WindowPin { kind, on })
+}
+
+fn window_focus_only(p: &Value) -> Result<Command, RpcError> {
+    Ok(Command::WindowFocusOnly(match p.get("scope") {
+        None | Some(Value::Null) => FocusScope::Screen,
+        Some(v) => match v.as_str() {
+            Some("screen") => FocusScope::Screen,
+            Some("workspace") => FocusScope::Workspace,
+            _ => return Err(RpcError::new(INVALID_PARAMS, "scope must be screen or workspace")),
+        },
+    }))
+}
+
+fn zones_pick(p: &Value) -> Result<Command, RpcError> {
+    Ok(Command::ZonesPick {
+        number: screen_param(p)?.ok_or_else(|| RpcError::new(INVALID_PARAMS, "number is required"))?,
+        layout: match p.get("layout") {
+            None | Some(Value::Null) => None,
+            Some(v) if v.is_object() => Some(v.clone()),
+            Some(_) => return Err(RpcError::new(INVALID_PARAMS, "layout must be a layout or null")),
+        },
+    })
+}
+
+fn zones_apply(p: &Value) -> Result<Command, RpcError> {
+    Ok(Command::ZonesApply {
+        number: screen_param(p)?,
+        layout: match p.get("layout") {
+            Some(Value::Null) => None,
+            Some(Value::String(s)) => Some(s.clone()),
+            _ => return Err(RpcError::new(INVALID_PARAMS, "layout must be a layout id or name, or null")),
+        },
     })
 }
 

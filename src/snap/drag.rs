@@ -164,45 +164,7 @@ impl Engine {
             drag.keys.part = None;
         }
         let zoned = show && beside.is_none();
-        let view =
-            zoned.then(|| drag.geometry.iter().position(|g| g.bounds.contains(pt.x, pt.y))).flatten().map(|screen| {
-                let cell = zones::zone_at(&drag.geometry[screen].cells, pt.x, pt.y);
-                let hit = cell.map(|zone| {
-                    // Tab's choice holds while the pointer stays in the zone it was made in.
-                    if drag.keys.cycle_at != Some((screen, zone)) {
-                        drag.keys.cycle = 0;
-                    }
-                    // An arrow's side holds in its zone, or the first zone the pointer enters
-                    // after it; elsewhere the side follows the pointer.
-                    if drag.keys.side.is_some() && drag.keys.side_at.is_none() {
-                        drag.keys.side_at = Some((screen, zone));
-                    }
-                    if drag.keys.side_at != Some((screen, zone)) {
-                        drag.keys.side = None;
-                    }
-                    if drag.keys.cycle > 0 {
-                        let list = dragkeys::candidates(&drag.geometry[screen].cells, zone, (pt.x, pt.y));
-                        return list[drag.keys.cycle.min(list.len() - 1)];
-                    }
-                    if !span {
-                        drag.anchor = None;
-                        return (zone, zone);
-                    }
-                    match drag.anchor {
-                        Some((s, from)) if s == screen => (from, zone),
-                        _ => {
-                            drag.anchor = Some((screen, zone));
-                            (zone, zone)
-                        }
-                    }
-                });
-                let g = &drag.geometry[screen];
-                let cut = hit.zip(drag.keys.part).map(|((a, b), part)| {
-                    let r = zones::span(g.zones[a.min(b)], g.zones[a.max(b)]);
-                    (part, drag.keys.side.unwrap_or_else(|| dragkeys::nearest_side(r, (pt.x, pt.y))))
-                });
-                View { screen, hit, cut }
-            });
+        let view = if zoned { Self::zone_view(&mut drag, pt, span) } else { None };
         let (view, beside) = match beside {
             Some((b, view)) => (view, Some(b)),
             None => (view, None),
@@ -212,6 +174,48 @@ impl Engine {
             self.present(&mut drag, view, beside);
         }
         self.drag = Some(drag);
+    }
+
+    /// The zones lit under the pointer, with the keys' choice of zone and share applied.
+    fn zone_view(drag: &mut Drag, pt: POINT, span: bool) -> Option<View> {
+        drag.geometry.iter().position(|g| g.bounds.contains(pt.x, pt.y)).map(|screen| {
+            let cell = zones::zone_at(&drag.geometry[screen].cells, pt.x, pt.y);
+            let hit = cell.map(|zone| {
+                // Tab's choice holds while the pointer stays in the zone it was made in.
+                if drag.keys.cycle_at != Some((screen, zone)) {
+                    drag.keys.cycle = 0;
+                }
+                // An arrow's side holds in its zone, or the first zone the pointer enters
+                // after it; elsewhere the side follows the pointer.
+                if drag.keys.side.is_some() && drag.keys.side_at.is_none() {
+                    drag.keys.side_at = Some((screen, zone));
+                }
+                if drag.keys.side_at != Some((screen, zone)) {
+                    drag.keys.side = None;
+                }
+                if drag.keys.cycle > 0 {
+                    let list = dragkeys::candidates(&drag.geometry[screen].cells, zone, (pt.x, pt.y));
+                    return list[drag.keys.cycle.min(list.len() - 1)];
+                }
+                if !span {
+                    drag.anchor = None;
+                    return (zone, zone);
+                }
+                match drag.anchor {
+                    Some((s, from)) if s == screen => (from, zone),
+                    _ => {
+                        drag.anchor = Some((screen, zone));
+                        (zone, zone)
+                    }
+                }
+            });
+            let g = &drag.geometry[screen];
+            let cut = hit.zip(drag.keys.part).map(|((a, b), part)| {
+                let r = zones::span(g.zones[a.min(b)], g.zones[a.max(b)]);
+                (part, drag.keys.side.unwrap_or_else(|| dragkeys::nearest_side(r, (pt.x, pt.y))))
+            });
+            View { screen, hit, cut }
+        })
     }
 
     fn hide_all(&self) {

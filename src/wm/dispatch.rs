@@ -6,57 +6,9 @@ impl Wm {
     pub(super) fn run(&mut self, command: Command) {
         match command {
             Command::Configure { owner, focus_border, focus_color, pin_color, notify_close } => {
-                // A window manager found before the tray first said who it is.
-                let first = self.owner == 0;
-                self.owner = owner;
-                self.notify_close = notify_close;
-                if first && self.other_wm.is_some() {
-                    self.tell_tray();
-                }
-                self.focus_accent = palette::colour(&focus_color, FOCUS_DEFAULT) == Colour::Accent;
-                self.pin_accent = palette::colour(&pin_color, PIN_DEFAULT) == Colour::Accent;
-                let focus_colour = palette::resolve(&focus_color, FOCUS_DEFAULT);
-                let pin_colour = palette::resolve(&pin_color, PIN_DEFAULT);
-                let (focus_changed, pin_changed) =
-                    (focus_colour != self.focus_colour, first || pin_colour != self.pin_colour);
-                (self.focus_colour, self.pin_colour) = (focus_colour, pin_colour);
-                let was_on = self.focus_border;
-                self.focus_border = focus_border;
-                self.sync_hooks();
-                if pin_changed {
-                    // None gives the pinned windows' borders back. Otherwise this is also where
-                    // a tray that starts again gives adopted pins their colour.
-                    self.paint_pins();
-                }
-                if !focus_border {
-                    if let Some(old) = self.bordered.take() {
-                        reset_border(hwnd_of(old));
-                    }
-                } else if !was_on || focus_changed || pin_changed {
-                    match self.focus_colour {
-                        Some(_) if self.bordered.is_some() && !pin_changed => self.paint_focus(),
-                        Some(_) => self.border(unsafe { GetForegroundWindow() }),
-                        None => {
-                            if let Some(old) = self.bordered.take() {
-                                reset_border(hwnd_of(old));
-                            }
-                        }
-                    }
-                }
+                self.on_configure(owner, focus_border, (&focus_color, &pin_color), notify_close)
             }
-            Command::Pin { kind, on, hwnd, reply } => {
-                let result = self.pin(kind, on, hwnd_of(hwnd));
-                match (result, reply) {
-                    (Ok(on), Some(tx)) => {
-                        let _ = tx.send(Ok(json!({ "on": on })));
-                    }
-                    (Err(why), Some(tx)) => {
-                        let _ = tx.send(Err(RpcError::new(api::REFUSED, why)));
-                    }
-                    (Ok(on), None) => log::info!("pin {kind:?}: {}", if on { "on" } else { "off" }),
-                    (Err(why), None) => log::info!("pin {kind:?}: {why}"),
-                }
-            }
+            Command::Pin { kind, on, hwnd, reply } => self.on_pin(kind, on, hwnd, reply),
             Command::AccentChanged => {
                 if self.focus_accent {
                     self.focus_colour = palette::resolve("accent", FOCUS_DEFAULT);
@@ -109,6 +61,65 @@ impl Wm {
                     self.sync_hooks();
                 }
             }
+        }
+    }
+
+    fn on_configure(
+        &mut self,
+        owner: isize,
+        focus_border: bool,
+        (focus_color, pin_color): (&str, &str),
+        notify_close: bool,
+    ) {
+        // A window manager found before the tray first said who it is.
+        let first = self.owner == 0;
+        self.owner = owner;
+        self.notify_close = notify_close;
+        if first && self.other_wm.is_some() {
+            self.tell_tray();
+        }
+        self.focus_accent = palette::colour(focus_color, FOCUS_DEFAULT) == Colour::Accent;
+        self.pin_accent = palette::colour(pin_color, PIN_DEFAULT) == Colour::Accent;
+        let focus_colour = palette::resolve(focus_color, FOCUS_DEFAULT);
+        let pin_colour = palette::resolve(pin_color, PIN_DEFAULT);
+        let (focus_changed, pin_changed) = (focus_colour != self.focus_colour, first || pin_colour != self.pin_colour);
+        (self.focus_colour, self.pin_colour) = (focus_colour, pin_colour);
+        let was_on = self.focus_border;
+        self.focus_border = focus_border;
+        self.sync_hooks();
+        if pin_changed {
+            // None gives the pinned windows' borders back. Otherwise this is also where
+            // a tray that starts again gives adopted pins their colour.
+            self.paint_pins();
+        }
+        if !focus_border {
+            if let Some(old) = self.bordered.take() {
+                reset_border(hwnd_of(old));
+            }
+        } else if !was_on || focus_changed || pin_changed {
+            match self.focus_colour {
+                Some(_) if self.bordered.is_some() && !pin_changed => self.paint_focus(),
+                Some(_) => self.border(unsafe { GetForegroundWindow() }),
+                None => {
+                    if let Some(old) = self.bordered.take() {
+                        reset_border(hwnd_of(old));
+                    }
+                }
+            }
+        }
+    }
+
+    fn on_pin(&mut self, kind: PinKind, on: Option<bool>, hwnd: isize, reply: Option<Sender<Reply>>) {
+        let result = self.pin(kind, on, hwnd_of(hwnd));
+        match (result, reply) {
+            (Ok(on), Some(tx)) => {
+                let _ = tx.send(Ok(json!({ "on": on })));
+            }
+            (Err(why), Some(tx)) => {
+                let _ = tx.send(Err(RpcError::new(api::REFUSED, why)));
+            }
+            (Ok(on), None) => log::info!("pin {kind:?}: {}", if on { "on" } else { "off" }),
+            (Err(why), None) => log::info!("pin {kind:?}: {why}"),
         }
     }
 

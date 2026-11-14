@@ -250,7 +250,7 @@ unsafe extern "system" fn key_proc(code: i32, wparam: WPARAM, lparam: LPARAM) ->
             let i = (key.vkCode & 0xFF) as usize;
             let up = matches!(wparam.0 as u32, WM_KEYUP | WM_SYSKEYUP);
             let since = if up { 0 } else { key.time.wrapping_sub(PRESSED_AT[i].swap(key.time, Ordering::Relaxed)) };
-            let live = LIVE.load(Ordering::Relaxed);
+            let (drag, live) = drag_and_live();
             let ours = !up
                 && live != 0
                 && live == MINE.get()
@@ -273,7 +273,7 @@ unsafe extern "system" fn key_proc(code: i32, wparam: WPARAM, lparam: LPARAM) ->
                     return LRESULT(1);
                 }
                 rules::Verdict::Post => {
-                    post(key.vkCode);
+                    post(key.vkCode, drag);
                     return LRESULT(1);
                 }
             }
@@ -294,12 +294,19 @@ unsafe fn foreign_modifier(vk: u32) -> bool {
     }
 }
 
-/// Post a key or the wheel to the drag, with the drag's id.
-unsafe fn post(vk: u32) {
+/// The drag's id, then the live generation. A drag's id is set before it goes live
+/// and after the drag before stopped being live, so a key the old drag's live value
+/// let through can't carry the new drag's id; at worst one carries the old id and is dropped.
+fn drag_and_live() -> (u64, u64) {
+    let drag = DRAG.load(Ordering::SeqCst);
+    (drag, LIVE.load(Ordering::SeqCst))
+}
+
+/// Post a key or the wheel to the drag, with the id read along with its live state.
+unsafe fn post(vk: u32, drag: u64) {
     unsafe {
         let owner = HWND(OWNER.load(Ordering::Relaxed) as *mut _);
-        let drag = DRAG.load(Ordering::Relaxed) as isize;
-        let _ = PostMessageW(Some(owner), WM_APP_DRAG_KEY, WPARAM(vk as usize), LPARAM(drag));
+        let _ = PostMessageW(Some(owner), WM_APP_DRAG_KEY, WPARAM(vk as usize), LPARAM(drag as isize));
     }
 }
 
@@ -339,7 +346,7 @@ unsafe extern "system" fn mouse_proc(code: i32, wparam: WPARAM, lparam: LPARAM) 
                 released();
                 return LRESULT(1);
             }
-            let live = LIVE.load(Ordering::Relaxed);
+            let (drag, live) = drag_and_live();
             if live != 0 && live == MINE.get() && !ESC_ONLY.load(Ordering::Relaxed) {
                 let what = match msg {
                     WM_MOUSEWHEEL if foreign_modifier(WHEEL_NEXT) => None,
@@ -354,7 +361,7 @@ unsafe extern "system" fn mouse_proc(code: i32, wparam: WPARAM, lparam: LPARAM) 
                     _ => None,
                 };
                 if let Some(what) = what {
-                    post(what);
+                    post(what, drag);
                     return LRESULT(1);
                 }
             }
@@ -442,8 +449,10 @@ unsafe fn serve(generation: u64) {
                 }
             } else if timer != 0 && timer == cap {
                 log::info!("drag keys: the hook took itself out at the cap");
-                // Gone, whether its drag is over or a new one has it, so neither keeps it.
-                let gone = |w: u64| (w == 0 || w == generation).then_some(generation | rules::GONE);
+                // Gone, whether its drag is over, a new one has it, or the word still holds
+                // an earlier thread's going, so no drag ends or takes it over after this.
+                let theirs_gone = |w: u64| w & rules::GONE != 0;
+                let gone = |w: u64| (w == 0 || w == generation || theirs_gone(w)).then_some(generation | rules::GONE);
                 let _ = IDLE.try_update(Ordering::SeqCst, Ordering::SeqCst, gone);
                 // The drag hears of it, so its strip goes and the hook isn't put back.
                 let owner = HWND(OWNER.load(Ordering::SeqCst) as *mut _);

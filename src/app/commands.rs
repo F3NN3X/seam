@@ -85,26 +85,8 @@ pub(super) fn align_finished(app: &mut App) {
 
 /// Run one command and answer it, unless a worker will answer it later.
 pub(super) fn run_command(app: &mut App, queued: Queued) {
-    let ok = || Ok(json!({ "ok": true }));
     let Queued { command, reply, panel } = queued;
     let result = match command {
-        Command::ConfigPatch(patch) => patch_config(app, &patch),
-        Command::RemapSet(on) => {
-            set_remap(app, on);
-            Ok(json!({ "on": on }))
-        }
-        Command::ZonesSet(on) => {
-            app.cfg.zones.enabled = on;
-            persist(app);
-            snap::update(app.hwnd, &app.cfg, &app.sig, &app.mons, aside(app).as_deref());
-            publish(app);
-            Ok(json!({ "on": on }))
-        }
-        Command::LineupStart if overlay::is_active() => busy("Line Up is already open"),
-        Command::LineupStart => {
-            start_lineup(app);
-            ok()
-        }
         Command::ArrangementAlign => {
             if let Some(refusal) = start_align(app, reply.clone()) {
                 let _ = reply.send(refusal);
@@ -124,13 +106,6 @@ pub(super) fn run_command(app: &mut App, queued: Queued) {
         {
             Err(RpcError::new(api::NOT_FOUND, "no such screen"))
         }
-        Command::ZonesQuick(Some(number)) if number.checked_sub(1).and_then(|i| app.mons.get(i as usize)).is_none() => {
-            Err(RpcError::new(api::NOT_FOUND, "no such screen"))
-        }
-        Command::ZonesQuick(number) => match tile::open_quick_layout(app, number, true) {
-            Ok(()) => ok(),
-            Err(why) => refused(why),
-        },
         Command::ZonesPick { number, layout } => {
             tile::pick_layout(app, number, layout, None, reply);
             return;
@@ -144,6 +119,86 @@ pub(super) fn run_command(app: &mut App, queued: Queued) {
             tile::start_from_windows(app, at, reply);
             return;
         }
+        Command::Window(verb, dir) => {
+            start_window(app, verb, dir, Some(reply));
+            return;
+        }
+        Command::WindowFocusOnly(scope) => {
+            start_focus_only(app, scope, Some(reply));
+            return;
+        }
+        Command::WindowGroup(verb) => {
+            start_group(app, verb, Some(reply));
+            return;
+        }
+        Command::WindowShare { hwnd, axis, fraction } => {
+            share::start_share(app, hwnd, GroupVerb::Share { axis, fraction, side: None }, Some(reply));
+            return;
+        }
+        Command::WindowFit { hwnd } => {
+            fit_group(app, hwnd, Some(reply));
+            return;
+        }
+        Command::WindowPin { kind, on } => {
+            wm::pin(kind, on, unsafe { GetForegroundWindow() }.0 as isize, Some(reply));
+            return;
+        }
+        Command::WmRelease => {
+            wm::release(Some(reply));
+            return;
+        }
+        Command::WorkspaceStatus { id } => match desk_workspaces(app).into_iter().find(|w| w.id == id) {
+            Some(ws) => {
+                live::answer_status(live_of(app, ws), reply);
+                return;
+            }
+            None => Err(RpcError::new(api::NOT_FOUND, "no such workspace on this desk")),
+        },
+        Command::WorkspaceQuickSave => {
+            if let Some(refusal) = quick_save(app, Some(reply.clone())) {
+                let _ = reply.send(refusal);
+            }
+            return;
+        }
+        Command::WorkspaceCapture { name, into, row, pick } => {
+            if let Some(refusal) = start_capture(app, name, into, row, pick, Some(reply.clone())) {
+                let _ = reply.send(refusal);
+            }
+            return;
+        }
+        other => command_result(app, other, panel),
+    };
+    let _ = reply.send(result);
+}
+
+/// The commands the tray thread answers itself, without handing the reply on.
+fn command_result(app: &mut App, command: Command, panel: bool) -> Reply {
+    let ok = || Ok(json!({ "ok": true }));
+    match command {
+        Command::ConfigPatch(patch) => patch_config(app, &patch),
+        Command::RemapSet(on) => {
+            set_remap(app, on);
+            Ok(json!({ "on": on }))
+        }
+        Command::ZonesSet(on) => {
+            app.cfg.zones.enabled = on;
+            persist(app);
+            snap::update(app.hwnd, &app.cfg, &app.sig, &app.mons, aside(app).as_deref());
+            publish(app);
+            Ok(json!({ "on": on }))
+        }
+        Command::LineupStart if overlay::is_active() => busy("Line Up is already open"),
+        Command::LineupStart => {
+            start_lineup(app);
+            ok()
+        }
+        Command::ZonesQuick(Some(number)) if number.checked_sub(1).and_then(|i| app.mons.get(i as usize)).is_none() => {
+            Err(RpcError::new(api::NOT_FOUND, "no such screen"))
+        }
+        Command::ZonesQuick(number) => match tile::open_quick_layout(app, number, true) {
+            Ok(()) => ok(),
+            Err(why) => refused(why),
+        },
         Command::ScreenIdentify(number) => match number.checked_sub(1).and_then(|i| app.mons.get(i as usize)) {
             Some(mon) => {
                 identify::show(number, mon.rect);
@@ -174,40 +229,12 @@ pub(super) fn run_command(app: &mut App, queued: Queued) {
             Ok(()) => ok(),
             Err(why) => refused(why),
         },
-        Command::Window(verb, dir) => {
-            start_window(app, verb, dir, Some(reply));
-            return;
-        }
-        Command::WindowFocusOnly(scope) => {
-            start_focus_only(app, scope, Some(reply));
-            return;
-        }
         Command::WindowSpotlight(on) => {
             let now = set_spotlight(app, on);
             Ok(json!({ "on": now, "resumes": app.spotlight_resume }))
         }
         Command::SeamPause(on) => Ok(json!({ "paused": set_paused(app, on) })),
-        Command::WindowGroup(verb) => {
-            start_group(app, verb, Some(reply));
-            return;
-        }
-        Command::WindowShare { hwnd, axis, fraction } => {
-            share::start_share(app, hwnd, GroupVerb::Share { axis, fraction, side: None }, Some(reply));
-            return;
-        }
         Command::WindowUngroup { hwnd } => share::take_out(hwnd),
-        Command::WindowFit { hwnd } => {
-            fit_group(app, hwnd, Some(reply));
-            return;
-        }
-        Command::WindowPin { kind, on } => {
-            wm::pin(kind, on, unsafe { GetForegroundWindow() }.0 as isize, Some(reply));
-            return;
-        }
-        Command::WmRelease => {
-            wm::release(Some(reply));
-            return;
-        }
         Command::SessionRestore => match saved_session(app) {
             Some(session) => restore_session(app, session.workspace()),
             None => Err(RpcError::new(api::NOT_FOUND, "No last session is saved for this desk")),
@@ -216,22 +243,9 @@ pub(super) fn run_command(app: &mut App, queued: Queued) {
             start_switch(app, id.as_deref(), name.as_deref(), alongside)
         }
         Command::WorkspaceUpdate { id, workspace } => update_workspace(app, &id, workspace),
-        Command::WorkspaceStatus { id } => match desk_workspaces(app).into_iter().find(|w| w.id == id) {
-            Some(ws) => {
-                live::answer_status(live_of(app, ws), reply);
-                return;
-            }
-            None => Err(RpcError::new(api::NOT_FOUND, "no such workspace on this desk")),
-        },
         Command::WorkspaceSnapBack => snap_back(app),
         Command::WorkspaceSwitchBack => switch_back(app),
         Command::WorkspaceSetDefault(id) => set_default(app, id),
-        Command::WorkspaceQuickSave => {
-            if let Some(refusal) = quick_save(app, Some(reply.clone())) {
-                let _ = reply.send(refusal);
-            }
-            return;
-        }
         Command::CursorEasingSet(on) => set_cursor_easing(app, on),
         Command::AutoApplySet(on) => {
             app.cfg.auto_apply = on;
@@ -240,16 +254,9 @@ pub(super) fn run_command(app: &mut App, queued: Queued) {
             publish(app);
             Ok(json!({ "on": on }))
         }
-        Command::WorkspaceCapture { name, into, row, pick } => {
-            if let Some(refusal) = start_capture(app, name, into, row, pick, Some(reply.clone())) {
-                let _ = reply.send(refusal);
-            }
-            return;
-        }
         // Answered on the client's own thread.
         _ => Err(RpcError::new(api::METHOD_NOT_FOUND, "not a tray command")),
-    };
-    let _ = reply.send(result);
+    }
 }
 
 pub(super) fn drain_api(app: &mut App) {

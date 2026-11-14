@@ -80,7 +80,8 @@ impl Engine {
                 }
             }
         }
-        self.pending = Some(Pending { hwnd: hwnd.0 as isize, target, before, steps, retries: 0, quiet, maximize, timer: 0 });
+        self.pending =
+            Some(Pending { hwnd: hwnd.0 as isize, target, before, steps, retries: 0, quiet, maximize, timer: 0 });
         self.advance_step();
         unsafe {
             let _ = PostMessageW(Some(hwnd_of(self.owner)), WM_APP_WINDOWS_CHANGED, WPARAM(0), LPARAM(0));

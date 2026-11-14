@@ -1131,6 +1131,15 @@ Set a key for **Pause Seam** on Shortcuts and a key for **Spotlight**, turn on *
 - [ ] **Paused, then a game.** Pause Seam, start a game, leave it, then resume. Nothing is left unregistered: every shortcut works after the resume. A shortcut another app holds still shows as taken on Shortcuts.
 - [ ] **The setting off.** Turn **Step aside for games and full-screen apps** off. A full-screen app in front changes nothing: the shortcuts stay registered and Shift-drag shows zones. Pause Seam still works. Turn it on with a game in front: Seam steps aside at once.
 
+## Quick fixes
+
+- [ ] **Sign-in timer with Do nothing.** With every desk on **Do nothing**, sign out and in (or start Seam with `--autostart`). With **Debug log** on, no sign-in line appears and no 3-minute wait is logged. Then set one desk to **Open a workspace** within 3 minutes of the start: the workspace opens or is offered as before.
+- [ ] **A refused pin.** Add an app rule with **Keep on top** for an app that runs as administrator. The log has one line that the window thread refused it. Open or close other windows: no more such lines for that window. Close the app and open it again: one more try, one line.
+- [ ] **Undo of Tile with a maximized window.** Maximize a window on a screen with zones, press Tile, then click Undo in the notice. The window is back and maximized on that screen. Repeat with a layout pick on the Zones page, and with a split by the drag's keys.
+- [ ] **Apply layout key.** With Stream Deck open and the key on a screen, the plugin log shows one `zones.layouts` call when the key appears, none on redraws (change another key's state or desk), and one again after pressing the key or giving a screen another layout on the Zones page.
+- [ ] **Alt+drag at quit.** With Alt+drag on, hold a window with Alt and the left button, quit Seam from the tray, and let go 1 second later. The app under the pointer gets no stray click or release. A release after 2 seconds may reach it.
+- [ ] **Ease value missing.** On a Windows 11 build from 22557, delete `CursorDeadzoneJumpingSetting` under `HKCU\Control Panel\Cursors` and start Seam. The log has one line that the value is missing and read as on, and only one however many times it is read.
+
 ## Report back
 
 For each failure, give the step, what you saw, and the matching lines from `seam.log`.

@@ -200,6 +200,8 @@ struct Dragging {
     solved: Option<(zones::Node, Vec<Rect>)>,
     moves: u32,
     longest: Duration,
+    /// The id the drag-keys hook gave it, which its Esc carries.
+    keys: u64,
 }
 
 struct State {
@@ -549,10 +551,10 @@ impl State {
             solved: None,
             moves: 0,
             longest: Duration::ZERO,
+            // Esc is the drag's, so it doesn't reach the focused app as well.
+            keys: dragkeys::start_esc(self.owner.0 as isize),
         });
         DRAGGING.store(true, Ordering::SeqCst);
-        // Esc is the drag's, so it doesn't reach the focused app as well.
-        dragkeys::start_esc(self.owner.0 as isize);
         unsafe {
             let _ = SetCapture(hwnd);
             SetTimer(Some(self.owner), TIMER_FOLLOW, FOLLOW_MS, None);
@@ -704,7 +706,11 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
             }
             // Esc from the drag-keys hook, which swallowed it: the drag goes back.
             dragkeys::WM_APP_DRAG_KEY if wparam.0 == usize::from(VK_ESCAPE.0) => {
-                with_state(|s| s.release(false));
+                with_state(|s| {
+                    if s.drag.as_ref().is_some_and(|d| d.keys == lparam.0 as u64) {
+                        s.release(false);
+                    }
+                });
             }
             WM_RBUTTONUP => menu::handle_menu(hwnd),
             WM_CLOSE if with_state(|s| s.owner == hwnd) == Some(true) => {

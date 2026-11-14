@@ -339,7 +339,11 @@ impl Engine {
             return;
         }
         let Some(key) = dragkeys::key_of(vk) else { return };
-        let Some(drag) = self.drag.as_mut().filter(|d| (d.shown.is_some() || d.beside.is_some()) && !d.keys.off) else {
+        // A key meant for the drag before, which this one's hook took over, is about nothing now.
+        let this = |d: &&mut Drag| d.keys.hooked && d.keys.generation == generation;
+        let Some(drag) =
+            self.drag.as_mut().filter(|d| (d.shown.is_some() || d.beside.is_some()) && !d.keys.off).filter(this)
+        else {
             return;
         };
         let name = dragkeys::name(key);

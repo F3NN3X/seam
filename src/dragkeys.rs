@@ -18,8 +18,10 @@ use windows::Win32::System::Threading::GetCurrentThreadId;
 use windows::Win32::UI::Input::KeyboardAndMouse::*;
 use windows::Win32::UI::WindowsAndMessaging::*;
 
+mod rules;
+
 /// A key for the drag, with its virtual-key code in wparam, or 0 when the hook
-/// took itself out at the cap, with its generation in lparam.
+/// took itself out at the cap, with the drag's id from `start` in lparam.
 pub const WM_APP_DRAG_KEY: u32 = WM_APP + 32;
 /// The hook takes itself out after this long, even if the drag never ends.
 const CAP_MS: u32 = 60_000;
@@ -51,9 +53,16 @@ const WHEEL_NEXT: u32 = 0x1001;
 const WHEEL_BACK: u32 = 0x1002;
 const OTHER_BUTTON: u32 = 0x1003;
 
-/// The generation of a hook whose drag is over, which the next drag takes over, or 0.
-/// Whoever swaps it to 0 decides: the hook's thread to go, or a new drag to keep it.
+/// When each key was last pressed, by the hook's clock, to tell a repeat from a new press.
+static PRESSED_AT: [AtomicU32; 256] = [const { AtomicU32::new(0) }; 256];
+
+/// The generation of a hook whose drag is over, which the next drag takes over, or 0
+/// while a drag has it, or with `rules::GONE` once it decided to go. Only the rules'
+/// moves change it, so a takeover and the thread going can't both happen.
 static IDLE: AtomicU64 = AtomicU64::new(0);
+/// The id of the drag the hook serves now, which each key and the cap's message carry,
+/// so the tray drops what was meant for the drag before.
+static DRAG: AtomicU64 = AtomicU64::new(0);
 
 thread_local! {
     /// The generation of the hook on this thread.
@@ -165,7 +174,7 @@ pub struct Steer {
     pub off: bool,
     /// The hook is in for this drag.
     pub hooked: bool,
-    /// The generation `start` gave this drag's hook.
+    /// The id `start` gave this drag, which its keys carry.
     pub generation: u64,
     /// The hook took itself out at the cap, so it isn't put back for this drag.
     pub capped: bool,
@@ -238,23 +247,35 @@ unsafe extern "system" fn key_proc(code: i32, wparam: WPARAM, lparam: LPARAM) ->
     unsafe {
         if code >= 0 {
             let key = &*(lparam.0 as *const KBDLLHOOKSTRUCT);
-            let slot = &DOWN[(key.vkCode & 0xFF) as usize];
+            let i = (key.vkCode & 0xFF) as usize;
             let up = matches!(wparam.0 as u32, WM_KEYUP | WM_SYSKEYUP);
-            if up && slot.swap(false, Ordering::Relaxed) {
-                released();
-                return LRESULT(1);
-            }
-            // A held key repeats its press: swallow it, but it steered only once.
-            if !up && slot.load(Ordering::Relaxed) {
-                return LRESULT(1);
-            }
+            let since = if up { 0 } else { key.time.wrapping_sub(PRESSED_AT[i].swap(key.time, Ordering::Relaxed)) };
             let live = LIVE.load(Ordering::Relaxed);
-            let ours = key_of(key.vkCode).is_some_and(|k| k == Key::Cancel || !ESC_ONLY.load(Ordering::Relaxed));
-            if !up && live != 0 && live == MINE.get() && ours && !foreign_modifier(key.vkCode) {
-                slot.store(true, Ordering::Relaxed);
-                let owner = HWND(OWNER.load(Ordering::Relaxed) as *mut _);
-                let _ = PostMessageW(Some(owner), WM_APP_DRAG_KEY, WPARAM(key.vkCode as usize), LPARAM(0));
-                return LRESULT(1);
+            let ours = !up
+                && live != 0
+                && live == MINE.get()
+                && rules::ours(key_of(key.vkCode), ESC_ONLY.load(Ordering::Relaxed));
+            let e = rules::KeyIn {
+                up,
+                held: DOWN[i].load(Ordering::Relaxed),
+                since,
+                ours,
+                foreign: ours && foreign_modifier(key.vkCode),
+            };
+            let (verdict, held) = rules::key(e);
+            DOWN[i].store(held, Ordering::Relaxed);
+            match verdict {
+                rules::Verdict::Pass => {}
+                rules::Verdict::Swallow => {
+                    if up {
+                        released();
+                    }
+                    return LRESULT(1);
+                }
+                rules::Verdict::Post => {
+                    post(key.vkCode);
+                    return LRESULT(1);
+                }
             }
         }
         CallNextHookEx(None, code, wparam, lparam)
@@ -269,24 +290,29 @@ unsafe fn foreign_modifier(vk: u32) -> bool {
         let ctrl = (pressed(VK_CONTROL), CTRL_OK.load(Ordering::Relaxed));
         let alt = (pressed(VK_MENU), ALT_OK.load(Ordering::Relaxed));
         let win = (pressed(VK_LWIN) || pressed(VK_RWIN), WIN_OK.load(Ordering::Relaxed));
-        foreign(vk, ctrl, alt, win)
+        rules::foreign(vk == u32::from(VK_TAB.0), ctrl, alt, win)
     }
 }
 
-/// Ctrl, Alt or Win is held and isn't the drag's own key, so what comes with it is
-/// the app's: Ctrl+wheel zoom. Tab with Alt held is Windows' Alt+Tab, even when Alt
-/// is the drag's own key. Each modifier is (held, the drag's own).
-fn foreign(vk: u32, ctrl: (bool, bool), alt: (bool, bool), win: (bool, bool)) -> bool {
-    let theirs = |(held, own): (bool, bool)| held && !own;
-    theirs(ctrl) || theirs(win) || (alt.0 && (!alt.1 || vk == u32::from(VK_TAB.0)))
+/// Post a key or the wheel to the drag, with the drag's id.
+unsafe fn post(vk: u32) {
+    unsafe {
+        let owner = HWND(OWNER.load(Ordering::Relaxed) as *mut _);
+        let drag = DRAG.load(Ordering::Relaxed) as isize;
+        let _ = PostMessageW(Some(owner), WM_APP_DRAG_KEY, WPARAM(vk as usize), LPARAM(drag));
+    }
+}
+
+/// The hook's thread decides to go, unless a new drag took it over meanwhile.
+fn go(generation: u64) -> bool {
+    IDLE.try_update(Ordering::SeqCst, Ordering::SeqCst, |w| rules::go(w, generation)).is_ok()
 }
 
 /// A swallowed release came. A hook whose drag is over and whose linger ended goes
 /// once it owes none, unless a new drag took it over.
 unsafe fn released() {
     unsafe {
-        let mine = MINE.get();
-        if DRAINING.get() && !owes() && IDLE.compare_exchange(mine, 0, Ordering::SeqCst, Ordering::SeqCst).is_ok() {
+        if DRAINING.get() && !owes() && go(MINE.get()) {
             PostQuitMessage(0);
         }
     }
@@ -328,8 +354,7 @@ unsafe extern "system" fn mouse_proc(code: i32, wparam: WPARAM, lparam: LPARAM) 
                     _ => None,
                 };
                 if let Some(what) = what {
-                    let owner = HWND(OWNER.load(Ordering::Relaxed) as *mut _);
-                    let _ = PostMessageW(Some(owner), WM_APP_DRAG_KEY, WPARAM(what as usize), LPARAM(0));
+                    post(what);
                     return LRESULT(1);
                 }
             }
@@ -360,7 +385,10 @@ fn run(generation: u64) {
                     if let Ok(mouse) = mouse {
                         let _ = UnhookWindowsHookEx(mouse);
                     }
-                    clear_down();
+                    // A newer hook owns what is down now.
+                    if WANTED.load(Ordering::SeqCst) == generation {
+                        clear_down();
+                    }
                 }
                 Err(e) => log::info!("drag keys: no keyboard hook: {e}"),
             }
@@ -376,50 +404,51 @@ unsafe fn serve(generation: u64) {
     unsafe {
         let mut msg = MSG::default();
         let cap = SetTimer(None, 0, CAP_MS, None);
-        let (mut linger, mut hold) = (0, 0);
-        // Only the hook's thread decides to go while its drag is over, and only by this swap.
-        let go = || IDLE.compare_exchange(generation, 0, Ordering::SeqCst, Ordering::SeqCst).is_ok();
+        let (mut linger, mut hold, mut extended) = (0, 0, false);
         while WANTED.load(Ordering::SeqCst) == generation && GetMessageW(&mut msg, None, 0, 0).as_bool() {
             let timer = if msg.message == WM_TIMER && msg.hwnd.is_invalid() { msg.wParam.0 } else { 0 };
             if msg.message == MSG_LINGER {
                 linger = SetTimer(None, linger, LINGER_MS, None);
             } else if msg.message == MSG_TAKEN {
-                // A new drag: the hook starts over, with a full cap.
+                // A new drag: the hook starts over, and the cap is pushed back once.
                 DRAINING.set(false);
                 for t in [linger, hold].into_iter().filter(|t| *t != 0) {
                     let _ = KillTimer(None, t);
                 }
                 (linger, hold) = (0, 0);
-                SetTimer(None, cap, CAP_MS, None);
+                if rules::extend_cap(extended) {
+                    SetTimer(None, cap, CAP_MS, None);
+                    extended = true;
+                }
             } else if timer != 0 && timer == linger {
                 let _ = KillTimer(None, linger);
                 linger = 0;
-                // A new drag took it over meanwhile.
-                if IDLE.load(Ordering::SeqCst) != generation {
-                    continue;
-                }
-                if !owes() {
-                    if go() {
-                        break;
+                let mine = IDLE.load(Ordering::SeqCst) == generation;
+                match rules::linger_ended(mine, owes()) {
+                    rules::AfterLinger::Taken => {}
+                    rules::AfterLinger::Go if go(generation) => break,
+                    rules::AfterLinger::Go => {}
+                    rules::AfterLinger::Hold => {
+                        DRAINING.set(true);
+                        hold = SetTimer(None, hold, HOLD_MS, None);
                     }
-                    continue;
                 }
-                // A key is still held: its release ends the hook, or the hold's end does.
-                DRAINING.set(true);
-                hold = SetTimer(None, hold, HOLD_MS, None);
             } else if timer != 0 && timer == hold {
                 let _ = KillTimer(None, hold);
                 hold = 0;
-                if go() {
+                if go(generation) {
                     log::info!("drag keys: a key held past the drop went back to the apps after 5 s");
                     break;
                 }
             } else if timer != 0 && timer == cap {
-                log::info!("drag keys: the hook took itself out after 60 s");
-                go();
+                log::info!("drag keys: the hook took itself out at the cap");
+                // Gone, whether its drag is over or a new one has it, so neither keeps it.
+                let gone = |w: u64| (w == 0 || w == generation).then_some(generation | rules::GONE);
+                let _ = IDLE.try_update(Ordering::SeqCst, Ordering::SeqCst, gone);
                 // The drag hears of it, so its strip goes and the hook isn't put back.
                 let owner = HWND(OWNER.load(Ordering::SeqCst) as *mut _);
-                let _ = PostMessageW(Some(owner), WM_APP_DRAG_KEY, WPARAM(0), LPARAM(generation as isize));
+                let drag = DRAG.load(Ordering::SeqCst) as isize;
+                let _ = PostMessageW(Some(owner), WM_APP_DRAG_KEY, WPARAM(0), LPARAM(drag));
                 break;
             } else {
                 let _ = TranslateMessage(&msg);
@@ -437,16 +466,16 @@ fn clear_down() {
 /// Put the hook in for a drag, its keys going to `owner`, or take over the one still
 /// lingering after the last drag. `own` says whether Ctrl, Alt and Win are the drag's
 /// own keys. It passes every key through until `set_live` says zones show. Returns
-/// its generation, which the cap's message carries.
+/// the drag's id, which its keys and the cap's message carry.
 pub fn start(owner: isize, own: (bool, bool, bool)) -> u64 {
     begin(owner, own, false)
 }
 
 /// Put the hook in for a divider handle's drag, which takes Esc only, live at once.
 pub fn start_esc(owner: isize) -> u64 {
-    let generation = begin(owner, (false, false, false), true);
+    let drag = begin(owner, (false, false, false), true);
     set_live(true);
-    generation
+    drag
 }
 
 fn begin(owner: isize, (ctrl, alt, win): (bool, bool, bool), esc_only: bool) -> u64 {
@@ -455,20 +484,25 @@ fn begin(owner: isize, (ctrl, alt, win): (bool, bool, bool), esc_only: bool) -> 
     ALT_OK.store(alt, Ordering::SeqCst);
     WIN_OK.store(win, Ordering::SeqCst);
     ESC_ONLY.store(esc_only, Ordering::SeqCst);
+    // A new id either way, so keys still on their way from the drag before don't count.
+    let last = DRAG.load(Ordering::SeqCst);
+    let drag = rules::next_drag(last);
+    DRAG.store(drag, Ordering::SeqCst);
     let generation = WANTED.load(Ordering::SeqCst);
     let open = OPEN.load(Ordering::SeqCst);
-    if open != 0 && IDLE.compare_exchange(generation, 0, Ordering::SeqCst, Ordering::SeqCst).is_ok() {
+    let take = |w: u64| rules::take_over(w, generation);
+    if open != 0 && IDLE.try_update(Ordering::SeqCst, Ordering::SeqCst, take).is_ok() {
         unsafe {
             let _ = PostThreadMessageW(open, MSG_TAKEN, WPARAM(0), LPARAM(0));
         }
-        return generation;
+        return drag;
     }
     stop();
     let generation = WANTED.load(Ordering::SeqCst);
     if let Err(e) = std::thread::Builder::new().name("seam-dragkeys".into()).spawn(move || run(generation)) {
         log::info!("drag keys: couldn't start: {e}");
     }
-    generation
+    drag
 }
 
 /// Whether zones show, so the drag's keys are swallowed. One atomic store.
@@ -488,7 +522,11 @@ pub fn release() {
         stop();
         return;
     }
-    IDLE.store(WANTED.load(Ordering::SeqCst), Ordering::SeqCst);
+    let generation = WANTED.load(Ordering::SeqCst);
+    // The thread already decided to go, so the next drag puts a new hook in.
+    if IDLE.try_update(Ordering::SeqCst, Ordering::SeqCst, |w| rules::ended(w, generation)).is_err() {
+        return;
+    }
     unsafe {
         let _ = PostThreadMessageW(open, MSG_LINGER, WPARAM(0), LPARAM(0));
     }
@@ -503,35 +541,5 @@ pub fn stop() {
         unsafe {
             let _ = PostThreadMessageW(open, WM_QUIT, WPARAM(0), LPARAM(0));
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    const TAB: u32 = VK_TAB.0 as u32;
-    const ONE: u32 = VK_1.0 as u32;
-    const OFF: (bool, bool) = (false, false);
-
-    #[test]
-    fn alt_tab_goes_to_windows_even_when_alt_is_the_drags_key() {
-        // Alt is the drag's: the wheel and 1 steer, Tab is Alt+Tab.
-        assert!(!foreign(WHEEL_NEXT, OFF, (true, true), OFF));
-        assert!(!foreign(ONE, OFF, (true, true), OFF));
-        assert!(foreign(TAB, OFF, (true, true), OFF));
-        // Alt held and not the drag's: all of it is the app's.
-        assert!(foreign(ONE, OFF, (true, false), OFF));
-        // Nothing held: Tab steers.
-        assert!(!foreign(TAB, OFF, OFF, OFF));
-    }
-
-    #[test]
-    fn a_held_modifier_steers_only_when_it_is_the_drags_own() {
-        assert!(foreign(WHEEL_NEXT, (true, false), OFF, OFF));
-        assert!(!foreign(WHEEL_NEXT, (true, true), OFF, OFF));
-        // Win as the Alt+drag's key.
-        assert!(foreign(TAB, OFF, OFF, (true, false)));
-        assert!(!foreign(TAB, OFF, OFF, (true, true)));
     }
 }

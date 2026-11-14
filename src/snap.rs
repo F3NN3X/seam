@@ -395,8 +395,8 @@ pub fn rezone(list: Vec<Zoned>) {
     }
 }
 
-/// A key the drag's keyboard hook passed on, by virtual-key code, or 0 with the
-/// generation of a hook that took itself out at the cap.
+/// A key the drag's keyboard hook passed on, by virtual-key code, or 0 when the
+/// hook took itself out at the cap, with the id of the drag it was for.
 pub fn drag_key(vk: u32, generation: u64) {
     with_engine(|e| e.drag_key(vk, generation));
 }

@@ -1152,7 +1152,7 @@ Set a key for **Pause Seam** on Shortcuts and a key for **Spotlight**, turn on *
 - [ ] **Two drags in a row.** Shift-drag a window and drop it, then at once Shift-drag another and press Tab with zones showing, a few times. Each Tab steers and none reaches the app under the pointer (Notepad gets no tab).
 - [ ] **Tab held past the drop.** Shift-drag a window into Notepad's zone, press Tab and keep it held, drop the window, and let go of Tab 2 seconds later. Notepad gets no tabs. Hold it 6 seconds instead: the repeats after about 5 seconds may reach it, with one `held past the drop` line in the log.
 - [ ] **Alt+Tab with Alt as the show key.** Set the show key to Alt. Drag a window with Alt held: Tab opens Windows' Alt+Tab switcher and doesn't steer, Shift+Tab steps back in it, and the wheel and 1, 2, 3, 0 still steer.
-- [ ] **Alt+drag steers.** With **Move and resize from anywhere in a window** on and Alt as its key, Alt-drag a window with the show key held. The wheel and 1, 2, 3, 0 steer while Alt is held, and Tab is Alt+Tab. With Win as the key, the wheel steers while Win is held.
+- [ ] **Alt+drag steers.** With **Move and resize from anywhere in a window** on and Alt as its key, Alt-drag a window with the show key held. The wheel and 1, 2, 3, 0 steer while Alt is held, and Tab is Alt+Tab. With Win as the key, Win-drag with the show key held: the wheel, Tab and 1, 2, 3, 0 steer while Win is held, and Win+Tab or Win+1 don't reach Windows during that drag.
 - [ ] **Esc on a divider handle.** Focus a terminal or Notepad, drag a divider handle, press Esc. The windows go back, and the focused app gets no Esc (a terminal's line stays, a dialog stays open). A plain Esc after the drag reaches the app again.
 
 ## Report back

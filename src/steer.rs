@@ -26,7 +26,7 @@ pub(super) struct Outcome {
     /// The dropped window's visible frame.
     pub(super) rect: Rect,
     pub(super) split: Option<Split>,
-    pub(super) swap: Option<(Vec<Placement>, bool)>,
+    pub(super) swap: Option<swap::Swap>,
 }
 
 impl Outcome {
@@ -34,7 +34,7 @@ impl Outcome {
     pub(super) fn others(&self) -> Vec<Rect> {
         match &self.split {
             Some(split) => split.occupant.map(|_| split.zones[split.rest]).into_iter().collect(),
-            None => self.swap.iter().flat_map(|(list, _)| list.iter().map(|p| p.target)).collect(),
+            None => self.swap.iter().flat_map(|(list, ..)| list.iter().map(|p| p.target)).collect(),
         }
     }
 }
@@ -142,6 +142,14 @@ impl Engine {
             (x.from, x.to) = (renumber(x.from), renumber(x.to));
             winutil::stamp_zones(hwnd_of(*key), &refit::covered(&split.cells, x.from, x.to));
         }
+        // So are the ones only a stamp knows, as after a restart of the tray.
+        for (key, from, to, at) in self.stamped_only(g.bounds, &[drag.hwnd]) {
+            if Some(key) == occupant || from.max(to) <= split.hi {
+                continue;
+            }
+            keep.push(Zoned { hwnd: key, zone: (id.clone(), from, to), at, moving: false });
+            winutil::stamp_zones(hwnd_of(key), &refit::covered(&split.cells, renumber(from), renumber(to)));
+        }
         if let Some(frame) = drag.frame {
             let (x, y) = (frame.x + frame.w / 2, frame.y + frame.h / 2);
             let on = self.screens.iter().find(|on| on.bounds.contains(x, y));
@@ -213,10 +221,11 @@ impl Engine {
         let Some(number) = self.screens.iter().position(|x| x.id == id) else { return };
         let Some(before) = self.screens[number].layout.clone() else { return };
         let Some(tree) = zones::remove_leaf(&before.tree, k) else { return };
-        let shared = self
-            .snapped
-            .iter()
-            .any(|(key, x)| *key != drag.hwnd && x.screen == id && refit::covered(&g.cells, x.from, x.to).contains(&k));
+        let stamped = self.stamped_only(g.bounds, &[drag.hwnd]);
+        let shared =
+            self.snapped.iter().any(|(key, x)| {
+                *key != drag.hwnd && x.screen == id && refit::covered(&g.cells, x.from, x.to).contains(&k)
+            }) || stamped.iter().any(|(_, from, to, _)| refit::covered(&g.cells, *from, *to).contains(&k));
         if shared {
             log::info!("pull out: screen {}, zone {}, another window holds it, so a plain drop", number + 1, k + 1);
             return;
@@ -255,6 +264,14 @@ impl Engine {
             }
             (x.from, x.to) = (from, to);
             winutil::stamp_zones(hwnd_of(*key), &refit::covered(&cells, from, to));
+        }
+        // Windows only a stamp knows are renumbered and not moved, like those moved by hand.
+        for (key, from, to, at) in stamped {
+            let (a, b) = (renumber(from), renumber(to));
+            if (a, b) != (from, to) {
+                keep.push(Zoned { hwnd: key, zone: (id.clone(), from, to), at, moving: false });
+                winutil::stamp_zones(hwnd_of(key), &refit::covered(&cells, a, b));
+            }
         }
         // Undo puts the pulled window back in its zone too, and with the size it had before it was snapped.
         let place = Placement {

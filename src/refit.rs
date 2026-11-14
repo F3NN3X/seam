@@ -94,6 +94,21 @@ fn stamped_windows() -> Vec<isize> {
 }
 
 impl Engine {
+    /// Windows on the screen at `bounds` that carry a zone stamp the snapping holds
+    /// no record of, as after a restart of the tray: the window, its zones' first
+    /// and last, and where it is. `skip` are left out.
+    pub(super) fn stamped_only(&self, bounds: Rect, skip: &[isize]) -> Vec<(isize, usize, usize, Rect)> {
+        let known = |key: &isize| self.snapped.contains_key(key) || skip.contains(key);
+        let found = |key: isize| {
+            let h = hwnd_of(key);
+            let set = winutil::zone_stamp(h);
+            let (from, to) = (*set.iter().min()?, *set.iter().max()?);
+            let at = if winutil::is_minimized(h) { winutil::normal_rect(h) } else { winutil::visible_rect(h) }?;
+            bounds.contains(at.x + at.w / 2, at.y + at.h / 2).then_some((key, from, to, at))
+        };
+        stamped_windows().into_iter().filter(|key| !known(key)).filter_map(found).collect()
+    }
+
     fn refit_schedule(&mut self) {
         if !self.settings.refit || !self.active() {
             return;

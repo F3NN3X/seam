@@ -108,7 +108,9 @@ impl Engine {
     pub(super) fn window_pump(&mut self) {
         while self.pending.is_none() && self.drag.is_none() {
             let Some(p) = self.queued.pop_front() else { break };
-            self.place_queued(p);
+            if !self.moved_since_plan(&p) {
+                self.place_queued(p);
+            }
         }
     }
 

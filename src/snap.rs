@@ -213,6 +213,8 @@ struct Engine {
     refit: refit::Refit,
     /// Window control's moves, one at a time through the same steps.
     queued: VecDeque<Placement>,
+    /// For a swap's moves still waiting: the window, its target, and where the plan saw it.
+    saw: Vec<swap::Saw>,
     /// Windows put side by side on screens with no zones, in memory only.
     adhoc: Vec<adhoc::Adhoc>,
     /// The last ad-hoc group's id.

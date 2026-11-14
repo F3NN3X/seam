@@ -35,6 +35,9 @@ pub(super) enum Skip {
     Refused,
 }
 
+/// An occupant that has moved more than this since the plan saw it is left where it is.
+const MOVED_PX: i32 = 6;
+
 /// How far each rect is shrunk before two count as overlapping, so zones that
 /// only share an edge, or round a pixel into each other, don't.
 const EDGE_SLOP: i32 = 2;
@@ -113,6 +116,12 @@ fn look(dragged: isize, landed: &[(isize, Rect)], exclude: &[String], how: &str)
     }
     list
 }
+
+/// The moves of a swap, whether the dropped window was snapped, and what the plan saw.
+pub(super) type Swap = (Vec<Placement>, bool, Vec<Saw>);
+
+/// A move's window and target, and the rect the plan saw the window at.
+pub(super) type Saw = (isize, Rect, Rect);
 
 /// The worker's answer to a look.
 pub(super) type Ahead = mpsc::Receiver<Vec<(isize, Rect)>>;
@@ -358,7 +367,7 @@ impl Engine {
     /// The moves that give the windows in the zones `(a, b)` of screen `screen` the
     /// dropped window's old place, and whether it was snapped. None when nothing
     /// swaps, and the drop is as it always was.
-    pub(super) fn swap_plan(&self, drag: &Drag, screen: usize, ab: (usize, usize)) -> Option<(Vec<Placement>, bool)> {
+    pub(super) fn swap_plan(&self, drag: &Drag, screen: usize, ab: (usize, usize)) -> Option<Swap> {
         self.swap_why(drag, screen, ab).ok()
     }
 
@@ -368,7 +377,7 @@ impl Engine {
         drag: &Drag,
         screen: usize,
         (a, b): (usize, usize),
-    ) -> Result<(Vec<Placement>, bool), Skip> {
+    ) -> Result<(Vec<Placement>, bool, Vec<Saw>), Skip> {
         if !self.settings.swap_on_drop {
             return Err(Skip::Off);
         }
@@ -431,12 +440,32 @@ impl Engine {
                 }
             }
         };
-        Ok((occupants.iter().map(place).collect(), drag.old_zone.is_some()))
+        let list: Vec<Placement> = occupants.iter().map(place).collect();
+        let saw = list.iter().zip(&occupants).map(|(p, (_, at))| (p.hwnd, p.target, *at)).collect();
+        Ok((list, drag.old_zone.is_some(), saw))
+    }
+
+    /// Whether the window of a move about to start has moved since the plan saw it,
+    /// which leaves it where it went. Each plan's rect is used once.
+    pub(super) fn moved_since_plan(&mut self, p: &Placement) -> bool {
+        let Some(i) = self.saw.iter().position(|(k, target, _)| *k == p.hwnd && *target == p.target) else {
+            return false;
+        };
+        let (_, _, saw) = self.saw.swap_remove(i);
+        let Some(now) = winutil::visible_rect(hwnd_of(p.hwnd)) else { return false };
+        let far = [(now.x, saw.x), (now.y, saw.y), (now.w, saw.w), (now.h, saw.h)]
+            .iter()
+            .any(|(a, b)| (a - b).abs() > MOVED_PX);
+        if far {
+            log::info!("zone swap: a window moved from {saw:?} to {now:?} since the plan, so its move is dropped");
+        }
+        far
     }
 
     /// Start the moves `swap_plan` made, once the dropped window has been sent to its zones.
-    pub(super) fn swap_start(&mut self, plan: Option<(Vec<Placement>, bool)>) {
-        let Some((list, snapped)) = plan else { return };
+    pub(super) fn swap_start(&mut self, plan: Option<Swap>) {
+        let Some((list, snapped, saw)) = plan else { return };
+        self.saw = saw;
         let was = if snapped { "snapped" } else { "loose" };
         log::info!("zone swap: moved {} window(s), the dropped window was {was}", list.len());
         self.queued.extend(list);

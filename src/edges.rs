@@ -296,7 +296,7 @@ impl Engine {
             gap,
             dpi: g.dpi,
             known: self.zoned(),
-            exclude: self.exclude.clone(),
+            exclude: self.exclude.to_vec(),
             given: None,
         };
         self.follow(ask, layout.template, None)
@@ -327,7 +327,7 @@ impl Engine {
             gap: a.gap,
             dpi,
             known: Vec::new(),
-            exclude: self.exclude.clone(),
+            exclude: self.exclude.to_vec(),
             given: Some(given),
         };
         self.follow(ask, Template::Custom, Some(a.id))

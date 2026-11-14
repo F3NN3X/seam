@@ -39,6 +39,7 @@ mod sync;
 
 pub use adhoc::{adhoc_area, adhoc_dragged, fit, is_adhoc};
 pub use refit::{WM_APP_REFIT, display_changed, found as refit_found, line_up_ended};
+pub use swap::{WM_APP_SWAP_LOOK, look_ready};
 
 /// A window the tray couldn't move, probably because it runs as administrator.
 pub const WM_APP_SNAP_BLOCKED: u32 = WM_APP + 14;
@@ -135,8 +136,9 @@ struct Drag {
     others: Vec<(isize, Rect)>,
     /// `others` was read, the first time zones showed.
     looked: bool,
-    /// The worker's look at the windows, started with the drag, until zones first show.
-    ahead: Option<swap::Ahead>,
+    /// The worker's look at the windows, with its generation, asked for with the drag and
+    /// taken once it is there.
+    ahead: Option<(u64, swap::Ahead)>,
     /// Moves posted at drag start, and where to, as they may not have landed yet.
     landed: Vec<(isize, Rect)>,
     /// The pointer rested, so zones show as if the show key were held.
@@ -188,8 +190,8 @@ struct Engine {
     /// Seam is paused or a full-screen app is in front (D390): no drag snapping, zones or handles.
     standing_by: bool,
     settings: ZoneSettings,
-    /// Lower case.
-    exclude: Vec<String>,
+    /// Lower case. Shared, so a worker can hold it without a copy.
+    exclude: std::sync::Arc<[String]>,
     /// The size a free drag to another screen gives the window: Windows' own unless
     /// "Also when I drag a window to another screen" is on and nothing steps aside.
     drag_size: WindowSize,
@@ -283,7 +285,7 @@ pub fn update(owner: HWND, cfg: &Config, sig: &str, mons: &[Mon], aside: Option<
     let on_drag = cfg.window_size_on_drag && aside.is_none() && !standing_by;
     let drag_size = if on_drag { cfg.window_size_on_move } else { WindowSize::Windows };
     let alt_holds_ctrl = cfg.windows.alt_drag.on && cfg.windows.alt_drag.key == "ctrl_alt";
-    let exclude: Vec<String> = cfg.zones.exclude.iter().map(|x| x.to_lowercase()).collect();
+    let exclude: std::sync::Arc<[String]> = cfg.zones.exclude.iter().map(|x| x.to_lowercase()).collect();
     with_engine(|e| {
         // A change that isn't about zones mustn't cut a drag short.
         let same = e.owner == owner.0 as isize

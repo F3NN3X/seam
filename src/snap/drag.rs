@@ -238,8 +238,11 @@ impl Engine {
         let live = view.is_some() || beside.is_some();
         // The keys are the drag's from the first time zones show, until it ends or Esc.
         // One look at the windows a drop could swap with, the first time zones show.
-        if live && !drag.looked {
-            drag.others = self.others(drag);
+        if live
+            && !drag.looked
+            && let Some(others) = self.others(drag)
+        {
+            drag.others = others;
             drag.looked = true;
         }
         if live && !drag.keys.hooked && !drag.keys.off && !drag.keys.capped {

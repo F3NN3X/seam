@@ -7,8 +7,8 @@
 
 use super::*;
 use crate::wincontrol;
-use std::sync::{OnceLock, mpsc};
-use std::time::Duration;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, OnceLock, mpsc};
 
 /// A mapped rect this close to a span of zones counts as being that span.
 const MATCH_SLOP: i32 = 12;
@@ -117,12 +117,48 @@ fn look(dragged: isize, landed: &[(isize, Rect)], exclude: &[String], how: &str)
 /// The worker's answer to a look.
 pub(super) type Ahead = mpsc::Receiver<Vec<(isize, Rect)>>;
 
+/// The drag the worker is looking for now. An older job is for a drag that is over.
+static CURRENT: AtomicU64 = AtomicU64::new(0);
+/// The look is ready, for the drag whose generation is in `wparam`.
+pub const WM_APP_SWAP_LOOK: u32 = WM_APP + 35;
+
 /// A look at the screen for a drag, and where to send it.
 struct Look {
+    generation: u64,
+    owner: isize,
     dragged: isize,
     landed: Vec<(isize, Rect)>,
-    exclude: Vec<String>,
+    exclude: Arc<[String]>,
     reply: mpsc::Sender<Vec<(isize, Rect)>>,
+}
+
+/// The tray's handler of `WM_APP_SWAP_LOOK`.
+pub fn look_ready(generation: u64) {
+    with_engine(|e| e.look_posted(generation));
+}
+
+/// Look for the newest drag only: older jobs waiting, and one whose drag is over, are skipped.
+fn serve(rx: mpsc::Receiver<Look>) {
+    while let Ok(mut job) = rx.recv() {
+        while let Ok(newer) = rx.try_recv() {
+            job = newer;
+        }
+        if job.generation != CURRENT.load(Ordering::SeqCst) {
+            continue;
+        }
+        let list = look(job.dragged, &job.landed, &job.exclude, "on a worker");
+        // A reply nobody is waiting for means the drag ended.
+        if job.reply.send(list).is_ok() {
+            unsafe {
+                let _ = PostMessageW(
+                    Some(hwnd_of(job.owner)),
+                    WM_APP_SWAP_LOOK,
+                    WPARAM(job.generation as usize),
+                    LPARAM(0),
+                );
+            }
+        }
+    }
 }
 
 /// The one worker that makes the looks, started the first time one is asked for.
@@ -131,12 +167,7 @@ fn worker() -> Option<&'static mpsc::Sender<Look>> {
     WORKER
         .get_or_init(|| {
             let (tx, rx) = mpsc::channel::<Look>();
-            let run = move || {
-                for job in rx {
-                    let _ = job.reply.send(look(job.dragged, &job.landed, &job.exclude, "on a worker"));
-                }
-            };
-            std::thread::Builder::new().name("zone-swap-look".into()).spawn(run).ok().map(|_| tx)
+            std::thread::Builder::new().name("zone-swap-look".into()).spawn(move || serve(rx)).ok().map(|_| tx)
         })
         .as_ref()
 }
@@ -195,22 +226,43 @@ impl Engine {
 
     /// Ask the worker for the look at drag start, so it is ready before zones first show.
     /// None when the worker can't be had: the look is then read on the spot.
-    pub(super) fn look_ahead(&self, dragged: isize, landed: &[(isize, Rect)]) -> Option<Ahead> {
+    pub(super) fn look_ahead(&self, dragged: isize, landed: &[(isize, Rect)]) -> Option<(u64, Ahead)> {
         let (reply, rx) = mpsc::channel();
-        let (landed, exclude) = (landed.to_vec(), self.exclude.clone());
-        worker()?.send(Look { dragged, landed, exclude, reply }).ok()?;
-        Some(rx)
+        let generation = CURRENT.fetch_add(1, Ordering::SeqCst) + 1;
+        let (landed, exclude) = (landed.to_vec(), Arc::clone(&self.exclude));
+        let job = Look { generation, owner: self.owner, dragged, landed, exclude, reply };
+        worker()?.send(job).ok()?;
+        Some((generation, rx))
     }
 
-    /// The drag's look at the screen: the worker's, which is already under way and so
-    /// takes at most one read, or else read on the spot if it is gone or late.
-    pub(super) fn others(&self, drag: &mut Drag) -> Vec<(isize, Rect)> {
-        let started = log::enabled().then(Instant::now);
-        let ahead = drag.ahead.take().and_then(|rx| rx.recv_timeout(Duration::from_millis(5)).ok());
-        if let Some(started) = started.filter(|_| ahead.is_some()) {
-            log::info!("zone swap: waited {:.0}us for the worker's look", started.elapsed().as_secs_f64() * 1e6);
+    /// The drag's look at the screen, if it is there. The tray never waits for the
+    /// worker: until it answers there is no look, and the worker posts when it has. Read on
+    /// the spot only when there is no worker, or it is gone.
+    pub(super) fn others(&self, drag: &mut Drag) -> Option<Vec<(isize, Rect)>> {
+        let Some((_, rx)) = &drag.ahead else { return Some(self.snapshot(drag.hwnd, &drag.landed)) };
+        match rx.try_recv() {
+            Ok(list) => {
+                drag.ahead = None;
+                Some(list)
+            }
+            Err(mpsc::TryRecvError::Empty) => None,
+            Err(mpsc::TryRecvError::Disconnected) => {
+                drag.ahead = None;
+                Some(self.snapshot(drag.hwnd, &drag.landed))
+            }
         }
-        ahead.unwrap_or_else(|| self.snapshot(drag.hwnd, &drag.landed))
+    }
+
+    /// The worker's look is ready: if its drag is still the one running and zones show,
+    /// draw them again once, now with the windows they swap with.
+    fn look_posted(&mut self, generation: u64) {
+        let Some(mut drag) = self.drag.take() else { return };
+        let mine = drag.ahead.as_ref().is_some_and(|(g, _)| *g == generation);
+        let (view, beside) = (drag.shown, drag.beside);
+        if mine && (view.is_some() || beside.is_some()) {
+            self.present(&mut drag, view, beside);
+        }
+        self.drag = Some(drag);
     }
 
     /// At the drop: where the windows on the screen it was dropped on are now, as
@@ -218,6 +270,11 @@ impl Engine {
     pub(super) fn refresh(&self, drag: &mut Drag) {
         let Some(view) = drag.shown else { return };
         let bounds = drag.geometry[view.screen].bounds;
+        // Dropped before the worker's look came: read it now.
+        if !drag.looked {
+            drag.others = self.snapshot(drag.hwnd, &drag.landed);
+            drag.looked = true;
+        }
         // One closed, minimized or hidden since is no longer there to swap with.
         drag.others.retain_mut(|(key, r)| {
             if !overlaps(*r, bounds) {

@@ -12,7 +12,8 @@ use crate::wincontrol::tile::Back;
 use dragkeys::Part;
 use seam::beside;
 use seam::zones::{Node, Template};
-use std::sync::atomic::{AtomicIsize, Ordering};
+use std::cell::RefCell;
+use std::collections::HashSet;
 
 /// An ad-hoc group's name where a screen's id goes: the divider handles and the
 /// layout saves of their drags.
@@ -125,15 +126,16 @@ pub fn fit(hwnd: HWND) -> Result<Fitted, String> {
     with_engine(|e| e.fit(hwnd)).unwrap_or_else(|| Err("Seam is busy, try again".into()))
 }
 
-/// A member's state changed while a group is about: closed, minimized, maximized or moved.
-/// The groups' windows, for the hooks to pass over every other window without
-/// taking the engine. Empty slots are 0; a group past this many windows isn't heard.
-static MEMBERS: [AtomicIsize; MAX_HEARD] = [const { AtomicIsize::new(0) }; MAX_HEARD];
-const MAX_HEARD: usize = 128;
+thread_local! {
+    /// The groups' windows, for the hooks to pass over every other window without
+    /// taking the engine. The hooks run on this thread.
+    static MEMBERS: RefCell<HashSet<isize>> = RefCell::new(HashSet::new());
+}
 
+/// A member's state changed while a group is about: closed, minimized, maximized or moved.
 unsafe extern "system" fn on_member(_: HWINEVENTHOOK, event: u32, hwnd: HWND, object: i32, child: i32, _: u32, _: u32) {
     let key = hwnd.0 as isize;
-    if object != OBJID_WINDOW.0 || child != 0 || key == 0 || !MEMBERS.iter().any(|m| m.load(Ordering::Relaxed) == key) {
+    if object != OBJID_WINDOW.0 || child != 0 || key == 0 || !MEMBERS.with_borrow(|m| m.contains(&key)) {
         return;
     }
     with_engine(|e| e.member_changed(hwnd, event));
@@ -244,15 +246,14 @@ impl Engine {
     }
 
     /// Hear of members closing, minimizing and moving while there is a group.
-    /// Only the threads of the groups' windows are hooked, so other windows' events never
-    /// reach the tray. Called whenever a group or Seam's standing changes.
+    /// Moves are hooked on the threads of the groups' windows only. Closing and
+    /// minimizing have no thread to narrow to, so the callback filters them. Called whenever a group or Seam's standing changes.
     pub(super) fn sync_adhoc_hooks(&mut self) {
         let active = self.active();
         let members: Vec<isize> =
             self.adhoc.iter().flat_map(|a| a.members.iter().map(|(k, _)| *k)).filter(|_| active).collect();
-        for (slot, key) in MEMBERS.iter().zip(members.iter().copied().chain(std::iter::repeat(0))) {
-            slot.store(key, Ordering::Relaxed);
-        }
+        MEMBERS.with_borrow_mut(|m| *m = members.iter().copied().collect());
+        self.sync_member_hook(!members.is_empty());
         let mut threads: Vec<(u32, u32)> = members.iter().filter_map(|k| thread_of(*k)).collect();
         threads.sort_unstable();
         threads.dedup();
@@ -267,22 +268,38 @@ impl Engine {
             if self.member_hooks.iter().any(|(t, _)| *t == tid) {
                 continue;
             }
-            let events = [EVENT_SYSTEM_MINIMIZESTART, EVENT_OBJECT_DESTROY, EVENT_OBJECT_LOCATIONCHANGE];
-            let hooks: Vec<HWINEVENTHOOK> = events
-                .into_iter()
-                .map(|event| unsafe { SetWinEventHook(event, event, None, Some(on_member), pid, tid, flags) })
-                .filter(|hook| !hook.0.is_null())
-                .collect();
-            if hooks.len() < events.len() {
+            let event = EVENT_OBJECT_LOCATIONCHANGE;
+            let hook = unsafe { SetWinEventHook(event, event, None, Some(on_member), pid, tid, flags) };
+            if hook.0.is_null() {
                 log::info!("snap beside: a group hook wasn't installed");
             }
-            self.member_hooks.push((tid, hooks));
+            self.member_hooks.push((tid, Some(hook).filter(|h| !h.0.is_null()).into_iter().collect()));
         }
         if self.adhoc.is_empty() && self.adhoc_timer != 0 {
             unsafe {
                 let _ = KillTimer(None, self.adhoc_timer);
             }
             self.adhoc_timer = 0;
+        }
+    }
+
+    /// One hook for every window's closing and minimizing, on while a group has
+    /// members. The callback drops the events of windows that aren't members.
+    fn sync_member_hook(&mut self, wanted: bool) {
+        if !wanted {
+            for hook in std::mem::take(&mut self.member_global) {
+                let _ = unsafe { UnhookWinEvent(hook) };
+            }
+        } else if self.member_global.is_empty() {
+            let flags = WINEVENT_OUTOFCONTEXT | WINEVENT_SKIPOWNPROCESS;
+            for event in [EVENT_SYSTEM_MINIMIZESTART, EVENT_OBJECT_DESTROY] {
+                let hook = unsafe { SetWinEventHook(event, event, None, Some(on_member), 0, 0, flags) };
+                if hook.0.is_null() {
+                    log::info!("snap beside: a group hook wasn't installed");
+                } else {
+                    self.member_global.push(hook);
+                }
+            }
         }
     }
 

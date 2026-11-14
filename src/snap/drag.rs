@@ -133,6 +133,11 @@ impl Engine {
             if now != drag.start {
                 let resized = !drag.was_maximized && (now.w != drag.start.w || now.h != drag.start.h);
                 drag.phase = if resized { Phase::Resizing } else { Phase::Moving };
+                // A member dragged away leaves its group now, not once it has stayed put.
+                // A resize can be the group's own, through its edges, so that waits for the drop.
+                if !resized {
+                    self.leave_adhoc(drag.hwnd);
+                }
                 if resized && drag.edges.is_none() {
                     // Zones have nothing to do with a resize, unless the neighbours follow it.
                     unsafe {

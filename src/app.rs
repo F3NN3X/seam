@@ -54,7 +54,7 @@ use session::{
     check_restart_apps, end_session, offer_session, pin_closed, query_end_session, reopen_closed, restore_session,
     saved_session, session_captured, start_session_capture, sync_restart_apps, windows_changed,
 };
-use signin::{SignInRun, begin, cancel_sign_in, open_offered, sign_in_tick};
+use signin::{SignInRun, arm, begin, cancel_sign_in, open_offered, sign_in_tick};
 pub use start::run;
 use std::cell::RefCell;
 use std::os::windows::process::CommandExt;

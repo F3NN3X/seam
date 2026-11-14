@@ -109,37 +109,9 @@ fn capture_rules(job: &CaptureJob, session: bool) -> Captured {
     let started = Instant::now();
     let geos = geometry(&job.screens, job.gap);
     let mut skips: BTreeMap<&'static str, usize> = BTreeMap::new();
-    let (mut procs, mut seen, mut away) = (Procs::new(), Vec::new(), Vec::new());
-    for h in winutil::top_level_windows() {
-        let z = seen.len();
-        let mut elsewhere = false;
-        seen.extend(seen_of(h, z, &job.exclude, &mut procs, &mut |why, facts| {
-            *skips.entry(why).or_default() += 1;
-            elsewhere |= matches!(why, "cloaked" | "off screen");
-            // Hidden and cloaked windows are most of them, so those are only counted.
-            if !matches!(why, "hidden" | "cloaked") {
-                log::info!("capture skipped {} {}: {why}", facts.class, facts.exe_name);
-            }
-        }));
-        if elsewhere && job.removes && !session {
-            away.push(h);
-        }
-    }
-    let mut others: Vec<Candidate> = away
-        .into_iter()
-        .filter_map(|h| {
-            let path = proc_of(&mut procs, winutil::process_id(h)).path.clone()?;
-            let exe = winutil::exe_path_from(h, path)?;
-            Some(Candidate {
-                hwnd: h.0 as isize,
-                exe,
-                aumid: winutil::aumid(h),
-                class: String::new(),
-                title: String::new(),
-                z: 0,
-            })
-        })
-        .collect();
+    let mut procs = Procs::new();
+    let (seen, away) = list_windows(job, session, &mut procs, &mut skips);
+    let mut others = away_candidates(away, &mut procs);
     let foreground = unsafe { GetForegroundWindow() }.0 as isize;
     let (mut rules, mut hwnds) = (Vec::new(), Vec::new());
     // A sticky window belongs to no workspace. The last session keeps it, pinned.
@@ -207,4 +179,48 @@ fn capture_rules(job: &CaptureJob, session: bool) -> Captured {
     let ms = started.elapsed().as_millis();
     log::info!("workspace capture: {} windows in {ms} ms, skipped {}", rules.len(), skipped.join(", "));
     (rules, hwnds, others)
+}
+
+/// The windows a capture reads, and the ones off every screen or on another desktop.
+fn list_windows(
+    job: &CaptureJob,
+    session: bool,
+    procs: &mut Procs,
+    skips: &mut BTreeMap<&'static str, usize>,
+) -> (Vec<Seen>, Vec<HWND>) {
+    let (mut seen, mut away) = (Vec::new(), Vec::new());
+    for h in winutil::top_level_windows() {
+        let z = seen.len();
+        let mut elsewhere = false;
+        seen.extend(seen_of(h, z, &job.exclude, procs, &mut |why, facts| {
+            *skips.entry(why).or_default() += 1;
+            elsewhere |= matches!(why, "cloaked" | "off screen");
+            // Hidden and cloaked windows are most of them, so those are only counted.
+            if !matches!(why, "hidden" | "cloaked") {
+                log::info!("capture skipped {} {}: {why}", facts.class, facts.exe_name);
+            }
+        }));
+        if elsewhere && job.removes && !session {
+            away.push(h);
+        }
+    }
+    (seen, away)
+}
+
+/// The windows away from the desk as candidates, for those whose program is known.
+fn away_candidates(away: Vec<HWND>, procs: &mut Procs) -> Vec<Candidate> {
+    away.into_iter()
+        .filter_map(|h| {
+            let path = proc_of(procs, winutil::process_id(h)).path.clone()?;
+            let exe = winutil::exe_path_from(h, path)?;
+            Some(Candidate {
+                hwnd: h.0 as isize,
+                exe,
+                aumid: winutil::aumid(h),
+                class: String::new(),
+                title: String::new(),
+                z: 0,
+            })
+        })
+        .collect()
 }

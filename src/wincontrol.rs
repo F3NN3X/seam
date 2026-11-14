@@ -18,6 +18,7 @@ use seam::zones::{self, Rect, ZoneLayout};
 use serde_json::json;
 use std::sync::mpsc::Sender;
 use std::sync::{Condvar, Mutex, OnceLock};
+use std::time::{Duration, Instant};
 use windows::Win32::Foundation::*;
 use windows::Win32::UI::Input::KeyboardAndMouse::{
     INPUT, INPUT_0, INPUT_MOUSE, MOUSEEVENTF_MOVE, MOUSEINPUT, SendInput,
@@ -86,6 +87,8 @@ struct Planned {
     /// The id of the library layout Save from windows made, which the layout brings into the library.
     fresh: Option<String>,
     reply: Option<Sender<Reply>>,
+    /// When the worker finished it.
+    at: Instant,
 }
 
 static SLOT: Mutex<Option<Job>> = Mutex::new(None);
@@ -163,6 +166,17 @@ pub fn planned(mut save: impl FnMut(&str, ZoneLayout, bool) -> bool) -> Option<R
     let made = plan.fresh.map(|id| json!({ "ok": true, "id": id }));
     answer(plan.reply, Ok(counts.or(made).unwrap_or_else(|| json!({ "ok": true }))));
     done.map(Ok)
+}
+
+/// The plan waiting for the tray has an API client waiting for it for `limit` or
+/// longer: drop it and say the tray is busy. Splits, Undo and edge saves stay.
+pub fn refuse_stale(limit: Duration) {
+    let mut slot = PLANNED.lock().unwrap_or_else(|e| e.into_inner());
+    if slot.as_ref().is_some_and(|p| p.reply.is_some() && p.at.elapsed() >= limit) {
+        let stale = slot.take();
+        drop(slot);
+        answer(stale.and_then(|p| p.reply), Err(RpcError::new(api::BUSY, "Seam is busy, try again")));
+    }
 }
 
 /// What the last split by a drag's keys did, once `planned` has saved its layout.
@@ -244,7 +258,7 @@ fn work() {
         match planned {
             Ok(None) => answer(reply, Ok(json!({ "ok": true }))),
             Ok(Some((list, layout, tile, fresh))) => {
-                let plan = Planned { list, layout, tile, fresh, reply };
+                let plan = Planned { list, layout, tile, fresh, reply, at: Instant::now() };
                 let earlier = PLANNED.lock().unwrap_or_else(|e| e.into_inner()).replace(plan);
                 if let Some(earlier) = earlier {
                     replaced(earlier.reply);

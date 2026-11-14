@@ -164,22 +164,15 @@ pub(super) unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARA
             wincontrol::WM_APP_WINDOW => {
                 // Busy elsewhere: the plan stays where it is, with its layout and its Undo, and a timer tries again.
                 if with_app(window_planned).is_none() {
-                    WINDOW_SINCE.with(|s| s.set(s.get().or_else(|| Some(Instant::now()))));
                     SetTimer(Some(hwnd), TIMER_WINDOW, 100, None);
                 }
                 LRESULT(0)
             }
             WM_TIMER if wparam.0 == TIMER_WINDOW => {
+                // A plan an API client waits for is dropped after a while, and the client told. Splits, Undo and edge saves wait until they run.
+                wincontrol::refuse_stale(WINDOW_WAIT);
                 if with_app(window_planned).is_some() {
                     let _ = KillTimer(Some(hwnd), TIMER_WINDOW);
-                    WINDOW_SINCE.with(|s| s.take());
-                } else if WINDOW_SINCE.with(|s| s.get().is_some_and(|at| at.elapsed() >= WINDOW_WAIT)) {
-                    // A caller waiting for an answer doesn't wait longer: it is told as before.
-                    let _ = KillTimer(Some(hwnd), TIMER_WINDOW);
-                    WINDOW_SINCE.with(|s| s.take());
-                    wincontrol::planned(|_, _, _| false);
-                    // Its layout wasn't saved, so there is nothing to undo.
-                    wincontrol::take_split();
                 }
                 LRESULT(0)
             }

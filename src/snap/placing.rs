@@ -8,6 +8,9 @@ impl Engine {
         self.snapped.remove(&(hwnd.0 as isize));
         if stamped {
             winutil::clear_zone_stamp(hwnd);
+        } else {
+            // A stamp may stay with no record of it.
+            self.no_stray_stamps = false;
         }
         self.sync_dividers();
     }
@@ -44,6 +47,8 @@ impl Engine {
             self.snapped.retain(|k, _| unsafe { IsWindow(Some(hwnd_of(*k))) }.as_bool());
             if self.snapped.len() > MAX_SNAPPED {
                 self.snapped.clear();
+                // Their stamps stay.
+                self.no_stray_stamps = false;
             }
         }
         self.sync_dividers();

@@ -61,7 +61,7 @@ impl Engine {
         let edges = self.edges_start(hwnd, &geometry, (zone, stamped), was_maximized);
         let edges = edges.or_else(|| self.adhoc_edges_start(hwnd, was_maximized));
         // Zones or an edge to snap beside will want the windows, so read them now.
-        let ahead = (!geometry.is_empty() || self.beside_on()).then(|| self.look_ahead(key, &landed));
+        let ahead = (!geometry.is_empty() || self.beside_on()).then(|| self.look_ahead(key, &landed)).flatten();
         // The handles stay out of the way of any drag, and come back at its end.
         dividers::hide();
         self.drag = Some(Drag {

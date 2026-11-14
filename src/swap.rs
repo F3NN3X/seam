@@ -7,7 +7,7 @@
 
 use super::*;
 use crate::wincontrol;
-use std::sync::mpsc;
+use std::sync::{OnceLock, mpsc};
 use std::time::Duration;
 
 /// A mapped rect this close to a span of zones counts as being that span.
@@ -114,6 +114,33 @@ fn look(dragged: isize, landed: &[(isize, Rect)], exclude: &[String], how: &str)
     list
 }
 
+/// The worker's answer to a look.
+pub(super) type Ahead = mpsc::Receiver<Vec<(isize, Rect)>>;
+
+/// A look at the screen for a drag, and where to send it.
+struct Look {
+    dragged: isize,
+    landed: Vec<(isize, Rect)>,
+    exclude: Vec<String>,
+    reply: mpsc::Sender<Vec<(isize, Rect)>>,
+}
+
+/// The one worker that makes the looks, started the first time one is asked for.
+fn worker() -> Option<&'static mpsc::Sender<Look>> {
+    static WORKER: OnceLock<Option<mpsc::Sender<Look>>> = OnceLock::new();
+    WORKER
+        .get_or_init(|| {
+            let (tx, rx) = mpsc::channel::<Look>();
+            let run = move || {
+                for job in rx {
+                    let _ = job.reply.send(look(job.dragged, &job.landed, &job.exclude, "on a worker"));
+                }
+            };
+            std::thread::Builder::new().name("zone-swap-look".into()).spawn(run).ok().map(|_| tx)
+        })
+        .as_ref()
+}
+
 impl Engine {
     /// The windows on the screen in the zones `target` covers on `g`, and where each
     /// is. None when one of them can't be moved or is hung, which leaves the drop as
@@ -166,20 +193,23 @@ impl Engine {
         look(dragged, landed, &self.exclude, "on the spot")
     }
 
-    /// Start the look at drag start, on a worker, so it is ready before zones first show.
-    pub(super) fn look_ahead(&self, dragged: isize, landed: &[(isize, Rect)]) -> mpsc::Receiver<Vec<(isize, Rect)>> {
-        let (tx, rx) = mpsc::channel();
+    /// Ask the worker for the look at drag start, so it is ready before zones first show.
+    /// None when the worker can't be had: the look is then read on the spot.
+    pub(super) fn look_ahead(&self, dragged: isize, landed: &[(isize, Rect)]) -> Option<Ahead> {
+        let (reply, rx) = mpsc::channel();
         let (landed, exclude) = (landed.to_vec(), self.exclude.clone());
-        std::thread::spawn(move || {
-            let _ = tx.send(look(dragged, &landed, &exclude, "on a worker"));
-        });
-        rx
+        worker()?.send(Look { dragged, landed, exclude, reply }).ok()?;
+        Some(rx)
     }
 
-    /// The drag's look at the screen: the worker's if it is ready, or comes within about
-    /// a millisecond, or else read on the spot.
+    /// The drag's look at the screen: the worker's, which is already under way and so
+    /// takes at most one read, or else read on the spot if it is gone or late.
     pub(super) fn others(&self, drag: &mut Drag) -> Vec<(isize, Rect)> {
-        let ahead = drag.ahead.take().and_then(|rx| rx.recv_timeout(Duration::from_millis(1)).ok());
+        let started = log::enabled().then(Instant::now);
+        let ahead = drag.ahead.take().and_then(|rx| rx.recv_timeout(Duration::from_millis(5)).ok());
+        if let Some(started) = started.filter(|_| ahead.is_some()) {
+            log::info!("zone swap: waited {:.0}us for the worker's look", started.elapsed().as_secs_f64() * 1e6);
+        }
         ahead.unwrap_or_else(|| self.snapshot(drag.hwnd, &drag.landed))
     }
 

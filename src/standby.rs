@@ -9,7 +9,7 @@
 
 use crate::log;
 use seam::winutil;
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::sync::atomic::{AtomicBool, AtomicIsize, Ordering};
 use windows::Win32::Foundation::*;
 use windows::Win32::Graphics::Gdi::*;
@@ -193,10 +193,12 @@ fn still_full(h: HWND) -> bool {
 
 /// No full-screen app is in front. Returns whether there was one.
 fn leave() -> bool {
+    // The window that went, read before it is let go. It may be closed by now.
+    let gone = HWND(WATCHED.load(Ordering::SeqCst) as *mut _);
     watch(None);
     let changed = FULL_SCREEN.swap(false, Ordering::SeqCst);
     if changed {
-        log::info!("full-screen app gone: Seam resumes, {}", describe(unsafe { GetForegroundWindow() }));
+        log::info!("full-screen app gone: Seam resumes, window that went: {}", describe(gone));
     }
     changed
 }
@@ -216,6 +218,22 @@ fn describe(h: HWND) -> String {
     let quns = unsafe { SHQueryUserNotificationState() }.map_or(-1, |state| state.0);
     let exe = winutil::exe_name(h).unwrap_or_default();
     format!("class {}, exe {exe}, rect {window} on screen {screen}, QUNS {quns}", winutil::class_name(h))
+}
+
+/// The window belongs to a system overlay. The last answer is kept for its window and
+/// process, so a burst of looks at one window opens its process once.
+fn overlay_window(h: HWND) -> bool {
+    thread_local! {
+        static LAST: Cell<(isize, u32, bool)> = const { Cell::new((0, 0, false)) };
+    }
+    let (key, pid) = (h.0 as isize, winutil::process_id(h));
+    let (last_key, last_pid, answer) = LAST.get();
+    if (last_key, last_pid) == (key, pid) {
+        return answer;
+    }
+    let answer = is_overlay(winutil::exe_name(h).as_deref());
+    LAST.set((key, pid, answer));
+    answer
 }
 
 /// The exe is one of the system overlays that count for nothing.
@@ -262,7 +280,7 @@ fn look(foreground: HWND) -> Seen {
     if !covers_screen(foreground, false) {
         return Seen::Not;
     }
-    if is_overlay(winutil::exe_name(foreground).as_deref()) {
+    if overlay_window(foreground) {
         return Seen::Keep;
     }
     // No title bar and not maximized: an F11 page, a borderless, OpenGL or Vulkan game.

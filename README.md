@@ -290,6 +290,9 @@ Windows lines screens up in raw pixels and keeps the same pixel row when the poi
 **Why must "Ease cursor movement between displays" be on?**
 Without it, Windows blocks the pointer from leaving a screen at a point that has no neighbouring pixels. With different sizes, much of a screen's edge is like that, so the pointer would never get to the border where Seam can carry it across. Seam warns you on the Displays page when it's off. **Turn it on** does it for you. Seam never turns it off, so turn it off in Display settings if you want it off.
 
+**Where does Seam read that setting?**
+Windows has no API for it, so Seam reads the registry value the setting is kept in: `CursorDeadzoneJumpingSetting` under `HKEY_CURRENT_USER\Control Panel\Cursors`, a DWORD that is `1` for on and `0` for off. With no value, Windows 11 from build 22557, where the setting first came, counts it as on. **Turn it on** writes `1`, reads it back to check Windows kept it, and tells Windows the cursor settings changed, so you don't have to sign out. To check it yourself, run `reg query "HKCU\Control Panel\Cursors" /v CursorDeadzoneJumpingSetting`. Microsoft doesn't document this value, so a Windows update could move it. If Displays says it's off while Display settings shows it on, or **Turn it on** says Windows didn't keep it, turn it on in Display settings and [open an issue](https://github.com/F3NN3X/seam/issues).
+
 **My screens touch on the desk, but Windows has a gap between them. Can the pointer cross it?**
 Yes, if you glue them in Line Up (G). When the pointer goes past the edge into the gap, Seam carries it to where the other screen physically continues, after a push of 60 px, or what you set in **Glued edge push**. If Windows has another screen under the pointer there, that screen wins. Align arrangement keeps the gap, and refuses a move that would break a glue.
 

@@ -107,6 +107,9 @@ fn caption(action: &str) -> Option<&'static str> {
         "reset_sizes" => {
             Some("Put the screen under the pointer back to the layout it came from, or even out its tiles")
         }
+        a if a.starts_with("add_to_") => {
+            Some("Add the focused window to this workspace, counted in the order of the Workspaces page")
+        }
         _ => None,
     }
 }
@@ -214,6 +217,15 @@ pub fn render(panel: &mut Panel, _: &mut Window, cx: &mut Context<Panel>) -> imp
         .map(|(i, ws)| row(&ws.name, &format!("workspace:{}", ws.id), ws.hotkey.as_ref(), 20 + i))
         .collect();
     workspace_rows.push(row("Capture current windows", "capture_workspace", keys.capture_workspace.as_ref(), 4));
+    // Slots past the other workspace rows, which stop before 100.
+    for (n, combo) in keys.add_to_workspace().into_iter().enumerate() {
+        workspace_rows.push(row(
+            &format!("Add window to workspace {}", n + 1),
+            &format!("add_to_{}", n + 1),
+            combo,
+            1000 + n,
+        ));
+    }
     workspace_rows.push(row("Snap back to this workspace", "snap_back", keys.snap_back.as_ref(), 20 + on_desk.len()));
     workspace_rows.push(row(
         "Save windows to the active workspace",

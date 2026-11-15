@@ -254,6 +254,14 @@ fn an_older_file_has_no_rotate_or_reset_key() {
 }
 
 #[test]
+fn an_older_file_has_no_add_to_workspace_keys() {
+    let c: Config = serde_json::from_str(r#"{"hotkeys": {"overview": "Ctrl+Alt+O"}}"#).unwrap();
+    assert!(c.hotkeys.add_to_workspace().iter().all(Option::is_none));
+    let set: Config = serde_json::from_str(r#"{"hotkeys": {"add_to_3": "Ctrl+Alt+3"}}"#).unwrap();
+    assert_eq!(set.hotkeys.add_to_workspace()[2].map(String::as_str), Some("Ctrl+Alt+3"));
+}
+
+#[test]
 fn quitting_clears_tiling_for_every_freed_desktop_and_an_old_config_has_the_switch_off() {
     let on = |ids: &[&str]| TileScreen { desktops: ids.iter().map(|d| d.to_string()).collect(), ..Default::default() };
     let mut tiling = BTreeMap::from([("a".to_string(), on(&["d1", "d2"])), ("b".to_string(), on(&["d1"]))]);

@@ -426,3 +426,207 @@ fn a_row_out_of_a_stack_saves_no_stack_field() {
     let back: Rule = serde_json::from_value(serde_json::to_value(&stacked).unwrap()).unwrap();
     assert_eq!(back.stack, Some(1));
 }
+
+fn named(id: &str) -> Workspace {
+    Workspace { id: id.into(), name: id.into(), ..Workspace::default() }
+}
+
+#[test]
+fn workspace_n_is_counted_from_one_in_list_order() {
+    let list = [named("a"), named("b"), named("c")];
+    assert_eq!(numbered(&list, 1).map(|w| w.id.as_str()), Some("a"));
+    assert_eq!(numbered(&list, 3).map(|w| w.id.as_str()), Some("c"));
+    assert!(numbered(&list, 0).is_none());
+    assert!(numbered(&list, 4).is_none());
+    assert!(numbered(&[], 1).is_none());
+}
+
+#[test]
+fn a_window_without_a_row_gets_one_at_the_end_with_launch_off() {
+    let notepad = r"C:\Windows\notepad.exe";
+    let old = Workspace { windows: vec![rule(r"C:\a.exe", None, "A", "a")], ..named("w") };
+    let mut fresh = rule(notepad, None, "Notepad", "Untitled");
+    fresh.launch = true;
+    fresh.focused = true;
+    fresh.open_with = Some(r"C:\x".into());
+    fresh.target = Target::Zone { zone: 2, span_to: None };
+    fresh.place = Some(Place::Folder(r"C:\src".into()));
+    let added = add_window(&old, fresh, &[]);
+    assert!(added.new);
+    assert_eq!(added.row, 1);
+    assert_eq!(added.workspace.windows.len(), 2);
+    let row = &added.workspace.windows[1];
+    assert_eq!(row.exe, notepad);
+    assert_eq!(row.target, Target::Zone { zone: 2, span_to: None });
+    // Launch off, no Open with, no focus taken from the workspace, and a place left for the tray to store after its checks.
+    assert!(!row.launch && !row.focused);
+    assert_eq!(row.open_with, None);
+    assert_eq!(row.place, None);
+    assert_eq!(added.place, Some(Place::Folder(r"C:\src".into())));
+    // The rows that were there are untouched.
+    assert_eq!(added.workspace.windows[0], old.windows[0]);
+}
+
+#[test]
+fn a_window_that_has_a_row_updates_it_and_never_adds_a_duplicate() {
+    let ff = r"C:\Mozilla Firefox\firefox.exe";
+    let mut mine = rule(ff, None, "MozillaWindowClass", "GitHub");
+    mine.launch = true;
+    mine.delay_ms = 1500;
+    mine.focused = true;
+    mine.z = 0;
+    mine.target = Target::Zone { zone: 3, span_to: None };
+    mine.stack = Some(1);
+    mine.open_with = Some(r"C:\x".into());
+    mine.place = Some(Place::Url("https://a.example".into()));
+    let other = rule(r"C:\b.exe", None, "B", "b");
+    let old = Workspace { windows: vec![other.clone(), mine], ..named("w") };
+    let mut fresh = rule(ff, None, "MozillaWindowClass", "GitHub - now");
+    fresh.target = Target::Zone { zone: 3, span_to: None };
+    fresh.z = 5;
+    fresh.stack = Some(1);
+    fresh.place = Some(Place::Url("https://b.example".into()));
+    let added = add_window(&old, fresh, &[]);
+    assert!(!added.new);
+    assert_eq!(added.row, 1);
+    assert_eq!(added.workspace.windows.len(), 2);
+    let row = &added.workspace.windows[1];
+    // Where it is now is taken ...
+    assert_eq!(row.target, Target::Zone { zone: 3, span_to: None });
+    assert_eq!(row.title_hint, "GitHub - now");
+    assert_eq!(row.stack, Some(1));
+    // ... and what the row was set up with stays, launch on included.
+    assert!(row.launch && row.focused);
+    assert_eq!((row.delay_ms, row.z), (1500, 0));
+    assert_eq!(row.open_with.as_deref(), Some(r"C:\x"));
+    assert_eq!(row.place, Some(Place::Url("https://a.example".into())));
+    assert_eq!(added.place, Some(Place::Url("https://b.example".into())));
+    assert_eq!(added.workspace.windows[0], other);
+}
+
+fn terminal_row(zone: u32) -> Rule {
+    let mut r = rule(r"C:\wt.exe", None, "CASCADIA", "pwsh");
+    r.target = Target::Zone { zone, span_to: None };
+    r.stack = Some(1);
+    r
+}
+
+#[test]
+fn with_two_rows_of_one_app_the_row_for_this_window_is_the_one_updated() {
+    let old = Workspace { windows: vec![terminal_row(1), terminal_row(2)], ..named("w") };
+    // In zone 2, where the second row is: that row, not the first.
+    let mut fresh = terminal_row(2);
+    fresh.title_hint = "now".into();
+    let added = add_window(&old, fresh, &[None, None]);
+    assert!(!added.new);
+    assert_eq!(added.row, 1);
+    assert_eq!(added.workspace.windows[0], old.windows[0]);
+    assert_eq!(added.workspace.windows[1].title_hint, "now");
+    // The row bound to this exact window wins, even where the window moved to.
+    let mut moved = terminal_row(3);
+    moved.title_hint = "moved".into();
+    let added = add_window(&old, moved, &[None, Some(Bound::Alive(0))]);
+    assert_eq!((added.row, added.new), (1, false));
+    assert_eq!(added.workspace.windows[1].target, Target::Zone { zone: 3, span_to: None });
+    assert_eq!(added.workspace.windows[0], old.windows[0]);
+}
+
+#[test]
+fn a_window_in_a_place_no_row_holds_gets_a_new_row_even_with_rows_of_its_app() {
+    let old = Workspace { windows: vec![terminal_row(1), terminal_row(2)], ..named("w") };
+    let added = add_window(&old, terminal_row(4), &[None, None]);
+    assert!(added.new);
+    assert_eq!(added.row, 2);
+    assert_eq!(added.workspace.windows.len(), 3);
+    assert_eq!(&added.workspace.windows[..2], &old.windows[..]);
+}
+
+#[test]
+fn a_row_takes_the_stack_the_window_is_read_in_and_a_new_row_records_it() {
+    let old = Workspace { windows: vec![terminal_row(1)], ..named("w") };
+    let mut second = terminal_row(1);
+    second.stack = Some(0);
+    let same = add_window(&old, second, &[]);
+    assert_eq!(same.workspace.windows[0].stack, Some(0));
+    // Now in no stack: the row isn't in one either.
+    let mut alone = terminal_row(1);
+    alone.stack = None;
+    assert_eq!(add_window(&old, alone, &[]).workspace.windows[0].stack, None);
+    // A new row, in a place no row of two holds, records the stack too.
+    let two = Workspace { windows: vec![terminal_row(1), terminal_row(2)], ..named("w") };
+    let mut stacked = terminal_row(4);
+    stacked.stack = Some(2);
+    let added = add_window(&two, stacked, &[]);
+    assert!(added.new);
+    assert_eq!(added.workspace.windows[2].stack, Some(2));
+}
+
+#[test]
+fn rows_are_matched_bound_then_only_row_then_same_place_then_new() {
+    let at = |zone| Target::Zone { zone, span_to: None };
+    // 1. Bound to this window wins over a row in the same place.
+    let old = Workspace { windows: vec![terminal_row(1), terminal_row(2)], ..named("w") };
+    let a = add_window(&old, terminal_row(2), &[Some(Bound::Alive(0)), None]);
+    assert_eq!((a.row, a.new), (0, false));
+    assert_eq!(a.workspace.windows[0].target, at(2));
+    // 2. The only row of the app is updated, though the window moved.
+    let one = Workspace { windows: vec![rule(r"C:\a.exe", None, "A", "a"), terminal_row(1)], ..named("w") };
+    let b = add_window(&one, terminal_row(5), &[]);
+    assert_eq!((b.row, b.new, b.workspace.windows.len()), (1, false, 2));
+    assert_eq!(b.workspace.windows[1].target, at(5));
+    // ... unless it is bound to another window.
+    let c = add_window(&one, terminal_row(5), &[None, Some(Bound::Alive(-1))]);
+    assert!(c.new);
+    // 3. With several rows, the one in the same place.
+    let d = add_window(&old, terminal_row(2), &[None, None]);
+    assert_eq!((d.row, d.new), (1, false));
+    // 4. Several rows and none in its place: a new row.
+    let e = add_window(&old, terminal_row(7), &[None, None]);
+    assert_eq!((e.row, e.new), (2, true));
+}
+
+#[test]
+fn adding_is_not_refused_for_another_rows_open_with() {
+    let mut stale = rule(r"C:\a.exe", None, "A", "a");
+    stale.open_with = Some(r"C:\gone\nowhere.txt".into());
+    let old = Workspace { windows: vec![stale], ..named("w") };
+    let mut added = add_window(&old, rule(r"C:\b.exe", None, "B", "b"), &[]).workspace;
+    // Open with, which the check clears when it can't be used, comes through untouched.
+    let kept = checked_rows(&old, added.clone(), &|_| 0, Some(1)).expect("the add's own row is fine");
+    assert_eq!(kept.windows[0].open_with, old.windows[0].open_with);
+    assert_eq!(kept.windows.len(), 2);
+    // The editor's own save still checks every row.
+    added.windows[0].open_with = Some(r#"C:\src" --evil"#.into());
+    assert!(checked_rows(&old, added.clone(), &|_| 0, None).is_err());
+    assert!(checked_rows(&old, added, &|_| 0, Some(1)).is_ok());
+}
+
+#[test]
+fn a_place_row_bound_to_another_window_leaves_this_one_a_row_of_its_own() {
+    let explorer = r"C:\Windows\explorer.exe";
+    let mut folder = rule(explorer, None, "CabinetWClass", "src");
+    folder.place = Some(Place::Folder(r"C:\src".into()));
+    let old = Workspace { windows: vec![folder], ..named("w") };
+    let mut fresh = rule(explorer, None, "CabinetWClass", "docs");
+    fresh.target = Target::Zone { zone: 2, span_to: None };
+    // The row's own window is open, and it isn't the one being added.
+    let bound = [Some(Bound::Alive(-1))];
+    let added = add_window(&old, fresh, &bound);
+    assert!(added.new);
+    assert_eq!(added.workspace.windows.len(), 2);
+}
+
+#[test]
+fn refusals_say_why_and_everything_else_means_no_taskbar_button() {
+    assert!(why_not("seam").contains("Seam's own"));
+    assert!(why_not("never include").contains("Left alone"));
+    assert!(why_not("administrator").contains("administrator"));
+    assert!(why_not("sticky").contains("out of workspace switches"));
+    assert!(why_not("off screen").contains("screen"));
+    for skip in ["tool window", "owned", "not in Alt+Tab", "no activate", "child"] {
+        assert!(why_not(skip).contains("taskbar button"), "{skip}");
+    }
+    let all = ["seam", "never include", "administrator", "sticky", "off screen", "no exe", "tool window"];
+    let texts: HashSet<&str> = all.iter().map(|s| why_not(s)).collect();
+    assert_eq!(texts.len(), all.len());
+}

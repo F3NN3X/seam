@@ -347,6 +347,9 @@ pub const TOPICS: &[Topic] = &[
                 "**Save windows to the active workspace** is a shortcut that saves into the workspace in use without opening Seam. Click its notification within 8 seconds to undo it.",
             ),
             Text(
+                "**Add window to workspace 1** to **9** on Shortcuts add the focused window to that workspace, counted in the order of the list. A window with no row there gets a new one at the end with where it is now and Launch off, so a switch places it but never starts it. A window that already has a row there updates that row's place and keeps its launch details and order. It never takes the window out of another workspace. Seam's own windows, apps under Left alone, apps running as administrator, windows kept out of workspace switches and windows with no taskbar button are refused, and a notice says why. A notification offers Undo for 8 seconds. None has a key until you set one.",
+            ),
+            Text(
                 "The workspace in use shows as Active in the list, and as Active, moved once one of its windows moved. **Set as default**, on a workspace's menu, makes it the one in use when Seam starts and none is remembered.",
             ),
         ],

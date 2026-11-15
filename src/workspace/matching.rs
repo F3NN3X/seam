@@ -27,7 +27,7 @@ pub fn assign(rules: &[Rule], wins: &[Candidate]) -> Vec<Option<isize>> {
 }
 
 /// Whether the window is one of the rule's app: by AUMID when the rule has one, else by exe.
-fn same_app(r: &Rule, w: &Candidate) -> bool {
+pub(super) fn same_app(r: &Rule, w: &Candidate) -> bool {
     match (&r.aumid, &w.aumid) {
         (Some(a), Some(b)) => a == b,
         (Some(_), None) => false,

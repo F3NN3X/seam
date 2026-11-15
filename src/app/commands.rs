@@ -180,6 +180,14 @@ pub(super) fn run_command(app: &mut App, queued: Queued) {
             }
             return;
         }
+        Command::WorkspaceAddWindow { id, number, hwnd } => {
+            let which = match id {
+                Some(id) => Which::Id(id),
+                None => Which::Number(number.unwrap_or(0) as usize),
+            };
+            start_add_window(app, which, hwnd, Some(reply.clone()));
+            return;
+        }
         Command::WorkspaceCapture { name, into, row, pick } => {
             if let Some(refusal) = start_capture(app, name, into, row, pick, Some(reply.clone())) {
                 let _ = reply.send(refusal);

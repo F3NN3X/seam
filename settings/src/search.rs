@@ -223,6 +223,12 @@ const ENTRIES: &[Entry] = &[
         "A path or link the app opens when a switch starts it",
         "folder file project vault url link argument start",
     ),
+    entry(
+        Page::Workspaces,
+        "Show every window",
+        "A window saved minimized comes back, in its place",
+        "minimized restore show all",
+    ),
     entry(Page::Workspaces, "Other windows", "Leave, minimize or politely close the rest", "close minimize leave"),
     entry(Page::Workspaces, "Export workspace", "Save a workspace to a file", "import share backup"),
     entry(Page::Workspaces, "Add an app", "Add an open window or an installed app", "picker store start menu"),

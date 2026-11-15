@@ -19,13 +19,15 @@ pub(super) fn now_of(h: HWND, dpi: u32) -> Option<Now> {
 }
 
 /// What a rule asks for on its screen, or `None` for a window to keep where it is.
-fn plan(rule: &Rule, geo: &Geo) -> Option<Kind> {
+fn plan(rule: &Rule, geo: &Geo, show_all: bool) -> Option<Kind> {
     if rule.target == (Target::State { state: WinState::Keep }) {
         return None;
     }
     let rect = workspace::rect_for(&rule.target, &geo.zones, geo.work);
     let normal = rule.normal_rect.map(|f| workspace::from_fractions(f, geo.work));
-    Some(match (rule.shown, rect) {
+    // "Show every window" restores a window saved minimized, onto its rect or maximized.
+    let shown = if show_all && rule.shown == Shown::Minimized { Shown::Normal } else { rule.shown };
+    Some(match (shown, rect) {
         (Shown::Minimized, _) => Kind::Min(rect.or(normal).unwrap_or(geo.work)),
         (Shown::Fullscreen, _) => Kind::Full(geo.bounds),
         (Shown::Normal, Some(r)) => Kind::Rect(r),
@@ -39,13 +41,14 @@ fn plan(rule: &Rule, geo: &Geo) -> Option<Kind> {
 /// give that size) keeps the pixels or the millimetres it had at capture (§11.4): on
 /// its own screen, or, with that screen gone, on the one the window is on now. Then it comes with the line to log once
 /// it's moved. `tell` logs a window Windows scales because a screen doesn't report
-/// its size. `None` leaves the window where it is.
+/// its size. `show_all` is the workspace's "Show every window". `None` leaves the window where it is.
 pub(super) fn destination<'g>(
     rule: &Rule,
     geos: &'g [Geo],
     h: HWND,
     mode: WindowSize,
     tell: bool,
+    show_all: bool,
 ) -> Option<Planned<'g>> {
     let saved = geos.iter().find(|g| g.id == rule.monitor);
     let px = rule.size_px.map(|p| [p[0] as f32, p[1] as f32]);
@@ -55,7 +58,7 @@ pub(super) fn destination<'g>(
         WindowSize::Real => rule.size_mm,
     };
     let kept = kept.filter(|_| matches!(rule.target, Target::Rect { .. }));
-    let Some(kept) = kept else { return saved.and_then(|geo| Some((geo, plan(rule, geo)?, None))) };
+    let Some(kept) = kept else { return saved.and_then(|geo| Some((geo, plan(rule, geo, show_all)?, None))) };
     let geo = match saved {
         Some(geo) => geo,
         None => {
@@ -63,7 +66,7 @@ pub(super) fn destination<'g>(
             geos.iter().find(|g| g.bounds.contains(centre(now).0, centre(now).1))?
         }
     };
-    let kind = plan(rule, geo)?;
+    let kind = plan(rule, geo, show_all)?;
     let (Kind::Rect(at) | Kind::Min(at)) = kind else { return Some((geo, kind, None)) };
     // Restored on the screen it was captured on. Without that record, the screen
     // it was captured on is the one whose fractions still give the size it had:

@@ -588,8 +588,8 @@ fn more_button(panel: &Panel, ws: &Workspace, cx: &mut Context<Panel>) -> impl I
         })
 }
 
-/// Start missing apps, and what happens to the other windows.
-fn switch_rows(ws: &Workspace, p: Palette, window: &mut Window, cx: &mut Context<Panel>) -> [AnyElement; 2] {
+/// Start missing apps, showing every window, and what happens to the other windows.
+fn switch_rows(ws: &Workspace, p: Palette, window: &mut Window, cx: &mut Context<Panel>) -> [AnyElement; 3] {
     let view = cx.entity();
     let id = ws.id.clone();
     let start_missing = switch("start-missing", "Start missing apps", ws.launch_missing, window, cx, {
@@ -597,6 +597,14 @@ fn switch_rows(ws: &Workspace, p: Palette, window: &mut Window, cx: &mut Context
         move |on, window, cx| {
             let id = id.clone();
             view.update(cx, |panel, cx| edit(panel, &id, window, cx, |ws| ws.launch_missing = on));
+        }
+    });
+    let id = ws.id.clone();
+    let show_all = switch("show-all", "Show every window", ws.show_all, window, cx, {
+        let view = view.clone();
+        move |on, window, cx| {
+            let id = id.clone();
+            view.update(cx, |panel, cx| edit(panel, &id, window, cx, |ws| ws.show_all = on));
         }
     });
     let id = ws.id.clone();
@@ -620,6 +628,7 @@ fn switch_rows(ws: &Workspace, p: Palette, window: &mut Window, cx: &mut Context
     );
     [
         row("Start missing apps", Some("Ticked apps open if they're closed".into()), start_missing, p),
+        row("Show every window", Some("A window saved minimized comes back, in its place".into()), show_all, p),
         row("Other windows", Some("When you switch. Close asks each app first, so it can save".into()), others, p),
     ]
 }

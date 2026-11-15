@@ -187,6 +187,7 @@ fn snapping_keys_card(
                     .border_color(p.hairline),
                 ),
         )
+        .child(div().border_t_1().border_color(p.hairline).child(margins::row(panel, p, window, cx)))
 }
 
 /// The switch rows of the Snapping card.

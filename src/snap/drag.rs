@@ -474,7 +474,7 @@ impl DragJob {
         std::thread::sleep(std::time::Duration::from_millis(SETTLE_MS.into()));
         let h = hwnd_of(self.hwnd);
         let ((from, src), (to, dst, bounds)) = (self.from, self.to);
-        let (Some(now), Some((work, _))) = (winutil::visible_rect(h), work_area(bounds)) else { return };
+        let (Some(now), Some((work, _))) = (winutil::visible_rect(h), winutil::work_area_full(bounds)) else { return };
         let app = winutil::exe_name(h).unwrap_or_default();
         let (w, ht, mode) = (self.frame.w, self.frame.h, self.mode);
         let Some(r) = desk::moved_rect(mode, (w as f64, ht as f64), (src, dst), now, work) else {

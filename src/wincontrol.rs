@@ -332,26 +332,43 @@ fn centre(r: Rect) -> (i32, i32) {
 }
 
 /// A screen's work area, scale and zones in pixels, in the order of the desk's screens.
+/// `work` is the area zones are laid out in, less the screen's margins; `full` is without them,
+/// for a move between screens, which keeps a window's share of the room.
 struct Geo {
     id: String,
     /// Line Up number.
     number: usize,
     bounds: Rect,
     work: Rect,
+    full: Rect,
     dpi: u32,
     /// Physical pixels per inch from EDID, 0 when the screen doesn't report its size.
     raw_dpi: f64,
     zones: Vec<Rect>,
 }
 
+impl Geo {
+    /// A screen from its work area with and without margins, so every zone comes from `work`.
+    fn new(
+        (id, number, bounds): (String, usize, Rect),
+        (work, full): (Rect, Rect),
+        (dpi, raw_dpi, gap): (u32, f64, i32),
+        tree: Option<&zones::Node>,
+    ) -> Geo {
+        let zones = tree.map(|t| zones::rects(t, work, gap)).unwrap_or_default();
+        Geo { id, number, bounds, work, full, dpi, raw_dpi, zones }
+    }
+}
+
 fn geometry(job: &Job, screens: &[Screen]) -> Vec<Geo> {
     let geo = |s: &Screen| {
-        let (work, dpi) = winutil::work_area(s.px).unwrap_or((s.px, 96));
+        let (full, dpi) = winutil::work_area_full(s.px).unwrap_or((s.px, 96));
+        let work = winutil::work_area(s.px).map_or(full, |(work, _)| work);
         let gap = (job.gap.min(MAX_GAP) as f32 * dpi as f32 / 96.0).round() as i32;
         let layout = job.layouts.get(s.mm.index).and_then(Option::as_ref);
-        let zones = layout.map(|l| zones::rects(&l.tree, work, gap)).unwrap_or_default();
         let mon = &job.mons[s.mm.index];
-        Geo { id: mon.id.clone(), number: s.mm.index + 1, bounds: s.px, work, dpi, raw_dpi: mon.raw_dpi, zones }
+        let who = (mon.id.clone(), s.mm.index + 1, s.px);
+        Geo::new(who, (work, full), (dpi, mon.raw_dpi, gap), layout.map(|l| &l.tree))
     };
     screens.iter().map(geo).collect()
 }
@@ -444,12 +461,12 @@ fn fraction(at: i32, room: i32) -> f64 {
 /// position keeps its share of the room left in the work area.
 fn relative(rect: Rect, from: &Geo, to: &Geo) -> Rect {
     let k = to.dpi as f64 / from.dpi.max(1) as f64;
-    let w = ((rect.w as f64 * k).round() as i32).clamp(1, to.work.w.max(1));
-    let h = ((rect.h as f64 * k).round() as i32).clamp(1, to.work.h.max(1));
-    let fx = fraction(rect.x - from.work.x, from.work.w - rect.w);
-    let fy = fraction(rect.y - from.work.y, from.work.h - rect.h);
-    let x = to.work.x + (fx * (to.work.w - w) as f64).round() as i32;
-    let y = to.work.y + (fy * (to.work.h - h) as f64).round() as i32;
+    let w = ((rect.w as f64 * k).round() as i32).clamp(1, to.full.w.max(1));
+    let h = ((rect.h as f64 * k).round() as i32).clamp(1, to.full.h.max(1));
+    let fx = fraction(rect.x - from.full.x, from.full.w - rect.w);
+    let fy = fraction(rect.y - from.full.y, from.full.h - rect.h);
+    let x = to.full.x + (fx * (to.full.w - w) as f64).round() as i32;
+    let y = to.full.y + (fy * (to.full.h - h) as f64).round() as i32;
     Rect { x, y, w, h }
 }
 
@@ -463,7 +480,7 @@ fn resized(job: &Job, h: HWND, size: Rect, from: &Geo, to: &Geo, placed: Rect) -
     }
     let app = winutil::exe_name(h).unwrap_or_default();
     let px = (size.w as f64, size.h as f64);
-    let Some(r) = desk::moved_rect(job.size_mode, px, (from.raw_dpi, to.raw_dpi), placed, to.work) else {
+    let Some(r) = desk::moved_rect(job.size_mode, px, (from.raw_dpi, to.raw_dpi), placed, to.full) else {
         log::info!(
             "window size: {app} scaled by Windows, screen {} or {} doesn't report its size",
             from.number,
@@ -592,4 +609,36 @@ fn move_one(
     let here = direction::screen_at(screens, from).ok_or("Nothing in that direction")?;
     let placed = relative(from, &geo[here], to);
     Ok(free(h, to, resized(job, h, from, &geo[here], to, placed)))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use seam::margins::{Margins, shrink};
+
+    fn geo(margins: Margins) -> Geo {
+        let full = Rect { x: 0, y: 0, w: 1920, h: 1040 };
+        let work = shrink(full, 96, &margins);
+        let tree = zones::template_tree(zones::Template::Columns);
+        Geo::new(("m".into(), 1, full), (work, full), (96, 96.0, 8), tree.as_ref())
+    }
+
+    #[test]
+    fn zones_come_from_the_margined_area_and_full_stays_whole() {
+        let g = geo(Margins { top: 40, right: 0, bottom: 0, left: 200 });
+        assert_eq!(g.full, Rect { x: 0, y: 0, w: 1920, h: 1040 });
+        assert_eq!(g.work, Rect { x: 200, y: 40, w: 1720, h: 1000 });
+        assert!(!g.zones.is_empty());
+        assert!(g.zones.iter().all(|z| z.x >= g.work.x && z.y >= g.work.y));
+        assert!(g.zones.iter().all(|z| z.x + z.w <= g.work.x + g.work.w && z.y + z.h <= g.work.y + g.work.h));
+        // Every path that lays out from `work` gets the same rects the zones hold.
+        let tree = zones::template_tree(zones::Template::Columns).unwrap();
+        assert_eq!(zones::rects(&tree, g.work, 8), g.zones);
+    }
+
+    #[test]
+    fn no_margins_give_the_same_geometry() {
+        let g = geo(Margins::default());
+        assert_eq!(g.work, g.full);
+    }
 }

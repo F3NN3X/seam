@@ -132,6 +132,8 @@ pub struct Panel {
     pub colour_generation: u64,
     /// The Gap slider. It sends the new gap when it's let go.
     pub gap: Entity<SliderState>,
+    /// The Screen margins sliders, top, right, bottom and left, sent the same way.
+    pub margins: [Entity<SliderState>; 4],
     /// The Edge resistance and Glued edge push sliders, sent the same way.
     pub edge_resistance: Entity<SliderState>,
     pub glue_push: Entity<SliderState>,
@@ -172,6 +174,9 @@ impl Panel {
         let pin_picker = cx.new(|cx| ColorPickerState::new(window, cx));
         let gap =
             cx.new(|_| SliderState::new().min(0.).max(32.).step(2.).default_value(Config::default().zones.gap as f32));
+        let margins = std::array::from_fn(|_| {
+            cx.new(|_| SliderState::new().min(0.).max(seam::margins::MAX_PX as f32).step(4.).default_value(0.))
+        });
         let pointer = Config::default().pointer;
         let edge_resistance = cx.new(|_| {
             SliderState::new()
@@ -184,6 +189,7 @@ impl Panel {
             SliderState::new().min(0.).max(MAX_GLUE_PUSH_PX as f32).step(10.).default_value(pointer.glue_push_px as f32)
         });
         let mut subscriptions = slider_subscriptions(&edge_resistance, &glue_push, &gap, window, cx);
+        subscriptions.extend(pages::zones::margins::subscriptions(&margins, window, cx));
         subscriptions.extend(field_subscriptions(&name_input, &focus_picker, &pin_picker, &search, window, cx));
         subscriptions.extend(window_subscriptions(window, cx));
         let focus = cx.focus_handle();
@@ -222,6 +228,7 @@ impl Panel {
             pin_picker,
             colour_generation: 0,
             gap,
+            margins,
             edge_resistance,
             glue_push,
             search,

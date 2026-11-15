@@ -20,6 +20,7 @@ use std::rc::Rc;
 
 mod colour_pick;
 mod layouts;
+pub mod margins;
 mod page;
 mod screen_preview;
 

@@ -117,6 +117,12 @@ const ENTRIES: &[Entry] = &[
     entry(Page::Zones, "Gap", "Space between zones and the screen edge", "padding"),
     entry(
         Page::Zones,
+        "Screen margins",
+        "Room kept free around the zones on this screen",
+        "top right bottom left edge border inset ultrawide bezel",
+    ),
+    entry(
+        Page::Zones,
         "Keep windows in their zones",
         "Experimental. Moves snapped windows back after a screen change",
         "refit resolution scaling unplug",

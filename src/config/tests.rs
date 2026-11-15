@@ -257,11 +257,11 @@ fn an_older_file_has_no_rotate_or_reset_key() {
 fn quitting_clears_tiling_for_every_freed_desktop_and_an_old_config_has_the_switch_off() {
     let on = |ids: &[&str]| TileScreen { desktops: ids.iter().map(|d| d.to_string()).collect(), ..Default::default() };
     let mut tiling = BTreeMap::from([("a".to_string(), on(&["d1", "d2"])), ("b".to_string(), on(&["d1"]))]);
-    clear_tiling(&mut tiling, &[("a".into(), "d1".into()), ("b".into(), "d1".into()), ("c".into(), "d1".into())]);
-    assert_eq!(tiling.get("a"), Some(&on(&["d2"])));
-    assert!(!tiling.contains_key("b"));
-    clear_tiling(&mut tiling, &[("a".into(), "d2".into())]);
-    assert!(tiling.is_empty());
+    // Screen b keeps its family, and desktops never tiled this session go too.
+    tiling.insert("b".into(), TileScreen { family: crate::tiling::Family::Grid, ..on(&["d3"]) });
+    clear_tiling(&mut tiling);
+    assert_eq!(tiling.len(), 1);
+    assert!(tiling["b"].desktops.is_empty());
     let old: Config = serde_json::from_value(json!({ "zones": { "gap": 4 } })).unwrap();
     assert!(!old.zones.tiling_free_on_quit);
 }

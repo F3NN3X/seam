@@ -497,11 +497,11 @@ unsafe fn on_destroy() {
             wm::release_before_exit();
             // A quit the user asked for, the same signal as pins: not an update, a crash or a sign-out.
             if with_app(|a| a.cfg.zones.tiling_free_on_quit).unwrap_or(false) {
-                let freed = snap::tiling_free_for_quit(until);
+                snap::tiling_free_for_quit(until);
                 // As Free all windows does: tiling is off there when Seam starts again.
                 with_app(|a| {
                     if let Some(desk) = a.cfg.desks.get_mut(&a.sig) {
-                        seam::config::clear_tiling(&mut desk.tiling, &freed);
+                        seam::config::clear_tiling(&mut desk.tiling);
                     }
                     persist(a);
                 });

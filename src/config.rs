@@ -447,17 +447,12 @@ pub struct Desk {
     pub tiling: BTreeMap<String, TileScreen>,
 }
 
-/// Tiling off for each (screen, virtual desktop) pair, as Free all windows leaves it. A screen
-/// left with no desktops and its default family is dropped.
-pub fn clear_tiling(tiling: &mut BTreeMap<String, TileScreen>, freed: &[(String, String)]) {
-    for (screen, desktop) in freed {
-        if let Some(entry) = tiling.get_mut(screen) {
-            entry.desktops.retain(|d| d != desktop);
-            if *entry == TileScreen::default() {
-                tiling.remove(screen);
-            }
-        }
-    }
+/// Tiling off on every screen and virtual desktop of a desk, as quitting with Put windows back
+/// leaves it, including those that were never tiled this session. A screen left with no
+/// desktops and its default family is dropped.
+pub fn clear_tiling(tiling: &mut BTreeMap<String, TileScreen>) {
+    tiling.values_mut().for_each(|entry| entry.desktops.clear());
+    tiling.retain(|_, entry| *entry != TileScreen::default());
 }
 
 /// Smart tiling on one screen of a desk: the family, and the virtual desktops it is

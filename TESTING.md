@@ -612,6 +612,12 @@ Each change below saves at once, with no Save button, and shows a notification w
 - [ ] **Narrow panel.** At the panel's default size (1160 by 780, on a panel with no window open before) and at its least width (900), with a workspace whose apps have long names and places, every row shows the grip, icon, name, Now, Goes to, Launch and the "..." at the right, with nothing cut off. Long names, places and Now words end in "..." and hovering shows them in full. At the default size, "Visual Studio Code", "Running in background" and "Screen 2, zone 1" show in full with no "...". Widen the window: the name, Now and Goes to columns all grow, the name and Goes to about twice as fast as Now, until "Running in background" and the places show in full. The column heads stay over their columns as the window narrows and widens. The detail header keeps **Update from screen**, **Switch now** and its "...", with a long name ending in "...". A card with a long name, "Default" and "Active, moved" ends the name in "..." and keeps both words.
 - [ ] **Reorder with windows open.** Turn the debug log on, switch to the workspace so its apps are placed, then drag the first row below the second. The log has `workspace rows changed: 2 stamps moved, 0 cleared`. Turn **Put apps in place when they open** on, close the app that is now first and open it again: it goes to its own place, not the other app's. Remove a row whose app is running: the log has `1 cleared`, and dragging that app's window no longer marks the workspace as drifted. Rename the workspace: no `workspace rows changed` line.
 
+### Show every window
+- [ ] **Off by default.** Minimize one app, capture, then restore it and switch to the workspace: the app stays minimized, and its row reads In place.
+- [ ] **Switch on.** Turn on **Show every window** for it, and it survives reopening the panel. Minimize the app, and the row reads Moved. Snap back restores it onto its place, or maximized for a row with no zone, and it may take the focus.
+- [ ] **Auto-apply.** With **Put apps in place when they open** on, switch with the app closed and **Start missing apps** on: it opens in its place, not minimized.
+- [ ] **Turn it off again.** The row returns to In place while the app is minimized.
+
 ### Zones in a workspace
 
 Use the 4-screen desk. Screen 1 is Priority, screen 2 Columns, and the library has "Custom 1".

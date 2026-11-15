@@ -51,7 +51,9 @@ fn row_state(rule: &Rule, hit: Option<isize>, seen: &[Seen], geos: &[Geo], live:
         return RowState::InPlace;
     }
     let h = hwnd_of(hwnd);
-    let Some((geo, kind, _)) = destination(rule, geos, h, live.size_mode, false) else { return RowState::InPlace };
+    let Some((geo, kind, _)) = destination(rule, geos, h, live.size_mode, false, live.workspace.show_all) else {
+        return RowState::InPlace;
+    };
     let Some(now) = now_of(h, geo.dpi) else { return RowState::InPlace };
     if now.shown == Shown::Minimized && !matches!(kind, Kind::Min(_)) {
         RowState::Minimized
@@ -95,15 +97,15 @@ pub fn place_opened(live: &LiveWorkspace, hwnd: isize) -> Option<String> {
     let (row, rule) = (free[hit], &ws.windows[free[hit]]);
     let app = app_name(rule);
     let geos = geometry(&live.screens, live.gap);
-    let moved = move_opened(h, rule, &geos, live.size_mode);
+    let moved = move_opened(h, rule, &geos, live.size_mode, ws.show_all);
     winutil::set_ws_stamp(h, key, row);
     let what = if moved { "placed" } else { "already in place" };
     Some(format!("{app} for row {}: {what} in {} ms", row + 1, started.elapsed().as_millis()))
 }
 
 /// Move a window that just opened to where the rule puts it. Whether it moved.
-pub(super) fn move_opened(h: HWND, rule: &Rule, geos: &[Geo], mode: WindowSize) -> bool {
-    let target = destination(rule, geos, h, mode, true);
+pub(super) fn move_opened(h: HWND, rule: &Rule, geos: &[Geo], mode: WindowSize, show_all: bool) -> bool {
+    let target = destination(rule, geos, h, mode, true, show_all);
     let now = target.as_ref().and_then(|(geo, ..)| now_of(h, geo.dpi));
     match (target, now) {
         (Some((geo, kind, note)), Some(now)) if !in_place(&kind, &now, geo.bounds) => {

@@ -272,6 +272,8 @@ pub struct Workspace {
     pub hotkey: Option<String>,
     pub launch_missing: bool,
     pub other_windows: OtherWindows,
+    /// A window saved minimized is shown, on its rect or maximized, and counts as drifted while it's minimized.
+    pub show_all: bool,
     pub windows: Vec<Rule>,
     /// Screen device path -> the layout a switch gives that screen, as a desk saves
     /// one, or `no_zones()`. A screen with no entry is kept as it is. Raw, so an
@@ -288,6 +290,7 @@ impl Default for Workspace {
             hotkey: None,
             launch_missing: true,
             other_windows: OtherWindows::Leave,
+            show_all: false,
             windows: Vec::new(),
             zones: BTreeMap::new(),
         }
@@ -389,6 +392,7 @@ impl Session {
             hotkey: None,
             launch_missing: true,
             other_windows: OtherWindows::Leave,
+            show_all: false,
             windows: self.windows,
             // A restore never changes a screen's layout.
             zones: BTreeMap::new(),

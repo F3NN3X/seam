@@ -298,6 +298,7 @@ pub const TOPICS: &[Topic] = &[
                 "**Switch now**, the workspace's shortcut or **Workspaces** in the tray menu puts each app back. Windows already in place aren't touched.",
                 "**Open alongside**, on a workspace's menu, switches once and leaves the other windows alone, whatever **Other windows** says",
                 "**Start missing apps** starts the ticked apps that aren't running, and **Other windows** leaves, minimizes or closes the rest. Close only asks, so an app with unsaved work stays open.",
+                "**Show every window** brings back a window that was minimized at capture, onto its place or maximized. It counts as moved while it's minimized, so Snap back and auto-apply restore it.",
                 "**Update from screen** saves the windows as they are now, and keeps your edits and the apps that aren't open, unless **Update from screen removes apps that aren't open** is on",
             ]),
             Text(

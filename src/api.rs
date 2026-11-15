@@ -174,8 +174,13 @@ pub enum Command {
         id: String,
     },
     /// Switch to the active workspace again, so drifted windows go back.
-    WorkspaceSnapBack,
-    WorkspaceSwitchBack,
+    WorkspaceSnapBack {
+        /// Leave the other windows alone, which an assistant always does.
+        alongside: bool,
+    },
+    WorkspaceSwitchBack {
+        alongside: bool,
+    },
     /// Save the windows on screen into the workspace in use, or a new one (§7).
     WorkspaceQuickSave,
     /// The workspace taken as in use at start when none is remembered, or none.

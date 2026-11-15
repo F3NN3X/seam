@@ -22,6 +22,12 @@ fn offer_undo(app: &mut App, saved: &Workspace, before: Option<Value>, from: Opt
 pub(in crate::app) fn create_workspace(app: &mut App, client: &str, name: &str) -> Reply {
     let Some(desk) = app.cfg.desks.get(&app.sig) else { return refused("This desk has no workspaces") };
     let existing = workspace::list(&desk.workspaces);
+    if existing.len() >= workspace::MAX_ASSISTANT_WORKSPACES {
+        return refused(format!(
+            "This desk already has {} workspaces, so Seam won't make another for an assistant",
+            workspace::MAX_ASSISTANT_WORKSPACES
+        ));
+    }
     let names: Vec<String> = existing.iter().map(|w| w.name.clone()).collect();
     let ids: Vec<String> = existing.iter().map(|w| w.id.clone()).collect();
     let created =
@@ -58,5 +64,6 @@ pub(in crate::app) fn edit_workspace(app: &mut App, client: &str, id: &str, edit
     log::info!("assistant {client}: {what} in {}", old.name);
     let saved = stored(app, id).and_then(|v| workspace::parse(&v)).unwrap_or(edited);
     offer_undo(app, &saved, Some(before), from, &what);
-    Ok(json!({ "ok": true }))
+    // A name that was taken got " 2", so the assistant is told what it ended up as.
+    Ok(json!({ "ok": true, "name": saved.name }))
 }

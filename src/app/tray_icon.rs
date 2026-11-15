@@ -190,7 +190,7 @@ pub(super) fn show_menu(app: &mut App) {
             }
             ID_RELEASE => wm::release(None),
             ID_SWITCH_BACK => {
-                if let Err(e) = switch_back(app) {
+                if let Err(e) = switch_back(app, false) {
                     log::info!("workspace menu: {}", e.message);
                     notify(app, "Switch back", &e.message, BalloonAction::None);
                 }

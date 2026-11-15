@@ -33,6 +33,11 @@ fn success(id: Value, result: Value) -> Value {
     json!({ "jsonrpc": "2.0", "id": id, "result": result })
 }
 
+/// The answer to a line that couldn't be read at all.
+pub fn parse_error(message: &str) -> Value {
+    failure(Value::Null, PARSE_ERROR, message)
+}
+
 /// A short, single-line name for the log, from whatever the client called itself.
 pub fn clean_name(name: &str) -> String {
     name.chars().filter(|c| !c.is_control()).take(40).collect::<String>().trim().to_string()

@@ -59,10 +59,15 @@ impl Backend for Link {
                     self.watching();
                     return Ok(result);
                 }
-                // The tray hung up on an idle connection, or restarted: connect once more.
-                Err(CallError::Io(_)) if !retried => {
+                // The tray hung up on an idle connection, or restarted: connect once more. Only
+                // when the request never went out, or it might run twice (a removed row, say).
+                Err(CallError::Io(_)) if !retried && !client.unanswered() => {
                     retried = true;
                     self.client = None;
+                }
+                Err(CallError::Io(_)) if client.unanswered() => {
+                    self.client = None;
+                    return Err("Seam stopped answering. The change may or may not have been made, so check before trying again".into());
                 }
                 Err(e) => return Err(describe(e)),
             }

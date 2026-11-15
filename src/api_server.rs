@@ -44,7 +44,7 @@ use windows::Win32::System::Threading::{
 use windows::Win32::UI::WindowsAndMessaging::{GetCursorPos, PostMessageW};
 use windows::core::PCWSTR;
 
-const MAX_CLIENTS: u32 = 8;
+const MAX_CLIENTS: u32 = 16;
 const PIPE_BUFFER: u32 = 64 * 1024;
 const WRITE_TIMEOUT_MS: u32 = 2000;
 const COMMAND_TIMEOUT: Duration = Duration::from_secs(60);
@@ -76,6 +76,8 @@ struct Conn {
     topics: Vec<String>,
     /// It proved it is the panel with the token.
     panel: bool,
+    /// The client process is a `seam-mcp.exe`.
+    mcp: bool,
     outbox: Arc<Outbox>,
 }
 
@@ -461,17 +463,18 @@ fn pump(shared: &Shared, pipe: HANDLE, read_event: HANDLE, write_event: HANDLE, 
         overflowed: AtomicBool::new(false),
     });
     let conn_id = NEXT_CONN.fetch_add(1, Ordering::Relaxed);
+    let mcp = client_is_mcp(pipe);
     guard(&shared.conns).push(Conn {
         id: conn_id,
         name: None,
         topics: Vec::new(),
         panel: false,
+        mcp,
         outbox: outbox.clone(),
     });
     notify_clients_changed(shared);
 
     let own_image = client_is_seam(pipe);
-    let mcp = client_is_mcp(pipe);
     let name = "anonymous".to_string();
     let mut session = Session { pipe, write_event, conn_id, outbox, panel: false, own_image, mcp, name };
     let mut buffer = vec![0u8; 8192];
@@ -539,6 +542,12 @@ pub fn publish(next: Snapshot, api: &ApiSettings) -> bool {
     let Some(shared) = SHARED.get() else { return false };
     shared.api_enabled.store(api.enabled, Ordering::Relaxed);
     shared.mcp.store(api.mcp, Ordering::Relaxed);
+    if !api.mcp {
+        // Switching assistants off ends what they subscribed to, as well as what they may ask.
+        for conn in guard(&shared.conns).iter_mut().filter(|c| c.mcp) {
+            conn.topics.clear();
+        }
+    }
     shared.assistants_edit.store(api.assistants_may_edit(), Ordering::Relaxed);
     let mut slot = shared.snapshot.write().unwrap_or_else(|e| e.into_inner());
     let changed = slot.state != next.state;

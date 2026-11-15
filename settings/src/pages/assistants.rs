@@ -16,10 +16,11 @@ pub fn connected(panel: &Panel) -> bool {
     panel.state.as_ref().is_some_and(|s| s.clients.iter().any(|c| c.starts_with(MCP_CLIENT)))
 }
 
-/// `seam-mcp.exe` next to the exe running, where the installer and the zip put it.
-fn mcp_path() -> String {
-    let beside = std::env::current_exe().ok().map(|exe| exe.with_file_name("seam-mcp.exe"));
-    beside.map_or_else(|| "seam-mcp.exe".into(), |path| path.display().to_string())
+/// `seam-mcp.exe` next to the exe running, where the installer and the zip put it, if
+/// it is there. The Store copy doesn't have it.
+fn mcp_path() -> Option<String> {
+    let beside = std::env::current_exe().ok()?.with_file_name("seam-mcp.exe");
+    beside.is_file().then(|| beside.display().to_string())
 }
 
 fn patching(view: &Entity<Panel>, patch: fn(bool) -> Value) -> impl Fn(bool, &mut Window, &mut App) + 'static + use<> {
@@ -69,11 +70,13 @@ pub fn render(panel: &Panel, view: &Entity<Panel>, window: &mut Window, cx: &mut
         .font_weight(FontWeight::NORMAL)
         .text_size(px(13.))
         .text_color(p.secondary)
-        .child(path.clone());
-    let copy = ui::secondary("copy-mcp-path", "Copy", cx).on_click(cx.listener(move |_, _, window, cx| {
-        cx.write_to_clipboard(ClipboardItem::new_string(path.clone()));
-        window.push_notification(Notification::new().message("Copied the path to seam-mcp.exe"), cx);
-    }));
+        .child(path.clone().unwrap_or_else(|| "Not included in this build".into()));
+    let copy = path.map(|path| {
+        ui::secondary("copy-mcp-path", "Copy", cx).on_click(cx.listener(move |_, _, window, cx| {
+            cx.write_to_clipboard(ClipboardItem::new_string(path.clone()));
+            window.push_notification(Notification::new().message("Copied the path to seam-mcp.exe"), cx);
+        }))
+    });
     section(
         "Assistants",
         card(
@@ -90,7 +93,7 @@ pub fn render(panel: &Panel, view: &Entity<Panel>, window: &mut Window, cx: &mut
                     edits,
                     p,
                 ),
-                row_with("seam-mcp.exe", Some(shown.into_any_element()), copy),
+                row_with("seam-mcp.exe", Some(shown.into_any_element()), div().children(copy)),
             ],
             p,
         ),

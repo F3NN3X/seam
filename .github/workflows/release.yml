@@ -142,13 +142,17 @@ jobs:
               return {"name": name, "asset": asset, "size": os.path.getsize(f"dist/{asset}"),
                       "sha256": hashlib.sha256(open(f"dist/{asset}", "rb").read()).hexdigest()}
           # Keyed like Rust's std::env::consts::ARCH, which the updater looks itself up by.
-          arches = {arch: [entry(n, n.replace(".exe", f"{suffix}.exe")) for n in ("seam.exe", "seam-settings.exe", "seam-mcp.exe")]
+          arches = {arch: [entry(n, n.replace(".exe", f"{suffix}.exe")) for n in ("seam.exe", "seam-settings.exe")]
                     for arch, suffix in (("x86_64", ""), ("aarch64", "-arm64"))}
-          # `files` is exactly what updaters from before ARM64 builds read: the two x64 exes. Those
-          # updaters refuse any other name, so seam-mcp.exe is in `arches` only.
-          files = [{k: f[k] for k in ("name", "size", "sha256")} for f in arches["x86_64"][:2]]
+          # Every updater from v0.5.0 on takes `arches[arch]` when there is one, and refuses a list
+          # that isn't exactly the two exes. So seam-mcp.exe goes under `optional`, a key those
+          # updaters never read and newer ones merge in, checked like the others.
+          optional = {arch: [entry("seam-mcp.exe", f"seam-mcp{suffix}.exe")]
+                      for arch, suffix in (("x86_64", ""), ("aarch64", "-arm64"))}
+          # `files` is exactly what updaters from before ARM64 builds read: the x64 exes.
+          files = [{k: f[k] for k in ("name", "size", "sha256")} for f in arches["x86_64"]]
           json.dump({"version": tag, "date": datetime.date.today().isoformat(), "prerelease": pre,
-                     "notes": notes.strip(), "files": files, "arches": arches},
+                     "notes": notes.strip(), "files": files, "arches": arches, "optional": optional},
                     open("dist/latest.json", "w"), indent=2)
           PY
 
@@ -235,7 +239,7 @@ jobs:
           manifest = json.load(open("dist/latest.json"))
           staged = {"x86_64": "dist", "aarch64": "dist-arm64"}
           checks = [(f["name"], f"dist/{f['name']}", f["sha256"]) for f in manifest["files"]]
-          checks += [(f["asset"], path, f["sha256"]) for arch, files in manifest["arches"].items() for f in files
+          checks += [(f["asset"], path, f["sha256"]) for group in ("arches", "optional") for arch, files in manifest[group].items() for f in files
                      for path in (f"dist/{f['asset']}", f"{staged[arch]}/{f['name']}")]
           bad = sorted({name for name, path, sha in checks
                         if hashlib.sha256(open(path, "rb").read()).hexdigest() != sha})

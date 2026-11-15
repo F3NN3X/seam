@@ -248,7 +248,7 @@ Other programs on the PC can read Seam's status, switch workspaces, line up scre
 
 ### Assistants (MCP)
 
-An AI assistant that speaks MCP, such as Claude, can use Seam through `seam-mcp.exe`, which sits next to `seam.exe`. It can read status and your workspaces, switch workspaces without closing any window, Snap back, Switch back and Quick save. **Let assistants use Seam (MCP)** on General is off until you turn it on, and takes effect at once. **Let assistants change workspaces** under it, also off, lets it rename, create and edit rows, each with an Undo notice. It can't close windows, change your settings or choose which programs a workspace starts. General has the path to paste into the assistant's MCP settings. See [MCP](docs/api.md#mcp).
+An AI assistant that speaks MCP, such as Claude, can use Seam through `seam-mcp.exe`, which sits next to `seam.exe`. It can read status and your workspaces, switch workspaces without closing any window, Snap back and Switch back. **Let assistants use Seam (MCP)** on General is off until you turn it on, and takes effect at once. **Let assistants change workspaces** under it, also off, lets it also Quick save, rename, create and edit rows, each with an Undo notice. It can't close windows, change your settings or choose which programs a workspace starts. General has the path to paste into the assistant's MCP settings. See [MCP](docs/api.md#mcp).
 
 ## Getting started
 

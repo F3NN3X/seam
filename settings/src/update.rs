@@ -21,9 +21,11 @@ const RELEASE_DOWNLOADS: &str = "https://github.com/F3NN3X/seam/releases/downloa
 /// The public half of Seam's minisign key (ID DD3DF0F7CB3ACA88): the second
 /// line of `seam.pub`. See packaging/README.md.
 pub const SEAM_PUBLIC_KEY: &str = "RWSIyjrL9/A93aX1yKj6IwVEqWPJfCHdaObPGMyLiD3ri5I/VvS9FnGQ";
-/// What an update replaces. `seam-mcp.exe` came later, so a manifest without it is still good.
-const EXES: [&str; 3] = ["seam.exe", "seam-settings.exe", "seam-mcp.exe"];
-const REQUIRED: [&str; 2] = ["seam.exe", "seam-settings.exe"];
+/// The exes every release has. Updaters from v0.5.0 on refuse a `files` or `arches`
+/// list with anything else in it, so those two lists never hold more.
+const EXES: [&str; 2] = ["seam.exe", "seam-settings.exe"];
+/// Exes a release may list under `optional`, which only newer updaters read.
+const OPTIONAL: [&str; 1] = ["seam-mcp.exe"];
 const MANIFEST: &str = "latest.json";
 const SIGNATURE: &str = "latest.json.minisig";
 /// How long a tray told to quit gets before the old one is given up on.
@@ -99,18 +101,8 @@ struct Manifest {
     files: Vec<File>,
 }
 
-/// The files for this build's architecture. `files` is the x64 build, the list
-/// updaters from before the ARM64 builds read. `arches` has a list per build,
-/// keyed like `std::env::consts::ARCH`, and a manifest that has it is only read there.
-fn parse_manifest(bytes: &[u8]) -> Option<Manifest> {
-    let manifest: Value = serde_json::from_slice(bytes).ok()?;
-    let list = match manifest["arches"].as_object() {
-        Some(arches) => arches.get(std::env::consts::ARCH)?,
-        None => &manifest["files"],
-    };
-    let files: Vec<File> = list
-        .as_array()?
-        .iter()
+fn read_files(list: &[Value]) -> Vec<File> {
+    list.iter()
         .filter_map(|f| {
             let name = f["name"].as_str()?.to_string();
             Some(File {
@@ -120,12 +112,28 @@ fn parse_manifest(bytes: &[u8]) -> Option<Manifest> {
                 sha256: f["sha256"].as_str()?.to_lowercase(),
             })
         })
-        .collect();
-    // Only these exes, with the two it can't do without: no other name to join onto a path.
+        .collect()
+}
+
+/// The files for this build's architecture. `files` is the x64 build, the list
+/// updaters from before the ARM64 builds read. `arches` has a list per build,
+/// keyed like `std::env::consts::ARCH`, and a manifest that has it is only read there.
+/// `optional` has the same per build, for exes that older updaters must not see.
+fn parse_manifest(bytes: &[u8]) -> Option<Manifest> {
+    let manifest: Value = serde_json::from_slice(bytes).ok()?;
+    let list = match manifest["arches"].as_object() {
+        Some(arches) => arches.get(std::env::consts::ARCH)?,
+        None => &manifest["files"],
+    };
+    let mut files = read_files(list.as_array()?);
+    // Exactly the two exes: nothing missing, and no other name to join onto a path.
     let only_exes = files.iter().all(|f| EXES.contains(&f.name.as_str()));
-    if !only_exes || !REQUIRED.iter().all(|exe| files.iter().any(|f| f.name == *exe)) {
+    if !only_exes || !EXES.iter().all(|exe| files.iter().any(|f| f.name == *exe)) {
         return None;
     }
+    // What came later is listed apart, per build, and held to its own list of names.
+    let optional = manifest["optional"][std::env::consts::ARCH].as_array().map_or_else(Vec::new, |l| read_files(l));
+    files.extend(optional.into_iter().filter(|f| OPTIONAL.contains(&f.name.as_str())));
     Some(Manifest {
         version: manifest["version"].as_str()?.to_string(),
         date: manifest["date"].as_str().unwrap_or_default().to_string(),
@@ -334,7 +342,9 @@ fn running_tray(dir: &Path) -> Result<Option<u32>, InstallError> {
         Err(CallError::Io(e)) if e.kind() == std::io::ErrorKind::PermissionDenied => {
             return Err(failed("Something else is using Seam's pipe, so nothing was changed"));
         }
-        Err(_) => return Ok(None),
+        // Only a missing pipe means no tray. A busy pipe or a slow answer means one may be running.
+        Err(CallError::Io(e)) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(_) => return Err(failed("Seam may be running but didn't answer, so nothing was changed")),
     };
     let info = tray.call("app.info", Value::Null).ok();
     let pid = info.and_then(|i| i["pid"].as_u64()).and_then(|pid| u32::try_from(pid).ok());
@@ -370,18 +380,43 @@ fn copy_checked(from: &Path, to: &Path, file: &File) -> std::io::Result<()> {
     }
 }
 
+/// An exe `swap` set aside, and where its old copy went. A copy that wasn't there has none.
+type Aside = (&'static str, Option<PathBuf>);
+
+/// Where the running copy of an optional exe goes. Its assistant may still be running
+/// from the last `.old`, which then can't be removed, so it gets a fresh name instead.
+/// Stale ones whose process has ended are cleaned up here, best effort.
+fn old_path(dir: &Path, name: &str) -> PathBuf {
+    for entry in std::fs::read_dir(dir).into_iter().flatten().flatten() {
+        if entry.file_name().to_string_lossy().starts_with(&format!("{name}.old")) {
+            let _ = std::fs::remove_file(entry.path());
+        }
+    }
+    let plain = dir.join(format!("{name}.old"));
+    if !plain.exists() {
+        return plain;
+    }
+    (1..).map(|n| dir.join(format!("{name}.old.{n}"))).find(|p| !p.exists()).unwrap_or(plain)
+}
+
 /// Renaming a running exe works on NTFS, so each exe can replace itself.
-fn swap(dir: &Path, staged: &Path, manifest: &Manifest, renamed: &mut Vec<&'static str>) -> std::io::Result<()> {
-    for name in EXES.into_iter().filter(|name| manifest.files.iter().any(|f| f.name == *name)) {
-        // A copy without seam-mcp.exe gets it added, and a failed update takes it away again.
-        if !REQUIRED.contains(&name) && !dir.join(name).exists() {
-            renamed.push(name);
+fn swap(dir: &Path, staged: &Path, manifest: &Manifest, renamed: &mut Vec<Aside>) -> std::io::Result<()> {
+    for name in EXES.into_iter().chain(OPTIONAL).filter(|name| manifest.files.iter().any(|f| f.name == *name)) {
+        if OPTIONAL.contains(&name) {
+            // A copy without seam-mcp.exe gets it added, and a failed update takes it away again.
+            if !dir.join(name).exists() {
+                renamed.push((name, None));
+                continue;
+            }
+            let old = old_path(dir, name);
+            std::fs::rename(dir.join(name), &old)?;
+            renamed.push((name, Some(old)));
             continue;
         }
         let old = dir.join(format!("{name}.old"));
         let _ = std::fs::remove_file(&old);
-        std::fs::rename(dir.join(name), old)?;
-        renamed.push(name);
+        std::fs::rename(dir.join(name), &old)?;
+        renamed.push((name, Some(old)));
     }
     for file in &manifest.files {
         copy_checked(&staged.join(&file.name), &dir.join(&file.name), file)?;
@@ -391,10 +426,12 @@ fn swap(dir: &Path, staged: &Path, manifest: &Manifest, renamed: &mut Vec<&'stat
 
 /// Put back the exes `swap` renamed, and drop any new one that arrived. A
 /// `.old` that swap didn't make is from an earlier update and stays where it is.
-fn roll_back(dir: &Path, renamed: &[&str]) {
-    for name in renamed {
+fn roll_back(dir: &Path, renamed: &[Aside]) {
+    for (name, old) in renamed {
         let _ = std::fs::remove_file(dir.join(name));
-        let _ = std::fs::rename(dir.join(format!("{name}.old")), dir.join(name));
+        if let Some(old) = old {
+            let _ = std::fs::rename(old, dir.join(name));
+        }
     }
 }
 
@@ -544,9 +581,79 @@ pub fn quit_main() -> i32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
 
     fn rel(tag: &str, draft: bool, pre: bool) -> Release {
         Release { tag_name: tag.into(), draft, prerelease: pre, assets: vec![] }
+    }
+
+    /// `parse_manifest` as v0.7.0 has it (`git show v0.7.0:settings/src/update.rs`), which
+    /// every release since v0.5.0 does alike: the list for its build, and exactly two exes.
+    fn parse_as_v070(bytes: &[u8]) -> Option<Vec<String>> {
+        const OLD_EXES: [&str; 2] = ["seam.exe", "seam-settings.exe"];
+        let manifest: Value = serde_json::from_slice(bytes).ok()?;
+        let list = match manifest["arches"].as_object() {
+            Some(arches) => arches.get(std::env::consts::ARCH)?,
+            None => &manifest["files"],
+        };
+        let names: Vec<String> = list
+            .as_array()?
+            .iter()
+            .filter_map(|f| {
+                f["size"].as_u64()?;
+                f["sha256"].as_str()?;
+                Some(f["name"].as_str()?.to_string())
+            })
+            .collect();
+        let only_exes = names.iter().all(|n| OLD_EXES.contains(&n.as_str()));
+        (only_exes && OLD_EXES.iter().all(|exe| names.iter().any(|n| n == exe))).then_some(names)
+    }
+
+    /// A manifest the way release.yml builds it.
+    fn released() -> Vec<u8> {
+        let entry = |name: &str, asset: &str| json!({ "name": name, "asset": asset, "size": 10, "sha256": "ab" });
+        let arches = json!({
+            "x86_64": [entry("seam.exe", "seam.exe"), entry("seam-settings.exe", "seam-settings.exe")],
+            "aarch64": [entry("seam.exe", "seam-arm64.exe"), entry("seam-settings.exe", "seam-settings-arm64.exe")],
+        });
+        let optional = json!({
+            "x86_64": [entry("seam-mcp.exe", "seam-mcp.exe")],
+            "aarch64": [entry("seam-mcp.exe", "seam-mcp-arm64.exe")],
+        });
+        let files = json!([
+            { "name": "seam.exe", "size": 10, "sha256": "ab" },
+            { "name": "seam-settings.exe", "size": 10, "sha256": "ab" },
+        ]);
+        json!({ "version": "0.8.0", "date": "2026-01-01", "prerelease": false, "notes": "", "files": files,
+            "arches": arches, "optional": optional })
+        .to_string()
+        .into_bytes()
+    }
+
+    #[test]
+    fn a_release_with_seam_mcp_still_updates_older_updaters_and_the_new_one_takes_it_too() {
+        let bytes = released();
+        assert_eq!(parse_as_v070(&bytes).map(|n| n.len()), Some(2), "v0.7.0 and the builds before it accept it");
+        let manifest = parse_manifest(&bytes).expect("this build reads it");
+        let names: Vec<&str> = manifest.files.iter().map(|f| f.name.as_str()).collect();
+        assert_eq!(names, ["seam.exe", "seam-settings.exe", "seam-mcp.exe"]);
+        // And the first manifest that put it in `arches` is what broke them.
+        let broken =
+            String::from_utf8_lossy(&bytes).replace(r#""name":"seam-settings.exe""#, r#""name":"seam-mcp.exe""#);
+        assert!(parse_as_v070(broken.as_bytes()).is_none());
+    }
+
+    #[test]
+    fn the_optional_list_is_held_to_its_names() {
+        let mut manifest: Value = serde_json::from_slice(&released()).unwrap();
+        let arch = std::env::consts::ARCH;
+        manifest["optional"][arch][0]["name"] = json!("..\\evil.exe");
+        let read = parse_manifest(manifest.to_string().as_bytes()).unwrap();
+        assert_eq!(read.files.len(), 2, "a name outside the list is dropped, never joined onto a path");
+        manifest["optional"] = Value::Null;
+        assert_eq!(parse_manifest(manifest.to_string().as_bytes()).unwrap().files.len(), 2);
+        manifest["arches"][arch][1]["name"] = json!("seam-mcp.exe");
+        assert!(parse_manifest(manifest.to_string().as_bytes()).is_none(), "the two exes stay exactly two");
     }
 
     #[test]

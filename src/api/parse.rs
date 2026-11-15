@@ -70,8 +70,8 @@ fn command(method: &str, p: &Value) -> Result<Command, RpcError> {
         "workspace.status" => Command::WorkspaceStatus {
             id: str_param(p, "id")?.ok_or_else(|| RpcError::new(INVALID_PARAMS, "id is required"))?,
         },
-        "workspace.snap_back" => Command::WorkspaceSnapBack,
-        "workspace.switch_back" => Command::WorkspaceSwitchBack,
+        "workspace.snap_back" => Command::WorkspaceSnapBack { alongside: false },
+        "workspace.switch_back" => Command::WorkspaceSwitchBack { alongside: false },
         "workspace.quick_save" => Command::WorkspaceQuickSave,
         "workspace.set_default" => Command::WorkspaceSetDefault(str_param(p, "id")?),
         "autoapply.set" => Command::AutoApplySet(on_param(p)?),
@@ -322,12 +322,15 @@ fn zones_apply(p: &Value) -> Result<Command, RpcError> {
 }
 
 /// What `seam-mcp.exe` may send, and only while "Let assistants use Seam (MCP)" is on.
-/// Switch, Snap back, Switch back and Quick save never close a window, and edits need
-/// the second switch. Everything else, launch settings, Close and Open with included,
+/// Switch, Snap back and Switch back never close a window (`parse_request` makes them
+/// alongside), and Quick save and edits need the second switch. Everything else, launch settings, Close and Open with included,
 /// stays out of reach.
 fn assistant_allowed(command: &Command, peer: Peer) -> Result<(), RpcError> {
     if !peer.mcp_on {
         return Err(RpcError::new(DISABLED, MCP_OFF));
+    }
+    if !peer.api_enabled {
+        return Err(RpcError::new(DISABLED, "Other apps can't control Seam right now"));
     }
     match command {
         Command::AppInfo
@@ -337,12 +340,16 @@ fn assistant_allowed(command: &Command, peer: Peer) -> Result<(), RpcError> {
         | Command::WorkspaceGet { .. }
         | Command::WorkspaceStatus { .. }
         | Command::WorkspaceSwitch { .. }
-        | Command::WorkspaceSnapBack
-        | Command::WorkspaceSwitchBack
-        | Command::WorkspaceQuickSave
+        | Command::WorkspaceSnapBack { .. }
+        | Command::WorkspaceSwitchBack { .. }
         | Command::EventsSubscribe(_) => Ok(()),
-        Command::WorkspaceCreate { .. } | Command::WorkspaceEdit { .. } if peer.assistants_edit => Ok(()),
-        Command::WorkspaceCreate { .. } | Command::WorkspaceEdit { .. } => {
+        // Quick save adds a row for every window on screen, so it is an edit.
+        Command::WorkspaceCreate { .. } | Command::WorkspaceEdit { .. } | Command::WorkspaceQuickSave
+            if peer.assistants_edit =>
+        {
+            Ok(())
+        }
+        Command::WorkspaceCreate { .. } | Command::WorkspaceEdit { .. } | Command::WorkspaceQuickSave => {
             Err(RpcError::new(FORBIDDEN, "Changing workspaces is off for assistants in Seam, General"))
         }
         _ => Err(RpcError::new(FORBIDDEN, "Assistants can't do that")),
@@ -395,6 +402,8 @@ pub fn parse_request(line: &str, peer: Peer) -> Result<(Value, Command), Rejecte
     // An assistant's switch never closes windows, whatever it asked for.
     let parsed = parsed.map(|c| match c {
         Command::WorkspaceSwitch { id, name, .. } if peer.mcp => Command::WorkspaceSwitch { id, name, alongside: true },
+        Command::WorkspaceSnapBack { .. } if peer.mcp => Command::WorkspaceSnapBack { alongside: true },
+        Command::WorkspaceSwitchBack { .. } if peer.mcp => Command::WorkspaceSwitchBack { alongside: true },
         c => c,
     });
     match parsed {
@@ -465,8 +474,8 @@ mod tests {
             ),
             (request("zones.apply", r#"{"layout":null}"#), anyone, Command::ZonesApply { number: None, layout: None }),
             (request("zones.layouts", "{}"), anyone, Command::ZonesLayouts(None)),
-            (request("workspace.snap_back", "{}"), anyone, Command::WorkspaceSnapBack),
-            (request("workspace.switch_back", "{}"), anyone, Command::WorkspaceSwitchBack),
+            (request("workspace.snap_back", "{}"), anyone, Command::WorkspaceSnapBack { alongside: false }),
+            (request("workspace.switch_back", "{}"), anyone, Command::WorkspaceSwitchBack { alongside: false }),
             (request("workspace.quick_save", "{}"), anyone, Command::WorkspaceQuickSave),
             (request("autoapply.set", r#"{"on":true}"#), anyone, Command::AutoApplySet(true)),
             (
@@ -562,11 +571,26 @@ mod tests {
         // A switch from an assistant never closes windows, whatever it sent.
         let switch = code(&request("workspace.switch", r#"{"name":"Mail","alongside":false}"#), assistant(false));
         assert_eq!(switch, Ok(Command::WorkspaceSwitch { id: None, name: Some("Mail".into()), alongside: true }));
-        for method in
-            ["state.get", "workspaces.list", "workspace.snap_back", "workspace.switch_back", "workspace.quick_save"]
-        {
+        for method in ["state.get", "workspaces.list"] {
             assert!(code(&request(method, "{}"), assistant(false)).is_ok(), "{method}");
         }
+        // Snap back and Switch back never close windows either.
+        assert_eq!(
+            code(&request("workspace.snap_back", "{}"), assistant(false)),
+            Ok(Command::WorkspaceSnapBack { alongside: true })
+        );
+        assert_eq!(
+            code(&request("workspace.switch_back", "{}"), assistant(false)),
+            Ok(Command::WorkspaceSwitchBack { alongside: true })
+        );
+        // Quick save is an edit, and needs the second switch.
+        let quick = request("workspace.quick_save", "{}");
+        assert_eq!(code(&quick, assistant(false)).map_err(|e| e.0), Err(FORBIDDEN));
+        assert_eq!(code(&quick, assistant(true)), Ok(Command::WorkspaceQuickSave));
+        // The API switch has to be on too, after hello as well as at it.
+        let api_off = Peer { api_enabled: false, ..assistant(true) };
+        assert_eq!(code(&request("state.get", "{}"), api_off).map_err(|e| e.0), Err(DISABLED));
+        assert_eq!(code(&request("workspace.switch_back", "{}"), api_off).map_err(|e| e.0), Err(DISABLED));
         assert!(code(&request("workspace.status", r#"{"id":"ws_1"}"#), assistant(false)).is_ok());
 
         // With the master switch off, every call says so.

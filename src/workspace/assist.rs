@@ -8,6 +8,9 @@ use super::*;
 /// The longest workspace name an assistant may give.
 pub const MAX_NAME: usize = 64;
 
+/// Workspaces on a desk past which an assistant can't make another.
+pub const MAX_ASSISTANT_WORKSPACES: usize = 50;
+
 /// What `workspace.edit_row` changes. `launch_off` only ever turns a row's launch off.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct RowChange {
@@ -24,10 +27,19 @@ pub enum Edit {
     ShowAll(bool),
 }
 
+/// Characters that change how text reads or show nothing (Unicode Cf): bidi controls,
+/// zero-width spaces and joiners, the byte order mark, soft hyphens and the tag block.
+fn hidden(c: char) -> bool {
+    matches!(c,
+        '\u{00AD}' | '\u{061C}' | '\u{180E}' | '\u{200B}'..='\u{200F}' | '\u{202A}'..='\u{202E}'
+        | '\u{2060}'..='\u{2064}' | '\u{2066}'..='\u{206F}' | '\u{FEFF}' | '\u{FFF9}'..='\u{FFFB}'
+        | '\u{E0000}'..='\u{E007F}')
+}
+
 /// A name as an assistant gave it: trimmed, not empty, and short.
 pub fn checked_name(name: &str) -> Result<String, String> {
     let name = name.trim();
-    if name.is_empty() || name.chars().count() > MAX_NAME || name.chars().any(char::is_control) {
+    if name.is_empty() || name.chars().count() > MAX_NAME || name.chars().any(|c| c.is_control() || hidden(c)) {
         return Err(format!("name must be 1 to {MAX_NAME} characters"));
     }
     Ok(name.to_string())
@@ -98,6 +110,8 @@ mod tests {
         assert!(checked_name("   ").is_err());
         assert!(checked_name(&"x".repeat(MAX_NAME + 1)).is_err());
         assert!(checked_name("a\nb").is_err());
+        assert!(checked_name("Mail\u{202E}fdp").is_err());
+        assert!(checked_name("a\u{200B}b").is_err());
     }
 
     #[test]

@@ -133,25 +133,27 @@ fn fixed(family: Family, n: usize, before: Option<&Node>) -> Node {
 pub struct Seen {
     /// Floated by hand: the Float key or a drag out.
     pub floated: bool,
-    /// Off its tile since tiling put it there, without a drag: Win+arrow, the keyboard or its app (`moved`).
+    /// Off its tile since tiling put it there, without a drag: Win+arrow, the keyboard,
+    /// its app or a workspace switch that moved it (`moved`). A capture or Quick save,
+    /// which only stamps it, doesn't count.
     pub moved: bool,
-    /// A workspace switch placed it since tiling took it.
-    pub by_switch: bool,
     /// Maximized, minimized or on another desktop: left as it is, still tiled.
     pub away: bool,
+    /// Closed, or moved to another desktop: it leaves the tree, and doesn't float.
+    pub gone: bool,
 }
 
 /// The one rule before any move (D562, D564): tiling moves a window only when nobody
-/// else placed it since. A float, a window moved off its tile and one a switch placed
-/// never move; one away is left as it is.
+/// else placed it since. A float and a window moved off its tile never move; one away
+/// or gone is left as it is.
 pub fn may_move(s: &Seen) -> bool {
-    !(s.floated || s.moved || s.by_switch || s.away)
+    !(s.floated || s.moved || s.away || s.gone)
 }
 
 /// A window that may not move because someone else placed it leaves the tree and
 /// floats, and its neighbours fill the gap. One only away stays.
 pub fn floats(s: &Seen) -> bool {
-    s.floated || s.moved || s.by_switch
+    (s.floated || s.moved) && !s.gone
 }
 
 /// The windows of `tree` tiling may move now, in zone order.
@@ -159,25 +161,96 @@ pub fn to_move(tree: &Tree, seen: impl Fn(isize) -> Seen) -> Vec<isize> {
     tree.windows().filter(|h| may_move(&seen(*h))).collect()
 }
 
+/// What tiling does with a tree just before it moves windows: the tree after, the
+/// windows that left (gone) or float, each float a window stacked in its tile took
+/// over from, the zones that closed in turn, and the windows that may move then. The snapping's `tiled_apply` runs
+/// exactly this.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Plan {
+    pub tree: Tree,
+    pub left: Vec<isize>,
+    pub floated: Vec<isize>,
+    /// (the float, the window that takes its tile).
+    pub heirs: Vec<(isize, isize)>,
+    /// Each zone that closed, as it closed, for the tiles that count zones.
+    pub closed: Vec<usize>,
+    pub moves: Vec<isize>,
+}
+
+/// Plan a move of `tree` by the one rule. A window gone leaves and the others close
+/// up; a float leaves its tile to the window stacked in it (`heir`), or the others
+/// close up; then the windows that may move are the ones to place.
+pub fn plan_apply(tree: &Tree, seen: impl Fn(isize) -> Seen, heir: impl Fn(isize) -> Option<(isize, Min)>) -> Plan {
+    let mut plan = Plan {
+        tree: tree.clone(),
+        left: Vec::new(),
+        floated: Vec::new(),
+        heirs: Vec::new(),
+        closed: Vec::new(),
+        moves: Vec::new(),
+    };
+    for h in tree.windows() {
+        let s = seen(h);
+        if s.gone {
+            plan.left.push(h);
+        } else if floats(&s) {
+            plan.floated.push(h);
+        }
+    }
+    let close = |plan: &mut Plan, h: isize| {
+        if let (Some(z), Some(less)) = (plan.tree.zone_of(h), plan.tree.remove(h)) {
+            plan.tree = less;
+            plan.closed.push(z);
+        }
+    };
+    for h in plan.left.clone() {
+        close(&mut plan, h);
+    }
+    for h in plan.floated.clone() {
+        let zone = plan.tree.zone_of(h);
+        match (zone, heir(h).filter(|(k, _)| plan.tree.zone_of(*k).is_none())) {
+            (Some(z), Some((k, min))) => {
+                plan.tree.tiles[z] = Tile { hwnd: Some(k), min };
+                plan.heirs.push((h, k));
+            }
+            _ => close(&mut plan, h),
+        }
+    }
+    plan.moves = to_move(&plan.tree, &seen);
+    plan
+}
+
 /// Minimized windows this close together came as one minimize all, such as Win+D.
 pub const BURST: Duration = Duration::from_millis(250);
+/// A burst keeps its tiles this long with no restore, then they close too (D567).
+pub const BURST_KEEPS: Duration = Duration::from_secs(30);
 /// A minimized window's tile waits this long, from its minimize or the tree's last
 /// restore, whichever is later, before the others fill it (D567).
 pub const GAP_AFTER: Duration = Duration::from_millis(600);
 
-/// Which tiles of minimized windows close now, from each one's (zone, minimized at).
-/// One that came in a burst with another keeps its tile until it is restored or closed,
-/// so Win+D then a restore is exact however long the restores take. Another closes
-/// once `GAP_AFTER` has passed since its minimize and since the last restore (`back`),
-/// so a run of restores is never cut short. Highest zone first, for `remove_zone`.
-pub fn gaps_due(resting: &[(usize, Instant)], back: Option<Instant>, now: Instant) -> Vec<usize> {
+/// A minimized window's tile as `gaps_due` reads it: its zone, when it was minimized,
+/// and whether it may count in a burst. One a workspace switch minimized never does.
+pub type Resting = (usize, Instant, bool);
+
+/// Which tiles of minimized windows close now. One that came in a burst with another
+/// keeps its tile until it is restored or closed, so Win+D then a restore is exact
+/// however long the restores take, or until `BURST_KEEPS` passes with no restore.
+/// Another closes once `GAP_AFTER` has passed since its minimize and since the last
+/// restore (`back`), so a run of restores is never cut short. Highest zone first, for
+/// `remove_zone`.
+pub fn gaps_due(resting: &[Resting], back: Option<Instant>, now: Instant) -> Vec<usize> {
     let near = |a: Instant, b: Instant| a.max(b).duration_since(a.min(b)) <= BURST;
+    let burst = |i: usize, at: Instant, may: bool| {
+        may && resting.iter().enumerate().any(|(j, (_, other, counts))| j != i && *counts && near(at, *other))
+    };
     let mut due: Vec<usize> = resting
         .iter()
         .enumerate()
-        .filter(|(i, (_, at))| !resting.iter().enumerate().any(|(j, (_, other))| j != *i && near(*at, *other)))
-        .filter(|(_, (_, at))| now.duration_since(back.map_or(*at, |b| b.max(*at))) >= GAP_AFTER)
-        .map(|(_, (zone, _))| *zone)
+        .filter(|(i, (_, at, may))| {
+            let wait = if burst(*i, *at, *may) { BURST_KEEPS } else { GAP_AFTER };
+            now.duration_since(back.map_or(*at, |b| b.max(*at))) >= wait
+        })
+        .map(|(_, (zone, ..))| *zone)
         .collect();
     due.sort_unstable_by(|a, b| b.cmp(a));
     due.dedup();
@@ -712,13 +785,34 @@ mod tests {
         for s in [
             Seen { floated: true, ..Seen::default() },
             Seen { moved: true, ..Seen::default() },
-            Seen { by_switch: true, ..Seen::default() },
             Seen { away: true, ..Seen::default() },
+            Seen { gone: true, ..Seen::default() },
         ] {
             assert!(!may_move(&s), "{s:?}");
         }
         assert!(!floats(&Seen { away: true, ..Seen::default() }));
-        assert!(floats(&Seen { by_switch: true, away: true, ..Seen::default() }));
+        assert!(!floats(&Seen { moved: true, gone: true, ..Seen::default() }));
+        assert!(floats(&Seen { moved: true, away: true, ..Seen::default() }));
+    }
+
+    #[test]
+    fn the_plan_floats_and_closes_up_before_anything_moves() {
+        let four = grow(Family::Smart, 4);
+        // 1 moved by hand, 2 closed unseen, 3 floated with a stacked window 9 under it.
+        let seen = |h: isize| Seen { moved: h == 1, gone: h == 2, floated: h == 3, ..Seen::default() };
+        let heir = |h: isize| (h == 3).then_some((9, (0, 0)));
+        let plan = plan_apply(&four, seen, heir);
+        let mut floated = plan.floated.clone();
+        floated.sort_unstable();
+        assert_eq!((plan.left, floated, plan.heirs), (vec![2], vec![1, 3], vec![(3, 9)]));
+        let mut moves = plan.moves.clone();
+        moves.sort_unstable();
+        assert_eq!(moves, vec![4, 9]);
+        assert_eq!(plan.tree.tiles.len(), 2);
+        sound(&plan.tree, AREA, 0);
+        // A capture or Quick save stamps windows but moves none: nothing floats.
+        let quiet = plan_apply(&four, |_| Seen::default(), |_| None);
+        assert_eq!((&quiet.tree, quiet.moves), (&four, four.windows().collect::<Vec<_>>()));
     }
 
     #[test]
@@ -727,37 +821,36 @@ mod tests {
         let three = grow(Family::Smart, 3);
         let at = Instant::now();
         let rested = three.vacate(2).unwrap();
-        let due = gaps_due(&[(three.zone_of(2).unwrap(), at)], None, at + GAP_AFTER);
+        let due = gaps_due(&[(three.zone_of(2).unwrap(), at, true)], None, at + GAP_AFTER);
         assert_eq!(due, vec![three.zone_of(2).unwrap()]);
         let mut tree = rested;
         for z in due {
             tree = tree.remove_zone(z).unwrap();
         }
-        let seen = |h: isize| Seen { moved: h == 1, ..Seen::default() };
-        // The hand-moved window floats and leaves, and only the others move.
-        let floated: Vec<isize> = tree.windows().filter(|h| floats(&seen(*h))).collect();
-        assert_eq!(floated, vec![1]);
-        for h in floated {
-            tree = tree.remove(h).unwrap();
-        }
-        assert_eq!(to_move(&tree, seen), vec![3]);
-        assert!(!to_move(&three, seen).contains(&1));
+        // The gap closing goes through the same plan as every move: the hand-moved window floats.
+        let plan = plan_apply(&tree, |h| Seen { moved: h == 1, ..Seen::default() }, |_| None);
+        assert_eq!((plan.floated, plan.moves), (vec![1], vec![3]));
     }
 
     #[test]
     fn win_d_keeps_every_tile_and_a_lone_minimize_closes() {
         let t0 = Instant::now();
         let ms = |n: u64| t0 + Duration::from_millis(n);
-        // Win+D: three minimized within a burst keep their tiles, however late the restores.
-        let burst = [(0, t0), (1, ms(40)), (2, ms(90))];
-        assert!(gaps_due(&burst, None, ms(60_000)).is_empty());
-        assert!(gaps_due(&burst[1..], Some(ms(5000)), ms(60_000)).is_empty());
+        // Win+D: three minimized within a burst keep their tiles while restores keep coming.
+        let burst = [(0, t0, true), (1, ms(40), true), (2, ms(90), true)];
+        assert!(gaps_due(&burst, None, ms(29_000)).is_empty());
+        assert!(gaps_due(&burst[1..], Some(ms(5000)), ms(34_000)).is_empty());
+        // A burst with no restore for 30 s closes after all.
+        assert_eq!(gaps_due(&burst, None, ms(30_100)), vec![2, 1, 0]);
+        assert_eq!(gaps_due(&burst[1..], Some(ms(5000)), ms(35_000)), vec![2, 1]);
         // One minimize alone closes after the wait, not before.
-        assert!(gaps_due(&[(1, t0)], None, ms(599)).is_empty());
-        assert_eq!(gaps_due(&[(1, t0)], None, ms(600)), vec![1]);
+        assert!(gaps_due(&[(1, t0, true)], None, ms(599)).is_empty());
+        assert_eq!(gaps_due(&[(1, t0, true)], None, ms(600)), vec![1]);
         // A restore just now holds the others a moment longer.
-        assert!(gaps_due(&[(1, t0)], Some(ms(900)), ms(1000)).is_empty());
-        assert_eq!(gaps_due(&[(3, t0), (1, ms(2000))], None, ms(3000)), vec![3, 1]);
+        assert!(gaps_due(&[(1, t0, true)], Some(ms(900)), ms(1000)).is_empty());
+        assert_eq!(gaps_due(&[(3, t0, true), (1, ms(2000), true)], None, ms(3000)), vec![3, 1]);
+        // Windows a switch minimized together are no burst: they close at the normal wait.
+        assert_eq!(gaps_due(&[(0, t0, false), (1, t0, false)], None, ms(600)), vec![1, 0]);
     }
 
     #[test]

@@ -354,6 +354,7 @@ fn windows_section(
         },
     );
     let drag_row = alt_drag_row(&windows_cfg, view, p, window, cx);
+    let corner_row = corner_overview_row(&windows_cfg, view, p, window, cx);
     let size_mode = panel.config.window_size_on_move;
     let (size_row, on_drag_row) = size_rows(panel, size_mode, view, p, window, cx);
     let other_about = match &detected {
@@ -403,6 +404,7 @@ fn windows_section(
                 p,
             ),
             drag_row,
+            corner_row,
             size_row,
             on_drag_row,
             row("Another window manager handles my windows", Some(other_about.into()), manual, p),
@@ -452,6 +454,48 @@ fn alt_drag_row(
         key => format!("Hold {key} and drag to move, or right-drag to resize"),
     };
     row("Move and resize from anywhere in a window", Some(drag_about.into()), drag_control, p)
+}
+
+/// "Open the overview when the pointer rests in a corner", with the corner.
+fn corner_overview_row(
+    windows_cfg: &WindowSettings,
+    view: &Entity<Panel>,
+    p: Palette,
+    window: &mut Window,
+    cx: &mut Context<Panel>,
+) -> AnyElement {
+    let corner = windows_cfg.corner_overview.clone();
+    let title = "Open the overview when the pointer rests in a corner";
+    let label = CORNERS.iter().find(|(k, _)| *k == corner.corner).map_or("Top left", |(_, label)| label);
+    let corner_switch = switch("corner-overview", title, corner.on, window, cx, {
+        let view = view.clone();
+        move |on, window, cx| {
+            view.update(cx, |panel, cx| {
+                panel.patch(json!({ "windows": { "corner_overview": { "on": on } } }), window, cx)
+            })
+        }
+    });
+    let corner_menu = ui::secondary("corner-overview-corner", label, cx)
+        .dropdown_caret(true)
+        .accessibility_label(format!("Corner: {label}"))
+        .dropdown_menu({
+            let view = view.downgrade();
+            move |mut menu, _, _| {
+                for (key, name) in CORNERS {
+                    let view = view.clone();
+                    let item = PopupMenuItem::new(name).checked(name == label).on_click(move |_, window, cx| {
+                        let patch = json!({ "windows": { "corner_overview": { "corner": key } } });
+                        let _ = view.update(cx, |panel, cx| panel.patch(patch, window, cx));
+                    });
+                    menu = menu.item(item);
+                }
+                menu
+            }
+        });
+    let control = div().flex().items_center().gap(px(12.)).child(corner_menu).child(corner_switch);
+    let about =
+        "Rest it there a moment, with no button down. Only a corner of the whole desk counts, not one between screens";
+    row(title, Some(about.into()), control, p)
 }
 
 /// The rows for a window that moves to another screen, and for one dragged there.

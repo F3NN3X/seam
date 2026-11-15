@@ -150,6 +150,7 @@ A stack puts several windows in one zone, one on top, and a key brings the next 
 - **Jump between desktops.** Ctrl+Tab and Page Down select the first window of the next desktop's group, Ctrl+Shift+Tab and Page Up the previous one, and they wrap around. The wheel over a group's label does the same. Groups a search leaves empty are skipped.
 - **Move a window.** Drag a window onto a zone to snap it there, or onto another screen with no zones to centre it there. A tiled window you move this way floats, and its neighbours close the gap.
 - **What it can't move.** Windows on other virtual desktops: Windows only lets an app move its own windows between desktops. Windows running as administrator can't be moved either. The overview says why in place of its hint, and a drop that can't be made changes nothing.
+- **Open it from a corner.** Turn on **Open the overview when the pointer rests in a corner** on Zones and pick the corner. Resting the pointer there a moment, with no button down, opens the overview, once per visit. Only an outer corner of the whole desk counts, never one between two screens, and nothing opens during a drag, while Seam is paused or steps aside, or with a full-screen app in front.
 - **Busy apps.** A window that isn't responding is listed with "Not responding". You can go to it, and the overview never waits on it.
 - **Closing it.** **Esc**, a click in another app, or Enter on a window that has closed in the meantime closes it, and the focus goes back to the window you were using.
 

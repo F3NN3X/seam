@@ -273,3 +273,12 @@ fn quitting_clears_tiling_for_every_freed_desktop_and_an_old_config_has_the_swit
     let old: Config = serde_json::from_value(json!({ "zones": { "gap": 4 } })).unwrap();
     assert!(!old.zones.tiling_free_on_quit);
 }
+
+#[test]
+fn an_older_file_has_the_corner_overview_off() {
+    let old: Config = serde_json::from_value(json!({ "windows": { "alt_drag": { "on": true } } })).unwrap();
+    assert!(!old.windows.corner_overview.on);
+    assert_eq!(old.windows.corner_overview.corner, "top_left");
+    let set: Config = serde_json::from_value(json!({ "windows": { "corner_overview": { "on": true } } })).unwrap();
+    assert!(set.windows.corner_overview.on);
+}

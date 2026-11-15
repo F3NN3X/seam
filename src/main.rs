@@ -30,6 +30,8 @@ mod live;
 #[cfg(windows)]
 mod minsize;
 #[cfg(windows)]
+mod mousewatch;
+#[cfg(windows)]
 mod overlay;
 #[cfg(windows)]
 mod overview_win;

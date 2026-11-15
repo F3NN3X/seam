@@ -34,8 +34,8 @@ use crate::switcher::{
 use crate::tray::{CLASS, WM_APP_API, WM_APP_LINEUP, WM_APP_WINDOWS_CHANGED};
 use crate::wm::{Pinned, WM_APP_WS_MOVED};
 use crate::{
-    altdrag, arrange, dividers, ease, focus_only, hotkey, identify, live, overlay, quicklayout, showlayout, spotlight,
-    wincontrol, wm,
+    altdrag, arrange, dividers, ease, focus_only, hotkey, identify, live, mousewatch, overlay, quicklayout, showlayout,
+    spotlight, wincontrol, wm,
 };
 use commands::{align_finished, busy, drain_api, patch_config, refused};
 use messages::wndproc;
@@ -460,6 +460,15 @@ fn relink(app: &mut App) {
     // The hook is in only while it's wanted, and not while Seam stands by or steps aside.
     let alt_drag = windows.alt_drag.on && standby::reason().is_none() && aside(app).is_none();
     altdrag::configure(owner, alt_drag, &windows.alt_drag.key, &app.cfg.zones.exclude);
+    // The corner's hook is in only while it's wanted, and not while Seam stands by. Its
+    // corners come from the screens, so a display change gets new ones here.
+    let corner = &windows.corner_overview;
+    let spots = if corner.on && standby::reason().is_none() {
+        mousewatch::corner_spots(&app.mons, &corner.corner)
+    } else {
+        Vec::new()
+    };
+    mousewatch::configure(owner, &spots);
     sync_live(app);
     arm_hook(app);
     update_tip(app);

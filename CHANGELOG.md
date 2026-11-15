@@ -11,6 +11,7 @@ All notable changes to Seam. The format follows [Keep a Changelog](https://keepa
 - **Stacks.** Several windows can share one zone, one on top. S during a drag stacks the window on the one in the zone instead of swapping, with Undo, and a slim mark at the bottom of the zone shows how many it holds. **Next window in stack** and **Previous window in stack** (no key by default), `window.stack`, `window.stack_cycle`, `stacks` in the state, and a Cycle stack key in the Stream Deck plugin 0.8.3. The others stay behind the top one in the zone, so Alt+Tab and the taskbar still reach them. Workspaces keep stacks, and a restart finds them again.
 - **Assistants (MCP).** `seam-mcp.exe` lets an AI assistant such as Claude read Seam's status, switch workspaces (never closing windows), Snap back and Switch back. **Let assistants use Seam (MCP)** on General turns it on, and it is off by default. **Let assistants change workspaces**, also off by default, adds Quick save, renaming, creating, editing a row's place or how it shows, removing a row and Show every window, each with an Undo notice, and never a program, a shortcut or a launch turned on. General shows whether an assistant is connected and the path to copy. The zip and the installer include `seam-mcp.exe`.
 - **Show every window**, a switch on each workspace, off by default. A window saved minimized comes back onto its place, or maximized, and counts as moved while it's minimized, so Snap back and auto-apply restore it.
+- **Open with**, under an app's name in a workspace, makes a switch that starts the app open a path or link I typed: a full path on a local drive as the app's one argument, or an http, https, obsidian, vscode, vscode-insiders or spotify link through the shell. Anything else is refused and shows under the app, and so is a path for a program that would run it. It is never captured or exported, import drops it, and only the Seam window sees it.
 
 ### Fixed
 
@@ -30,12 +31,9 @@ All notable changes to Seam. The format follows [Keep a Changelog](https://keepa
 - **A workspace row no longer keeps a window that isn't its own** when Windows reuses a window handle for another program's window.
 - **Alt+drag** forgets an app's verdict the moment the app exits, so a new program that gets its process id isn't judged by it.
 
-### Added
-
-- **Open with**, under an app's name in a workspace, makes a switch that starts the app open a path or link I typed: a full path on a local drive as the app's one argument, or an http, https, obsidian, vscode, vscode-insiders or spotify link through the shell. Anything else is refused and shows under the app, and so is a path for a program that would run it. It is never captured or exported, import drops it, and only the Seam window sees it.
-
 ### Changed
 
+- **The updater also updates `seam-mcp.exe`,** checked against the same signed manifest as the other exes. It's listed where updaters from 0.5.0 to 0.7.0 don't look, so they still update to this release, and `seam-mcp.exe` comes with the next update after that, or from the zip. A running `seam-mcp.exe` no longer blocks an update, and the installer stops it before it copies the new one; the assistant starts it again on its next use.
 - With the debug log on, each step aside and return says what decided it: the window's class and exe, its rect against its screen and Windows' full-screen state. The zone swap's look at the open windows now starts when a drag does, so it is ready when zones show.
 
 ## [0.7.0] - 2026-11-13

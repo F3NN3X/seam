@@ -129,6 +129,14 @@ const stackCycle = (p) => {
   return { ...base, h: 28, svg: base.svg + behind + top + arrowBelow(p) };
 };
 
+/** A window on each screen, and the arrow they both step along: each takes the next zone. */
+const rotate = (p) => {
+  const base = mark(p);
+  const left = `<rect x="3" y="6" width="6" height="8" rx="1" fill="${p.line}"/>`;
+  const right = `<rect x="22" y="6" width="6" height="8" rx="1" fill="${p.line}"/>`;
+  return { ...base, h: 28, svg: base.svg + left + right + arrowBelow(p) };
+};
+
 /** A window on the right screen with a pin above it, the way it stays above the others. */
 const pinTop = (p) => {
   const base = mark(p);
@@ -243,6 +251,7 @@ const actions = {
   "window-move": { draw: windowMove, states: ["lit"] },
   "window-focus": { draw: windowFocus, states: ["lit"] },
   "stack-cycle": { draw: stackCycle, states: ["lit"] },
+  rotate: { draw: rotate, states: ["lit"] },
   "pin-top": { draw: pinTop, states: ["lit"] },
   release: { draw: release, states: ["lit"] },
   "snap-back": { draw: snapBack, states: ["lit"] },

@@ -415,3 +415,14 @@ fn open_with_is_checked_on_edit_and_left_out_of_files() {
     let older: Rule = serde_json::from_str(r#"{"exe":"C:\\a.exe"}"#).unwrap();
     assert_eq!(older.open_with, None);
 }
+
+#[test]
+fn a_row_out_of_a_stack_saves_no_stack_field() {
+    // An older file has none and loads as none, which is no stack.
+    let older: Rule = serde_json::from_str(r#"{"exe":"C:\\a.exe"}"#).unwrap();
+    assert_eq!(older.stack, None);
+    assert!(serde_json::to_value(&older).unwrap().get("stack").is_none());
+    let stacked = Rule { stack: Some(1), ..older };
+    let back: Rule = serde_json::from_value(serde_json::to_value(&stacked).unwrap()).unwrap();
+    assert_eq!(back.stack, Some(1));
+}

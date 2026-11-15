@@ -534,8 +534,9 @@ impl State {
         let Some(s) = scene.screens.get(spot.screen) else { return };
         let placed = zones::rects(&s.layout.tree, s.work, s.gap);
         let mut list = wincontrol::screen_members(&s.id, s.bounds, &placed, &scene.known, &scene.exclude);
-        list.retain(|(h, ..)| !scene.hidden.contains(&(h.0 as isize)));
+        // A stack's hidden windows count for the smallest sizes, but follow only at the end.
         let mins = wincontrol::group_mins(&s.layout.tree, s.work, s.gap, s.dpi, &list);
+        list.retain(|(h, ..)| !scene.hidden.contains(&(h.0 as isize)));
         let member = |(h, from, to): (HWND, usize, usize)| {
             Member::of(h, from, to, zones::span(*placed.get(from)?, *placed.get(to)?))
         };

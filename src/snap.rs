@@ -242,6 +242,10 @@ struct Engine {
     stacks_looked: bool,
     /// The stacks' marks last handed to the overlay.
     marks: Vec<zone_paint::Mark>,
+    /// Each stack window's process and its start, from when it joined.
+    stack_owners: HashMap<isize, (u32, u64)>,
+    /// Tops of stacks a swap carried, shown again once every window has landed.
+    restack: Vec<isize>,
 }
 
 /// Where window control wants a window, worked out on its worker.

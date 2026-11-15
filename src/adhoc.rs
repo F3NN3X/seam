@@ -309,8 +309,10 @@ impl Engine {
         let active = self.active();
         let members: Vec<isize> =
             self.adhoc.iter().flat_map(|a| a.members.iter().map(|(k, _)| *k)).filter(|_| active).collect();
-        MEMBERS.with_borrow_mut(|m| *m = members.iter().copied().collect());
-        self.sync_member_hook(!members.is_empty());
+        // A stack's windows leave it as they close or minimize, through the same hook.
+        let stacked = self.stack_members();
+        MEMBERS.with_borrow_mut(|m| *m = members.iter().chain(&stacked).copied().collect());
+        self.sync_member_hook(!members.is_empty() || !stacked.is_empty());
         let mut threads: Vec<(u32, u32)> = members.iter().filter_map(|k| thread_of(*k)).collect();
         threads.sort_unstable();
         threads.dedup();
@@ -373,10 +375,13 @@ impl Engine {
     /// a group send the same event.
     fn member_changed(&mut self, hwnd: HWND, event: u32) {
         let key = hwnd.0 as isize;
+        let gone = event == EVENT_OBJECT_DESTROY || event == EVENT_SYSTEM_MINIMIZESTART;
+        if gone {
+            self.stack_gone(key);
+        }
         if self.adhoc_of(key).is_none() {
             return;
         }
-        let gone = event == EVENT_OBJECT_DESTROY || event == EVENT_SYSTEM_MINIMIZESTART;
         if gone || winutil::is_minimized(hwnd) || winutil::is_maximized(hwnd) {
             self.leave_adhoc(key);
             return;

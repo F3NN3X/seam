@@ -622,6 +622,7 @@ mod tests {
             ("workspace.set_default", r#"{"id":"ws_1"}"#),
             ("window.fit", "{}"),
             ("window.stack_cycle", r#"{"dir":"next"}"#),
+            ("window.stack", r#"{"on":true}"#),
             ("app.quit", "{}"),
             ("session.restore", "{}"),
             ("layout.show", r#"{"view":"seam"}"#),

@@ -717,6 +717,26 @@ pub fn set_rect(h: HWND, r: Rect) {
 }
 
 /// Raise the window to the top of the others that aren't topmost, without activating it.
+/// Put `h` directly below `above` in the stacking order, without activating it.
+pub fn place_below(h: HWND, above: HWND) {
+    let flags = SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_ASYNCWINDOWPOS;
+    unsafe {
+        let _ = SetWindowPos(h, Some(above), 0, 0, 0, 0, flags);
+    }
+}
+
+/// The highest of `among` in the stacking order, read from the top down until one is found.
+pub fn topmost_of(among: &[isize]) -> Option<isize> {
+    let mut h = unsafe { GetTopWindow(None) }.ok()?;
+    for _ in 0..10_000 {
+        if among.contains(&(h.0 as isize)) {
+            return Some(h.0 as isize);
+        }
+        h = unsafe { GetWindow(h, GW_HWNDNEXT) }.ok()?;
+    }
+    None
+}
+
 pub fn raise(h: HWND) {
     let flags = SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_ASYNCWINDOWPOS;
     unsafe {

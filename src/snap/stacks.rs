@@ -4,7 +4,9 @@
 //! overlay for its mark. Hiding is by z-order only: every window keeps the zone's
 //! place, so Alt+Tab and the taskbar still reach each one, and the one that takes the
 //! focus is the top. Hidden windows are moved once the moves of their top are over,
-//! never during a drag.
+//! never during a drag. Only a cycle, or `window.stack`, puts a window at the very top;
+//! otherwise the others are put just below their top, so no window a user is working
+//! in is covered.
 
 use super::*;
 use crate::wincontrol::tile::Back;
@@ -44,7 +46,12 @@ pub fn cycle(hwnd: HWND, forward: bool, nudge: bool) -> Result<(isize, usize, us
 /// `window.stack`: on stacks `hwnd` with the other windows in its zones, on top of
 /// them; off takes it out of its stack. Returns how many windows its stack has now.
 pub fn set(hwnd: HWND, on: bool) -> Result<usize, String> {
-    with_engine(|e| e.stack_set(hwnd.0 as isize, on)).unwrap_or_else(|| Err(BUSY.into()))
+    let n = with_engine(|e| e.stack_set(hwnd.0 as isize, on)).unwrap_or_else(|| Err(BUSY.into()))?;
+    // It is the top now, so it shows, as a cycle's does.
+    if on {
+        winutil::raise(hwnd);
+    }
+    Ok(n)
 }
 
 /// Every stack, for the state.
@@ -65,10 +72,14 @@ pub fn stacks_found() {
 
 /// A workspace switch put these windows in their zones as stacks: the screen and zones,
 /// and the windows from the top.
+/// With none, the switch may still have closed or minimized windows of a stack.
 pub fn rebuild(list: Vec<((String, usize, usize), Vec<isize>)>) {
-    if !list.is_empty() {
-        with_engine(|e| e.stacks_rebuild(list));
-    }
+    with_engine(|e| {
+        if !list.is_empty() {
+            e.stacks_rebuild(list);
+        }
+        e.stacks_settle();
+    });
 }
 
 const BUSY: &str = "Seam is busy, try again";
@@ -91,28 +102,69 @@ unsafe extern "system" fn collect(h: HWND, data: LPARAM) -> BOOL {
 }
 
 impl Engine {
-    /// Write the stamps of stack `id`'s windows, and clear those of `out`.
-    fn stack_stamps(&self, out: &[isize], id: Option<u32>) {
+    /// Write the stamps of stack `id`'s windows, and clear those of `out`. Each window's
+    /// process and its start are kept as it joins, so a handle Windows gives to another
+    /// window later isn't taken for it.
+    fn stack_stamps(&mut self, out: &[isize], id: Option<u32>) {
         for w in out {
             winutil::set_stack_stamp(hwnd_of(*w), 0);
+            self.stack_owners.remove(w);
         }
         let Some(s) = id.and_then(|id| self.stacks.iter().find(|s| s.id == id)) else { return };
         for (i, m) in s.members.iter().enumerate() {
             winutil::set_stack_stamp(hwnd_of(*m), stack::stamp(s.id, i));
+            self.stack_owners.entry(*m).or_insert_with(|| owner_of(*m));
         }
     }
 
-    /// `key` leaves its stack, if it is in one. A stack left with one window is gone, and
-    /// when `key` was on top, the new top is raised.
+    /// Whether `m` is still the window that joined: the same process, started at the
+    /// same time, and still stamped as in a stack.
+    fn same_window(&self, m: isize) -> bool {
+        let h = hwnd_of(m);
+        unsafe { IsWindow(Some(h)) }.as_bool()
+            && winutil::stack_stamp(h) != 0
+            && self.stack_owners.get(&m).is_none_or(|o| *o == owner_of(m))
+    }
+
+    /// `key` leaves its stack, if it is in one. A stack left with one window is gone.
+    /// When `key` was on top and is still on screen, the next one goes just below it,
+    /// never over it; when it closed or minimized, the highest one left is the top.
     pub(super) fn stack_leave(&mut self, key: isize) {
         let Some(s) = self.stacks.of(key) else { return };
         let (id, was_top) = (s.id, s.top() == key);
         let out = self.stacks.leave(key);
         self.stack_stamps(&out, Some(id));
-        if let Some(s) = self.stacks.iter().find(|s| s.id == id).filter(|_| was_top) {
-            winutil::raise(hwnd_of(s.top()));
+        let rest = self.stacks.iter().find(|s| s.id == id).filter(|_| was_top).map(|s| (s.top(), s.members.clone()));
+        if let Some((next, members)) = rest {
+            let h = hwnd_of(key);
+            if unsafe { IsWindow(Some(h)) }.as_bool() && !winutil::is_minimized(h) {
+                winutil::place_below(hwnd_of(next), h);
+            } else if let Some(t) = winutil::topmost_of(&members) {
+                self.stacks.raise(t);
+            }
         }
         self.stacks_changed();
+    }
+
+    /// A window of a stack closed or minimized, as the hook on every window's closing
+    /// and minimizing saw: it leaves at once.
+    pub(super) fn stack_gone(&mut self, key: isize) {
+        if self.stacks.of(key).is_some() {
+            self.stack_leave(key);
+        }
+    }
+
+    /// The windows of `top`'s stack go just below it, so it shows and nothing else moves.
+    fn stack_order(&self, top: isize) {
+        let Some(s) = self.stacks.of(top) else { return };
+        for m in s.members.iter().filter(|m| **m != top) {
+            winutil::place_below(hwnd_of(*m), hwnd_of(top));
+        }
+    }
+
+    /// Every stack's windows, by the same id, for the hook on closing and minimizing.
+    pub(super) fn stack_members(&self) -> Vec<isize> {
+        self.stacks.iter().flat_map(|s| s.members.iter().copied()).collect()
     }
 
     /// A window is about to be put in zones `zone`: it leaves its stack for other zones,
@@ -137,57 +189,66 @@ impl Engine {
         self.stacks.iter().flat_map(hidden).collect()
     }
 
-    /// Once the moves are over: a window that closed, was minimized or maximized, left
-    /// the zones of its stack's top, or a top no longer where it was put, leaves its
-    /// stack. Each hidden window that isn't where its top is goes there, which is how a
-    /// swap, an edge or a divider's drag resizes them, at its end. The marks follow.
+    /// What the snapping knows of each of a stack's windows, for `stack::settle`.
+    fn seen(&self, s: &stack::Stack) -> Vec<stack::Seen<(String, usize, usize), Rect>> {
+        let seen = |m: &isize| {
+            let h = hwnd_of(*m);
+            let record = self.snapped.get(m);
+            stack::Seen {
+                hwnd: *m,
+                live: self.same_window(*m) && !winutil::is_minimized(h) && !winutil::is_maximized(h),
+                in_place: self.current(h).is_some(),
+                place: record.map(|x| ((x.screen.clone(), x.from, x.to), x.at)),
+            }
+        };
+        s.members.iter().map(seen).collect()
+    }
+
+    /// Once the moves are over, `stack::settle` decides each stack: a window that closed,
+    /// was minimized or maximized, isn't where it was put, or is in other zones leaves.
+    /// Each hidden window in the same zones at another place goes where its top is, which
+    /// is how an edge or a divider's drag resizes them, at its end. A stack whose top is
+    /// on another desktop is left as it is. A carried stack's top shows again, and the
+    /// marks follow.
     pub(super) fn stacks_settle(&mut self) {
         if self.stacks.is_empty() || self.pending.is_some() || !self.queued.is_empty() || self.drag.is_some() {
             return;
         }
         self.carried.clear();
-        let gone = |e: &Engine, m: isize| {
-            let h = hwnd_of(m);
-            !unsafe { IsWindow(Some(h)) }.as_bool()
-                || winutil::is_minimized(h)
-                || winutil::is_maximized(h)
-                || !e.snapped.contains_key(&m)
-        };
-        let mut leaving: Vec<isize> = Vec::new();
-        for s in self.stacks.iter() {
-            let here = |m: isize| !gone(self, m) && self.current(hwnd_of(m)).is_some();
-            // The top is the one on screen, so it says where the stack is. A top moved
-            // away by hand leaves, and the next one still in place says instead.
-            let order = s.members.iter().copied().cycle().skip(s.top).take(s.members.len());
-            let Some(t) = order.clone().find(|m| here(*m)).and_then(|t| self.snapped.get(&t)) else {
-                leaving.extend(&s.members);
-                continue;
-            };
-            let zone = (t.screen.as_str(), t.from, t.to);
-            let other = |m: isize| self.snapped.get(&m).is_none_or(|x| (x.screen.as_str(), x.from, x.to) != zone);
-            let top_moved = (!here(s.top())).then_some(s.top());
-            leaving.extend(s.members.iter().copied().filter(|m| gone(self, *m) || other(*m)).chain(top_moved));
+        let (mut leaving, mut follow, mut tops) = (Vec::new(), Vec::new(), Vec::new());
+        for s in self.stacks.iter().filter(|s| !winutil::is_cloaked(hwnd_of(s.top()))) {
+            let decided = stack::settle(&self.seen(s), s.top);
+            leaving.extend(decided.leaving);
+            follow.extend(decided.follow);
+            tops.extend(decided.top);
         }
+        leaving.sort_unstable();
         leaving.dedup();
         for key in leaving {
             self.stack_leave(key);
         }
-        let mut follow = Vec::new();
-        let geometry = self.geometry();
-        for s in self.stacks.iter() {
-            let Some(t) = self.snapped.get(&s.top()) else { continue };
-            let Some(g) = geometry.iter().find(|g| g.id == t.screen) else { continue };
-            for m in s.members.iter().filter(|m| **m != s.top()) {
-                if self.snapped.get(m).is_some_and(|x| x.at != t.at) {
-                    let zone = Some((t.screen.clone(), t.from, t.to));
-                    follow.push(Placement { hwnd: *m, target: t.at, zone, dpi: g.dpi, maximize: false });
-                }
-            }
+        for t in tops {
+            self.stacks.raise(t);
         }
+        let geometry = self.geometry();
+        let place = |m: &isize| {
+            let t = self.snapped.get(&self.stacks.of(*m)?.top())?;
+            let dpi = geometry.iter().find(|g| g.id == t.screen)?.dpi;
+            let zone = Some((t.screen.clone(), t.from, t.to));
+            Some(Placement { hwnd: *m, target: t.at, zone, dpi, maximize: false })
+        };
+        let follow: Vec<Placement> = follow.iter().filter_map(place).collect();
         if !follow.is_empty() {
             log::info!("stacks: {} hidden windows follow their top", follow.len());
             self.queued.extend(follow);
             self.window_pump();
+            return;
+        }
+        for top in std::mem::take(&mut self.restack) {
+            if self.stacks.of(top).is_some_and(|s| s.top() == top) {
+                winutil::raise(hwnd_of(top));
+                self.stack_order(top);
+            }
         }
         self.stack_marks();
     }
@@ -195,6 +256,7 @@ impl Engine {
     /// The stacks changed: the focus hook, the marks and the tray's state follow.
     pub(super) fn stacks_changed(&mut self) {
         self.sync_stack_hook();
+        self.sync_adhoc_hooks();
         self.stack_marks();
         // The handles are the top's, so they follow a new one.
         self.sync_dividers();
@@ -223,22 +285,33 @@ impl Engine {
         }
     }
 
-    /// A window took the focus: in a stack, it is that stack's top now.
+    /// A window took the focus: in a stack, it is that stack's top now, and the stacks
+    /// are looked at, as a close or minimize of the top hands the focus on. The mark
+    /// shows only for the window in front.
     fn stack_focus(&mut self, key: isize) {
         if self.stacks.raise(key) {
-            self.stack_marks();
             self.sync_dividers();
             unsafe {
                 let _ = PostMessageW(Some(hwnd_of(self.owner)), WM_APP_STACKS, WPARAM(0), LPARAM(0));
             }
         }
+        if self.stacks.of(key).is_some() {
+            self.stacks_settle();
+        }
+        self.stack_marks();
     }
 
-    /// Each stack's mark where its top is, or none while zones are off, Seam stands by or
-    /// another window manager has the windows. Only a screen with zones has the overlay
-    /// that draws them.
+    /// The mark of the stack whose top is the window in front, on the current desktop,
+    /// or none, and none while zones are off, Seam stands by or another window manager
+    /// has the windows. The window in front has nothing over it but topmost windows, so
+    /// the mark never sits over another window. Only a screen with zones has the
+    /// overlay that draws it.
     pub(super) fn stack_marks(&mut self) {
+        let front = unsafe { GetForegroundWindow() }.0 as isize;
         let mark = |s: &stack::Stack| {
+            if s.top() != front || winutil::is_cloaked(hwnd_of(front)) {
+                return None;
+            }
             let t = self.snapped.get(&s.top())?;
             let screen = self.screens.iter().find(|x| x.id == t.screen && x.layout.is_some())?;
             let (_, dpi) = work_area(screen.bounds)?;
@@ -302,6 +375,9 @@ impl Engine {
         let mut more = Vec::new();
         for p in list.iter().filter(|p| p.zone.is_some()) {
             let Some(s) = self.stacks.of(p.hwnd) else { continue };
+            // It lands in the dropped window's old zones, maybe over a stack left there: it
+            // shows once every window has landed.
+            self.restack.push(s.top());
             for m in s.members.clone() {
                 self.carried.push(m);
                 if m != p.hwnd {
@@ -318,10 +394,10 @@ impl Engine {
         more
     }
 
-    /// A re-fit is over: each stack's top goes back over the others.
+    /// A re-fit is over: each stack's others go back below its top.
     pub(super) fn stack_raise_tops(&self) {
         for s in self.stacks.iter() {
-            winutil::raise(hwnd_of(s.top()));
+            self.stack_order(s.top());
         }
     }
 
@@ -350,23 +426,26 @@ impl Engine {
             return Err(why);
         }
         if !on {
+            self.stacks.of(key).ok_or("That window isn't in a stack")?;
             self.stack_leave(key);
             return Ok(0);
         }
         let h = hwnd_of(key);
         let s = self.current(h).ok_or("That window isn't in a zone")?;
         let zone = (s.screen.clone(), s.from, s.to);
-        // The other windows still where the snapping put them in the same zones, in the
-        // order of their stack if they have one.
+        // The other windows still where the snapping put them in the same zones, on this
+        // desktop, in the order of their stack if they have one, then of their old stamp.
         let mut members: Vec<isize> = self.stacks.of(key).map(|s| s.members.clone()).unwrap_or_default();
+        let shown = |h: HWND| unsafe { IsWindowVisible(h) }.as_bool() && !winutil::is_cloaked(h);
         let mut others: Vec<isize> = self
             .snapped
             .iter()
             .filter(|(k, x)| **k != key && (x.screen.clone(), x.from, x.to) == zone)
             .map(|(k, _)| *k)
-            .filter(|k| !members.contains(k) && self.current(hwnd_of(*k)).is_some())
+            .filter(|k| !members.contains(k) && shown(hwnd_of(*k)) && self.current(hwnd_of(*k)).is_some())
             .collect();
-        others.sort_unstable();
+        let was = |k: &isize| stack::unstamp(winutil::stack_stamp(hwnd_of(*k))).map_or(usize::MAX, |(_, pos)| pos);
+        others.sort_unstable_by_key(|k| (was(k), *k));
         members.retain(|m| *m != key);
         members.extend(others);
         if members.is_empty() {
@@ -420,6 +499,9 @@ impl Engine {
     /// The stamps the worker found make the stacks again. Each window's zones come from
     /// its zone stamp, as a re-fit reads them; one with no zones on its screen now leaves.
     fn stacks_found(&mut self, list: Vec<(isize, u64)>) {
+        // A switch may have made a stack first: its ids must not meet the stamps' later.
+        let last = list.iter().filter_map(|(_, bits)| stack::unstamp(*bits)).map(|(id, _)| id).max();
+        self.stacks.seed(last.unwrap_or(0));
         if list.is_empty() || !self.stacks.is_empty() {
             return;
         }
@@ -444,7 +526,9 @@ impl Engine {
             }
             keep.push((key, bits));
         }
-        self.stacks = Stacks::rebuild(&keep);
+        let mut rebuilt = Stacks::rebuild(&keep);
+        rebuilt.seed(last.unwrap_or(0));
+        self.stacks = rebuilt;
         let ids: Vec<u32> = self.stacks.iter().map(|s| s.id).collect();
         // A stamp whose stack came back with one window means nothing now.
         let alone: Vec<isize> = keep.iter().map(|(k, _)| *k).filter(|k| self.stacks.of(*k).is_none()).collect();
@@ -452,12 +536,19 @@ impl Engine {
         for id in ids {
             self.stack_stamps(&[], Some(id));
         }
+        for top in self.stacks.iter().map(|s| s.top()).collect::<Vec<_>>() {
+            self.stack_order(top);
+        }
         log::info!("stacks: found {} again after a restart", self.stacks.iter().count());
         self.stacks_changed();
         self.stacks_settle();
     }
 
     fn stacks_rebuild(&mut self, list: Vec<((String, usize, usize), Vec<isize>)>) {
+        if let Some(why) = self.stack_refusal() {
+            log::info!("stacks: a switch's stacks left as windows, {why}");
+            return;
+        }
         let geometry = self.geometry();
         for ((screen, from, to), windows) in list {
             let Some(g) = geometry.iter().find(|g| g.id == screen && from <= to && to < g.zones.len()) else {
@@ -472,11 +563,16 @@ impl Engine {
             }
             let (out, id) = self.stacks.make(windows, 0);
             self.stack_stamps(&out, id);
-            if let Some(s) = id.and_then(|id| self.stacks.iter().find(|s| s.id == id)) {
-                winutil::raise(hwnd_of(s.top()));
+            if let Some(top) = id.and_then(|id| self.stacks.iter().find(|s| s.id == id)).map(|s| s.top()) {
+                self.stack_order(top);
             }
         }
         self.stacks_changed();
-        self.stacks_settle();
     }
+}
+
+/// A window's process and when it started, which a later window given the same handle doesn't share.
+fn owner_of(m: isize) -> (u32, u64) {
+    let pid = winutil::process_id(hwnd_of(m));
+    (pid, seam::process::started(pid).unwrap_or(0))
 }

@@ -272,23 +272,26 @@ impl Engine {
         if drag.keys.hooked && !drag.keys.off {
             dragkeys::set_live(live);
         }
-        let text = if drag.keys.stack { dragkeys::STACK_HINT } else { dragkeys::HINT };
-        let hint = (drag.keys.hooked && self.settings.drag_hints).then(|| text.to_string());
+        // The strip says the drop stacks only when there is a window to stack on.
+        let hint = |stacking: bool| {
+            let text = if stacking { dragkeys::STACK_HINT } else { dragkeys::HINT };
+            (drag.keys.hooked && self.settings.drag_hints).then(|| text.to_string())
+        };
         if let Some(view) = view {
             let g = &drag.geometry[view.screen];
             // The whole span stays lit, and a share of it from the keys is lit again inside it.
-            let (lit, part, others) = match view.hit {
+            let (lit, part, others, stacking) = match view.hit {
                 Some((a, b)) => {
                     let out = self.outcome(drag, view.screen, (a, b), view.cut);
                     let part = out.split.is_some().then_some(out.rect);
-                    (Some(zones::span(g.zones[a], g.zones[b])), part, out.others())
+                    (Some(zones::span(g.zones[a], g.zones[b])), part, out.others(), out.stack.is_some())
                 }
-                None => (None, None, Vec::new()),
+                None => (None, None, Vec::new(), false),
             };
-            zone_paint::preview(&g.id, lit, part, others, hint);
+            zone_paint::preview(&g.id, lit, part, others, hint(stacking));
         } else if let Some((id, plan)) = now.zip(beside.and_then(|b| self.adhoc_plan(drag.hwnd, &b))) {
             // Beside a window on a screen with no zones: the dropped window's part, and the other's.
-            zone_paint::preview(&id, None, Some(plan.rect), vec![plan.target], hint);
+            zone_paint::preview(&id, None, Some(plan.rect), vec![plan.target], hint(false));
         }
         drag.shown = view;
         drag.beside = beside;

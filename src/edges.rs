@@ -238,9 +238,10 @@ impl Ask {
                 wincontrol::group_members(first, &self.screen, self.bounds, &self.placed, &self.known, &self.exclude)
             }
         };
+        // A stack's hidden windows count for the smallest sizes, but follow only at the end.
+        let mins = wincontrol::group_mins(&self.tree, self.work, self.gap, self.dpi, &list);
         let mut list = list;
         list.retain(|(h, ..)| !self.hidden.contains(&(h.0 as isize)));
-        let mins = wincontrol::group_mins(&self.tree, self.work, self.gap, self.dpi, &list);
         let member = |(h, from, to): (HWND, usize, usize)| {
             Member::of(h, from, to, zones::span(self.placed[from], self.placed[to]))
         };

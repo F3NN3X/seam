@@ -376,7 +376,8 @@ impl Engine {
         }
         // Beside a window, the wheel steps the share through 1/2, 1/3 and 2/3, stopping
         // at the ends; the side is the edge's, so Tab and the arrows do nothing.
-        if drag.beside.is_some() && matches!(key, Key::Next | Key::Scroll(_) | Key::Side(_)) {
+        // S does nothing there either: a snap-beside group is never a stack.
+        if drag.beside.is_some() && matches!(key, Key::Next | Key::Scroll(_) | Key::Side(_) | Key::Stack) {
             if let Key::Scroll(next) = key {
                 let shares = [Part::Half, Part::Third, Part::TwoThirds];
                 let i = shares.iter().position(|p| Some(*p) == drag.keys.part).unwrap_or(0);

@@ -143,6 +143,11 @@ impl Stacks {
         out
     }
 
+    /// Stamps carry ids up to `id`, so a new stack takes a later one.
+    pub fn seed(&mut self, id: u32) {
+        self.last = self.last.max(id);
+    }
+
     /// `h` took the focus: it is its stack's top now. False when it is in none, or on top already.
     pub fn raise(&mut self, h: isize) -> bool {
         match self.of_mut(h) {
@@ -183,6 +188,47 @@ impl Stacks {
         }
         stacks
     }
+}
+
+/// What the snapping knows of one window of a stack, for `settle`. `Z` is its zones
+/// and `A` its place in them.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Seen<Z, A> {
+    pub hwnd: isize,
+    /// Still the window that joined, stamped as in a stack, and neither minimized nor maximized.
+    pub live: bool,
+    /// Still where the snapping put it.
+    pub in_place: bool,
+    /// The zones and place the snapping has it in, or None.
+    pub place: Option<(Z, A)>,
+}
+
+/// What `settle` decided for one stack.
+#[derive(Debug, Default, PartialEq, Eq)]
+pub struct Settle {
+    pub leaving: Vec<isize>,
+    /// Windows that stay but aren't where the top is: they go there.
+    pub follow: Vec<isize>,
+    /// The window that says where the stack is, its top from now on. None when every window leaves.
+    pub top: Option<isize>,
+}
+
+/// Once the moves are over, for one stack's windows in their order with `top` on top:
+/// the first one from the top that is live and where it was put says where the stack
+/// is. A window that isn't live, isn't where it was put, or is in other zones leaves.
+/// One in the same zones at another place follows it there.
+pub fn settle<Z: PartialEq, A: PartialEq>(members: &[Seen<Z, A>], top: usize) -> Settle {
+    let n = members.len();
+    let from_top = (0..n).map(|i| &members[(top + i) % n]);
+    let anchor = from_top.filter(|m| m.live && m.in_place).find_map(|m| Some((m.hwnd, m.place.as_ref()?)));
+    let Some((anchor, (zone, at))) = anchor else {
+        return Settle { leaving: members.iter().map(|m| m.hwnd).collect(), ..Settle::default() };
+    };
+    let stays = |m: &Seen<Z, A>| m.live && m.in_place && m.place.as_ref().is_some_and(|(z, _)| z == zone);
+    let leaving = members.iter().filter(|m| !stays(m)).map(|m| m.hwnd).collect();
+    let elsewhere = |m: &&Seen<Z, A>| m.hwnd != anchor && m.place.as_ref().is_some_and(|(_, a)| a != at);
+    let follow = members.iter().filter(|m| stays(m)).filter(elsewhere).map(|m| m.hwnd).collect();
+    Settle { leaving, follow, top: Some(anchor) }
 }
 
 /// The `Seam_stack` bits for a window at `position` in stack `id`. Never 0, which is no stamp.
@@ -349,6 +395,53 @@ mod tests {
     fn a_capture_ranks_each_stack_from_its_top() {
         let ranked = ranks(&[Some(4), None, Some(9), Some(4), Some(4)]);
         assert_eq!(ranked, vec![Some(0), None, None, Some(1), Some(2)]);
+    }
+
+    fn seen(hwnd: isize, live: bool, in_place: bool, place: Option<(u8, u8)>) -> Seen<u8, u8> {
+        Seen { hwnd, live, in_place, place }
+    }
+
+    #[test]
+    fn settling_keeps_a_stack_that_is_where_it_was() {
+        let members = [seen(1, true, true, Some((1, 5))), seen(2, true, true, Some((1, 5)))];
+        assert_eq!(settle(&members, 1), Settle { top: Some(2), ..Settle::default() });
+    }
+
+    #[test]
+    fn a_top_moved_away_leaves_and_the_next_says_where_the_stack_is() {
+        let members =
+            [seen(1, true, true, Some((1, 5))), seen(2, true, false, Some((1, 5))), seen(3, true, true, Some((1, 5)))];
+        let s = settle(&members, 1);
+        assert_eq!((s.leaving, s.top), (vec![2], Some(3)));
+    }
+
+    #[test]
+    fn a_closed_or_reused_window_leaves() {
+        // A stale stamp or another process behind the same handle isn't live.
+        let members = [seen(1, false, true, Some((1, 5))), seen(2, true, true, Some((1, 5)))];
+        assert_eq!(settle(&members, 1).leaving, vec![1]);
+    }
+
+    #[test]
+    fn a_hidden_window_in_other_zones_leaves_and_one_elsewhere_in_them_follows() {
+        let members =
+            [seen(1, true, true, Some((1, 5))), seen(2, true, true, Some((2, 5))), seen(3, true, true, Some((1, 4)))];
+        let s = settle(&members, 0);
+        assert_eq!((s.leaving, s.follow, s.top), (vec![2], vec![3], Some(1)));
+    }
+
+    #[test]
+    fn a_stack_with_nothing_in_place_leaves_whole() {
+        let members =
+            [seen(1, true, false, Some((1, 5))), seen(2, false, true, Some((1, 5))), seen(3, true, true, None)];
+        assert_eq!(settle(&members, 0), Settle { leaving: vec![1, 2, 3], ..Settle::default() });
+    }
+
+    #[test]
+    fn a_seed_keeps_new_ids_past_old_stamps() {
+        let mut s = Stacks::default();
+        s.seed(40);
+        assert_eq!(s.join(1, 2).1, 41);
     }
 
     #[test]

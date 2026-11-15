@@ -536,21 +536,42 @@ impl Overlay {
     }
 
     /// The stacks' marks: the ones that changed or went are taken down, new ones drawn.
+    /// A mark of the same zone is drawn again in its window rather than made anew, so a
+    /// cycle doesn't flicker.
     fn marks(&mut self, list: Vec<Mark>) {
-        let (keep, gone): (Vec<_>, Vec<_>) = self.marks.drain(..).partition(|(m, _)| list.contains(m));
-        for (_, window) in gone {
-            unsafe {
-                let _ = DestroyWindow(window);
-            }
-        }
+        let (keep, mut gone): (Vec<_>, Vec<_>) = self.marks.drain(..).partition(|(m, _)| list.contains(m));
         self.marks = keep;
         for mark in list {
             if self.marks.iter().any(|(m, _)| *m == mark) {
                 continue;
             }
-            if let Some(window) = mark_window(&mark) {
+            let reused = gone.iter().position(|(m, _)| m.zone == mark.zone).map(|i| gone.swap_remove(i).1);
+            let window = match reused {
+                Some(window) if paint_mark(window, &mark) => Some(window),
+                Some(window) => {
+                    unsafe {
+                        let _ = DestroyWindow(window);
+                    }
+                    None
+                }
+                None => create().and_then(|w| {
+                    if paint_mark(w, &mark) {
+                        return Some(w);
+                    }
+                    unsafe {
+                        let _ = DestroyWindow(w);
+                    }
+                    None
+                }),
+            };
+            if let Some(window) = window {
                 show_on_top(window);
                 self.marks.push((mark, window));
+            }
+        }
+        for (_, window) in gone {
+            unsafe {
+                let _ = DestroyWindow(window);
             }
         }
     }
@@ -801,9 +822,10 @@ fn hint_window(work: Rect, text: &str, s: f32) -> Option<HWND> {
     Some(hwnd)
 }
 
-/// A hidden window with a stack's mark: a bar per window on a dark strip, centred at
-/// the bottom of the zone, the top window's bar in full ink and the others muted.
-fn mark_window(mark: &Mark) -> Option<HWND> {
+/// Give `hwnd` a stack's mark: a bar per window on a dark strip, centred at the bottom
+/// of the zone, the top window's bar in full ink and the others muted. False when the
+/// zone is too small for it.
+fn paint_mark(hwnd: HWND, mark: &Mark) -> bool {
     let s = mark.scale;
     let px = |v: f32| (v * s).round() as i32;
     let n = mark.count.clamp(2, MARK_MAX) as i32;
@@ -811,10 +833,9 @@ fn mark_window(mark: &Mark) -> Option<HWND> {
     let (w, h) = (n * bar + (n - 1) * gap + 2 * pad, thick + 2 * pad);
     let z = mark.zone;
     if w > z.w || h > z.h {
-        return None;
+        return false;
     }
     let at = Rect { x: z.x + (z.w - w) / 2, y: z.y + z.h - h - px(MARK_BOTTOM), w, h };
-    let hwnd = create()?;
     let back = pm(SHADE, 0.9);
     render(hwnd, at, |canvas| {
         canvas.rounded(Rect { x: 0, y: 0, w, h }, MARK_RADIUS, back, Some((pm(INK, 0.4), OUTLINE)), s);
@@ -824,7 +845,7 @@ fn mark_window(mark: &Mark) -> Option<HWND> {
             canvas.rounded(r, 1., over(back, pm(INK, alpha)), None, s);
         }
     });
-    Some(hwnd)
+    true
 }
 
 /// The base: every zone and its number, in screen pixels turned local to the work area.

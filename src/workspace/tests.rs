@@ -484,6 +484,7 @@ fn a_window_that_has_a_row_updates_it_and_never_adds_a_duplicate() {
     let mut fresh = rule(ff, None, "MozillaWindowClass", "GitHub - now");
     fresh.target = Target::Zone { zone: 3, span_to: None };
     fresh.z = 5;
+    fresh.stack = Some(1);
     fresh.place = Some(Place::Url("https://b.example".into()));
     let added = add_window(&old, fresh, &[]);
     assert!(!added.new);
@@ -541,13 +542,47 @@ fn a_window_in_a_place_no_row_holds_gets_a_new_row_even_with_rows_of_its_app() {
 }
 
 #[test]
-fn a_row_keeps_its_stack_only_while_the_window_stays_in_its_place() {
+fn a_row_takes_the_stack_the_window_is_read_in_and_a_new_row_records_it() {
     let old = Workspace { windows: vec![terminal_row(1)], ..named("w") };
-    let same = add_window(&old, terminal_row(1), &[]);
-    assert_eq!(same.workspace.windows[0].stack, Some(1));
-    // Bound to this window but now in another zone: no longer in that stack.
-    let moved = add_window(&old, terminal_row(2), &[Some(Bound::Alive(0))]);
-    assert_eq!(moved.workspace.windows[0].stack, None);
+    let mut second = terminal_row(1);
+    second.stack = Some(0);
+    let same = add_window(&old, second, &[]);
+    assert_eq!(same.workspace.windows[0].stack, Some(0));
+    // Now in no stack: the row isn't in one either.
+    let mut alone = terminal_row(1);
+    alone.stack = None;
+    assert_eq!(add_window(&old, alone, &[]).workspace.windows[0].stack, None);
+    // A new row, in a place no row of two holds, records the stack too.
+    let two = Workspace { windows: vec![terminal_row(1), terminal_row(2)], ..named("w") };
+    let mut stacked = terminal_row(4);
+    stacked.stack = Some(2);
+    let added = add_window(&two, stacked, &[]);
+    assert!(added.new);
+    assert_eq!(added.workspace.windows[2].stack, Some(2));
+}
+
+#[test]
+fn rows_are_matched_bound_then_only_row_then_same_place_then_new() {
+    let at = |zone| Target::Zone { zone, span_to: None };
+    // 1. Bound to this window wins over a row in the same place.
+    let old = Workspace { windows: vec![terminal_row(1), terminal_row(2)], ..named("w") };
+    let a = add_window(&old, terminal_row(2), &[Some(Bound::Alive(0)), None]);
+    assert_eq!((a.row, a.new), (0, false));
+    assert_eq!(a.workspace.windows[0].target, at(2));
+    // 2. The only row of the app is updated, though the window moved.
+    let one = Workspace { windows: vec![rule(r"C:\a.exe", None, "A", "a"), terminal_row(1)], ..named("w") };
+    let b = add_window(&one, terminal_row(5), &[]);
+    assert_eq!((b.row, b.new, b.workspace.windows.len()), (1, false, 2));
+    assert_eq!(b.workspace.windows[1].target, at(5));
+    // ... unless it is bound to another window.
+    let c = add_window(&one, terminal_row(5), &[None, Some(Bound::Alive(-1))]);
+    assert!(c.new);
+    // 3. With several rows, the one in the same place.
+    let d = add_window(&old, terminal_row(2), &[None, None]);
+    assert_eq!((d.row, d.new), (1, false));
+    // 4. Several rows and none in its place: a new row.
+    let e = add_window(&old, terminal_row(7), &[None, None]);
+    assert_eq!((e.row, e.new), (2, true));
 }
 
 #[test]

@@ -107,10 +107,32 @@ fn read_added(job: &CaptureJob, hwnd: isize) -> Added {
     let geos = geometry(&job.screens, job.gap);
     let Some(mut rule) = rule_of(&seen.cand, &geos, hwnd, false, 0) else { return why("off screen") };
     rule.launch = false;
+    rule.stack = stack_rank(&rule, hwnd);
     if job.places {
         rule.place = places::read(std::slice::from_ref(&rule), &[hwnd]).into_iter().next().flatten();
     }
     Ok((rule, hwnd))
+}
+
+/// The window's place in its stack, counted from the top as a capture does, when it is in
+/// a zone and shares it with other windows. The stack's other windows are found by their stamps.
+fn stack_rank(rule: &Rule, hwnd: isize) -> Option<u32> {
+    if !matches!(rule.target, Target::Zone { .. }) {
+        return None;
+    }
+    let (id, _) = stack::unstamp(winutil::stack_stamp(hwnd_of(hwnd)))?;
+    let mut mine = 0;
+    let mut found = Vec::new();
+    for h in winutil::top_level_windows() {
+        let stamp = stack::unstamp(winutil::stack_stamp(h)).filter(|(of, _)| *of == id);
+        if h.0 as isize == hwnd {
+            mine = found.len();
+        }
+        if stamp.is_some() {
+            found.push(stamp);
+        }
+    }
+    stack::ranks(&found).get(mine).copied().flatten()
 }
 
 /// Capture the last session (D120): every window, pinned ones with their pins.

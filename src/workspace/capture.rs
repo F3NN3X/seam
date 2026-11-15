@@ -196,34 +196,35 @@ pub struct Added {
     pub place: Option<Place>,
 }
 
-/// The focused window, read as a capture would, goes into `old`. The row it updates is
-/// the one bound to this very window (`bound`, as a switch keeps them), else the row of
-/// its app whose screen and place the window now fills; never one picked by app alone.
-/// That row takes where the window is now and keeps its launch details, its start order,
-/// its focus and, while the window stays in the same place, its stack position. With no
+/// The focused window, read as a capture would, goes into `old`. The row it updates is,
+/// in this order: the one bound to this very window (`bound`, as a switch keeps them);
+/// the only row of its app, even when the window has moved, unless it is bound to another window; with several rows of its app,
+/// the one on the window's screen and in its place. That row takes where the window is now,
+/// its stack included, and keeps its launch details, its start order and its focus. With no
 /// such row the window gets one at the end, with launch off and no Open with. Never
 /// removes a row. `bound` has this window as index 0.
 pub fn add_window(old: &Workspace, fresh: Rule, bound: &[Option<Bound>]) -> Added {
     let this = as_candidates(std::slice::from_ref(&fresh));
     let same_app = |r: &Rule| matching::same_app(r, &this[0]);
-    let held = old
-        .windows
-        .iter()
-        .enumerate()
-        .position(|(i, r)| same_app(r) && matches!(bound.get(i).copied().flatten(), Some(Bound::Alive(0))));
-    let filled =
-        || old.windows.iter().position(|r| same_app(r) && r.monitor == fresh.monitor && r.target == fresh.target);
+    let of_app: Vec<usize> = (0..old.windows.len()).filter(|i| same_app(&old.windows[*i])).collect();
+    let held = of_app.iter().copied().find(|i| matches!(bound.get(*i).copied().flatten(), Some(Bound::Alive(0))));
+    let only = (of_app.len() == 1)
+        .then(|| of_app[0])
+        .filter(|i| !matches!(bound.get(*i).copied().flatten(), Some(Bound::Alive(h)) if h != 0));
+    let filled = || {
+        of_app.iter().copied().find(|i| {
+            let r = &old.windows[*i];
+            r.monitor == fresh.monitor && r.target == fresh.target
+        })
+    };
     let place = fresh.place.clone();
     let mut workspace = old.clone();
-    let (row, new) = match held.or_else(filled) {
+    let (row, new) = match held.or(only).or_else(filled) {
         Some(row) => {
             let rule = &mut workspace.windows[row];
             let (focused, z, kept) = (rule.focused, rule.z, rule.place.clone());
-            let (target, stack) = (rule.target.clone(), rule.stack);
             rule.take_place(&fresh);
             (rule.focused, rule.z, rule.place) = (focused, z, kept);
-            // The window isn't read for its stack, so it keeps the one it had while it sits in the same place.
-            rule.stack = if rule.target == target { stack } else { None };
             (row, false)
         }
         None => {

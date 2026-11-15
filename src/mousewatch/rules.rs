@@ -57,32 +57,35 @@ impl Spot {
 }
 
 /// The chosen corner of each screen, where it is an outer corner of the desk: no screen
-/// holds the pixel past it sideways, up or down, or diagonally. A corner another screen
-/// touches is where the pointer crosses, so it never counts. `screens` are the monitor
-/// rects in physical pixels, each with its DPI, which sizes its spot.
+/// holds a pixel just past its spot, along either edge or diagonally. A corner another
+/// screen touches, or nearly touches, is where the pointer crosses, so it never counts.
+/// `screens` are the monitor rects in physical pixels, each with its DPI, which sizes
+/// its spot.
 pub fn outer_corners(screens: &[(Rect, u32)], corner: Corner) -> Vec<Spot> {
     let (dx, dy) = corner.out();
-    let held = |x: i32, y: i32| screens.iter().any(|(r, _)| r.contains(x, y));
+    let held = |strip: Rect| screens.iter().any(|(r, _)| r.intersects(&strip));
     screens
         .iter()
         .filter(|(r, _)| r.width() > 0 && r.height() > 0)
         .filter_map(|&(r, dpi)| {
-            let x = if dx < 0 { r.left } else { r.right - 1 };
-            let y = if dy < 0 { r.top } else { r.bottom - 1 };
-            if held(x + dx, y) || held(x, y + dy) || held(x + dx, y + dy) {
-                return None;
-            }
             let reach = (REACH_PX * dpi.max(96) as i32 / 96).min(r.width()).min(r.height());
             let (left, right) = if dx < 0 { (r.left, r.left + reach) } else { (r.right - reach, r.right) };
             let (top, bottom) = if dy < 0 { (r.top, r.top + reach) } else { (r.bottom - reach, r.bottom) };
-            Some(Spot { left, top, right, bottom })
+            // The column and the row of pixels just outside the spot, each one longer
+            // outwards so they meet at the diagonal. Both lie off this screen.
+            let column_x = if dx < 0 { left - 1 } else { right };
+            let row_y = if dy < 0 { top - 1 } else { bottom };
+            let column =
+                Rect { left: column_x, top: top.min(row_y), right: column_x + 1, bottom: bottom.max(row_y + 1) };
+            let row = Rect { left: left.min(column_x), top: row_y, right: right.max(column_x + 1), bottom: row_y + 1 };
+            (!held(column) && !held(row)).then_some(Spot { left, top, right, bottom })
         })
         .collect()
 }
 
-/// Whether the point is in any of the spots.
-pub fn in_corner(spots: &[Spot], pt: (i32, i32)) -> bool {
-    spots.iter().any(|s| s.contains(pt))
+/// Whether the point is in any of the spots. It stops at the first that holds it.
+pub fn in_corner(spots: impl IntoIterator<Item = Spot>, pt: (i32, i32)) -> bool {
+    spots.into_iter().any(|s| s.contains(pt))
 }
 
 /// Where the pointer is with the corner, between moves.
@@ -122,9 +125,12 @@ impl Rest {
     }
 
     /// The wait is up, at `now`: open once the pointer has rested long enough with no
-    /// button down, or wait the rest of the time.
-    pub fn tick(self, button: bool, now: u32) -> (Rest, Step) {
+    /// button down, or wait the rest of the time. `inside` is where the pointer is now,
+    /// read afresh, since a move the hook never saw (another hook's, or a jump by
+    /// `SetCursorPos`) may have taken it away: then the corner is armed again.
+    pub fn tick(self, inside: bool, button: bool, now: u32) -> (Rest, Step) {
         match self {
+            _ if !inside => (Rest::Away, Step::Nothing),
             Rest::Waiting(_) if button => (Rest::Spent, Step::Nothing),
             Rest::Waiting(since) => {
                 let rested = now.wrapping_sub(since);
@@ -217,12 +223,12 @@ mod tests {
     #[test]
     fn the_corner_zone_is_a_few_pixels_from_the_corner() {
         let spots = outer_corners(&[screen(0, 0, 1920, 1080)], Corner::BottomRight);
-        assert!(in_corner(&spots, (1919, 1079)));
-        assert!(in_corner(&spots, (1916, 1076)));
-        assert!(!in_corner(&spots, (1915, 1079)));
-        assert!(!in_corner(&spots, (1919, 1075)));
-        assert!(!in_corner(&spots, (1920, 1080)));
-        assert!(!in_corner(&[], (0, 0)));
+        assert!(in_corner(spots.iter().copied(), (1919, 1079)));
+        assert!(in_corner(spots.iter().copied(), (1916, 1076)));
+        assert!(!in_corner(spots.iter().copied(), (1915, 1079)));
+        assert!(!in_corner(spots.iter().copied(), (1919, 1075)));
+        assert!(!in_corner(spots.iter().copied(), (1920, 1080)));
+        assert!(!in_corner([], (0, 0)));
     }
 
     #[test]
@@ -232,12 +238,12 @@ mod tests {
         // Small moves inside keep the wait running from the first.
         assert_eq!(rest.moved(true, false, 1_200), (Rest::Waiting(1_000), Step::Nothing));
         // An early timer waits out the rest.
-        assert_eq!(rest.tick(false, 1_300), (rest, Step::Wait(100)));
-        let (rest, step) = rest.tick(false, 1_400);
+        assert_eq!(rest.tick(true, false, 1_300), (rest, Step::Wait(100)));
+        let (rest, step) = rest.tick(true, false, 1_400);
         assert_eq!((rest, step), (Rest::Spent, Step::Open));
         // Resting on opens nothing more.
         assert_eq!(rest.moved(true, false, 2_000), (Rest::Spent, Step::Nothing));
-        assert_eq!(rest.tick(false, 3_000), (Rest::Spent, Step::Nothing));
+        assert_eq!(rest.tick(true, false, 3_000), (Rest::Spent, Step::Nothing));
     }
 
     #[test]
@@ -245,7 +251,7 @@ mod tests {
         let (rest, _) = Rest::Away.moved(true, false, 0);
         let (rest, step) = rest.moved(false, false, 100);
         assert_eq!((rest, step), (Rest::Away, Step::Nothing));
-        assert_eq!(rest.tick(false, 400), (Rest::Away, Step::Nothing));
+        assert_eq!(rest.tick(true, false, 400), (Rest::Away, Step::Nothing));
         // After an open, leaving and coming back waits again.
         let (rest, _) = Rest::Spent.moved(false, false, 500);
         assert_eq!(rest.moved(true, false, 600), (Rest::Waiting(600), Step::Wait(REST_MS)));
@@ -258,7 +264,7 @@ mod tests {
         // A press while waiting.
         assert_eq!(Rest::Waiting(0).moved(true, true, 100), (Rest::Spent, Step::Nothing));
         // A button held when the wait is up.
-        assert_eq!(Rest::Waiting(0).tick(true, 400), (Rest::Spent, Step::Nothing));
+        assert_eq!(Rest::Waiting(0).tick(true, true, 400), (Rest::Spent, Step::Nothing));
         // Letting go in the corner doesn't open it until the pointer leaves and rests again.
         assert_eq!(Rest::Spent.moved(true, false, 500), (Rest::Spent, Step::Nothing));
     }
@@ -266,8 +272,8 @@ mod tests {
     #[test]
     fn the_clock_wrapping_still_times_the_rest() {
         let since = u32::MAX - 100;
-        assert_eq!(Rest::Waiting(since).tick(false, 299), (Rest::Spent, Step::Open));
-        assert_eq!(Rest::Waiting(since).tick(false, 200), (Rest::Waiting(since), Step::Wait(99)));
+        assert_eq!(Rest::Waiting(since).tick(true, false, 299), (Rest::Spent, Step::Open));
+        assert_eq!(Rest::Waiting(since).tick(true, false, 200), (Rest::Waiting(since), Step::Wait(99)));
     }
 
     #[test]
@@ -277,5 +283,47 @@ mod tests {
         assert_eq!(Corner::from_name("bottom_right"), Corner::BottomRight);
         assert_eq!(Corner::from_name("top_left"), Corner::TopLeft);
         assert_eq!(Corner::from_name("middle"), Corner::TopLeft);
+    }
+
+    #[test]
+    fn a_rest_the_pointer_left_unseen_opens_nothing() {
+        // The hook saw it come in, then it was moved away where the hook didn't see.
+        let (rest, _) = Rest::Away.moved(true, false, 0);
+        assert_eq!(rest.tick(false, false, 400), (Rest::Away, Step::Nothing));
+        // An early timer that finds it gone stops waiting too.
+        assert_eq!(rest.tick(false, false, 100), (Rest::Away, Step::Nothing));
+        // Back in, it waits the full rest again.
+        assert_eq!(Rest::Away.moved(true, false, 500), (Rest::Waiting(500), Step::Wait(REST_MS)));
+    }
+
+    #[test]
+    fn a_neighbour_a_few_pixels_off_still_shares_the_corner() {
+        // Lined up by hand, 2 px apart: the left screen's top right faces the right one's edge.
+        let desk = [screen(0, 0, 1920, 1080), screen(1920, 2, 1920, 1080)];
+        assert_eq!(outer_corners(&desk, Corner::TopRight), vec![spot(3836, 2, 3840, 6)]);
+        assert_eq!(outer_corners(&desk, Corner::TopLeft), vec![spot(0, 0, 4, 4)]);
+        // 2 px short at the bottom: the right screen's bottom left faces the left one.
+        assert_eq!(outer_corners(&desk, Corner::BottomLeft), vec![spot(0, 1076, 4, 1080)]);
+        // Far enough apart, both are outer.
+        let apart = [screen(0, 0, 1920, 1080), screen(1920, 5, 1920, 1080)];
+        assert_eq!(outer_corners(&apart, Corner::TopRight), vec![spot(1916, 0, 1920, 4), spot(3836, 5, 3840, 9)]);
+    }
+
+    #[test]
+    fn spots_scale_at_common_dpis_and_fit_a_tiny_screen() {
+        let at = |dpi: u32| outer_corners(&[(Rect::new(0, 0, 1920, 1080), dpi)], Corner::TopLeft);
+        // 125%, 150%, and below 100% reads as 100%.
+        assert_eq!(at(120), vec![spot(0, 0, 5, 5)]);
+        assert_eq!(at(144), vec![spot(0, 0, 6, 6)]);
+        assert_eq!(at(72), vec![spot(0, 0, 4, 4)]);
+        let tiny = [(Rect::new(0, 0, 3, 2), 192)];
+        assert_eq!(outer_corners(&tiny, Corner::BottomRight), vec![spot(1, 0, 3, 2)]);
+    }
+
+    #[test]
+    fn a_screen_with_no_size_has_no_corner_and_takes_none() {
+        let desk = [screen(0, 0, 1920, 1080), screen(1920, 0, 0, 1080)];
+        assert_eq!(outer_corners(&desk, Corner::TopRight), vec![spot(1916, 0, 1920, 4)]);
+        assert!(outer_corners(&[screen(0, 0, 0, 0)], Corner::TopLeft).is_empty());
     }
 }

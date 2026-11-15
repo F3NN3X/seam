@@ -3,7 +3,9 @@
 //! while something wants it. It never swallows anything: the callback reads atomics and
 //! the buttons, keeps the rest's state and posts, and the thread times the rest. A use
 //! that needs the pointer later adds its own want to `configure`, and the hook is in
-//! while any is. `src/hook.rs` is left alone.
+//! while any is. `src/hook.rs` is left alone. While it is in, the thread wakes for a
+//! rest's timer and once a minute to look whether Windows took the hook out, and for
+//! nothing else.
 
 use crate::log;
 use seam::desk::Mon;
@@ -159,7 +161,9 @@ fn run(generation: u64) {
                         } else if timer && wait != 0 && msg.wParam.0 == wait {
                             let _ = KillTimer(None, wait);
                             wait = 0;
-                            let (rest, step) = REST.get().tick(button_down(), GetTickCount());
+                            // Where the pointer is now, not where the hook last saw it.
+                            let inside = in_corner(cursor());
+                            let (rest, step) = REST.get().tick(inside, button_down(), GetTickCount());
                             REST.set(rest);
                             match step {
                                 Step::Wait(ms) => wait = SetTimer(None, 0, ms, None),
@@ -209,11 +213,11 @@ fn cursor() -> POINT {
 /// Whether the point is in one of the corner's spots, from the atomics.
 fn in_corner(pt: POINT) -> bool {
     let count = COUNT.load(Ordering::Relaxed).min(MAX_SPOTS);
-    let spots: [Spot; MAX_SPOTS] = std::array::from_fn(|i| {
-        let [left, top, right, bottom] = [0, 1, 2, 3].map(|edge| SPOTS[i][edge].load(Ordering::Relaxed));
+    let spot = |s: &[AtomicI32; 4]| {
+        let [left, top, right, bottom] = [0, 1, 2, 3].map(|edge| s[edge].load(Ordering::Relaxed));
         Spot { left, top, right, bottom }
-    });
-    rules::in_corner(&spots[..count], (pt.x, pt.y))
+    };
+    rules::in_corner(SPOTS[..count].iter().map(spot), (pt.x, pt.y))
 }
 
 /// Follow the pointer in and out of the corner, and have the thread time a rest.

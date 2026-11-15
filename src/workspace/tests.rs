@@ -299,7 +299,22 @@ fn open_with_refuses_arguments_and_dangerous_schemes() {
         // % expands in the shell, and a stream, a device or a trailing dot or space isn't a plain file.
         "%APPDATA%",
         r"C:\%TEMP%\x",
-        "https://a.com/%41",
+        "https://x/?%USERNAME%",
+        "https://x/?%2",
+        "https://x/?%zz",
+        "https://x/%",
+        r"C:\a\100%",
+        r"C:\a\%41",
+        r"C:\a\COM0",
+        r"C:\a\LPT0.txt",
+        "C:\\a\\COM\u{b9}",
+        "C:\\a\\lpt\u{b2}.txt",
+        "C:\\a\\COM\u{b3}",
+        "https://a.com/\u{200b}x",
+        "https://a.com/x\u{202e}gpj",
+        "https://a.com/\u{ad}x",
+        "https://a.com/\u{feff}",
+        "https://a.com/\u{2066}x",
         "obsidian://open?vault=%USERPROFILE%",
         r"C:\a\b.txt:evil",
         r"C:\a:b",
@@ -325,6 +340,9 @@ fn open_with_refuses_arguments_and_dangerous_schemes() {
     assert!(safe_open_with(&format!("https://a.com/{}", "x".repeat(1024))).is_err());
     assert!(safe_open_with(&format!(r"C:\{}", "x".repeat(1024))).is_err());
     assert!(safe_open_with(&format!(r"C:\{}", "x".repeat(1000))).is_ok());
+    // A % is fine in a link only as an escape.
+    assert!(safe_open_with("obsidian://open?vault=My%20Notes").is_ok());
+    assert!(safe_open_with("https://a.com/%41%7e").is_ok());
     // Names that only look like a device are fine.
     assert!(safe_open_with(r"C:\a\console\com10\lpt\nulled.txt").is_ok());
 }
@@ -345,6 +363,12 @@ fn open_with_a_path_needs_a_program_that_only_opens_it() {
         r"C:\Windows\System32\rundll32.exe",
         r"C:\Python\python.exe",
         r"C:\Program Files\nodejs\node.exe",
+        r"C:\Python312\python3.12.exe",
+        r"C:\Windows\py.exe",
+        r"C:\Tools\perl.exe",
+        r"C:\Windows\System32\certutil.exe",
+        r"C:\Program Files\PowerShell\7-preview\pwsh-preview.exe",
+        r"C:\Windows\System32\OpenSSH\ssh.exe",
         r"C:\Program Files\Java\bin\javaw.exe",
     ] {
         assert!(open_with_for(&on(exe, None), r"C:\src\run.bat").is_err(), "{exe}");

@@ -105,11 +105,12 @@ fn without_credentials(link: &str) -> Option<String> {
 const MAX_OPEN_WITH: usize = 1024;
 
 /// Programs that run a file, script or command they're given, so a path "Open with" on
-/// one would run it. A link is no argument to them, so it still works.
-const LAUNCHERS: [&str; 21] = [
+/// one would run it. A link is no argument to them, so it still works. This covers
+/// the common script hosts, which is no guarantee that no program will run a path.
+const LAUNCHERS: &[&str] = &[
     "cmd",
     "powershell",
-    "pwsh",
+    "powershell_ise",
     "wscript",
     "cscript",
     "mshta",
@@ -123,19 +124,45 @@ const LAUNCHERS: [&str; 21] = [
     "schtasks",
     "forfiles",
     "py",
-    "python",
-    "pythonw",
     "node",
     "java",
     "javaw",
+    "cmstp",
+    "msbuild",
+    "installutil",
+    "certutil",
+    "bitsadmin",
+    "ssh",
+    "perl",
+    "ruby",
+    "php",
+    "deno",
+    "bun",
+    "npx",
 ];
+
+/// Launchers that come with a version in their name (`python3.12`, `pwsh-preview`).
+const LAUNCHER_PREFIXES: [&str; 2] = ["python", "pwsh"];
 
 /// Whether a name is a DOS device (`CON`, `NUL`, `COM1`, `CONIN$`...), with or without an extension.
 fn is_device(name: &str) -> bool {
     let stem = name.split('.').next().unwrap_or_default().trim_end().to_ascii_uppercase();
-    let numbered =
-        |prefix: &str| stem.strip_prefix(prefix).is_some_and(|n| n.len() == 1 && n.as_bytes()[0].is_ascii_digit());
+    let numbered = |prefix: &str| {
+        stem.strip_prefix(prefix).is_some_and(|n| matches!(n.chars().collect::<Vec<_>>()[..], [d] if d.is_ascii_digit() || "\u{b9}\u{b2}\u{b3}".contains(d)))
+    };
     matches!(stem.as_str(), "CON" | "PRN" | "AUX" | "NUL" | "CONIN$" | "CONOUT$") || numbered("COM") || numbered("LPT")
+}
+
+/// Characters that show as nothing, or reorder what is shown, so a link can hide what it opens.
+fn invisible(c: char) -> bool {
+    matches!(c, '\u{ad}' | '\u{200b}'..='\u{200f}' | '\u{202a}'..='\u{202e}' | '\u{2060}'..='\u{2064}' | '\u{2066}'..='\u{2069}' | '\u{feff}')
+}
+
+/// Whether every `%` of a link is the start of a percent escape, `%` and two hex digits.
+fn only_escapes(text: &str) -> bool {
+    let bytes = text.as_bytes();
+    let escape = |i: usize| bytes.get(i + 1..i + 3).is_some_and(|h| h.iter().all(u8::is_ascii_hexdigit));
+    (0..bytes.len()).filter(|i| bytes[*i] == b'%').all(escape)
 }
 
 /// What a path may not have beyond `safe_folder`: a `:` after the drive (a stream), a
@@ -163,7 +190,7 @@ pub fn open_with_for(rule: &Rule, text: &str) -> Result<OpenWith, &'static str> 
     if let OpenWith::Path(path) = &open {
         let exe = Path::new(&rule.exe).file_stem().map(|s| s.to_string_lossy().to_ascii_lowercase());
         let exe = exe.unwrap_or_default();
-        if LAUNCHERS.contains(&exe.as_str()) {
+        if LAUNCHERS.contains(&exe.as_str()) || LAUNCHER_PREFIXES.iter().any(|p| exe.starts_with(p)) {
             return Err("A path would make this program run it, so only a link works for it");
         }
         if exe == "explorer" && Path::new(path).is_file() {
@@ -187,14 +214,17 @@ pub fn safe_open_with(text: &str) -> Result<OpenWith, &'static str> {
     if text.is_empty() || text.len() > MAX_OPEN_WITH {
         return Err("It's empty or too long");
     }
-    if text.chars().any(char::is_control) || text.contains(['"', '%']) {
-        return Err("It has a quote, a % or a control character");
+    if text.chars().any(char::is_control) || text.contains('"') {
+        return Err("It has a quote or a control character");
     }
     if text.starts_with(['-', '/']) {
         return Err("It must be a full path or a link, not an option");
     }
     let bytes = text.as_bytes();
     if bytes.len() >= 2 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':' {
+        if text.contains('%') {
+            return Err("A path can't have a %");
+        }
         if !safe_folder(text) {
             return Err("A path must be a full one on a drive letter, with no .. or /");
         }
@@ -207,6 +237,12 @@ pub fn safe_open_with(text: &str) -> Result<OpenWith, &'static str> {
     }
     if text.contains('\\') || text.chars().any(char::is_whitespace) {
         return Err("A link can't have a space or a backslash");
+    }
+    if text.chars().any(invisible) {
+        return Err("A link can't have an invisible character");
+    }
+    if !only_escapes(text) {
+        return Err("A link can only have a % in front of two hex digits");
     }
     let link = without_credentials(&format!("{scheme}:{rest}")).ok_or("That link has nothing to open")?;
     let web = scheme.starts_with("http");

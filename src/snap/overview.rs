@@ -3,6 +3,7 @@
 //! window floats, as after a drag out (D562, D569).
 
 use super::*;
+use seam::overview;
 
 /// A screen the overview can drop windows on, by device path.
 pub struct Target {
@@ -32,37 +33,40 @@ pub fn overview_place(hwnd: isize, screen: &str, zone: Option<usize>, free: Rect
 }
 
 impl Engine {
+    /// Every check runs on the zones as they are before anything moves, and only then is
+    /// a tiled window floated, so a refused drop leaves the window and tiling as they were.
     fn overview_place(&mut self, key: isize, screen: &str, zone: Option<usize>, free: Rect) -> Result<(), String> {
         let h = hwnd_of(key);
-        if !unsafe { IsWindow(Some(h)) }.as_bool() {
-            return Err("The window closed".into());
-        }
-        if winutil::is_elevated_over_us(h) {
-            return Err("That window runs as administrator, so Seam can't move it".into());
-        }
-        // A tiled window leaves its tile and floats, and its neighbours fill the gap.
-        if self.tiled_window(key) {
-            let _ = self.tiling_float(key);
-        }
+        let alive = unsafe { IsWindow(Some(h)) }.as_bool();
         let geometry = if self.active() { self.geometry() } else { Vec::new() };
         let g = geometry.iter().find(|g| g.id == screen);
+        let facts = overview::DropFacts {
+            alive,
+            elevated: alive && winutil::is_elevated_over_us(h),
+            tiled_window: self.tiled_window(key),
+            zone,
+            zones_now: g.map_or(&[][..], |g| &g.zones),
+            shown: free,
+            target_tiled: self.tiling_on(screen),
+        };
+        let (float_first, snap, float_over) = match overview::plan_drop(&facts) {
+            overview::DropPlan::Refuse(why) => return Err(why.into()),
+            overview::DropPlan::Move { float_first, snap, float_over } => (float_first, snap, float_over),
+        };
+        // A tiled window leaves its tile and floats, and its neighbours fill the gap.
+        if float_first {
+            let _ = self.tiling_float(key);
+        }
         let crosses = |dpi: u32| winutil::monitor_dpi(h) != dpi;
-        match (g, zone) {
-            // The zone the overview showed isn't there any more: the layout changed meanwhile.
-            (Some(g), Some(z)) if g.zones.get(z) != Some(&free) => {
-                return Err("The zones changed while the overview was open, so the window stayed".into());
-            }
-            (Some(g), Some(z)) if z < g.zones.len() && !self.tiling_on(screen) => {
-                self.snap_to(h, g, (z, z), g.zones[z], None);
-            }
-            (Some(g), Some(z)) if z < g.zones.len() => {
-                // A tiled screen's zones are its tree, which only tiling fills: the window floats over the tile.
-                winutil::set_floated(h, true);
-                self.place(h, g.zones[z], crosses(g.dpi), false);
-                self.unsnap(h, winutil::has_zone_stamp(h));
-            }
-            (_, Some(_)) => return Err("That zone is gone".into()),
-            (_, None) => {
+        match (g, snap) {
+            // Not a tiled screen, so its zones are as checked.
+            (Some(g), Some(z)) => self.snap_to(h, g, (z, z), g.zones[z], None),
+            _ => {
+                // A tiled screen's zones are its tree, which only tiling fills: the window
+                // floats over the tile as it was shown, even if the float reflowed the tree.
+                if float_over {
+                    winutil::set_floated(h, true);
+                }
                 let dpi = work_area(free).map_or(96, |(_, dpi)| dpi);
                 self.place(h, free, crosses(dpi), false);
                 self.unsnap(h, winutil::has_zone_stamp(h));

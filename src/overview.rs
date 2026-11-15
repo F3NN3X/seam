@@ -181,6 +181,54 @@ pub fn desktop_ranks(places: &[Option<usize>]) -> (Vec<usize>, Vec<usize>) {
     (ranked, index)
 }
 
+/// What the snapping knows about a drop, read before anything changes.
+#[derive(Clone, Debug)]
+pub struct DropFacts<'a> {
+    pub alive: bool,
+    pub elevated: bool,
+    /// Smart tiling has the window in a tile, so the move floats it.
+    pub tiled_window: bool,
+    /// The zone it was dropped on, or None for a screen with no zones.
+    pub zone: Option<usize>,
+    /// The target screen's zones now, empty when it has none or zones are off.
+    pub zones_now: &'a [Rect],
+    /// The zone's rect as the overview showed it.
+    pub shown: Rect,
+    /// Smart tiling arranges the target screen.
+    pub target_tiled: bool,
+}
+
+/// What a drop does. Every check comes first, so a refused drop changes nothing: the
+/// window isn't floated and tiling keeps its tree.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DropPlan {
+    Refuse(&'static str),
+    Move {
+        /// Float the window out of its tile, then move it.
+        float_first: bool,
+        /// Snap it into this zone.
+        snap: Option<usize>,
+        /// Put it over a tiled screen's zone, floating, without taking the tile.
+        float_over: bool,
+    },
+}
+
+pub fn plan_drop(f: &DropFacts) -> DropPlan {
+    if !f.alive {
+        return DropPlan::Refuse("The window closed");
+    }
+    if f.elevated {
+        return DropPlan::Refuse("That window runs as administrator, so Seam can't move it");
+    }
+    if let Some(z) = f.zone
+        && f.zones_now.get(z) != Some(&f.shown)
+    {
+        return DropPlan::Refuse("The zones changed while the overview was open, so the window stayed");
+    }
+    let float_over = f.zone.is_some() && f.target_tiled;
+    DropPlan::Move { float_first: f.tiled_window, snap: f.zone.filter(|_| !f.target_tiled), float_over }
+}
+
 /// What Esc does.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Escape {
@@ -356,6 +404,42 @@ mod tests {
     fn a_window_moved_to_a_screen_is_centred_and_fits() {
         assert_eq!(centred(r(100, 0, 1000, 800), (400, 300)), r(400, 250, 400, 300));
         assert_eq!(centred(r(0, 0, 1000, 800), (1200, 300)), r(0, 250, 1000, 300));
+    }
+
+    fn facts(zones_now: &[Rect]) -> DropFacts<'_> {
+        DropFacts {
+            alive: true,
+            elevated: false,
+            tiled_window: true,
+            zone: Some(1),
+            zones_now,
+            shown: r(50, 0, 50, 100),
+            target_tiled: false,
+        }
+    }
+
+    #[test]
+    fn a_refused_drop_floats_nothing() {
+        let zones = [r(0, 0, 50, 100), r(50, 0, 50, 100)];
+        let refused = |f: DropFacts| matches!(plan_drop(&f), DropPlan::Refuse(_));
+        assert!(refused(DropFacts { alive: false, ..facts(&zones) }));
+        assert!(refused(DropFacts { elevated: true, ..facts(&zones) }));
+        // The zone moved, or is gone, since the overview opened.
+        assert!(refused(DropFacts { shown: r(40, 0, 60, 100), ..facts(&zones) }));
+        assert!(refused(facts(&zones[..1])));
+        assert!(refused(facts(&[])));
+    }
+
+    #[test]
+    fn a_drop_floats_a_tiled_window_then_snaps_or_floats_over_a_tile() {
+        let zones = [r(0, 0, 50, 100), r(50, 0, 50, 100)];
+        let want = DropPlan::Move { float_first: true, snap: Some(1), float_over: false };
+        assert_eq!(plan_drop(&facts(&zones)), want);
+        let tiled = DropFacts { target_tiled: true, ..facts(&zones) };
+        assert_eq!(plan_drop(&tiled), DropPlan::Move { float_first: true, snap: None, float_over: true });
+        // To a screen with no zones; a window no tiling holds isn't floated.
+        let free = DropFacts { zone: None, tiled_window: false, ..facts(&[]) };
+        assert_eq!(plan_drop(&free), DropPlan::Move { float_first: false, snap: None, float_over: false });
     }
 
     #[test]

@@ -351,13 +351,13 @@ unsafe fn on_hotkey(id: i32) {
             }
             HOTKEY_RELEASE => wm::release(None),
             HOTKEY_SNAP_BACK => {
-                if let Some(Err(e)) = with_app(snap_back) {
+                if let Some(Err(e)) = with_app(|a| snap_back(a, false)) {
                     log::info!("snap back hotkey: {}", e.message);
                 }
             }
             HOTKEY_SWITCH_BACK => {
                 with_app(|a| {
-                    if let Err(e) = switch_back(a) {
+                    if let Err(e) = switch_back(a, false) {
                         log::info!("switch back hotkey: {}", e.message);
                         notify(a, "Switch back", &e.message, BalloonAction::None);
                     }

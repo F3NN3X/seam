@@ -105,6 +105,30 @@ Use a small client that opens `\\.\pipe\seam-<your username>` and writes one JSO
 - [ ] **Busy.** Open the tray menu and send `remap.set`. It's answered once the menu closes.
 - [ ] **Hook timing.** Note `hook stats` with a client spamming `state.get`. It matches a run without one.
 
+### Assistants (MCP)
+
+Needs an MCP client such as Claude Desktop with `seam-mcp.exe` added as a stdio server (the path is on General), or a console: `seam-mcp.exe` reads one JSON line at a time on stdin.
+
+- [ ] **Off by default.** On a new config General shows **Let assistants use Seam (MCP)** off and **Let assistants change workspaces** off and dimmed, and clicking the second does nothing. Search finds both, and Help has **Assistants (MCP)**.
+- [ ] **Off answers.** With the master switch off, send `initialize`, then `tools/call` `seam_state`. The result has `isError` true and says "Assistant access is off in Seam, General". With **Debug log** on, the log shows no assistant calls.
+- [ ] **On at once.** Leave `seam-mcp.exe` running, turn the master switch on in the Seam window and call `seam_state` again: it answers, with no restart. Turn it off and the next call is refused again.
+- [ ] **Connected.** With it on and an assistant started, General says "An assistant is connected" (it shows after `initialize`, before any call). Close the assistant and, within a few seconds, it says "None connected". The API count of connected apps doesn't include the assistant.
+- [ ] **Path.** **Copy** puts the full path of `seam-mcp.exe` next to `seam-settings.exe` on the clipboard, and it works pasted into the assistant's config. A copy of `seam-mcp.exe` in another folder is held to the same switches.
+- [ ] **Read and act tools.** `seam_workspaces`, `seam_workspace`, `seam_workspace_status` read what the Workspaces page shows. `seam_switch_workspace` with a name switches and closes nothing, even for a workspace whose Other windows says Close. Snap back and Switch back work. Quick save needs the second switch, as the **Quick save needs the second switch** step below says.
+- [ ] **Edits off.** With the second switch off, `seam_rename_workspace` is an error result saying changing workspaces is off. Nothing changed.
+- [ ] **Edits on.** Turn the second switch on. Rename a workspace, change a row with `seam_edit_row` (`shown` `minimized`, then a `target` `{"zone":2}`, then `launch` false), `seam_set_show_all`, `seam_remove_row` and `seam_create_workspace`. Each shows a notice, and clicking it within 8 seconds puts the change back: a removed row comes back in its place, and a created workspace goes away. The log names the assistant.
+- [ ] **Edits can't reach further.** `seam_edit_row` with `launch` true is refused. A `target` zone the screen doesn't have is refused. An `exe`, `open_with` or `hotkey` argument changes nothing. The workspace's programs and shortcut are as they were.
+- [ ] **Not in the list.** Through the console send `tools/call` with an unknown tool such as `seam_close_window`: a JSON-RPC error. A raw API call from `seam-mcp.exe`'s image (a renamed copy of a test client) to `config.patch` or `app.quit` answers 4.
+- [ ] **Snap back and Switch back close nothing.** With a workspace whose Other windows says Close in use and one window of another app open, `seam_snap_back` and `seam_switch_back` leave that window open. The tray's own Snap back still closes it.
+- [ ] **Quick save needs the second switch.** With only the master switch on, `seam_quick_save` is refused with a message about changing workspaces. With both on it saves and shows Undo.
+- [ ] **API switch.** Turn **Let other apps control Seam** off while an assistant is connected: its next call is refused at once. Turn it on again and it works without restarting.
+- [ ] **Many assistants.** Start five assistants (or `seam-mcp.exe` consoles) at once. The Seam window and the Stream Deck plugin still connect.
+- [ ] **Update with an assistant running.** With an assistant running its `seam-mcp.exe`, update from About twice in a row (or install over it). Both succeed, `seam-mcp.exe.old` and `seam-mcp.exe.old.1` may stay until the assistant exits and the next update, and the assistant restarts the server on its next use. The installer stops `seam-mcp.exe` first.
+- [ ] **Update manifest.** An installed 0.7.0 still finds and installs a release whose `latest.json` has `optional`, and leaves `seam-mcp.exe` as it was.
+- [ ] **Store copy.** General shows "Not included in this build" for `seam-mcp.exe`, with no Copy button.
+- [ ] **Creating many.** With 50 workspaces on the desk, `seam_create_workspace` is refused.
+- [ ] **Packaging.** The portable zip and the installer both hold `seam-mcp.exe` next to `seam.exe`, and the installer puts it in the install folder.
+
 ## Line Up
 
 - [ ] **Open.** Choose **Line Up Screens…** in the tray menu. Every screen shows its number. Border 1 of 3 is active, and the keyboard works straight away.

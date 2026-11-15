@@ -15,7 +15,7 @@
   #error Pass /DAppId= with the app_id from packaging\installer.json
 #endif
 #ifndef SourceDir
-  #error Pass /DSourceDir= with the folder that holds seam.exe and seam-settings.exe
+  #error Pass /DSourceDir= with the folder that holds seam.exe, seam-settings.exe and seam-mcp.exe
 #endif
 
 ; Inno wants "{{" for a literal brace in AppId.
@@ -76,6 +76,7 @@ RestartApplications=no
 Source: "{#SourceDir}\seam-settings.exe"; DestDir: "{tmp}"; Flags: dontcopy
 Source: "{#SourceDir}\seam.exe"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#SourceDir}\seam-settings.exe"; DestDir: "{app}"; Flags: ignoreversion
+Source: "{#SourceDir}\seam-mcp.exe"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\LICENSE"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\README.md"; DestDir: "{app}"; Flags: ignoreversion
 
@@ -88,6 +89,7 @@ Filename: "{app}\seam.exe"; Description: "Start Seam"; Flags: nowait postinstall
 [UninstallDelete]
 ; The updater leaves .old files behind, and keeps what it downloaded here.
 Type: files; Name: "{app}\*.old"
+Type: files; Name: "{app}\*.old.*"
 Type: filesandordirs; Name: "{localappdata}\Seam\updates"
 Type: dirifempty; Name: "{app}"
 
@@ -104,6 +106,15 @@ begin
   Result := Exec(SettingsExe, '--quit-tray', '', SW_HIDE, ewWaitUntilTerminated, Code) and (Code = 0);
 end;
 
+{ An assistant's seam-mcp.exe would block its own replacement. The assistant
+  starts it again on its next use. Best effort: a miss only costs a prompt. }
+procedure StopAssistants();
+var
+  Code: Integer;
+begin
+  Exec(ExpandConstant('{sys}\taskkill.exe'), '/F /IM seam-mcp.exe', '', SW_HIDE, ewWaitUntilTerminated, Code);
+end;
+
 { Closes any running Seam, a portable copy elsewhere included, so the one
   installed here is the one that runs afterwards. }
 function PrepareToInstall(var NeedsRestart: Boolean): String;
@@ -111,7 +122,9 @@ begin
   Result := '';
   ExtractTemporaryFile('seam-settings.exe');
   if not QuitTray(ExpandConstant('{tmp}\seam-settings.exe')) then
-    Result := StillRunning;
+    Result := StillRunning
+  else
+    StopAssistants();
 end;
 
 function InitializeUninstall(): Boolean;
@@ -124,7 +137,9 @@ begin
   begin
     SuppressibleMsgBox(StillRunning, mbError, MB_OK, IDOK);
     Result := False;
-  end;
+  end
+  else
+    StopAssistants();
 end;
 
 { Whether a path, or a command that starts with one, is inside the install folder. }

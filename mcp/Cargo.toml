@@ -1,0 +1,12 @@
+[package]
+name = "seam-mcp"
+version = "0.7.0"
+edition = "2024"
+rust-version = "1.100"
+description = "Lets an AI assistant use Seam over MCP, through Seam's local API."
+license = "MIT"
+publish = false
+
+[dependencies]
+seam = { path = ".." }
+serde_json = "1"

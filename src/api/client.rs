@@ -84,6 +84,7 @@ pub struct Client {
     name: String,
     token: Option<String>,
     last: Instant,
+    unanswered: bool,
 }
 
 impl Client {
@@ -91,7 +92,7 @@ impl Client {
         let pipe = open_pipe()?;
         let reader = BufReader::new(pipe.try_clone()?);
         let (name, owned) = (client.to_string(), token.map(str::to_string));
-        let mut c = Client { pipe, reader, next_id: 1, name, token: owned, last: Instant::now() };
+        let mut c = Client { pipe, reader, next_id: 1, name, token: owned, last: Instant::now(), unanswered: false };
         let version = env!("CARGO_PKG_VERSION");
         c.request("hello", json!({ "client": client, "version": version, "token": token }))?;
         Ok(c)
@@ -106,11 +107,18 @@ impl Client {
         result
     }
 
+    /// The last request went out and its answer never came, so the tray may have acted on it.
+    pub fn unanswered(&self) -> bool {
+        self.unanswered
+    }
+
     fn request(&mut self, method: &str, params: Value) -> Result<Value, CallError> {
         let id = self.next_id;
         self.next_id += 1;
         let request = json!({ "jsonrpc": "2.0", "id": id, "method": method, "params": params });
+        self.unanswered = false;
         writeln!(self.pipe, "{request}")?;
+        self.unanswered = true;
         loop {
             let mut line = String::new();
             if self.reader.read_line(&mut line)? == 0 {
@@ -120,6 +128,7 @@ impl Client {
             if message["id"] != id {
                 continue; // An event, or a late answer to something else.
             }
+            self.unanswered = false;
             if let Some(e) = message.get("error") {
                 let code = e["code"].as_i64().and_then(|c| i32::try_from(c).ok()).unwrap_or(INVALID_REQUEST);
                 return Err(CallError::Rpc(RpcError::new(code, e["message"].as_str().unwrap_or_default())));

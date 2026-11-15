@@ -67,6 +67,8 @@ foreach ($exe in 'seam.exe', 'seam-settings.exe') {
     if (-not (Test-Path (Join-Path $release $exe))) { throw "$exe is missing from $release. Run: cargo build --release --workspace" }
 }
 
+# seam-mcp.exe is left out of the package on purpose: the Store build is on hold, and
+# the assistant server isn't part of it yet.
 # 4. Stage a clean layout. No VFS: both exes sit at the package root.
 if (Test-Path $work) { Remove-Item $work -Recurse -Force }
 New-Item -ItemType Directory -Path $layout, $dist -Force | Out-Null

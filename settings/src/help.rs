@@ -432,6 +432,24 @@ pub const TOPICS: &[Topic] = &[
         opens: Some(Page::General),
     },
     Topic {
+        title: "Assistants (MCP)",
+        blocks: &[
+            Text(
+                "An AI assistant that speaks MCP, such as Claude, can use Seam through seam-mcp.exe, which sits next to seam.exe. Add its path to the assistant's MCP settings as a server that runs over stdio. **Copy** on General gives you the path.",
+            ),
+            Text(
+                "**Let assistants use Seam (MCP)**, on General, is off until you turn it on, and takes effect at once. **Let other apps control Seam** has to be on too. While it is off, the assistant is told so and can't do anything.",
+            ),
+            List(&[
+                "It can read status and your workspaces, switch workspaces, Snap back and Switch back",
+                "A switch from an assistant never closes windows",
+                "**Let assistants change workspaces** lets it also Quick save, create, rename and remove rows of a workspace, change where a row goes or how it is shown, and turn on **Show every window**. Each change shows a notice you can click to undo.",
+                "It can't change which programs a workspace starts, its shortcut, or what happens to other windows, and it can't close windows or change your settings",
+            ]),
+        ],
+        opens: Some(Page::General),
+    },
+    Topic {
         title: "Updates",
         blocks: &[
             Text("About shows your version and the result of each update check."),

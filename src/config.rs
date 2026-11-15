@@ -273,11 +273,22 @@ impl Default for WindowSettings {
 pub struct ApiSettings {
     /// "Let other apps control Seam".
     pub enabled: bool,
+    /// "Let assistants use Seam (MCP)": `seam-mcp.exe` may use the API, within its own list of methods.
+    pub mcp: bool,
+    /// "Let assistants change workspaces". Only counts while `mcp` is on.
+    pub assistants_edit: bool,
 }
 
 impl Default for ApiSettings {
     fn default() -> Self {
-        ApiSettings { enabled: true }
+        ApiSettings { enabled: true, mcp: false, assistants_edit: false }
+    }
+}
+
+impl ApiSettings {
+    /// Assistants may change workspaces: the second switch, under the first.
+    pub fn assistants_may_edit(&self) -> bool {
+        self.mcp && self.assistants_edit
     }
 }
 

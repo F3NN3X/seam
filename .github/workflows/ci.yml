@@ -14,6 +14,7 @@ on:
       - Cargo.lock
       - Cargo.toml
       - settings/Cargo.toml
+      - mcp/Cargo.toml
       - packaging/**
       - .github/workflows/ci.yml
   schedule:
@@ -78,12 +79,14 @@ jobs:
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
-      - name: Both crates are on one version
+      - name: All crates are on one version
         shell: bash
         run: |
           a=$(grep -m1 '^version' Cargo.toml | cut -d'"' -f2)
           b=$(grep -m1 '^version' settings/Cargo.toml | cut -d'"' -f2)
+          c=$(grep -m1 '^version' mcp/Cargo.toml | cut -d'"' -f2)
           [ "$a" = "$b" ] || { echo "seam is $a but seam-settings is $b"; exit 1; }
+          [ "$a" = "$c" ] || { echo "seam is $a but seam-mcp is $c"; exit 1; }
       # About and diagnostics show it. Local builds say "dev".
       - name: Short build id
         shell: bash
@@ -108,7 +111,7 @@ jobs:
           $id = (Get-Content packaging/installer.json -Raw | ConvertFrom-Json).app_id
           $version = (Select-String -Path Cargo.toml -Pattern '^version\s*=\s*"([^"]+)"' | Select-Object -First 1).Matches[0].Groups[1].Value
           New-Item -ItemType Directory -Path dist | Out-Null
-          Copy-Item target/release/seam.exe, target/release/seam-settings.exe dist
+          Copy-Item target/release/seam.exe, target/release/seam-settings.exe, target/release/seam-mcp.exe dist
           & $env:ISCC "/DAppVersion=$version" "/DAppId=$id" "/DSourceDir=$PWD\dist" "/O$PWD\dist" packaging\seam.iss
           if ($LASTEXITCODE -ne 0) { exit 1 }
 

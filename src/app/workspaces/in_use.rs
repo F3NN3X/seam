@@ -133,19 +133,19 @@ pub(in crate::app) fn set_default(app: &mut App, id: Option<String>) -> Reply {
 }
 
 /// Snap back: switch to the workspace in use again, so what drifted goes back.
-pub(in crate::app) fn snap_back(app: &mut App) -> Reply {
+pub(in crate::app) fn snap_back(app: &mut App, alongside: bool) -> Reply {
     match app.workspace.clone() {
-        Some(id) => start_switch(app, Some(&id), None, false),
+        Some(id) => start_switch(app, Some(&id), None, alongside),
         None => Err(RpcError::new(api::NOT_FOUND, "No workspace is in use on this desk")),
     }
 }
 
 /// Switch back: switch to the workspace that was in use before this one. Switching
 /// back twice goes to and fro between the two.
-pub(in crate::app) fn switch_back(app: &mut App) -> Reply {
+pub(in crate::app) fn switch_back(app: &mut App, alongside: bool) -> Reply {
     let previous = app.cfg.desks.get(&app.sig).and_then(|d| d.previous_workspace.clone());
     match previous.filter(|id| desk_workspaces(app).iter().any(|w| w.id == *id)) {
-        Some(id) => start_switch(app, Some(&id), None, false),
+        Some(id) => start_switch(app, Some(&id), None, alongside),
         None => Err(RpcError::new(api::NOT_FOUND, "No workspace to switch back to")),
     }
 }

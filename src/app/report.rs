@@ -92,7 +92,7 @@ pub(super) fn snapshot(app: &App) -> Snapshot {
 
 /// Tell API clients what the tray is doing now.
 pub(super) fn publish(app: &mut App) {
-    if api_server::publish(snapshot(app), app.cfg.api.enabled) {
+    if api_server::publish(snapshot(app), &app.cfg.api) {
         send_state_event(app);
     }
 }

@@ -34,7 +34,7 @@ jobs:
       - name: Versions match the tag
         run: |
           tag="${GITHUB_REF_NAME#v}"
-          for f in Cargo.toml settings/Cargo.toml; do
+          for f in Cargo.toml settings/Cargo.toml mcp/Cargo.toml; do
             v=$(grep -m1 '^version' "$f" | cut -d'"' -f2)
             [ "$v" = "$tag" ] || { echo "::error::$f is $v, tag is $tag"; exit 1; }
           done
@@ -127,10 +127,11 @@ jobs:
           set -euo pipefail
           tag="${GITHUB_REF_NAME#v}"
           mkdir dist dist-arm64
-          cp target/release/seam.exe target/release/seam-settings.exe dist/
-          cp target/aarch64-pc-windows-msvc/release/seam.exe target/aarch64-pc-windows-msvc/release/seam-settings.exe dist-arm64/
+          cp target/release/seam.exe target/release/seam-settings.exe target/release/seam-mcp.exe dist/
+          cp target/aarch64-pc-windows-msvc/release/seam.exe target/aarch64-pc-windows-msvc/release/seam-settings.exe target/aarch64-pc-windows-msvc/release/seam-mcp.exe dist-arm64/
           cp dist-arm64/seam.exe dist/seam-arm64.exe
           cp dist-arm64/seam-settings.exe dist/seam-settings-arm64.exe
+          cp dist-arm64/seam-mcp.exe dist/seam-mcp-arm64.exe
           pre=false; [[ "$tag" == *-* ]] && pre=true
           python - "$tag" "$pre" <<'PY'
           import hashlib, json, os, sys, datetime
@@ -143,10 +144,15 @@ jobs:
           # Keyed like Rust's std::env::consts::ARCH, which the updater looks itself up by.
           arches = {arch: [entry(n, n.replace(".exe", f"{suffix}.exe")) for n in ("seam.exe", "seam-settings.exe")]
                     for arch, suffix in (("x86_64", ""), ("aarch64", "-arm64"))}
+          # Every updater from v0.5.0 on takes `arches[arch]` when there is one, and refuses a list
+          # that isn't exactly the two exes. So seam-mcp.exe goes under `optional`, a key those
+          # updaters never read and newer ones merge in, checked like the others.
+          optional = {arch: [entry("seam-mcp.exe", f"seam-mcp{suffix}.exe")]
+                      for arch, suffix in (("x86_64", ""), ("aarch64", "-arm64"))}
           # `files` is exactly what updaters from before ARM64 builds read: the x64 exes.
           files = [{k: f[k] for k in ("name", "size", "sha256")} for f in arches["x86_64"]]
           json.dump({"version": tag, "date": datetime.date.today().isoformat(), "prerelease": pre,
-                     "notes": notes.strip(), "files": files, "arches": arches},
+                     "notes": notes.strip(), "files": files, "arches": arches, "optional": optional},
                     open("dist/latest.json", "w"), indent=2)
           PY
 
@@ -175,8 +181,8 @@ jobs:
         shell: pwsh
         run: |
           $version = $env:GITHUB_REF_NAME.TrimStart('v')
-          Compress-Archive -Path dist/seam.exe, dist/seam-settings.exe, README.md, LICENSE -DestinationPath "dist/seam-$version-windows-x64.zip"
-          Compress-Archive -Path dist-arm64/seam.exe, dist-arm64/seam-settings.exe, README.md, LICENSE -DestinationPath "dist/seam-$version-windows-arm64.zip"
+          Compress-Archive -Path dist/seam.exe, dist/seam-settings.exe, dist/seam-mcp.exe, README.md, LICENSE -DestinationPath "dist/seam-$version-windows-x64.zip"
+          Compress-Archive -Path dist-arm64/seam.exe, dist-arm64/seam-settings.exe, dist-arm64/seam-mcp.exe, README.md, LICENSE -DestinationPath "dist/seam-$version-windows-arm64.zip"
 
       # Inno Setup 7 isn't on Chocolatey, so this takes the official release at a
       # pinned version and SHA-256, and ignores any Inno the runner already has.
@@ -233,7 +239,7 @@ jobs:
           manifest = json.load(open("dist/latest.json"))
           staged = {"x86_64": "dist", "aarch64": "dist-arm64"}
           checks = [(f["name"], f"dist/{f['name']}", f["sha256"]) for f in manifest["files"]]
-          checks += [(f["asset"], path, f["sha256"]) for arch, files in manifest["arches"].items() for f in files
+          checks += [(f["asset"], path, f["sha256"]) for group in ("arches", "optional") for arch, files in manifest[group].items() for f in files
                      for path in (f"dist/{f['asset']}", f"{staged[arch]}/{f['name']}")]
           bad = sorted({name for name, path, sha in checks
                         if hashlib.sha256(open(path, "rb").read()).hexdigest() != sha})

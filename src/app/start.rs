@@ -172,7 +172,7 @@ unsafe fn start_services(hwnd: HWND) {
             apply_hotkeys(a);
             check_restart_apps(a);
             refresh(a);
-            api_server::start(a.hwnd.0 as isize, a.token.clone(), snapshot(a), a.cfg.api.enabled);
+            api_server::start(a.hwnd.0 as isize, a.token.clone(), snapshot(a), &a.cfg.api);
         });
         SetTimer(Some(hwnd), TIMER_REARM, 60_000, None);
         if with_app(|a| a.packaged) == Some(false) {

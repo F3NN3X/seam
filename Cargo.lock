@@ -5684,6 +5684,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "seam-mcp"
+version = "0.7.0"
+dependencies = [
+ "seam",
+ "serde_json",
+]
+
+[[package]]
 name = "seam-settings"
 version = "0.7.0"
 dependencies = [

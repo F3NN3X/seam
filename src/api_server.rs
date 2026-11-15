@@ -12,10 +12,11 @@
 use crate::log;
 use crate::tray::WM_APP_API;
 use seam::api::{
-    API_VERSION, BUSY, Command, DISABLED, MAX_LINE, MAX_QUEUED_EVENTS, Peer, Reply, RpcError, config_for_others,
-    desks_list, error_line, event_line, parse_request, pipe_name, result_line, topic_of, workspaces_list,
-    zones_layouts,
+    API_VERSION, BUSY, Command, DISABLED, MAX_LINE, MAX_QUEUED_EVENTS, MCP_CLIENT, MCP_OFF, Peer, Reply, RpcError,
+    config_for_others, desks_list, error_line, event_line, parse_request, pipe_name, result_line, topic_of,
+    workspace_get, workspaces_list, zones_layouts,
 };
+use seam::config::ApiSettings;
 use seam::process;
 use seam::state::Snapshot;
 use serde_json::{Value, json};
@@ -43,7 +44,7 @@ use windows::Win32::System::Threading::{
 use windows::Win32::UI::WindowsAndMessaging::{GetCursorPos, PostMessageW};
 use windows::core::PCWSTR;
 
-const MAX_CLIENTS: u32 = 8;
+const MAX_CLIENTS: u32 = 16;
 const PIPE_BUFFER: u32 = 64 * 1024;
 const WRITE_TIMEOUT_MS: u32 = 2000;
 const COMMAND_TIMEOUT: Duration = Duration::from_secs(60);
@@ -56,6 +57,10 @@ pub struct Queued {
     pub reply: Sender<Reply>,
     /// Sent by the panel the tray started, which proved it with the token.
     pub panel: bool,
+    /// The name the client gave in `hello`, for the log.
+    pub client: String,
+    /// The client process is a `seam-mcp.exe`.
+    pub assistant: bool,
 }
 
 /// Lines waiting for a client, which its own thread writes.
@@ -73,6 +78,8 @@ struct Conn {
     topics: Vec<String>,
     /// It proved it is the panel with the token.
     panel: bool,
+    /// The client process is a `seam-mcp.exe`.
+    mcp: bool,
     outbox: Arc<Outbox>,
 }
 
@@ -81,6 +88,9 @@ struct Shared {
     token: String,
     snapshot: RwLock<Arc<Snapshot>>,
     api_enabled: AtomicBool,
+    /// "Let assistants use Seam (MCP)", and "Let assistants change workspaces" under it.
+    mcp: AtomicBool,
+    assistants_edit: AtomicBool,
     queue: Mutex<VecDeque<Queued>>,
     conns: Mutex<Vec<Conn>>,
     clients_changed: AtomicBool,
@@ -155,7 +165,7 @@ pub fn new_token() -> Option<String> {
 }
 
 /// Start serving. The tray keeps working without the API if this fails.
-pub fn start(hwnd: isize, token: String, first: Snapshot, api_enabled: bool) {
+pub fn start(hwnd: isize, token: String, first: Snapshot, api: &ApiSettings) {
     let Some(descriptor) = current_user_only() else {
         log::info!("api off: no security descriptor");
         return;
@@ -168,7 +178,9 @@ pub fn start(hwnd: isize, token: String, first: Snapshot, api_enabled: bool) {
         hwnd,
         token,
         snapshot: RwLock::new(Arc::new(first)),
-        api_enabled: AtomicBool::new(api_enabled),
+        api_enabled: AtomicBool::new(api.enabled),
+        mcp: AtomicBool::new(api.mcp),
+        assistants_edit: AtomicBool::new(api.assistants_may_edit()),
         queue: Mutex::new(VecDeque::new()),
         conns: Mutex::new(Vec::new()),
         clients_changed: AtomicBool::new(false),
@@ -242,6 +254,16 @@ fn client_is_seam(pipe: HANDLE) -> bool {
     ["seam.exe", "seam-settings.exe"].iter().any(|name| dir.join(name).to_string_lossy().to_lowercase() == image)
 }
 
+/// The client is a `seam-mcp.exe`, from whatever folder, so a copy next to nothing is held to the same switches.
+fn client_is_mcp(pipe: HANDLE) -> bool {
+    let mut pid = 0u32;
+    if unsafe { GetNamedPipeClientProcessId(pipe, &mut pid) }.is_err() {
+        return false;
+    }
+    let image = process::image_path(pid);
+    image.and_then(|p| p.file_name().map(|n| n.to_string_lossy().eq_ignore_ascii_case("seam-mcp.exe"))).unwrap_or(false)
+}
+
 /// Write one line, giving up on a client that has stopped reading.
 fn write_line(pipe: HANDLE, event: HANDLE, line: &str) -> bool {
     let mut bytes = Vec::with_capacity(line.len() + 1);
@@ -273,6 +295,10 @@ struct Session {
     outbox: Arc<Outbox>,
     panel: bool,
     own_image: bool,
+    /// The client is `seam-mcp.exe`.
+    mcp: bool,
+    /// What it called itself in `hello`.
+    name: String,
 }
 
 impl Session {
@@ -289,17 +315,33 @@ impl Session {
     }
 
     fn peer(&self, shared: &Shared) -> Peer {
-        Peer { panel: self.panel, own_image: self.own_image, api_enabled: shared.api_enabled.load(Ordering::Relaxed) }
+        Peer {
+            panel: self.panel,
+            own_image: self.own_image,
+            api_enabled: shared.api_enabled.load(Ordering::Relaxed),
+            mcp: self.mcp,
+            mcp_on: shared.mcp.load(Ordering::Relaxed),
+            assistants_edit: shared.assistants_edit.load(Ordering::Relaxed),
+        }
     }
 
     fn hello(&mut self, shared: &Shared, client: String, token: Option<String>) -> Reply {
         // An empty token (the RNG failed) never matches, so nobody is the panel.
         self.panel = !shared.token.is_empty() && token.is_some_and(|t| t == shared.token);
         let peer = self.peer(shared);
+        if peer.mcp && !peer.panel && !peer.mcp_on {
+            return Err(RpcError::new(DISABLED, MCP_OFF));
+        }
         if !peer.api_enabled && !peer.panel && !peer.own_image {
             return Err(RpcError::new(DISABLED, "Other apps can't control Seam right now"));
         }
-        let name = if self.panel { "panel".to_string() } else { client };
+        // An assistant's connection is listed as seam-mcp, with the assistant it serves.
+        let name = match (self.panel, self.mcp) {
+            (true, _) => "panel".to_string(),
+            (false, true) if !client.starts_with(MCP_CLIENT) => MCP_CLIENT.to_string(),
+            _ => client,
+        };
+        self.name.clone_from(&name);
         if let Some(conn) = guard(&shared.conns).iter_mut().find(|c| c.id == self.conn_id) {
             conn.name = Some(name);
             conn.panel = self.panel;
@@ -333,6 +375,7 @@ impl Session {
             Command::ConfigGet => Ok(config_for_others(&read_snapshot(shared).config)),
             Command::DesksList => Ok(desks_list(&read_snapshot(shared))),
             Command::WorkspacesList { desk } => workspaces_list(&read_snapshot(shared), desk.as_deref()),
+            Command::WorkspaceGet { id } => workspace_get(&read_snapshot(shared), &id, self.panel),
             Command::ZonesLayouts(number) => {
                 let mut pt = POINT::default();
                 unsafe {
@@ -340,7 +383,7 @@ impl Session {
                 }
                 zones_layouts(&read_snapshot(shared), number, (pt.x, pt.y))
             }
-            command => run_on_main_thread(shared, command, self.panel),
+            command => run_on_main_thread(shared, command, self.panel, &self.name, self.mcp),
         }
     }
 
@@ -369,9 +412,9 @@ impl Session {
     }
 }
 
-fn run_on_main_thread(shared: &Shared, command: Command, panel: bool) -> Reply {
+fn run_on_main_thread(shared: &Shared, command: Command, panel: bool, client: &str, assistant: bool) -> Reply {
     let (reply, answer) = channel();
-    guard(&shared.queue).push_back(Queued { command, reply, panel });
+    guard(&shared.queue).push_back(Queued { command, reply, panel, client: client.to_string(), assistant });
     wake_main_thread(shared);
     answer.recv_timeout(COMMAND_TIMEOUT).map_err(|_| RpcError::new(BUSY, "Seam didn't answer in time"))?
 }
@@ -422,17 +465,20 @@ fn pump(shared: &Shared, pipe: HANDLE, read_event: HANDLE, write_event: HANDLE, 
         overflowed: AtomicBool::new(false),
     });
     let conn_id = NEXT_CONN.fetch_add(1, Ordering::Relaxed);
+    let mcp = client_is_mcp(pipe);
     guard(&shared.conns).push(Conn {
         id: conn_id,
         name: None,
         topics: Vec::new(),
         panel: false,
+        mcp,
         outbox: outbox.clone(),
     });
     notify_clients_changed(shared);
 
     let own_image = client_is_seam(pipe);
-    let mut session = Session { pipe, write_event, conn_id, outbox, panel: false, own_image };
+    let name = "anonymous".to_string();
+    let mut session = Session { pipe, write_event, conn_id, outbox, panel: false, own_image, mcp, name };
     let mut buffer = vec![0u8; 8192];
     let mut input = Vec::new();
     let mut deadline = Instant::now() + IDLE_TIMEOUT;
@@ -494,9 +540,17 @@ fn pump(shared: &Shared, pipe: HANDLE, read_event: HANDLE, write_event: HANDLE, 
 }
 
 /// Replace what clients read. Returns whether the state changed.
-pub fn publish(next: Snapshot, api_enabled: bool) -> bool {
+pub fn publish(next: Snapshot, api: &ApiSettings) -> bool {
     let Some(shared) = SHARED.get() else { return false };
-    shared.api_enabled.store(api_enabled, Ordering::Relaxed);
+    shared.api_enabled.store(api.enabled, Ordering::Relaxed);
+    shared.mcp.store(api.mcp, Ordering::Relaxed);
+    if !api.mcp {
+        // Switching assistants off ends what they subscribed to, as well as what they may ask.
+        for conn in guard(&shared.conns).iter_mut().filter(|c| c.mcp) {
+            conn.topics.clear();
+        }
+    }
+    shared.assistants_edit.store(api.assistants_may_edit(), Ordering::Relaxed);
     let mut slot = shared.snapshot.write().unwrap_or_else(|e| e.into_inner());
     let changed = slot.state != next.state;
     *slot = Arc::new(next);
@@ -513,11 +567,20 @@ pub fn broadcast_to_panels(kind: &str, data: &Value) {
     queue_event(kind, data, true);
 }
 
+/// Whether a connection gets events: an assistant's only while both switches are on.
+fn may_receive(assistant: bool, mcp_on: bool, api_on: bool) -> bool {
+    !assistant || (mcp_on && api_on)
+}
+
 fn queue_event(kind: &str, data: &Value, panels_only: bool) {
     let Some(shared) = SHARED.get() else { return };
     let line = event_line(kind, data);
     let topic = topic_of(kind);
-    let wanted = |c: &&Conn| (c.panel || !panels_only) && c.topics.iter().any(|t| t == topic);
+    // Read now, not when it subscribed: an assistant gets nothing once either switch is off.
+    let (mcp_on, api_on) = (shared.mcp.load(Ordering::Relaxed), shared.api_enabled.load(Ordering::Relaxed));
+    let wanted = |c: &&Conn| {
+        (c.panel || !panels_only) && c.topics.iter().any(|t| t == topic) && may_receive(c.mcp, mcp_on, api_on)
+    };
     for conn in guard(&shared.conns).iter().filter(wanted) {
         let mut lines = guard(&conn.outbox.lines);
         if lines.len() >= MAX_QUEUED_EVENTS {
@@ -542,4 +605,19 @@ pub fn take_client_names() -> Option<Vec<String>> {
         let conns = guard(&shared.conns);
         conns.iter().map(|c| c.name.clone().unwrap_or_else(|| "anonymous".into())).collect()
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::may_receive;
+
+    #[test]
+    fn an_assistant_gets_events_only_while_both_switches_are_on() {
+        assert!(may_receive(true, true, true));
+        assert!(!may_receive(true, false, true));
+        assert!(!may_receive(true, true, false));
+        assert!(!may_receive(true, false, false));
+        // Everyone else is unaffected by them.
+        assert!(may_receive(false, false, false));
+    }
 }

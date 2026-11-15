@@ -335,6 +335,8 @@ impl Engine {
         self.sync_dividers();
         // An edge's drag may have moved a stack's top, which its hidden windows follow now.
         self.stacks_settle();
+        // A tiled screen's windows are where the drag put them, and what came meanwhile is tiled.
+        self.tiled_after_drag(hwnd.0 as isize);
         // A re-fit that had to wait for this drag can go now.
         self.refit_resume();
     }

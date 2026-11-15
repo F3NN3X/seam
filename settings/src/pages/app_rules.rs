@@ -161,7 +161,16 @@ fn set_pin(panel: &mut Panel, at: usize, bit: usize, on: bool, window: &mut Wind
     });
 }
 
-fn more_menu(at: usize, title: &str, bits: usize, stays: bool, cx: &mut Context<Panel>) -> AnyElement {
+/// Turn the rule's "Leave out of smart tiling" on or off.
+fn set_float(panel: &mut Panel, at: usize, on: bool, window: &mut Window, cx: &mut Context<Panel>) {
+    let note = |title: &str| match on {
+        true => format!("{title} floats on tiled screens"),
+        false => format!("{title} is tiled like any other app"),
+    };
+    change(panel, at, note, window, cx, |rule| rule.float = on);
+}
+
+fn more_menu(at: usize, title: &str, bits: usize, float: bool, stays: bool, cx: &mut Context<Panel>) -> AnyElement {
     let weak = cx.entity().downgrade();
     ui::secondary(("rule-more", at), "", cx)
         .ghost()
@@ -170,14 +179,21 @@ fn more_menu(at: usize, title: &str, bits: usize, stays: bool, cx: &mut Context<
         .dropdown_menu(move |mut menu, _, _| {
             for (bit, label) in [(TOP, "Keep on top"), (STICKY, "Keep out of workspace switches")] {
                 let (weak, on) = (weak.clone(), bits & bit == 0);
-                // A rule that doesn't move its app needs a pin to do anything.
-                let last = stays && bits == bit;
+                // A rule that doesn't move its app needs a pin, or to float, to do anything.
+                let last = stays && bits == bit && !float;
                 let label = if last { format!("{label} (it only pins)") } else { label.to_string() };
                 let item = PopupMenuItem::new(label).checked(!on).disabled(last).on_click(move |_, window, cx| {
                     let _ = weak.update(cx, |panel, cx| set_pin(panel, at, bit, on, window, cx));
                 });
                 menu = menu.item(item);
             }
+            let (floats, last) = (weak.clone(), stays && bits == 0);
+            let label = if last { "Leave out of smart tiling (it only floats)" } else { "Leave out of smart tiling" };
+            let item =
+                PopupMenuItem::new(label).checked(float).disabled(last && float).on_click(move |_, window, cx| {
+                    let _ = floats.update(cx, |panel, cx| set_float(panel, at, !float, window, cx));
+                });
+            menu = menu.item(item);
             let weak = weak.clone();
             menu.item(PopupMenuItem::new("Remove").on_click(move |_, window, cx| {
                 let _ = weak.update(cx, |panel, cx| remove(panel, at, window, cx));
@@ -219,6 +235,7 @@ fn rule_row(
             at,
             &title,
             rule.pin.map_or(0, Pin::bits),
+            rule.float,
             goes(rule, screens) == STAYS,
             cx,
         )))

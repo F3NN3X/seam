@@ -175,6 +175,10 @@ pub struct Rule {
     /// it, and the windows only overlap in their zone.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub stack: Option<u32>,
+    /// An app rule's "Leave out of smart tiling": its windows float on a tiled screen.
+    /// An older Seam drops it, and the app is tiled like any other.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub float: bool,
 }
 
 impl Default for Rule {
@@ -200,6 +204,7 @@ impl Default for Rule {
             place: None,
             open_with: None,
             stack: None,
+            float: false,
         }
     }
 }

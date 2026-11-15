@@ -142,6 +142,10 @@ pub fn planned(mut save: impl FnMut(&str, ZoneLayout, bool) -> bool) -> Option<R
         }
         // They are where the drag left them either way, as with an edge drag.
         snap::keep_all(moved);
+        // A tiled screen's tree takes it in memory, and the screen's own layout stays.
+        if snap::tiled_dragged(&screen, &layout.tree) {
+            continue;
+        }
         if save(&screen, layout, false) {
             regroup::saved(&screen, None);
         } else {
@@ -150,7 +154,12 @@ pub fn planned(mut save: impl FnMut(&str, ZoneLayout, bool) -> bool) -> Option<R
     }
     let note = NOTE.lock().unwrap_or_else(|e| e.into_inner()).take();
     let Some(plan) = PLANNED.lock().unwrap_or_else(|e| e.into_inner()).take() else { return note.map(Err) };
-    if let Some((screen, layout, keep)) = plan.layout {
+    // Save from windows saves even on a tiled screen: it is how its arrangement becomes a layout.
+    let tiled = plan
+        .layout
+        .as_ref()
+        .is_some_and(|(screen, layout, _)| plan.fresh.is_none() && snap::tiled_dragged(screen, &layout.tree));
+    if let Some((screen, layout, keep)) = plan.layout.filter(|_| !tiled) {
         if !save(&screen, layout, plan.fresh.is_some()) {
             answer(plan.reply, Err(RpcError::new(api::BUSY, "The layout couldn't be saved, try again")));
             return None;

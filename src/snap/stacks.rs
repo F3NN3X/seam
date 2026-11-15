@@ -105,7 +105,7 @@ impl Engine {
     /// Write the stamps of stack `id`'s windows, and clear those of `out`. Each window's
     /// process and its start are kept as it joins, so a handle Windows gives to another
     /// window later isn't taken for it.
-    fn stack_stamps(&mut self, out: &[isize], id: Option<u32>) {
+    pub(super) fn stack_stamps(&mut self, out: &[isize], id: Option<u32>) {
         for w in out {
             winutil::set_stack_stamp(hwnd_of(*w), 0);
             self.stack_owners.remove(w);

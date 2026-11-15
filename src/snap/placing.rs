@@ -112,6 +112,8 @@ impl Engine {
         }
         // Every move is over, so the stacks are looked at, and their hidden windows follow.
         self.stacks_settle();
+        // A tile or a regroup on a tiled screen: its tree follows where the windows landed.
+        self.tiled_resync(None);
     }
 
     /// Start window control's next move once the one before is over.

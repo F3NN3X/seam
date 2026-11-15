@@ -37,6 +37,7 @@ mod steer;
 #[path = "swap.rs"]
 mod swap;
 mod sync;
+mod tiled;
 
 pub use adhoc::{adhoc_area, adhoc_dragged, fit, is_adhoc};
 pub use refit::{WM_APP_REFIT, display_changed, found as refit_found, line_up_ended};
@@ -45,6 +46,7 @@ pub use stacks::{
     stacks, stacks_found, take_joined,
 };
 pub use swap::{WM_APP_SWAP_LOOK, look_ready};
+pub use tiled::{tiled, tiled_dragged, tiling_desktop, tiling_events, tiling_float, tiling_free};
 
 /// A window the tray couldn't move, probably because it runs as administrator.
 pub const WM_APP_SNAP_BLOCKED: u32 = WM_APP + 14;
@@ -74,6 +76,8 @@ struct Screen {
     id: String,
     bounds: Rect,
     layout: Option<ZoneLayout>,
+    /// The layout saved for it, which `layout` replaces while it is tiled.
+    own: Option<ZoneLayout>,
     /// Physical pixels per inch from EDID, 0 when the screen doesn't report its size.
     raw_dpi: f64,
 }
@@ -246,6 +250,8 @@ struct Engine {
     stack_owners: HashMap<isize, (u32, u64)>,
     /// Tops of stacks a swap carried, shown again once every window has landed.
     restack: Vec<isize>,
+    /// Smart tiling's trees, per screen and virtual desktop (`tiled`).
+    tiling: tiled::Tiling,
 }
 
 /// Where window control wants a window, worked out on its worker.
@@ -307,11 +313,9 @@ fn main_button() -> VIRTUAL_KEY {
 /// now, and why it steps aside if another window manager has the windows.
 pub fn update(owner: HWND, cfg: &Config, sig: &str, mons: &[Mon], aside: Option<&str>) {
     let desk = cfg.desks.get(sig);
-    let screens = mons.iter().map(|m| Screen {
-        id: m.id.clone(),
-        bounds: rect_of(&m.rect),
-        layout: desk.and_then(|d| d.zones.get(&m.id)).and_then(zones::layout_of),
-        raw_dpi: m.raw_dpi,
+    let screens = mons.iter().map(|m| {
+        let own = desk.and_then(|d| d.zones.get(&m.id)).and_then(zones::layout_of);
+        Screen { id: m.id.clone(), bounds: rect_of(&m.rect), layout: own.clone(), own, raw_dpi: m.raw_dpi }
     });
     let screens: Vec<Screen> = screens.collect();
     let standing_by = crate::standby::reason().is_some();
@@ -324,7 +328,14 @@ pub fn update(owner: HWND, cfg: &Config, sig: &str, mons: &[Mon], aside: Option<
         _ => vec![VK_MENU],
     };
     let exclude: std::sync::Arc<[String]> = cfg.zones.exclude.iter().map(|x| x.to_lowercase()).collect();
+    let tiling = desk.map(|d| d.tiling.clone()).unwrap_or_default();
+    let tiles = cfg.zones.enabled && tiling.values().any(|t| !t.desktops.is_empty());
+    crate::tiler::configure(owner.0 as isize, exclude.to_vec(), tiles);
+    crate::wm::tiling(tiles);
     with_engine(|e| {
+        // A tiled screen's zones are its tree, in place of its own layout.
+        e.tiling_config(tiling);
+        let screens = e.with_tiled(screens);
         // A change that isn't about zones mustn't cut a drag short.
         let same = e.owner == owner.0 as isize
             && e.enabled == cfg.zones.enabled

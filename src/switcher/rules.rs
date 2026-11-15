@@ -155,6 +155,11 @@ pub fn place_by_rule(set: &AppRules, owner: Option<&Workspace>, hwnd: isize) -> 
     if pin_by_marker(h, rule, false, true, &mut false) {
         done.push("pinned");
     }
+    // Claimed by its rule, so smart tiling leaves it alone.
+    if rule.float {
+        winutil::set_floated(h, true);
+        done.push("left out of tiling");
+    }
     if done.is_empty() {
         return None;
     }

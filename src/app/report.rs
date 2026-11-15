@@ -92,6 +92,7 @@ pub(super) fn snapshot(app: &App) -> Snapshot {
         restart_apps: app.restart_apps,
         windows_cursor_easing: app.cursor_easing,
         stacks: snap::stacks().into_iter().filter_map(stack).collect(),
+        tiling: tiling::tiling_state(app),
     };
     Snapshot { state, config: serde_json::to_value(&app.cfg).unwrap_or_default() }
 }

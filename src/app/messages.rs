@@ -133,6 +133,19 @@ pub(super) unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARA
                 snap::stacks_found();
                 LRESULT(0)
             }
+            crate::tiler::WM_APP_TILING => {
+                // Busy elsewhere: the events stay with the worker's queue, and a timer tries again.
+                if with_app(tiling::tiling_events) != Some(true) {
+                    SetTimer(Some(hwnd), TIMER_TILING, 50, None);
+                }
+                LRESULT(0)
+            }
+            WM_TIMER if wparam.0 == TIMER_TILING => {
+                if with_app(tiling::tiling_events) == Some(true) {
+                    let _ = KillTimer(Some(hwnd), TIMER_TILING);
+                }
+                LRESULT(0)
+            }
             crate::dragkeys::WM_APP_DRAG_KEY => {
                 snap::drag_key(wparam.0 as u32, lparam.0 as u64);
                 LRESULT(0)
@@ -392,6 +405,10 @@ unsafe fn on_hotkey(id: i32) {
                 if let Err(why) = snap::stack_cycle(GetForegroundWindow(), id == HOTKEY_STACK_NEXT, false) {
                     log::info!("stack hotkey: {why}");
                 }
+            }
+            HOTKEY_FLOAT_TILE => tiling::float_or_tile(),
+            HOTKEY_FREE_TILING => {
+                with_app(|a| tiling::free_tiling(a, None, None));
             }
             HOTKEY_DIVIDER_MENU => {
                 if let Err(why) = snap::size_menu(GetForegroundWindow()) {

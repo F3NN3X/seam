@@ -188,7 +188,7 @@ impl Engine {
     }
 
     /// A window on its way somewhere counts as being there.
-    fn moving(&self, key: isize) -> bool {
+    pub(super) fn moving(&self, key: isize) -> bool {
         self.pending.as_ref().is_some_and(|p| p.hwnd == key) || self.queued.iter().any(|q| q.hwnd == key)
     }
 

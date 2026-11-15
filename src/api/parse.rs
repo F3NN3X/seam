@@ -95,6 +95,8 @@ fn command(method: &str, p: &Value) -> Result<Command, RpcError> {
             Some("prev") => false,
             _ => return Err(RpcError::new(INVALID_PARAMS, "dir must be next or prev")),
         }),
+        "tiling.set" => tiling_set(p)?,
+        "tiling.free" => Command::TilingFree(screen_param(p)?),
         "window.pin" => window_pin(p)?,
         "window.focus_only" => window_focus_only(p)?,
         "window.spotlight" => Command::WindowSpotlight(match p.get("on") {
@@ -279,6 +281,25 @@ fn window_share(p: &Value) -> Result<Command, RpcError> {
             .filter(|f| (MIN_SHARE..=MAX_SHARE).contains(f))
             .ok_or_else(|| RpcError::new(INVALID_PARAMS, "fraction must be 0.1 to 0.9"))? as f32,
     })
+}
+
+/// `tiling.set`: `on`, `family` or both.
+fn tiling_set(p: &Value) -> Result<Command, RpcError> {
+    let on = match p.get("on") {
+        None | Some(Value::Null) => None,
+        Some(_) => Some(on_param(p)?),
+    };
+    let family = match str_param(p, "family")? {
+        None => None,
+        Some(name) => Some(
+            crate::tiling::Family::parse(&name)
+                .ok_or_else(|| RpcError::new(INVALID_PARAMS, "family must be smart, columns, main_stack or grid"))?,
+        ),
+    };
+    if on.is_none() && family.is_none() {
+        return Err(RpcError::new(INVALID_PARAMS, "on or family is required"));
+    }
+    Ok(Command::TilingSet { number: screen_param(p)?, on, family })
 }
 
 fn window_pin(p: &Value) -> Result<Command, RpcError> {
@@ -472,6 +493,17 @@ mod tests {
                 Command::WindowStack { hwnd: Some(1234), on: false },
             ),
             (request("window.stack_cycle", r#"{"dir":"next"}"#), anyone, Command::WindowStackCycle(true)),
+            (
+                request("tiling.set", r#"{"number":2,"on":true,"family":"main_stack"}"#),
+                anyone,
+                Command::TilingSet { number: Some(2), on: Some(true), family: Some(crate::tiling::Family::MainStack) },
+            ),
+            (
+                request("tiling.set", r#"{"family":"grid"}"#),
+                anyone,
+                Command::TilingSet { number: None, on: None, family: Some(crate::tiling::Family::Grid) },
+            ),
+            (request("tiling.free", r#"{"number":1}"#), anyone, Command::TilingFree(Some(1))),
             (request("window.stack_cycle", r#"{"dir":"prev"}"#), anyone, Command::WindowStackCycle(false)),
             (request("screen.identify", r#"{"number":3}"#), anyone, Command::ScreenIdentify(3)),
             (request("panel.open", r#"{"page":"about"}"#), anyone, Command::PanelOpen(Some("about".into()))),
@@ -544,6 +576,8 @@ mod tests {
             (request("window.ungroup", r#"{"hwnd":"x"}"#), anyone, INVALID_PARAMS),
             (request("window.stack", "{}"), anyone, INVALID_PARAMS),
             (request("window.stack_cycle", r#"{"dir":"left"}"#), anyone, INVALID_PARAMS),
+            (request("tiling.set", "{}"), anyone, INVALID_PARAMS),
+            (request("tiling.set", r#"{"family":"dwindle"}"#), anyone, INVALID_PARAMS),
             (request("screen.identify", r#"{"number":-1}"#), anyone, INVALID_PARAMS),
             (request("workspace.switch", "{}"), anyone, INVALID_PARAMS),
             (request("zones.apply", "{}"), anyone, INVALID_PARAMS),
@@ -623,6 +657,8 @@ mod tests {
             ("window.fit", "{}"),
             ("window.stack_cycle", r#"{"dir":"next"}"#),
             ("window.stack", r#"{"on":true}"#),
+            ("tiling.set", r#"{"on":true}"#),
+            ("tiling.free", "{}"),
             ("app.quit", "{}"),
             ("session.restore", "{}"),
             ("layout.show", r#"{"view":"seam"}"#),

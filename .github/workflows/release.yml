@@ -142,10 +142,11 @@ jobs:
               return {"name": name, "asset": asset, "size": os.path.getsize(f"dist/{asset}"),
                       "sha256": hashlib.sha256(open(f"dist/{asset}", "rb").read()).hexdigest()}
           # Keyed like Rust's std::env::consts::ARCH, which the updater looks itself up by.
-          arches = {arch: [entry(n, n.replace(".exe", f"{suffix}.exe")) for n in ("seam.exe", "seam-settings.exe")]
+          arches = {arch: [entry(n, n.replace(".exe", f"{suffix}.exe")) for n in ("seam.exe", "seam-settings.exe", "seam-mcp.exe")]
                     for arch, suffix in (("x86_64", ""), ("aarch64", "-arm64"))}
-          # `files` is exactly what updaters from before ARM64 builds read: the x64 exes.
-          files = [{k: f[k] for k in ("name", "size", "sha256")} for f in arches["x86_64"]]
+          # `files` is exactly what updaters from before ARM64 builds read: the two x64 exes. Those
+          # updaters refuse any other name, so seam-mcp.exe is in `arches` only.
+          files = [{k: f[k] for k in ("name", "size", "sha256")} for f in arches["x86_64"][:2]]
           json.dump({"version": tag, "date": datetime.date.today().isoformat(), "prerelease": pre,
                      "notes": notes.strip(), "files": files, "arches": arches},
                     open("dist/latest.json", "w"), indent=2)

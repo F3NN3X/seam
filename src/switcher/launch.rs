@@ -55,6 +55,10 @@ pub(super) fn launch(rule: &Rule, places: bool) -> Result<(), &'static str> {
     if rule.exe.to_lowercase().contains(r"\steamapps\") {
         return Err("steam game");
     }
+    // What I typed wins over a saved place, and a refusal never falls back to a plain start.
+    if let Some(target) = &rule.open_with {
+        return open_with(rule, target);
+    }
     if let Some(place) = &rule.place {
         let (app, kind) = (app_name(rule), place_kind(place));
         match open_place(rule, place, places) {
@@ -113,6 +117,44 @@ fn open_place(rule: &Rule, place: &Place, remember: bool) -> Result<(), &'static
             need(Path::new(&rule.exe).is_file(), "the browser isn't installed")?;
             // A browser that runs already would open the page as a tab of a window it has.
             need(shell_open(&rule.exe, Some(&places::new_window_args(rule, url))), "it didn't start")
+        }
+    }
+}
+
+/// Start an app on what I typed in "Open with". It's checked again here, whatever
+/// saved it: a path goes to the row's program as one quoted argument, from a drive of
+/// this PC, and a link goes to the shell. Only an app with no window is started, so
+/// a window that is open is never navigated.
+fn open_with(rule: &Rule, target: &str) -> Result<(), &'static str> {
+    let app = app_name(rule);
+    let refused = |why: &'static str| {
+        log::info!("{app}: open with not used, {why}");
+        Err("open with refused")
+    };
+    match workspace::open_with_for(rule, target) {
+        Err(why) => refused(why),
+        Ok(OpenWith::Link(link)) => match shell_open(&link, None) {
+            true => Ok(()),
+            false => refused("it didn't start"),
+        },
+        Ok(OpenWith::Path(path)) => {
+            if !places::local_drive(&path) {
+                return refused("the path isn't on a drive of this PC");
+            }
+            if !Path::new(&path).exists() {
+                return refused("the path is gone");
+            }
+            let explorer = Path::new(&rule.exe).file_stem().is_some_and(|s| s.eq_ignore_ascii_case("explorer"));
+            if explorer && !Path::new(&path).is_dir() {
+                return refused("Explorer opens a folder here");
+            }
+            if !workspace::safe_exe(&rule.exe) || is_network_drive(&rule.exe) || !Path::new(&rule.exe).is_file() {
+                return refused("the program can't be started from there");
+            }
+            match shell_open(&rule.exe, Some(&workspace::explorer_arg(&path))) {
+                true => Ok(()),
+                false => refused("it didn't start"),
+            }
         }
     }
 }

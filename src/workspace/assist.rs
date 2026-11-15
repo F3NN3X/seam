@@ -113,6 +113,11 @@ mod tests {
         assert!(!ws.windows[1].launch);
         assert_eq!((ws.windows[1].exe.as_str(), &ws.windows[1].aumid), ("b.exe", &None));
         assert_eq!(ws.windows[0], two().windows[0]);
+        let mut typed = two();
+        typed.windows[1].open_with = Some(r"c:\proj".into());
+        let change = RowChange { shown: Some(Shown::Minimized), ..RowChange::default() };
+        let kept = edited(&typed, &Edit::Row { row: 1, change }).unwrap();
+        assert_eq!(kept.windows[1].open_with.as_deref(), Some(r"c:\proj"));
         assert_eq!((ws.hotkey, ws.other_windows), (None, OtherWindows::Leave));
     }
 

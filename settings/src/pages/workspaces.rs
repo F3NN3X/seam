@@ -189,7 +189,7 @@ fn home() -> PathBuf {
 
 fn export(panel: &Panel, mut ws: Workspace, window: &mut Window, cx: &mut Context<Panel>) {
     // Folders and pages say where I've been, so they stay on this PC (D330).
-    ws.windows.iter_mut().for_each(|r| r.place = None);
+    ws.windows.iter_mut().for_each(|r| (r.place, r.open_with) = (None, None));
     let refers = |id: &String| ws.windows.iter().any(|r| r.monitor == *id) || ws.zones.contains_key(id);
     let used: BTreeMap<String, ScreenInfo> = screen_infos(panel).into_iter().filter(|(id, _)| refers(id)).collect();
     let name: String = ws.name.chars().map(|c| if c.is_alphanumeric() || c == ' ' { c } else { '-' }).collect();

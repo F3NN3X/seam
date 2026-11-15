@@ -14,8 +14,8 @@ use seam::config::WindowSize;
 use seam::desk;
 use seam::winutil;
 use seam::workspace::{
-    self, Bound, Candidate, OtherWindows, Pin, Place, RowState, RowStatus, Rule, SESSION_ID, Shown, Target, WinState,
-    Workspace,
+    self, Bound, Candidate, OpenWith, OtherWindows, Pin, Place, RowState, RowStatus, Rule, SESSION_ID, Shown, Target,
+    WinState, Workspace,
 };
 use seam::zones::{self, Rect, ZoneLayout};
 use std::collections::{BTreeMap, HashMap, HashSet};

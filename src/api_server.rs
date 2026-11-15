@@ -13,8 +13,8 @@ use crate::log;
 use crate::tray::WM_APP_API;
 use seam::api::{
     API_VERSION, BUSY, Command, DISABLED, MAX_LINE, MAX_QUEUED_EVENTS, MCP_CLIENT, MCP_OFF, Peer, Reply, RpcError,
-    desks_list, error_line, event_line, parse_request, pipe_name, result_line, topic_of, workspace_get,
-    workspaces_list, zones_layouts,
+    config_for_others, desks_list, error_line, event_line, parse_request, pipe_name, result_line, topic_of,
+    workspace_get, workspaces_list, zones_layouts,
 };
 use seam::config::ApiSettings;
 use seam::process;
@@ -367,10 +367,11 @@ impl Session {
             Command::StateGet => {
                 serde_json::to_value(&read_snapshot(shared).state).map_err(|e| RpcError::new(BUSY, e.to_string()))
             }
-            Command::ConfigGet => Ok(read_snapshot(shared).config.clone()),
+            Command::ConfigGet if self.panel => Ok(read_snapshot(shared).config.clone()),
+            Command::ConfigGet => Ok(config_for_others(&read_snapshot(shared).config)),
             Command::DesksList => Ok(desks_list(&read_snapshot(shared))),
             Command::WorkspacesList { desk } => workspaces_list(&read_snapshot(shared), desk.as_deref()),
-            Command::WorkspaceGet { id } => workspace_get(&read_snapshot(shared), &id),
+            Command::WorkspaceGet { id } => workspace_get(&read_snapshot(shared), &id, self.panel),
             Command::ZonesLayouts(number) => {
                 let mut pt = POINT::default();
                 unsafe {

@@ -21,7 +21,9 @@ const RELEASE_DOWNLOADS: &str = "https://github.com/F3NN3X/seam/releases/downloa
 /// The public half of Seam's minisign key (ID DD3DF0F7CB3ACA88): the second
 /// line of `seam.pub`. See packaging/README.md.
 pub const SEAM_PUBLIC_KEY: &str = "RWSIyjrL9/A93aX1yKj6IwVEqWPJfCHdaObPGMyLiD3ri5I/VvS9FnGQ";
-const EXES: [&str; 2] = ["seam.exe", "seam-settings.exe"];
+/// What an update replaces. `seam-mcp.exe` came later, so a manifest without it is still good.
+const EXES: [&str; 3] = ["seam.exe", "seam-settings.exe", "seam-mcp.exe"];
+const REQUIRED: [&str; 2] = ["seam.exe", "seam-settings.exe"];
 const MANIFEST: &str = "latest.json";
 const SIGNATURE: &str = "latest.json.minisig";
 /// How long a tray told to quit gets before the old one is given up on.
@@ -119,9 +121,9 @@ fn parse_manifest(bytes: &[u8]) -> Option<Manifest> {
             })
         })
         .collect();
-    // Exactly the two exes: nothing missing, and no other name to join onto a path.
+    // Only these exes, with the two it can't do without: no other name to join onto a path.
     let only_exes = files.iter().all(|f| EXES.contains(&f.name.as_str()));
-    if !only_exes || !EXES.iter().all(|exe| files.iter().any(|f| f.name == *exe)) {
+    if !only_exes || !REQUIRED.iter().all(|exe| files.iter().any(|f| f.name == *exe)) {
         return None;
     }
     Some(Manifest {
@@ -370,7 +372,12 @@ fn copy_checked(from: &Path, to: &Path, file: &File) -> std::io::Result<()> {
 
 /// Renaming a running exe works on NTFS, so each exe can replace itself.
 fn swap(dir: &Path, staged: &Path, manifest: &Manifest, renamed: &mut Vec<&'static str>) -> std::io::Result<()> {
-    for name in EXES {
+    for name in EXES.into_iter().filter(|name| manifest.files.iter().any(|f| f.name == *name)) {
+        // A copy without seam-mcp.exe gets it added, and a failed update takes it away again.
+        if !REQUIRED.contains(&name) && !dir.join(name).exists() {
+            renamed.push(name);
+            continue;
+        }
         let old = dir.join(format!("{name}.old"));
         let _ = std::fs::remove_file(&old);
         std::fs::rename(dir.join(name), old)?;

@@ -308,6 +308,19 @@ pub fn desks_list(snapshot: &Snapshot) -> Value {
     Value::Array(desks.collect())
 }
 
+/// `config.get` for a client that isn't the panel: the config without what I typed in
+/// "Open with", which only the panel sees.
+pub fn config_for_others(config: &Value) -> Value {
+    let mut config = config.clone();
+    let desks = config.get_mut("desks").and_then(Value::as_object_mut);
+    for desk in desks.into_iter().flat_map(|d| d.values_mut()) {
+        if let Some(list) = desk.get_mut("workspaces").and_then(Value::as_array_mut) {
+            *list = crate::workspace::without_open_with(list);
+        }
+    }
+    config
+}
+
 pub fn workspaces_list(snapshot: &Snapshot, desk: Option<&str>) -> Reply {
     let sig = desk.unwrap_or(&snapshot.state.desk.sig);
     let Some(desk) = snapshot.config["desks"].get(sig) else {
@@ -331,14 +344,14 @@ pub fn workspaces_list(snapshot: &Snapshot, desk: Option<&str>) -> Reply {
 
 /// `workspace.get`: one workspace's rows, with the app's file name and what a client
 /// may edit. The program's path, its AUMID and the folder or page it showed stay out.
-pub fn workspace_get(snapshot: &Snapshot, id: &str) -> Reply {
+pub fn workspace_get(snapshot: &Snapshot, id: &str, panel: bool) -> Reply {
     let desk = snapshot.config["desks"].get(&snapshot.state.desk.sig);
     let found = desk.and_then(|d| d["workspaces"].as_array()).and_then(|list| list.iter().find(|w| w["id"] == id));
     let Some(ws) = found else { return Err(RpcError::new(NOT_FOUND, "no such workspace on this desk")) };
     let rows = ws["windows"].as_array().into_iter().flatten().enumerate().map(|(row, r)| {
         let exe = r["exe"].as_str().unwrap_or_default();
         let app = exe.rsplit('\\').next().filter(|n| !n.is_empty()).or_else(|| r["aumid"].as_str());
-        json!({
+        let mut entry = json!({
             "row": row,
             "app": app,
             "title": r["title_hint"],
@@ -346,7 +359,12 @@ pub fn workspace_get(snapshot: &Snapshot, id: &str) -> Reply {
             "target": r["target"],
             "shown": r["shown"],
             "launch": r["launch"],
-        })
+        });
+        // What I typed in "Open with" is the panel's alone, as in `config.get`.
+        if panel {
+            entry["open_with"] = r["open_with"].clone();
+        }
+        entry
     });
     Ok(json!({
         "id": ws["id"],
@@ -382,4 +400,23 @@ pub fn zones_layouts(snapshot: &Snapshot, number: Option<u32>, pointer: (i32, i3
         .map(|o| json!({ "id": o.id, "name": o.name, "kind": o.kind }))
         .collect();
     Ok(json!({ "number": screen.number, "current": library::layout_id(now.as_ref()), "layouts": layouts }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn workspace_get_shows_open_with_only_to_the_panel() {
+        let mut snapshot = Snapshot::default();
+        snapshot.state.desk.sig = "d".into();
+        snapshot.config = json!({ "desks": { "d": { "workspaces": [
+            { "id": "ws_1", "name": "A", "windows": [{ "exe": "c:\\a\\code.exe", "open_with": "c:\\proj" }] }
+        ] } } });
+        let others = workspace_get(&snapshot, "ws_1", false).unwrap().to_string();
+        assert!(!others.contains("open_with") && !others.contains("proj"));
+        assert!(others.contains("code.exe"));
+        let panel = workspace_get(&snapshot, "ws_1", true).unwrap();
+        assert_eq!(panel["rows"][0]["open_with"], "c:\\proj");
+    }
 }

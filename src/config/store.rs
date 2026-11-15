@@ -47,10 +47,13 @@ impl Config {
         }
         c.migrate_sign_in();
         for desk in c.desks.values_mut() {
-            desk.workspaces = crate::workspace::without_places(&desk.workspaces);
+            let clean = |saved: &[serde_json::Value]| {
+                crate::workspace::without_open_with(&crate::workspace::without_places(saved))
+            };
+            desk.workspaces = clean(&desk.workspaces);
             // The last session never saves them, so one in a file is dropped too.
             if let Some(session) = desk.last_session.take() {
-                desk.last_session = crate::workspace::without_places(&[session]).pop();
+                desk.last_session = clean(&[session]).pop();
             }
         }
         Ok(c)

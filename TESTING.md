@@ -777,6 +777,20 @@ Turn the debug log on. Set **Save windows to the active workspace** on Shortcuts
 - [ ] **API.** `workspace.quick_save` answers `{id, created}` once the capture is saved, with the same notification. Any client may call it.
 - [ ] **Stream Deck.** Put the **Save windows** action on a key and press it: the same as the hotkey.
 
+### Open with
+
+Close Code and Notepad first. Make a workspace with rows for both, and open a row's details.
+
+- [ ] **A folder for Code.** Type `C:\Users\<me>\Documents` (a folder that exists) in **Open with** for Code, press Enter, and switch with Code closed. Code opens on it. The field keeps the path, and Undo takes it away.
+- [ ] **A refusal in the field.** Type `--new-window`, `\\server\share`, `C:\a\..\b` and `file:///C:/Windows/System32/calc.exe` one by one and press Enter. Each shows a red line saying what is wrong, and nothing is saved: clicking another row and back shows the old value.
+- [ ] **A link.** Type `https://example.com` for Notepad's row and switch with Notepad closed. The default browser opens the page, and Notepad doesn't start. Try `obsidian://open` and `spotify:` the same way.
+- [ ] **Credentials.** Type `https://me:pw@example.com/` and press Enter: once it is saved, the field shows `https://example.com/` when the row is opened again.
+- [ ] **A path that has gone.** Delete the folder and switch: the app isn't started, the switch ends with the app skipped as `open with refused`, and the log says the path is gone. A path on a mapped network drive is refused the same way.
+- [ ] **Already open.** With the app open, switch: its window is put in its zone and nothing is opened.
+- [ ] **Over a saved place.** With **Remember folders and pages** on, give an Explorer row a saved folder and a different **Open with**: a switch with Explorer closed opens the **Open with** one.
+- [ ] **Never leaves this PC.** **Export workspace** and the export on General leave `open_with` out of the file. Importing a file with `open_with` typed into it by hand drops it. A second client calling `config.get` has no `open_with` in the rows, and the Seam window still shows it.
+- [ ] **Recapture.** **Update from screen** and **Where it is now** keep what is typed.
+
 ### Remember folders and pages
 
 Turn the debug log on, and **Remember folders and pages** on at the bottom of Workspaces. Close every Explorer, Chrome and Edge window first.

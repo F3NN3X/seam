@@ -21,8 +21,8 @@ mod tests;
 pub use assist::{Edit, MAX_NAME, RowChange, checked_name, edited, survivors};
 pub use capture::{checked_update, merge_capture, moved_rows, recapture_row, stages, take_window_place, tame_delay};
 pub use export::{
-    Export, ScreenInfo, explorer_arg, has_places, import, page_of, safe_aumid, safe_exe, safe_folder, safe_url,
-    without_places,
+    Export, OpenWith, ScreenInfo, explorer_arg, has_places, import, open_with_for, page_of, safe_aumid, safe_exe,
+    safe_folder, safe_open_with, safe_url, without_open_with, without_places,
 };
 pub use geometry::{from_fractions, rect_for, target_of, to_fractions};
 pub use matching::{Bound, Candidate, assign, assign_bound};
@@ -165,6 +165,11 @@ pub struct Rule {
     /// Used only when a switch starts the app, and never exported.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub place: Option<Place>,
+    /// A path or link I typed for the app to open when a switch starts it. Never
+    /// captured, never exported, and dropped on import. A path is one argument to
+    /// `exe`, a link goes to the shell (`safe_open_with`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub open_with: Option<String>,
 }
 
 impl Default for Rule {
@@ -188,6 +193,7 @@ impl Default for Rule {
             size_mm: None,
             captured_on: None,
             place: None,
+            open_with: None,
         }
     }
 }

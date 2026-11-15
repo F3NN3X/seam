@@ -9,6 +9,7 @@ use crate::panel::Panel;
 use crate::theme::{Palette, palette};
 use crate::ui::{self, row, switch};
 use gpui_kit::component::button::ButtonVariants;
+use gpui_kit::component::input::{Input, InputEvent, InputState};
 use gpui_kit::component::menu::{DropdownMenu, PopupMenuItem};
 use gpui_kit::component::slider::{SliderEvent, SliderState};
 use gpui_kit::component::{ActiveTheme, Icon, ThemeStyled, WindowExt};
@@ -23,7 +24,9 @@ mod screen_zones;
 mod table;
 
 pub use edits::{add_app, update};
-use edits::{exe_name, move_row, never_include, remove_row, seconds, set_delay, update_row, where_it_is};
+use edits::{
+    exe_name, move_row, never_include, remove_row, seconds, set_delay, set_open_with, update_row, where_it_is,
+};
 pub use screen_zones::{zones_moved, zones_section};
 pub use table::rows;
 
@@ -103,6 +106,10 @@ pub struct Editing {
     pub picker: Picker,
     /// The workspace whose Zones section is open. Closed until opened.
     zones_open: Option<String>,
+    /// The "Open with" field of the open row, the row it shows, and why it was refused.
+    open_with: Entity<InputState>,
+    open_with_for: Option<(String, usize)>,
+    open_with_error: Option<String>,
 }
 
 impl Editing {
@@ -119,7 +126,23 @@ impl Editing {
                 set_delay(panel, (value.end() * 1000.).round() as u32, window, cx);
             }
         });
-        (Editing { expanded: None, delay, holding_delay: false, picker, zones_open: None }, vec![held, picked])
+        let open_with = cx.new(|cx| InputState::new(window, cx).placeholder(r"C:\path or https://link"));
+        let typed = cx.subscribe_in(&open_with, window, |panel, _, event: &InputEvent, window, cx| {
+            if matches!(event, InputEvent::PressEnter { .. } | InputEvent::Blur) {
+                set_open_with(panel, window, cx);
+            }
+        });
+        let editing = Editing {
+            expanded: None,
+            delay,
+            holding_delay: false,
+            picker,
+            zones_open: None,
+            open_with,
+            open_with_for: None,
+            open_with_error: None,
+        };
+        (editing, vec![held, picked, typed])
     }
 }
 

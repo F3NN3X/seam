@@ -82,6 +82,7 @@ mod tests {
         assert_eq!(with_shift("Ctrl+Shift+R"), None);
         assert_eq!(with_shift("ctrl+SHIFT+alt+r"), None);
         assert_eq!(with_shift("R"), None);
+        assert!(with_shift("Ctrl + Alt + R").and_then(|c| parse(&c)).is_some());
         let shifted = with_shift("Ctrl+Alt+R").and_then(|c| parse(&c)).unwrap();
         assert_eq!(shifted.mods & MOD_SHIFT, MOD_SHIFT);
         assert_eq!(shifted.vk, parse("Ctrl+Alt+R").unwrap().vk);

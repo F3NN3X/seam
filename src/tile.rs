@@ -106,7 +106,7 @@ pub struct Plan {
     pub done: Done,
 }
 
-pub(super) fn topmost(h: HWND) -> bool {
+pub(crate) fn topmost(h: HWND) -> bool {
     unsafe { GetWindowLongW(h, GWL_EXSTYLE) as u32 & WS_EX_TOPMOST.0 != 0 }
 }
 

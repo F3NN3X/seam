@@ -20,6 +20,13 @@ pub struct Turned {
     pub tree: Option<Node>,
 }
 
+/// A window Seam's zone path leaves where it is, which the one rule doesn't know of: pinned
+/// or sticky, on top, or an administrator's.
+fn pinned(key: isize, exclude: &[String]) -> bool {
+    let h = hwnd_of(key);
+    winutil::pin_bits(h) != 0 || crate::wincontrol::tile::topmost(h) || crate::wincontrol::movable(h, exclude).is_err()
+}
+
 impl Engine {
     /// The tree of a tiled screen on the desktop in front, or why there is none.
     fn turn_tree(&mut self, screen: &str) -> Result<usize, String> {
@@ -50,7 +57,9 @@ impl Engine {
         let tree = &self.tiling.trees[i].tree;
         let rects = tree.rects(work, gap);
         let held: Vec<Held> = (tree.tiles.iter().enumerate())
-            .filter_map(|(zone, t)| Some(Held { hwnd: t.hwnd?, zone, stuck: !movable.contains(&t.hwnd?) }))
+            .filter_map(|(zone, t)| {
+                Some(Held { hwnd: t.hwnd?, zone, stuck: !movable.contains(&t.hwnd?) || pinned(t.hwnd?, &self.exclude) })
+            })
             .collect();
         let empty: Vec<usize> = (0..tree.tiles.len()).filter(|z| tree.tiles[*z].hwnd.is_none()).collect();
         let moves = turn::rotate(tree.tiles.len(), &held, &empty, forward);

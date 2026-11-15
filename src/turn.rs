@@ -77,4 +77,15 @@ mod tests {
         let stuck = [Held { hwnd: 1, zone: 0, stuck: true }, at(2, 1)];
         assert!(rotate(2, &stuck, &[], true).is_empty());
     }
+
+    // A tiled screen marks a pinned or sticky window stuck, as the zone path does: its tile
+    // is stepped over, backward too, next to a tile nobody holds.
+    #[test]
+    fn a_pinned_tile_and_an_empty_one_are_stepped_over_both_ways() {
+        let held = [at(1, 0), Held { hwnd: 2, zone: 1, stuck: true }, at(3, 3), at(4, 4)];
+        assert_eq!(rotate(5, &held, &[2], true), vec![(1, 3), (3, 4), (4, 0)]);
+        assert_eq!(rotate(5, &held, &[2], false), vec![(1, 4), (3, 0), (4, 3)]);
+        // A window past the last zone is ignored.
+        assert_eq!(rotate(2, &[at(1, 0), at(2, 1), at(3, 7)], &[], true), vec![(1, 1), (2, 0)]);
+    }
 }

@@ -438,6 +438,17 @@ mod tests {
     }
 
     #[test]
+    fn trees_are_told_by_their_cut_and_then_by_their_ratios() {
+        let (columns, rows) = (template_tree(Template::Columns).unwrap(), template_tree(Template::Rows).unwrap());
+        let priority = template_tree(Template::Priority).unwrap();
+        assert!(same_shape(&columns, &priority) && !same_shape(&columns, &rows));
+        assert!(!same_shape(&columns, &Node::Leaf(LeafTag::Leaf)));
+        assert_eq!(ratio_gap(&columns, &columns), 0.0);
+        assert!(ratio_gap(&columns, &priority) > 0.0);
+        assert!(ratio_gap(&columns, &rows).is_infinite());
+    }
+
+    #[test]
     fn remove_leaf_hands_the_space_to_the_sibling() {
         let l = || Node::Leaf(LeafTag::Leaf);
         let split = |dir, a, b| Node::Split { split: dir, ratio: 0.5, a: Box::new(a), b: Box::new(b) };

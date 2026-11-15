@@ -6,6 +6,7 @@
 
 use super::workspaces::queue_window;
 use super::*;
+use seam::library::Origin;
 use wincontrol::tile::{Done, Pick, Turn};
 
 /// Why neither can run now, if it can't.
@@ -68,8 +69,15 @@ fn reset_pick(app: &App, screen: &str, number: usize) -> Result<Pick, String> {
     if !seam::library::changed(&library, &layout) {
         return Err(format!("Screen {number}'s layout hasn't been changed"));
     }
-    let from = seam::library::origin(&app.cfg.custom_layouts, screen, &layout.tree)
-        .ok_or_else(|| format!("Seam can't tell which layout screen {number} came from"))?;
+    let from = match seam::library::origin(&app.cfg.custom_layouts, screen, &layout.tree) {
+        Origin::Layout(from) => from,
+        Origin::Unclear => {
+            return Err(format!(
+                "Screen {number}'s layout could have come from more than one layout, so Seam won't guess"
+            ));
+        }
+        Origin::Unknown => return Err(format!("Seam can't tell which layout screen {number} came from")),
+    };
     Ok(Pick { screen: screen.to_string(), layout: from, before: Some(layout), focused: None })
 }
 

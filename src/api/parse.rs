@@ -120,9 +120,10 @@ fn command(method: &str, p: &Value) -> Result<Command, RpcError> {
         "screen.tile" => Command::ScreenTile(screen_param(p)?),
         "screen.rotate" => Command::ScreenRotate {
             number: screen_param(p)?,
-            back: match p.get("dir").and_then(Value::as_str) {
-                None | Some("next") => false,
-                Some("back") => true,
+            back: match p.get("dir") {
+                None | Some(Value::Null) => false,
+                Some(Value::String(d)) if d == "next" => false,
+                Some(Value::String(d)) if d == "back" => true,
                 Some(_) => return Err(RpcError::new(INVALID_PARAMS, "dir must be next or back")),
             },
         },
@@ -598,6 +599,7 @@ mod tests {
             (request("tiling.set", r#"{"family":"dwindle"}"#), anyone, INVALID_PARAMS),
             (request("screen.identify", r#"{"number":-1}"#), anyone, INVALID_PARAMS),
             (request("screen.rotate", r#"{"dir":"left"}"#), anyone, INVALID_PARAMS),
+            (request("screen.rotate", r#"{"dir":5}"#), anyone, INVALID_PARAMS),
             (request("workspace.switch", "{}"), anyone, INVALID_PARAMS),
             (request("zones.apply", "{}"), anyone, INVALID_PARAMS),
             (request("zones.apply", r#"{"layout":{"template":"grid"}}"#), anyone, INVALID_PARAMS),

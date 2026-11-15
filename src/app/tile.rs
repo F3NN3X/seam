@@ -80,7 +80,12 @@ pub(super) fn tile_finished(app: &mut App, result: Option<Result<wincontrol::til
                     Verb::Reset => {
                         log::info!("reset sizes screen {}: {n} followed", done.number);
                         let body = format!("{n} {windows} followed. {left}Click to undo");
-                        (format!("Screen {}'s sizes are back", done.number), body)
+                        // A tiled screen has no layout to name, only its splits.
+                        let title = match done.changed.as_ref().and_then(|c| c.now.as_ref()) {
+                            Some(now) => format!("Reset to {}", seam::library::name_of(&app.cfg.custom_layouts, now)),
+                            None => format!("Screen {}'s splits are even", done.number),
+                        };
+                        (title, body)
                     }
                 }
             } else if done.pulled {

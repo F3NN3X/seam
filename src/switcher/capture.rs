@@ -68,6 +68,51 @@ pub fn take_captured() -> Option<Captured> {
     CAPTURED.lock().unwrap_or_else(|e| e.into_inner()).take()
 }
 
+/// The row for the window "Add window to workspace" read, as a capture would save it,
+/// and the window; or why it's not one a workspace takes, in the notice's words.
+type Added = Result<(Rule, isize), String>;
+
+static ADDED: Mutex<Option<Added>> = Mutex::new(None);
+
+/// Read one window for "Add window to workspace". The main thread gets `WM_APP_CAPTURED`.
+pub fn capture_added(job: CaptureJob, hwnd: isize) -> bool {
+    let spawned = std::thread::Builder::new().name("seam-capture".into()).spawn(move || {
+        let _com = Com::enter();
+        *ADDED.lock().unwrap_or_else(|e| e.into_inner()) = Some(read_added(&job, hwnd));
+        unsafe {
+            let _ = PostMessageW(Some(hwnd_of(job.owner)), WM_APP_CAPTURED, WPARAM(0), LPARAM(0));
+        }
+    });
+    spawned.is_ok()
+}
+
+pub fn take_added() -> Option<Added> {
+    ADDED.lock().unwrap_or_else(|e| e.into_inner()).take()
+}
+
+/// The window as a capture would take it, with launch off. A window a capture or a
+/// later switch would leave alone is refused.
+fn read_added(job: &CaptureJob, hwnd: isize) -> Added {
+    let why = |skip| Err(workspace::why_not(skip).to_string());
+    let mut skipped = None;
+    let seen = seen_of(hwnd_of(hwnd), 0, &job.exclude, &mut Procs::new(), &mut |skip, _| skipped = Some(skip));
+    let Some(seen) = seen else { return why(skipped.unwrap_or("no exe")) };
+    if seen.elevated {
+        return why("administrator");
+    }
+    // A sticky window belongs to no workspace.
+    if seen.pin & winutil::PIN_STICKY != 0 {
+        return why("sticky");
+    }
+    let geos = geometry(&job.screens, job.gap);
+    let Some(mut rule) = rule_of(&seen.cand, &geos, hwnd, false, 0) else { return why("off screen") };
+    rule.launch = false;
+    if job.places {
+        rule.place = places::read(std::slice::from_ref(&rule), &[hwnd]).into_iter().next().flatten();
+    }
+    Ok((rule, hwnd))
+}
+
 /// Capture the last session (D120): every window, pinned ones with their pins.
 /// The main thread gets `WM_APP_SESSION` when it's done.
 pub fn capture_session(job: CaptureJob) -> bool {
@@ -122,52 +167,14 @@ fn capture_rules(job: &CaptureJob, session: bool) -> Captured {
             }
             continue;
         }
-        let h = hwnd_of(seen.cand.hwnd);
-        let shown = shown_of(h);
-        let normal = winutil::normal_rect(h);
-        // A minimized window has no place on screen, so it counts where it would restore to.
-        let visible = if shown == Shown::Minimized { normal } else { winutil::visible_rect(h) };
-        let placed =
-            visible.and_then(|v| geos.iter().find(|g| g.bounds.contains(centre(v).0, centre(v).1)).map(|g| (v, g)));
-        let Some((visible, geo)) = placed else {
+        let Some(rule) = rule_of(&seen.cand, &geos, foreground, session, rules.len()) else {
             if job.removes && !session {
                 others.push(seen.cand);
             }
             continue;
         };
-        let visible = match shown {
-            Shown::Minimized => winutil::normal_frame(h, geo.dpi).unwrap_or(visible),
-            _ => visible,
-        };
-        let target = match shown {
-            Shown::Maximized => Target::State { state: WinState::Max },
-            _ => workspace::target_of(visible, &geo.zones)
-                .unwrap_or_else(|| Target::Rect { rect: workspace::to_fractions(visible, geo.work) }),
-        };
-        // Its size in pixels and millimetres, for a restore on another screen.
-        let free = matches!(shown, Shown::Normal | Shown::Minimized);
-        let size_px = free.then_some([visible.w, visible.h]);
-        let size_mm = free.then(|| desk::size_mm(visible.w, visible.h, geo.raw_dpi)).flatten();
-        let c = seen.cand;
-        hwnds.push(c.hwnd);
-        rules.push(Rule {
-            exe: c.exe,
-            aumid: c.aumid,
-            class: c.class,
-            title_hint: c.title,
-            monitor: geo.id.clone(),
-            target,
-            normal_rect: normal.map(|n| workspace::to_fractions(n, geo.work)),
-            launch: true,
-            pin: if session { Pin::of_bits(winutil::pin_bits(h)) } else { None },
-            shown,
-            z: rules.len() as u32,
-            focused: c.hwnd == foreground,
-            size_px,
-            size_mm,
-            captured_on: Some(geo.id.clone()),
-            ..Rule::default()
-        });
+        hwnds.push(seen.cand.hwnd);
+        rules.push(rule);
     }
     // A window in a stack in its zone keeps its place in it, from the top.
     let ids: Vec<Option<(u32, usize)>> = rules
@@ -191,6 +198,49 @@ fn capture_rules(job: &CaptureJob, session: bool) -> Captured {
     let ms = started.elapsed().as_millis();
     log::info!("workspace capture: {} windows in {ms} ms, skipped {}", rules.len(), skipped.join(", "));
     (rules, hwnds, others)
+}
+
+/// The rule for a window as a capture saves it: where it is now on its screen, and how
+/// it's shown. `z` is its place among the rules. `None` when it's on none of the screens.
+fn rule_of(c: &Candidate, geos: &[Geo], foreground: isize, session: bool, z: usize) -> Option<Rule> {
+    let h = hwnd_of(c.hwnd);
+    let shown = shown_of(h);
+    let normal = winutil::normal_rect(h);
+    // A minimized window has no place on screen, so it counts where it would restore to.
+    let visible = if shown == Shown::Minimized { normal } else { winutil::visible_rect(h) };
+    let (visible, geo) =
+        visible.and_then(|v| geos.iter().find(|g| g.bounds.contains(centre(v).0, centre(v).1)).map(|g| (v, g)))?;
+    let visible = match shown {
+        Shown::Minimized => winutil::normal_frame(h, geo.dpi).unwrap_or(visible),
+        _ => visible,
+    };
+    let target = match shown {
+        Shown::Maximized => Target::State { state: WinState::Max },
+        _ => workspace::target_of(visible, &geo.zones)
+            .unwrap_or_else(|| Target::Rect { rect: workspace::to_fractions(visible, geo.work) }),
+    };
+    // Its size in pixels and millimetres, for a restore on another screen.
+    let free = matches!(shown, Shown::Normal | Shown::Minimized);
+    let size_px = free.then_some([visible.w, visible.h]);
+    let size_mm = free.then(|| desk::size_mm(visible.w, visible.h, geo.raw_dpi)).flatten();
+    Some(Rule {
+        exe: c.exe.clone(),
+        aumid: c.aumid.clone(),
+        class: c.class.clone(),
+        title_hint: c.title.clone(),
+        monitor: geo.id.clone(),
+        target,
+        normal_rect: normal.map(|n| workspace::to_fractions(n, geo.work)),
+        launch: true,
+        pin: if session { Pin::of_bits(winutil::pin_bits(h)) } else { None },
+        shown,
+        z: z as u32,
+        focused: c.hwnd == foreground,
+        size_px,
+        size_mm,
+        captured_on: Some(geo.id.clone()),
+        ..Rule::default()
+    })
 }
 
 /// The windows a capture reads, and the ones off every screen or on another desktop.

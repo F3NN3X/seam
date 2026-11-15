@@ -415,6 +415,12 @@ const ENTRIES: &[Entry] = &[
         "Global shortcut",
         "hotkey keyboard workspace quick save capture update",
     ),
+    entry(
+        Page::Shortcuts,
+        "Add window to workspace",
+        "Add the focused window to workspace 1 to 9, counted in the order of the Workspaces page",
+        "hotkey keyboard workspace add send move window row numbered one two three",
+    ),
     entry(Page::General, "Start with Windows", "Seam waits in the tray after you sign in", "login autostart"),
     entry(Page::General, "Offer to line up new screens", "Asks once when screens Seam hasn't seen connect", ""),
     entry(

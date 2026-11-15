@@ -179,6 +179,63 @@ pub fn take_window_place(old: &Workspace, row: usize, exe: &str, class: &str, pi
     Some(updated)
 }
 
+/// Workspace `n` of the desk's list, counted from 1 in list order.
+pub fn numbered(list: &[Workspace], n: usize) -> Option<&Workspace> {
+    list.get(n.checked_sub(1)?)
+}
+
+/// What "Add window to workspace" made of a workspace.
+pub struct Added {
+    /// The workspace with the window in it. A folder or page the window showed isn't in
+    /// it: only a capture may set one, so the tray stores `place` after the checks.
+    pub workspace: Workspace,
+    pub row: usize,
+    /// The window got a row of its own, where an existing row would have been updated.
+    pub new: bool,
+    /// The folder or page the window showed, for its row.
+    pub place: Option<Place>,
+}
+
+/// The focused window, read as a capture would, goes into `old`. A row of the same app
+/// that pairs with it, as a switch would, takes where the window is now and keeps its
+/// launch details, its start order and its focus. Otherwise the window gets a row at the
+/// end, with launch off and no Open with. Never removes a row. `bound` and `elsewhere` as `pair`.
+pub fn add_window(old: &Workspace, fresh: Rule, bound: &[Option<Bound>], elsewhere: &HashSet<isize>) -> Added {
+    let found = pair(&old.windows, std::slice::from_ref(&fresh), bound, elsewhere);
+    let place = fresh.place.clone();
+    let mut workspace = old.clone();
+    let (row, new) = match found.iter().position(Option::is_some) {
+        Some(row) => {
+            let rule = &mut workspace.windows[row];
+            let (focused, z, kept) = (rule.focused, rule.z, rule.place.clone());
+            rule.take_place(&fresh);
+            (rule.focused, rule.z, rule.place) = (focused, z, kept);
+            (row, false)
+        }
+        None => {
+            let z = old.windows.len() as u32;
+            let rule = Rule { launch: false, open_with: None, focused: false, z, place: None, ..fresh };
+            workspace.windows.push(rule);
+            (old.windows.len(), true)
+        }
+    };
+    Added { workspace, row, new, place }
+}
+
+/// Why a window can't be added to a workspace, in the notice's words. `skip` is the
+/// reason a capture leaves a window out, or one of `administrator`, `sticky` and `off screen`.
+pub fn why_not(skip: &str) -> &'static str {
+    match skip {
+        "seam" => "That's one of Seam's own windows",
+        "never include" => "That app is under Left alone, so Seam never saves it",
+        "administrator" => "That app runs as administrator, so Seam couldn't move it later",
+        "sticky" => "That window is kept out of workspace switches, so no workspace holds it",
+        "hidden" | "cloaked" | "off screen" => "That window isn't showing on a screen of this desk",
+        "no exe" => "Seam can't tell which app that window belongs to",
+        _ => "That window has no taskbar button, so Seam doesn't save it",
+    }
+}
+
 /// The rows a switch starts, in start order, cut into stages. A stage ends at a
 /// row that waits for its window. Apps in a stage start together, each after its
 /// own delay, and the next stage starts once the waiting ones are up.

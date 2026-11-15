@@ -431,6 +431,9 @@ unsafe fn on_hotkey(id: i32) {
             HOTKEY_RESET_SIZES => {
                 with_app(|a| turn::start_turn(a, Verb::Reset, None, true, None));
             }
+            id if (HOTKEY_ADD_TO..HOTKEY_ADD_TO + ADD_TO_KEYS).contains(&id) => {
+                with_app(|a| start_add_window(a, Which::Number((id - HOTKEY_ADD_TO) as usize + 1), None, None));
+            }
             HOTKEY_DIVIDER_MENU => {
                 if let Err(why) = snap::size_menu(GetForegroundWindow()) {
                     log::info!("size menu hotkey: {why}");

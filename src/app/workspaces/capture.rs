@@ -25,7 +25,7 @@ pub(in crate::app) fn start_capture(
         return Some(Err(RpcError::new(api::NOT_FOUND, "no such row in that workspace")));
     }
     let hwnd = pick.as_ref().map(|p| p.hwnd);
-    app.capturing = Some(Capturing { reply, name, into, row, pick, sig: app.sig.clone(), quick: false });
+    app.capturing = Some(Capturing { reply, name, into, row, pick, sig: app.sig.clone(), quick: false, add: None });
     let started = match hwnd {
         Some(hwnd) => switcher::capture_window(capture_job(app), hwnd),
         None => switcher::capture(capture_job(app)),
@@ -303,6 +303,9 @@ fn finish_capture(
 
 /// A capture finished: save it as a new workspace, or over the one it was asked to update.
 pub(in crate::app) fn captured(app: &mut App) {
+    if app.capturing.as_ref().is_some_and(|job| job.add.is_some()) {
+        return super::add::added(app);
+    }
     let (Some((rules, hwnds, others)), Some(job)) = (switcher::take_captured(), app.capturing.take()) else { return };
     let answer = |r: Reply| {
         if let Some(tx) = &job.reply {

@@ -19,7 +19,10 @@ mod matching;
 mod tests;
 
 pub use assist::{Edit, MAX_ASSISTANT_WORKSPACES, MAX_NAME, RowChange, checked_name, edited, survivors};
-pub use capture::{checked_update, merge_capture, moved_rows, recapture_row, stages, take_window_place, tame_delay};
+pub use capture::{
+    Added, add_window, checked_update, merge_capture, moved_rows, numbered, recapture_row, stages, take_window_place,
+    tame_delay, why_not,
+};
 pub use export::{
     Export, OpenWith, ScreenInfo, explorer_arg, has_places, import, open_with_for, page_of, safe_aumid, safe_exe,
     safe_folder, safe_open_with, safe_url, without_open_with, without_places,

@@ -56,6 +56,7 @@ fn command(method: &str, p: &Value) -> Result<Command, RpcError> {
         "workspace.switch" => workspace_switch(p)?,
         "workspace.capture" => workspace_capture(p)?,
         "workspace.update" => workspace_update(p)?,
+        "workspace.add_window" => workspace_add_window(p)?,
         "workspace.create" => Command::WorkspaceCreate { name: name_param(p)? },
         "workspace.rename" => workspace_edit(p, Edit::Rename(name_param(p)?))?,
         "workspace.edit_row" => {
@@ -167,6 +168,23 @@ fn workspace_switch(p: &Value) -> Result<Command, RpcError> {
     }
     let alongside = p.get("alongside").and_then(Value::as_bool).unwrap_or(false);
     Ok(Command::WorkspaceSwitch { id, name, alongside })
+}
+
+fn workspace_add_window(p: &Value) -> Result<Command, RpcError> {
+    let id = str_param(p, "id")?;
+    let number = match p.get("number") {
+        None | Some(Value::Null) => None,
+        Some(v) => Some(
+            v.as_u64()
+                .and_then(|n| u32::try_from(n).ok())
+                .filter(|n| *n >= 1)
+                .ok_or_else(|| RpcError::new(INVALID_PARAMS, "number must be a workspace number, from 1"))?,
+        ),
+    };
+    if id.is_some() == number.is_some() {
+        return Err(RpcError::new(INVALID_PARAMS, "give id or number, one of them"));
+    }
+    Ok(Command::WorkspaceAddWindow { id, number, hwnd: hwnd_param(p)? })
 }
 
 fn workspace_capture(p: &Value) -> Result<Command, RpcError> {
@@ -522,6 +540,16 @@ mod tests {
                 Command::ScreenRotate { number: Some(2), back: true },
             ),
             (request("screen.reset_sizes", r#"{"number":3}"#), anyone, Command::ScreenResetSizes(Some(3))),
+            (
+                request("workspace.add_window", r#"{"number":2}"#),
+                anyone,
+                Command::WorkspaceAddWindow { id: None, number: Some(2), hwnd: None },
+            ),
+            (
+                request("workspace.add_window", r#"{"id":"ws_1","hwnd":4660}"#),
+                anyone,
+                Command::WorkspaceAddWindow { id: Some("ws_1".into()), number: None, hwnd: Some(4660) },
+            ),
             (request("overview.show", "{}"), anyone, Command::OverviewShow),
             (request("window.stack_cycle", r#"{"dir":"prev"}"#), anyone, Command::WindowStackCycle(false)),
             (request("screen.identify", r#"{"number":3}"#), anyone, Command::ScreenIdentify(3)),
@@ -600,6 +628,11 @@ mod tests {
             (request("screen.identify", r#"{"number":-1}"#), anyone, INVALID_PARAMS),
             (request("screen.rotate", r#"{"dir":"left"}"#), anyone, INVALID_PARAMS),
             (request("screen.rotate", r#"{"dir":5}"#), anyone, INVALID_PARAMS),
+            (request("workspace.add_window", "{}"), anyone, INVALID_PARAMS),
+            (request("workspace.add_window", r#"{"id":"ws_1","number":1}"#), anyone, INVALID_PARAMS),
+            (request("workspace.add_window", r#"{"number":0}"#), anyone, INVALID_PARAMS),
+            (request("workspace.add_window", r#"{"number":-1}"#), anyone, INVALID_PARAMS),
+            (request("workspace.add_window", r#"{"number":1,"hwnd":"x"}"#), anyone, INVALID_PARAMS),
             (request("workspace.switch", "{}"), anyone, INVALID_PARAMS),
             (request("zones.apply", "{}"), anyone, INVALID_PARAMS),
             (request("zones.apply", r#"{"layout":{"template":"grid"}}"#), anyone, INVALID_PARAMS),
@@ -682,6 +715,7 @@ mod tests {
             ("tiling.free", "{}"),
             ("screen.rotate", "{}"),
             ("screen.reset_sizes", "{}"),
+            ("workspace.add_window", r#"{"number":1}"#),
             ("overview.show", "{}"),
             ("app.quit", "{}"),
             ("session.restore", "{}"),

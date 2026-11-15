@@ -881,6 +881,22 @@ Turn the debug log on. Set **Save windows to the active workspace** on Shortcuts
 - [ ] **API.** `workspace.quick_save` answers `{id, created}` once the capture is saved, with the same notification. Any client may call it.
 - [ ] **Stream Deck.** Put the **Save windows** action on a key and press it: the same as the hotkey.
 
+### Add window to workspace
+
+Turn the debug log on. On Shortcuts, under Workspaces, record keys for **Add window to workspace 1** and **2** (none has a key until you set one). Have two workspaces on the desk, "Coding" first and "Mail" second in the list, and Notepad open.
+
+- [ ] **A new row.** Focus Notepad, which neither workspace holds, and press the key for 1. A notification says Notepad has a new row. Coding on the Workspaces page has a Notepad row at the end, set to where Notepad is now (its zone, or its position), with its **Launch** box off and **Open with** empty. Mail is unchanged.
+- [ ] **Undo.** Do it again with another app and click the notification within 8 s. The row is gone and the workspace is as it was, and the log has `quick save: undone`. Click it after 8 s: nothing happens.
+- [ ] **An existing row.** Move Notepad to another zone and press the key for 1 again. The Notepad row is still one, and its zone is the new one. Its **Launch**, delay and order in the list didn't change, and no second Notepad row appeared.
+- [ ] **Never removes.** Press the key for 2 with Notepad focused. Mail gets a Notepad row, and Coding still has its own.
+- [ ] **A folder or page.** With **Remember folders and pages** on, focus a File Explorer window and press the key. The new row has that folder, and a later switch to the workspace starts nothing for it (Launch is off) but places the window if it is open. With the setting off the row has no folder.
+- [ ] **No such workspace.** Press the key for a number past the list's end, say 9 with two workspaces. A notification says the desk has no workspace 9, and nothing is saved.
+- [ ] **Refused.** Each shows a notification saying why and saves nothing: the Seam panel in front ("Seam's own windows"), a window of an app on **Left alone**, an app run as administrator, a window kept out of workspace switches (**Keep window out of workspace switches**), and the Start menu or a tray pop-up (no taskbar button).
+- [ ] **A minimized or maximized window.** Maximize Notepad and press the key: the row is saved maximized. Do the same with it minimized, from the overview or the taskbar's Alt+Tab: the row remembers where it restores to.
+- [ ] **In use.** Press the key for the workspace in use with a window it lacks. The Workspaces page doesn't show **Moved** for it, and auto-apply doesn't move the window.
+- [ ] **Busy.** Press the key twice quickly: the second press says it is already capturing.
+- [ ] **API.** `workspace.add_window` with `{"number":1}` and with `{"id":"<id>","hwnd":<handle>}` answers `{id, row, new}` and does what the key does, with the same notification. `{}`, both `id` and `number`, and `{"number":0}` answer `-32602`; a number past the end answers error 1; a refused window answers error 3 with the reason. A client that isn't Seam may call it. An assistant (`seam-mcp.exe`) gets error 4, and the MCP tools list has no such tool.
+
 ### Open with
 
 Close Code and Notepad first. Make a workspace with rows for both, and open a row's details.

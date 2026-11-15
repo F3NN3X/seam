@@ -252,3 +252,11 @@ fn an_older_file_has_no_rotate_or_reset_key() {
     let set: Config = serde_json::from_str(r#"{"hotkeys": {"rotate": "Ctrl+Alt+R"}}"#).unwrap();
     assert_eq!(set.hotkeys.rotate.as_deref(), Some("Ctrl+Alt+R"));
 }
+
+#[test]
+fn an_older_file_has_no_add_to_workspace_keys() {
+    let c: Config = serde_json::from_str(r#"{"hotkeys": {"overview": "Ctrl+Alt+O"}}"#).unwrap();
+    assert!(c.hotkeys.add_to_workspace().iter().all(Option::is_none));
+    let set: Config = serde_json::from_str(r#"{"hotkeys": {"add_to_3": "Ctrl+Alt+3"}}"#).unwrap();
+    assert_eq!(set.hotkeys.add_to_workspace()[2].map(String::as_str), Some("Ctrl+Alt+3"));
+}

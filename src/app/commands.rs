@@ -86,9 +86,9 @@ pub(super) fn align_finished(app: &mut App) {
 
 /// Run one command and answer it, unless a worker will answer it later.
 pub(super) fn run_command(app: &mut App, queued: Queued) {
-    let Queued { command, reply, panel, client } = queued;
+    let Queued { command, reply, panel, client, assistant } = queued;
     let result = match command {
-        Command::WorkspaceCreate { name } => create_workspace(app, &client, &name),
+        Command::WorkspaceCreate { name } => create_workspace(app, &client, assistant, &name),
         Command::WorkspaceEdit { id, edit } => edit_workspace(app, &client, &id, &edit),
         Command::ArrangementAlign => {
             if let Some(refusal) = start_align(app, reply.clone()) {

@@ -5,6 +5,7 @@ use seam::api::{CallError, Client, DISABLED, Event, MCP_CLIENT, MCP_OFF};
 use serde_json::Value;
 use std::io::ErrorKind;
 use std::sync::mpsc::{Receiver, TryRecvError};
+use std::time::{Duration, Instant};
 
 pub struct Link {
     name: String,
@@ -12,11 +13,15 @@ pub struct Link {
     /// A second connection that only listens, so Seam can show an assistant is connected
     /// even while it is between calls. Nothing is ever sent on it.
     watch: Option<Receiver<Event>>,
+    /// Not before this, after the listening connection failed.
+    retry_at: Option<Instant>,
 }
+
+const WATCH_BACKOFF: Duration = Duration::from_secs(30);
 
 impl Link {
     pub fn new() -> Link {
-        Link { name: MCP_CLIENT.to_string(), client: None, watch: None }
+        Link { name: MCP_CLIENT.to_string(), client: None, watch: None, retry_at: None }
     }
 
     /// Keep the listening connection up, if Seam lets it. A refusal just means a later call tries again.
@@ -25,8 +30,11 @@ impl Link {
         if gone {
             self.watch = None;
         }
-        if self.watch.is_none() {
+        // A refused or failed subscribe waits a while: a full pipe makes each try cost about a second.
+        let waiting = self.retry_at.is_some_and(|at| Instant::now() < at);
+        if self.watch.is_none() && !waiting {
             self.watch = Client::subscribe(&self.name, None, &["mcp"]).ok();
+            self.retry_at = self.watch.is_none().then(|| Instant::now() + WATCH_BACKOFF);
         }
     }
 }

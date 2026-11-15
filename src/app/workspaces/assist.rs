@@ -19,10 +19,10 @@ fn offer_undo(app: &mut App, saved: &Workspace, before: Option<Value>, from: Opt
 }
 
 /// `workspace.create`: an empty workspace named as asked, not yet in use.
-pub(in crate::app) fn create_workspace(app: &mut App, client: &str, name: &str) -> Reply {
+pub(in crate::app) fn create_workspace(app: &mut App, client: &str, assistant: bool, name: &str) -> Reply {
     let Some(desk) = app.cfg.desks.get(&app.sig) else { return refused("This desk has no workspaces") };
     let existing = workspace::list(&desk.workspaces);
-    if existing.len() >= workspace::MAX_ASSISTANT_WORKSPACES {
+    if assistant && existing.len() >= workspace::MAX_ASSISTANT_WORKSPACES {
         return refused(format!(
             "This desk already has {} workspaces, so Seam won't make another for an assistant",
             workspace::MAX_ASSISTANT_WORKSPACES

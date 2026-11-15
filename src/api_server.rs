@@ -59,6 +59,8 @@ pub struct Queued {
     pub panel: bool,
     /// The name the client gave in `hello`, for the log.
     pub client: String,
+    /// The client process is a `seam-mcp.exe`.
+    pub assistant: bool,
 }
 
 /// Lines waiting for a client, which its own thread writes.
@@ -381,7 +383,7 @@ impl Session {
                 }
                 zones_layouts(&read_snapshot(shared), number, (pt.x, pt.y))
             }
-            command => run_on_main_thread(shared, command, self.panel, &self.name),
+            command => run_on_main_thread(shared, command, self.panel, &self.name, self.mcp),
         }
     }
 
@@ -410,9 +412,9 @@ impl Session {
     }
 }
 
-fn run_on_main_thread(shared: &Shared, command: Command, panel: bool, client: &str) -> Reply {
+fn run_on_main_thread(shared: &Shared, command: Command, panel: bool, client: &str, assistant: bool) -> Reply {
     let (reply, answer) = channel();
-    guard(&shared.queue).push_back(Queued { command, reply, panel, client: client.to_string() });
+    guard(&shared.queue).push_back(Queued { command, reply, panel, client: client.to_string(), assistant });
     wake_main_thread(shared);
     answer.recv_timeout(COMMAND_TIMEOUT).map_err(|_| RpcError::new(BUSY, "Seam didn't answer in time"))?
 }
@@ -565,11 +567,20 @@ pub fn broadcast_to_panels(kind: &str, data: &Value) {
     queue_event(kind, data, true);
 }
 
+/// Whether a connection gets events: an assistant's only while both switches are on.
+fn may_receive(assistant: bool, mcp_on: bool, api_on: bool) -> bool {
+    !assistant || (mcp_on && api_on)
+}
+
 fn queue_event(kind: &str, data: &Value, panels_only: bool) {
     let Some(shared) = SHARED.get() else { return };
     let line = event_line(kind, data);
     let topic = topic_of(kind);
-    let wanted = |c: &&Conn| (c.panel || !panels_only) && c.topics.iter().any(|t| t == topic);
+    // Read now, not when it subscribed: an assistant gets nothing once either switch is off.
+    let (mcp_on, api_on) = (shared.mcp.load(Ordering::Relaxed), shared.api_enabled.load(Ordering::Relaxed));
+    let wanted = |c: &&Conn| {
+        (c.panel || !panels_only) && c.topics.iter().any(|t| t == topic) && may_receive(c.mcp, mcp_on, api_on)
+    };
     for conn in guard(&shared.conns).iter().filter(wanted) {
         let mut lines = guard(&conn.outbox.lines);
         if lines.len() >= MAX_QUEUED_EVENTS {
@@ -594,4 +605,19 @@ pub fn take_client_names() -> Option<Vec<String>> {
         let conns = guard(&shared.conns);
         conns.iter().map(|c| c.name.clone().unwrap_or_else(|| "anonymous".into())).collect()
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::may_receive;
+
+    #[test]
+    fn an_assistant_gets_events_only_while_both_switches_are_on() {
+        assert!(may_receive(true, true, true));
+        assert!(!may_receive(true, false, true));
+        assert!(!may_receive(true, true, false));
+        assert!(!may_receive(true, false, false));
+        // Everyone else is unaffected by them.
+        assert!(may_receive(false, false, false));
+    }
 }

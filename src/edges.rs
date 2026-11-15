@@ -138,7 +138,8 @@ impl Group {
 pub(super) struct Edges {
     id: u64,
     screen: String,
-    template: Template,
+    /// The screen's layout when the drag began, which the new one is relabelled from.
+    before: ZoneLayout,
     /// The layout when the drag began. Every tick solves from it with the whole move
     /// since then, so nothing drifts.
     tree: Node,
@@ -305,7 +306,7 @@ impl Engine {
             given: None,
             hidden: self.stack_hidden(),
         };
-        self.follow(ask, layout.template, None)
+        self.follow(ask, layout.clone(), None)
     }
 
     /// A drag began on a window in an ad-hoc group: its members follow it the same
@@ -337,12 +338,13 @@ impl Engine {
             given: Some(given),
             hidden: Vec::new(),
         };
-        self.follow(ask, Template::Custom, Some(a.id))
+        let before = ZoneLayout { template: Template::Custom, custom: None, from: None, tree: a.tree.clone() };
+        self.follow(ask, before, Some(a.id))
     }
 
     /// The dividers along the window's sides, and a worker to find who follows them.
     /// None when no side has one: a window alone has no neighbours to follow it.
-    fn follow(&self, mut ask: Ask, template: Template, adhoc: Option<u64>) -> Option<Edges> {
+    fn follow(&self, mut ask: Ask, before: ZoneLayout, adhoc: Option<u64>) -> Option<Edges> {
         let leaves = refit::covered(&zones::rects(&ask.tree, ask.work, 0), ask.from, ask.to);
         let sides = [Side::Left, Side::Right, Side::Top, Side::Bottom]
             .map(|side| groups::edge_of(&ask.tree, ask.work, &leaves, side));
@@ -353,7 +355,7 @@ impl Engine {
         let edges = Edges {
             id: ask.id,
             screen: ask.screen.clone(),
-            template,
+            before,
             tree: ask.tree.clone(),
             area: ask.work,
             gap: ask.gap,
@@ -422,7 +424,7 @@ impl Engine {
         }
         self.keep_snapped(drag.hwnd, &edges.screen, (edges.from, edges.to), at);
         if tree != edges.tree {
-            wincontrol::save_layout(self.owner, edges.screen.clone(), groups::relabel(edges.template, tree));
+            wincontrol::save_layout(self.owner, edges.screen.clone(), groups::relabel(&edges.before, tree));
         }
         true
     }

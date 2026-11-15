@@ -21,6 +21,8 @@ pub(super) struct Given {
     /// The library layout the screen followed. The second press links it again, if
     /// the library still has it with this tree (`library::link`).
     custom: Option<String>,
+    /// What the layout was cut from.
+    from: Option<String>,
     stash: Stash,
     /// The tree Priority made. Any other change to the group drops the stash.
     after: Node,
@@ -166,18 +168,18 @@ pub(super) fn run(job: &Job, verb: GroupVerb) -> Result<Outcome, String> {
     let earlier = {
         let given = GIVEN.lock().unwrap_or_else(|e| e.into_inner());
         let found = given.as_ref().and_then(|m| m.get(&g.id)).filter(|p| p.after == layout.tree);
-        found.map(|p| (p.template, p.custom.clone(), p.stash.clone()))
+        found.map(|p| (p.template, p.custom.clone(), p.from.clone(), p.stash.clone()))
     };
     let (new, keep) = match verb {
         GroupVerb::Grow(step) => {
             let solved =
                 groups::grow(&layout.tree, g.work, leaves, step, &mins).ok_or("No room to grow that window")?;
-            (groups::relabel(layout.template, solved.tree), None)
+            (groups::relabel(layout, solved.tree), None)
         }
         GroupVerb::Shrink(step) => {
             let solved =
                 groups::shrink(&layout.tree, g.work, leaves, step, &mins).ok_or("That window can't get any smaller")?;
-            (groups::relabel(layout.template, solved.tree), None)
+            (groups::relabel(layout, solved.tree), None)
         }
         GroupVerb::Share { axis, fraction, side } => {
             let cells = zones::rects(&layout.tree, g.work, 0);
@@ -195,16 +197,19 @@ pub(super) fn run(job: &Job, verb: GroupVerb) -> Result<Outcome, String> {
                 found.max_by_key(|(.., room)| *room).ok_or("That window has no zone beside it that way")?;
             let solved = groups::share(&layout.tree, g.work, &edge, (leaves, &other), fraction, &mins)
                 .ok_or("That window has no zone beside it that way")?;
-            (groups::relabel(layout.template, solved.tree), None)
+            (groups::relabel(layout, solved.tree), None)
         }
         GroupVerb::Priority => match earlier {
             // A second press gives the group back as it was.
-            Some((template, custom, stash)) => (ZoneLayout { template, custom, tree: groups::restore(stash) }, None),
+            Some((template, custom, from, stash)) => {
+                (ZoneLayout { template, custom, from, tree: groups::restore(stash) }, None)
+            }
             None => {
                 let (tree, stash) = groups::priority(&layout.tree, g.work, leaves, &mins);
                 let custom = layout.custom.clone();
-                let keep = Given { template: layout.template, custom, stash, after: tree.clone() };
-                (groups::relabel(layout.template, tree), Some(keep))
+                let keep =
+                    Given { template: layout.template, custom, from: layout.from.clone(), stash, after: tree.clone() };
+                (groups::relabel(layout, tree), Some(keep))
             }
         },
     };

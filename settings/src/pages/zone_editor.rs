@@ -249,7 +249,7 @@ pub(super) fn done(panel: &mut Panel, window: &mut Window, cx: &mut Context<Pane
         };
         let patch = match (target, found) {
             (Target::Screen, _) => {
-                let layout = ZoneLayout { template: Template::Custom, custom: None, tree };
+                let layout = ZoneLayout { template: Template::Custom, custom: None, from: None, tree };
                 let Some(layout) = library::screen_patch(&layout) else { return };
                 json!({ "desks": { sig: { "zones": { screen: layout } } } })
             }

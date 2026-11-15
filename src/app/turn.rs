@@ -69,7 +69,7 @@ fn reset_pick(app: &App, screen: &str, number: usize) -> Result<Pick, String> {
     if !seam::library::changed(&library, &layout) {
         return Err(format!("Screen {number}'s layout hasn't been changed"));
     }
-    let from = match seam::library::origin(&app.cfg.custom_layouts, screen, &layout.tree) {
+    let from = match seam::library::origin(&app.cfg.custom_layouts, screen, &layout) {
         Origin::Layout(from) => from,
         Origin::Unclear => {
             return Err(format!(

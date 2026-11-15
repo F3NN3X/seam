@@ -50,7 +50,10 @@ pub(super) fn run(job: &Job, at: At, forward: bool) -> Result<Outcome, String> {
     }
     let moves = turn::rotate(g.zones.len(), &held, &blocked, forward);
     if moves.is_empty() {
-        return Err(format!("Nothing to rotate on screen {}", g.number));
+        return Err(format!(
+            "Nothing to rotate on screen {}. Zones held by windows that are minimized or on another desktop are left out",
+            g.number
+        ));
     }
     let (mut list, mut back) = (Vec::new(), Vec::new());
     for (x, h) in held.iter().zip(&windows) {

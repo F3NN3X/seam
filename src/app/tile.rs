@@ -293,7 +293,7 @@ pub(super) fn pick_layout(
 /// still where it was set back where it was, while that's still within 8 s. A window
 /// that was maximized is maximized again on that screen, once it is back.
 pub(super) fn undo_tile(app: &mut App) {
-    let Some(undo) = app.tile_undo.take() else { return };
+    let Some(mut undo) = app.tile_undo.take() else { return };
     if Instant::now() > undo.until || undo.sig != app.sig {
         log::info!("tile screen: too late to undo");
         return;
@@ -309,8 +309,12 @@ pub(super) fn undo_tile(app: &mut App) {
     // Where the screen kept another layout, the numbers are not the old layout's to give back.
     snap::rezone(if changed && !layout_back { Vec::new() } else { undo.keep });
     // A tiled screen's splits come back before its windows do, so they land in the right tiles.
-    if let Some((before, after)) = undo.tree {
-        snap::tiling_restore(&undo.screen, before, after);
+    // When a handle or a window has changed them since, the windows stay in the tiles they are in.
+    if let Some((before, after)) = undo.tree
+        && !snap::tiling_restore(&undo.screen, before, after)
+    {
+        log::info!("tile screen: the splits changed since, so the windows stay in the tiles they are in");
+        undo.back.clear();
     }
     let here = |b: &wincontrol::tile::Back| {
         let h = HWND(b.place.hwnd as *mut _);

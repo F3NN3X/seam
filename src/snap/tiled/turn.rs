@@ -98,22 +98,27 @@ impl Engine {
             back.extend(self.turn_back(*key, screen, *zone, before[*zone], after[*zone], dpi));
         }
         let was = tree.layout();
-        let now = even.layout();
         self.tiling.trees[i].tree = even;
         log::info!("tiling: evened out the splits, {} tiled windows followed", moving.len());
         self.tiled_apply(i);
+        let now = self.tiling.trees[i].tree.layout();
         Ok(Turned { moved: moving.len(), left: left.len(), back, tree: Some((was, now)) })
     }
 
     /// Undo of a reset: the tree's splits are as they were, unless a handle moved them
-    /// from `after`, the evened ones, or a window opened or closed, since.
-    pub(in crate::snap) fn tiled_restore(&mut self, screen: &str, before: Node, after: Node) {
+    /// from `after`, the evened ones, or a window opened or closed, since. Whether they are.
+    pub(in crate::snap) fn tiled_restore(&mut self, screen: &str, before: Node, after: Node) -> bool {
         let desktop = self.tiling.desktop.clone();
-        let Some(i) = self.tiling.trees.iter().position(|t| t.screen == screen && t.desktop == desktop) else { return };
-        if untouched(self.tiling.trees[i].tree.node.as_ref(), &after) {
-            self.tiling.trees[i].tree.node = Some(before);
-            self.tiled_sync();
+        let Some(i) = self.tiling.trees.iter().position(|t| t.screen == screen && t.desktop == desktop) else {
+            return false;
+        };
+        let tree = &mut self.tiling.trees[i].tree;
+        if !untouched(tree.node.as_ref(), &after) || zones::leaf_count(&before) != tree.tiles.len() {
+            return false;
         }
+        tree.node = Some(before);
+        self.tiled_sync();
+        true
     }
 }
 

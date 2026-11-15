@@ -935,6 +935,11 @@ mod tests {
         let deep = Tree { node: Some(zones::set_ratio(&smart.layout(), &[true], 0.3)), ..smart.clone() };
         assert_ne!(deep.layout(), smart.layout());
         assert_eq!(deep.evened().layout(), smart.layout());
+        // An empty tile keeps its place, and the splits even out around it.
+        let gap = Tree { node: Some(zones::set_ratio(&smart.layout(), &[], 0.7)), ..smart.vacate(2).unwrap() };
+        let even = gap.evened();
+        assert_eq!(even.tiles, gap.tiles);
+        assert_eq!(even.layout(), smart.layout());
         // Nothing tiled, nothing to even.
         assert_eq!(Tree::new(Family::Grid).evened(), Tree::new(Family::Grid));
     }

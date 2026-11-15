@@ -164,7 +164,7 @@ impl Engine {
             return false;
         }
         if let Some(s) = self.screens.iter_mut().find(|s| s.id == screen) {
-            s.layout = Some(ZoneLayout { template: Template::Custom, custom: None, tree: tree.clone() });
+            s.layout = Some(ZoneLayout { template: Template::Custom, custom: None, from: None, tree: tree.clone() });
         }
         let desktop = self.tiling.desktop.clone();
         let i = self.tree_index(screen, &desktop);

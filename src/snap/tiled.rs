@@ -141,8 +141,9 @@ pub fn tiling_reset(screen: &str) -> Result<Turned, String> {
 }
 
 /// Undo of a reset: a tiled screen's splits as they were.
-pub fn tiling_restore(screen: &str, before: Node, after: Node) {
-    with_engine(|e| e.tiled_restore(screen, before, after));
+/// False when they aren't the evened ones any more, and nothing changed.
+pub fn tiling_restore(screen: &str, before: Node, after: Node) -> bool {
+    with_engine(|e| e.tiled_restore(screen, before, after)).unwrap_or(false)
 }
 
 /// "Float or tile this window": a tiled window floats and the others close up, and a
@@ -251,7 +252,7 @@ impl Engine {
         }
         let tree = self.tiling.trees.iter().find(|t| t.screen == screen && t.desktop == self.tiling.desktop);
         let tree = tree.map_or(Node::Leaf(LeafTag::Leaf), |t| t.tree.layout());
-        Some(ZoneLayout { template: Template::Custom, custom: None, tree })
+        Some(ZoneLayout { template: Template::Custom, custom: None, from: None, tree })
     }
 
     /// The screens with each tiled one's tree as its zones.

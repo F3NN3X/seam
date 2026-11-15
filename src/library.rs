@@ -36,7 +36,7 @@ impl Entry {
 
     /// A screen's layout that follows this one.
     pub fn layout(&self) -> ZoneLayout {
-        ZoneLayout { template: Template::Custom, custom: Some(self.id.clone()), tree: self.tree.clone() }
+        ZoneLayout { template: Template::Custom, custom: Some(self.id.clone()), from: None, tree: self.tree.clone() }
     }
 }
 
@@ -188,18 +188,29 @@ pub enum Origin {
     Unknown,
 }
 
-/// Two layouts whose ratios are this much nearer, in `zones::ratio_gap`, than the next
-/// are told apart; closer than that and Reset sizes won't guess.
-const CLEAR_BY: f32 = 0.001;
+/// Without a record, a layout is only told from the others that cut the screen the same way
+/// when it is this much nearer one, in `zones::ratio_gap`. That is wide on purpose: a dragged
+/// Columns layout is refused rather than reset to Priority, which cuts alike.
+const CLEAR_BY: f32 = 0.25;
 
-/// The layout a changed screen's tree came from, for Reset sizes. A layout keeps no
-/// record of it, so it is the template or the library layout offered on the screen that
-/// cuts the screen the same way, the nearest in its ratios, and only when no other is
-/// about as near. Layouts with the same tree count once.
-pub fn origin(saved: &[Value], device: &str, tree: &Node) -> Origin {
+/// The layout a changed screen's layout came from, for Reset sizes. The layout records it
+/// (`from`, a template's name or a library id) when it first changes, so that is used while
+/// it still cuts the screen the same way. An older layout has none: then it is the template
+/// or the library layout offered on the screen that cuts it the same way and is nearest in
+/// its ratios, only when no other is anywhere near, since a guess could pick the wrong one.
+/// Layouts with the same tree count once.
+pub fn origin(saved: &[Value], device: &str, layout: &ZoneLayout) -> Origin {
+    let tree = &layout.tree;
     let entries = entries(saved);
     let templates = Template::ALL.into_iter().filter_map(ZoneLayout::of);
-    let custom = for_screen(&entries, device).map(Entry::layout);
+    let custom: Vec<ZoneLayout> = for_screen(&entries, device).map(Entry::layout).collect();
+    if let Some(id) = &layout.from {
+        let own = |l: &&ZoneLayout| layout_id(Some(*l)).as_deref() == Some(id.as_str());
+        let named = templates.clone().chain(custom.clone()).find(|l| own(&l));
+        if let Some(found) = named.filter(|l| zones::same_shape(&l.tree, tree)) {
+            return Origin::Layout(found);
+        }
+    }
     let mut near: Vec<(f32, ZoneLayout)> = Vec::new();
     for l in templates.chain(custom).filter(|l| zones::same_shape(&l.tree, tree)) {
         if !near.iter().any(|(_, k)| k.tree == l.tree) {
@@ -247,6 +258,9 @@ pub fn screen_patch(layout: &ZoneLayout) -> Option<Value> {
     if layout.custom.is_none() {
         value["custom"] = Value::Null;
     }
+    if layout.from.is_none() {
+        value["from"] = Value::Null;
+    }
     Some(value)
 }
 
@@ -276,42 +290,62 @@ mod tests {
         assert_eq!(zones::layout_of(&config.desks["S"].zones["M"]).unwrap(), now);
     }
 
-    // Reset sizes: a dragged divider leaves a Custom layout, and the template it cuts like is where it goes back.
+    fn changed_from(tree: Node, from: Option<&str>) -> ZoneLayout {
+        ZoneLayout { template: Template::Custom, custom: None, from: from.map(String::from), tree }
+    }
+
+    // Reset sizes: a dragged divider leaves a Custom layout, which records what it was cut from.
     #[test]
-    fn a_changed_layout_goes_back_to_the_nearest_layout_that_cuts_it_the_same() {
+    fn reset_goes_back_to_the_layout_a_changed_one_records() {
         let columns = zones::template_tree(Template::Columns).unwrap();
-        let dragged = zones::set_ratio(&columns, &[], 0.45);
-        let layout = ZoneLayout { template: Template::Custom, custom: None, tree: dragged.clone() };
-        assert!(changed(&[], &layout));
-        assert!(!changed(&[], &ZoneLayout::of(Template::Columns).unwrap()));
-        // Columns and Priority cut alike, so its ratios say which one it was.
-        assert_eq!(origin(&[], "M", &dragged), Origin::Layout(ZoneLayout::of(Template::Columns).unwrap()));
         let priority = zones::template_tree(Template::Priority).unwrap();
+        let columns_layout = ZoneLayout::of(Template::Columns).unwrap();
+        assert!(changed(&[], &changed_from(columns.clone(), None)));
+        assert!(!changed(&[], &columns_layout));
+        // A second divider dragged so far that Priority is nearer: the record still says Columns.
+        let dragged = zones::set_ratio(&columns, &[true], 0.8);
+        assert_eq!(origin(&[], "M", &changed_from(dragged.clone(), Some("columns"))), Origin::Layout(columns_layout));
+        // An older layout has no record, and Columns and Priority cut alike, so it isn't guessed.
+        assert_eq!(origin(&[], "M", &changed_from(dragged, None)), Origin::Unclear);
         let near = zones::set_ratio(&priority, &[], 0.3);
-        assert_eq!(origin(&[], "M", &near), Origin::Layout(ZoneLayout::of(Template::Priority).unwrap()));
-        // A library layout offered on the screen counts, and the layout it gives follows the library.
-        let entry = |screens: Vec<String>| Entry { id: "a1".into(), name: "Mine".into(), tree: near.clone(), screens };
-        let mine = entry(vec!["M".into()]);
-        assert_eq!(origin(&[mine.value()], "m", &near), Origin::Layout(mine.layout()));
+        assert_eq!(origin(&[], "M", &changed_from(near.clone(), None)), Origin::Unclear);
+        // A library layout is recorded by its id, and the layout it gives follows the library.
+        let mine = Entry { id: "a1".into(), name: "Mine".into(), tree: near.clone(), screens: vec!["M".into()] };
+        let from_mine = changed_from(zones::set_ratio(&near, &[], 0.4), Some("a1"));
+        assert_eq!(origin(&[mine.value()], "m", &from_mine), Origin::Layout(mine.layout()));
         assert_eq!(name_of(&[mine.value()], &mine.layout()), "Mine");
         assert_eq!(name_of(&[], &ZoneLayout::of(Template::Columns).unwrap()), "Columns");
         assert!(!changed(&entries(&[mine.value()]), &mine.layout()));
-        // One tied to another screen doesn't.
-        let tied = entry(vec!["Other".into()]);
-        assert_eq!(origin(&[tied.value()], "M", &near), Origin::Layout(ZoneLayout::of(Template::Priority).unwrap()));
-        // A split zone cuts like none of them.
+        // Deleted, or tied to another screen, the record can't be used, and the shape decides.
+        let tied = Entry { screens: vec!["Other".into()], ..mine };
+        assert_eq!(origin(&[], "M", &from_mine), Origin::Unclear);
+        assert_eq!(origin(&[tied.value()], "M", &from_mine), Origin::Unclear);
+        // A cut only one layout has needs no record, and a library copy of a template's tree isn't a rival.
+        let rows = zones::template_tree(Template::Rows).unwrap();
+        let rows_layout = ZoneLayout::of(Template::Rows).unwrap();
+        let dragged_rows = changed_from(zones::set_ratio(&rows, &[], 0.3), None);
+        assert_eq!(origin(&[], "M", &dragged_rows), Origin::Layout(rows_layout.clone()));
+        let copy = Entry { id: "c1".into(), name: "Copy".into(), tree: rows, screens: Vec::new() };
+        assert_eq!(origin(&[copy.value()], "M", &dragged_rows), Origin::Layout(rows_layout));
+        // A record that no longer fits the cut is ignored, and a split zone cuts like none of them.
         let split = zones::split_leaf(&columns, 0, zones::Dir::Horizontal).unwrap();
-        assert_eq!(origin(&[], "M", &split), Origin::Unknown);
-        // Halfway between Columns and Priority, it could be either, so it isn't guessed.
-        let columns_at = |a: f32, b: f32| {
-            let inner = zones::set_ratio(&columns, &[true], b);
-            zones::set_ratio(&inner, &[], a)
-        };
-        let between = columns_at((1.0 / 3.0 + 0.25) / 2.0, (0.5 + 2.0 / 3.0) / 2.0);
-        assert_eq!(origin(&[], "M", &between), Origin::Unclear);
-        // A library copy of a template's tree is the same layout, not a rival.
-        let copy = Entry { id: "c1".into(), name: "Copy".into(), tree: columns.clone(), screens: Vec::new() };
-        assert_eq!(origin(&[copy.value()], "M", &dragged), Origin::Layout(ZoneLayout::of(Template::Columns).unwrap()));
+        assert_eq!(origin(&[], "M", &changed_from(split, Some("columns"))), Origin::Unknown);
+    }
+
+    // The record is kept through further changes, and picking a layout is a new layout without one.
+    #[test]
+    fn the_record_survives_a_save_and_a_picked_layout_has_none() {
+        let columns = zones::template_tree(Template::Columns).unwrap();
+        let layout = changed_from(zones::set_ratio(&columns, &[], 0.4), Some("columns"));
+        let back: ZoneLayout = serde_json::from_value(serde_json::to_value(&layout).unwrap()).unwrap();
+        assert_eq!(back.from.as_deref(), Some("columns"));
+        // An older file has no `from`, and a picked layout writes none and clears the old one in a patch.
+        let old: ZoneLayout = serde_json::from_value(json!({ "template": "custom", "tree": "leaf" })).unwrap();
+        assert_eq!(old.from, None);
+        let picked = ZoneLayout::of(Template::Rows).unwrap();
+        assert!(serde_json::to_value(&picked).unwrap().get("from").is_none());
+        assert_eq!(screen_patch(&picked).unwrap()["from"], Value::Null);
+        assert!(screen_patch(&layout).unwrap()["from"] == json!("columns"));
     }
 
     #[test]

@@ -150,9 +150,21 @@ fn priority_gives_two_thirds_and_restore_gives_it_back() {
         assert!((w - 1200).abs() <= 2, "leaf {leaf}: {w}");
         assert_eq!(restore(stash), columns());
     }
-    assert_eq!(relabel(Template::Columns, columns()).template, Template::Columns);
+    let before = ZoneLayout::of(Template::Columns).unwrap();
+    assert_eq!(relabel(&before, columns()).template, Template::Columns);
     let (tree, _) = priority(&columns(), AREA, &[1], &[]);
-    assert_eq!(relabel(Template::Columns, tree).template, Template::Custom);
+    let changed = relabel(&before, tree.clone());
+    assert_eq!(changed.template, Template::Custom);
+    // What it was cut from is kept through further changes, and a library layout's id counts.
+    assert_eq!(changed.from.as_deref(), Some("columns"));
+    let (again, _) = priority(&tree, AREA, &[0], &[]);
+    assert_eq!(relabel(&changed, again).from.as_deref(), Some("columns"));
+    let linked = ZoneLayout { template: Template::Custom, custom: Some("a1".into()), from: None, tree: columns() };
+    assert_eq!(relabel(&linked, tree).from.as_deref(), Some("a1"));
+    // Dragged back to the template's own tree it is still Custom, so it still says where it came from.
+    assert_eq!(relabel(&changed, columns()).from.as_deref(), Some("columns"));
+    // A layout that is the template, as picked, remembers nothing.
+    assert_eq!(relabel(&before, columns()).from, None);
 }
 
 #[test]

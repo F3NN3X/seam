@@ -136,6 +136,7 @@ A stack puts several windows in one zone, one on top, and a key brings the next 
 - **What always floats:** dialogs, small helper windows, windows that can't be resized, apps under **Left alone**, windows a workspace or an app rule places, and apps whose rule on **Where apps open** has **Leave out of smart tiling**.
 - **Float or tile this window** takes the focused window out of tiling, or puts it back in. It has no key until you set one.
 - **Free all windows**, in the tray menu or on its own shortcut, turns tiling off on that screen and puts every window back where it was before it was tiled. It has no Undo.
+- **Put windows back when Seam quits** is a switch under the screen's row, off by default. With it on, Quit Seam frees every tiled screen on every virtual desktop first, as Free all windows does, and waits up to a second for the windows to move. An update, a restart, a crash, a sign-out or a shutdown keeps the arrangement, the same rule as pins.
 - **When nothing moves.** Nothing moves while Seam is paused or steps aside for a full-screen app, while zones are off, or during a workspace switch. The gaps close afterwards, and windows that opened during a switch are tiled once it ends, except those the switch placed.
 - **Per virtual desktop.** Each virtual desktop keeps its own arrangement, so tiling one never moves windows on another. A restart of Seam tiles the windows again. **Save from windows** keeps an arrangement as a layout.
 - **In the API:** `tiling.set`, `tiling.free`, and `tiling` in the state.
@@ -146,6 +147,7 @@ A stack puts several windows in one zone, one on top, and a key brings the next 
 
 - **What it shows.** Each window has a live preview, or its app's icon when it's minimized or on another virtual desktop. Windows on other desktops are grouped under their desktop's name.
 - **Find a window.** Type to search by title or app name, pick one with the arrows, Tab, Home and End or the mouse, and press Enter or click to go to it. A window on another desktop takes Windows to that desktop.
+- **Jump between desktops.** Ctrl+Tab and Page Down select the first window of the next desktop's group, Ctrl+Shift+Tab and Page Up the previous one, and they wrap around. The wheel over a group's label does the same. Groups a search leaves empty are skipped.
 - **Move a window.** Drag a window onto a zone to snap it there, or onto another screen with no zones to centre it there. A tiled window you move this way floats, and its neighbours close the gap.
 - **What it can't move.** Windows on other virtual desktops: Windows only lets an app move its own windows between desktops. Windows running as administrator can't be moved either. The overview says why in place of its hint, and a drop that can't be made changes nothing.
 - **Busy apps.** A window that isn't responding is listed with "Not responding". You can go to it, and the overview never waits on it.

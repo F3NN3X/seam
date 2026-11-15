@@ -3,6 +3,9 @@
 
 use super::*;
 
+/// A screen and the virtual desktop whose tree was freed.
+pub type Freed = (String, String);
+
 impl Engine {
     /// The worker said which desktop is in front, or `None` when it can't tell, as on a
     /// desktop with no windows. The snapping keeps only the records of the windows on
@@ -186,8 +189,23 @@ impl Engine {
 
     pub(in crate::snap) fn tiling_free(&mut self, screen: &str) -> usize {
         let desktop = self.tiling.desktop.clone();
+        self.free_screen(screen, &desktop, false).0
+    }
+
+    /// Seam quits and was asked to put windows back: every tiled screen on every desktop is
+    /// freed, and its moves are posted at once, since no timer will run them. Returns where
+    /// the windows are going, and the (screen, desktop) pairs freed.
+    pub(in crate::snap) fn tiling_free_for_quit(&mut self) -> (Vec<(isize, Rect)>, Vec<Freed>) {
+        let freed: Vec<Freed> = self.tiling.trees.iter().map(|t| (t.screen.clone(), t.desktop.clone())).collect();
+        let landing = freed.iter().flat_map(|(s, d)| self.free_screen(s, d, true).1).collect();
+        (landing, freed)
+    }
+
+    /// Free one screen. With `now` the moves are posted here rather than queued.
+    fn free_screen(&mut self, screen: &str, desktop: &str, now: bool) -> (usize, Vec<(isize, Rect)>) {
+        let front = desktop == self.tiling.desktop;
         let Some(i) = self.tiling.trees.iter().position(|t| t.screen == screen && t.desktop == desktop) else {
-            return 0;
+            return (0, Vec::new());
         };
         let t = self.tiling.trees.remove(i);
         let dpi = self.tile_area(screen).map_or(96, |(_, dpi, _)| dpi);
@@ -199,8 +217,11 @@ impl Engine {
             if self.stacks.of(*k).is_some() {
                 self.stack_leave(*k);
             }
-            // Gone to another desktop, it isn't moved from here.
-            let away = gone(*k) || winutil::is_minimized(h) || winutil::is_maximized(h);
+            // Gone to another desktop, it isn't moved from here. On a desktop not in front every
+            // window is cloaked, so only a closed window counts as gone.
+            let away = if front { gone(*k) } else { !unsafe { IsWindow(Some(h)) }.as_bool() }
+                || winutil::is_minimized(h)
+                || winutil::is_maximized(h);
             if let Some(r) = t.before.get(k).filter(|_| !away) {
                 moves.push(Placement { hwnd: *k, target: *r, zone: None, dpi, maximize: false });
             } else if self.snapped.contains_key(k) {
@@ -209,9 +230,12 @@ impl Engine {
         }
         log::info!("tiling: freed {} windows", windows.len());
         self.tiled_sync();
+        if now {
+            return (windows.len(), moves.into_iter().filter_map(|p| self.land_now(p)).collect());
+        }
         self.queued.extend(moves);
         self.window_pump();
-        windows.len()
+        (windows.len(), Vec::new())
     }
 
     pub(in crate::snap) fn tiling_float(&mut self, key: isize) -> Result<bool, String> {

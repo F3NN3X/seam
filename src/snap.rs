@@ -50,7 +50,7 @@ pub use stacks::{
 pub use swap::{WM_APP_SWAP_LOOK, look_ready};
 pub use tiled::{
     Turned, is_tiled, take_tiling_refused, tiled, tiled_dragged, tiling_desktop, tiling_events, tiling_float,
-    tiling_free, tiling_reset, tiling_restore, tiling_rotate, tiling_switch_ended,
+    tiling_free, tiling_free_for_quit, tiling_reset, tiling_restore, tiling_rotate, tiling_switch_ended,
 };
 
 /// A window the tray couldn't move, probably because it runs as administrator.

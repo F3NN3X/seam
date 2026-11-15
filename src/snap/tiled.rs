@@ -146,6 +146,35 @@ pub fn tiling_restore(screen: &str, before: Node, after: Node) -> bool {
     with_engine(|e| e.tiled_restore(screen, before, after)).unwrap_or(false)
 }
 
+/// Seam is quitting and the user wants the windows back: every tiled screen on every virtual
+/// desktop is freed, and the moves are posted. Waits for them to land, but not past `until`
+/// (a hung window never holds the quit). Returns the (screen, desktop) pairs freed.
+pub fn tiling_free_for_quit(until: Instant) -> Vec<(String, String)> {
+    let (landing, freed) = with_engine(|e| e.tiling_free_for_quit()).unwrap_or_default();
+    let started = Instant::now();
+    // A window that can't take its place (a minimum size) stops changing, so it counts as landed,
+    // but not before an app has had a moment to start on a move already posted.
+    let mut last: Vec<Option<Rect>> = vec![None; landing.len()];
+    let mut still = vec![0u8; landing.len()];
+    while Instant::now() < until {
+        let settling = started.elapsed() < Duration::from_millis(100);
+        let mut waiting = settling && !landing.is_empty();
+        for (i, (key, target)) in landing.iter().enumerate() {
+            let h = hwnd_of(*key);
+            let now = winutil::visible_rect(h);
+            let gone = !unsafe { IsWindow(Some(h)) }.as_bool();
+            still[i] = if now == last[i] { still[i].saturating_add(1) } else { 0 };
+            last[i] = now;
+            waiting |= !gone && now != Some(*target) && still[i] < 3;
+        }
+        if !waiting {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(15));
+    }
+    freed
+}
+
 /// "Float or tile this window": a tiled window floats and the others close up, and a
 /// window on a tiled screen is asked for again. Returns whether it floats now.
 pub fn tiling_float(hwnd: HWND) -> Result<bool, String> {

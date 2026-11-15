@@ -525,6 +525,13 @@ fn tiling_card(panel: &Panel, number: usize, p: Palette, window: &mut Window, cx
         toggle,
         p,
     )];
+    let free = panel.config.zones.tiling_free_on_quit;
+    let put_back = switch("zone-tiling-quit", "Put windows back when Seam quits", free, window, cx, {
+        let view = view.clone();
+        move |on, window, cx| {
+            view.update(cx, |panel, cx| panel.patch(json!({ "zones": { "tiling_free_on_quit": on } }), window, cx))
+        }
+    });
     if on {
         let titles: Vec<&'static str> = Family::ALL.iter().map(|f| f.title()).collect();
         let at = Family::ALL.iter().position(|f| *f == family).unwrap_or(0);
@@ -539,6 +546,12 @@ fn tiling_card(panel: &Panel, number: usize, p: Palette, window: &mut Window, cx
         let about = "Smart splits the largest window's space. The others share the screen evenly";
         rows.push(row("How windows are arranged", Some(about.into()), choice, p));
     }
+    rows.push(row(
+        "Put windows back when Seam quits",
+        Some("Quit from the tray frees every tiled screen, on every desktop, first. An update or a restart keeps the arrangement".into()),
+        put_back,
+        p,
+    ));
     card(rows, p)
 }
 

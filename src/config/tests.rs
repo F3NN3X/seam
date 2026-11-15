@@ -252,3 +252,16 @@ fn an_older_file_has_no_rotate_or_reset_key() {
     let set: Config = serde_json::from_str(r#"{"hotkeys": {"rotate": "Ctrl+Alt+R"}}"#).unwrap();
     assert_eq!(set.hotkeys.rotate.as_deref(), Some("Ctrl+Alt+R"));
 }
+
+#[test]
+fn quitting_clears_tiling_for_every_freed_desktop_and_an_old_config_has_the_switch_off() {
+    let on = |ids: &[&str]| TileScreen { desktops: ids.iter().map(|d| d.to_string()).collect(), ..Default::default() };
+    let mut tiling = BTreeMap::from([("a".to_string(), on(&["d1", "d2"])), ("b".to_string(), on(&["d1"]))]);
+    // Screen b keeps its family, and desktops never tiled this session go too.
+    tiling.insert("b".into(), TileScreen { family: crate::tiling::Family::Grid, ..on(&["d3"]) });
+    clear_tiling(&mut tiling);
+    assert_eq!(tiling.len(), 1);
+    assert!(tiling["b"].desktops.is_empty());
+    let old: Config = serde_json::from_value(json!({ "zones": { "gap": 4 } })).unwrap();
+    assert!(!old.zones.tiling_free_on_quit);
+}

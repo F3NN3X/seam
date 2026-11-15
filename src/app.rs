@@ -84,13 +84,13 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{
 use windows::Win32::UI::Shell::*;
 use windows::Win32::UI::WindowsAndMessaging::*;
 use windows::core::{PCWSTR, w};
+use workspaces::{Which, create_workspace, edit_workspace, start_add_window, start_group, window_planned};
 use workspaces::{
     apply_hotkeys, aside, capture_job, captured, choose_in_use, desk_workspaces, detected_in_use, drift_checked,
     drift_due, forget_deleted, live_of, migrate_hotkeys, other_wm_changed, quick_save, set_default, set_spotlight,
     show_spotlight, snap_back, start_capture, start_focus_only, start_switch, start_switch_job, start_window,
     switch_back, switched, sync_live, undo_quick_save, update_workspace, ws_moved,
 };
-use workspaces::{create_workspace, edit_workspace, start_group, window_planned};
 
 const WM_APP_TRAY: u32 = WM_APP + 1;
 /// A worker finished `arrangement.align`.
@@ -188,6 +188,9 @@ const HOTKEY_OVERVIEW: i32 = 74;
 const HOTKEY_ROTATE: i32 = 75;
 const HOTKEY_RESET_SIZES: i32 = 76;
 const HOTKEY_ROTATE_BACK: i32 = 77;
+/// "Add window to workspace" 1 to 9, from here up.
+const HOTKEY_ADD_TO: i32 = 80;
+const ADD_TO_KEYS: i32 = 9;
 /// One hotkey id per workspace on the desk, from here up.
 const HOTKEY_WORKSPACE: i32 = 100;
 const NIN_KEYSELECT: u32 = NIN_SELECT | NINF_KEY;
@@ -272,6 +275,8 @@ struct Capturing {
     sig: String,
     /// A quick save (§7): it says so, can be undone, and a new workspace becomes the one in use.
     quick: bool,
+    /// "Add window to workspace": the one window, going into `into`.
+    add: Option<isize>,
 }
 
 /// How long a quick save can be undone.

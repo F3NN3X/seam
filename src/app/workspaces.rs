@@ -2,11 +2,13 @@
 
 use super::*;
 
+mod add;
 mod assist;
 mod capture;
 mod in_use;
 mod window;
 
+pub(super) use add::{Which, start_add_window};
 pub(super) use assist::{create_workspace, edit_workspace};
 pub(super) use capture::{captured, quick_save, start_capture, undo_quick_save, update_workspace};
 use in_use::{active_workspace, set_in_use};
@@ -70,6 +72,9 @@ pub(super) fn apply_hotkeys(app: &mut App) {
         (HOTKEY_RESET_SIZES, "reset_sizes".to_string(), keys.reset_sizes.clone()),
         (HOTKEY_ROTATE_BACK, "rotate".to_string(), keys.rotate.as_deref().and_then(hotkey::with_shift)),
     ];
+    for (n, (id, combo)) in (HOTKEY_ADD_TO..).zip(keys.add_to_workspace()).enumerate() {
+        wanted.push((id, format!("add_to_{}", n + 1), combo.cloned()));
+    }
     for (id, (verb, dir, combo)) in (HOTKEY_WINDOW..).zip(keys.directional()) {
         wanted.push((id, format!("{verb}_{dir}"), combo.cloned()));
     }

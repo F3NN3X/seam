@@ -25,7 +25,7 @@ pub(in crate::app) fn start_capture(
         return Some(Err(RpcError::new(api::NOT_FOUND, "no such row in that workspace")));
     }
     let hwnd = pick.as_ref().map(|p| p.hwnd);
-    app.capturing = Some(Capturing { reply, name, into, row, pick, sig: app.sig.clone(), quick: false });
+    app.capturing = Some(Capturing { reply, name, into, row, pick, sig: app.sig.clone(), quick: false, add: None });
     let started = match hwnd {
         Some(hwnd) => switcher::capture_window(capture_job(app), hwnd),
         None => switcher::capture(capture_job(app)),
@@ -303,6 +303,9 @@ fn finish_capture(
 
 /// A capture finished: save it as a new workspace, or over the one it was asked to update.
 pub(in crate::app) fn captured(app: &mut App) {
+    if app.capturing.as_ref().is_some_and(|job| job.add.is_some()) {
+        return super::add::added(app);
+    }
     let (Some((rules, hwnds, others)), Some(job)) = (switcher::take_captured(), app.capturing.take()) else { return };
     let answer = |r: Reply| {
         if let Some(tx) = &job.reply {
@@ -346,6 +349,11 @@ pub(in crate::app) fn captured(app: &mut App) {
 /// The editor saved a workspace of this desk. It's checked as `checked_update`
 /// says, then saved and applied through the same path as `config.patch`.
 pub(in crate::app) fn update_workspace(app: &mut App, id: &str, sent: Value) -> Reply {
+    update_rows(app, id, sent, None)
+}
+
+/// `update_workspace`; with `only` set, the Open with of the other rows isn't checked again.
+pub(super) fn update_rows(app: &mut App, id: &str, sent: Value, only: Option<usize>) -> Reply {
     let Some(desk) = app.cfg.desks.get(&app.sig) else { return refused("This desk has no workspaces") };
     let Some(old) = workspace::list(&desk.workspaces).into_iter().find(|w| w.id == id) else {
         return Err(RpcError::new(api::NOT_FOUND, "no such workspace on this desk"));
@@ -363,7 +371,7 @@ pub(in crate::app) fn update_workspace(app: &mut App, id: &str, sent: Value) -> 
         let layout = desk.zones.get(monitor).and_then(zones::layout_of);
         layout.map_or(0, |l| zones::leaf_count(&l.tree))
     };
-    let checked = match workspace::checked_update(&old, sent, &zones) {
+    let checked = match workspace::checked_rows(&old, sent, &zones, only) {
         Ok(ws) => ws,
         Err(why) => return refused(why),
     };

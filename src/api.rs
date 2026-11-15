@@ -150,6 +150,13 @@ pub enum Command {
         row: Option<usize>,
         pick: Option<Pick>,
     },
+    /// `workspace.add_window`: the window in front, or `hwnd`, joins the workspace with this
+    /// id, or the one with this number in the desk's list. Panel or any client, never an assistant.
+    WorkspaceAddWindow {
+        id: Option<String>,
+        number: Option<u32>,
+        hwnd: Option<isize>,
+    },
     /// The editor saving one workspace of the current desk.
     WorkspaceUpdate {
         id: String,

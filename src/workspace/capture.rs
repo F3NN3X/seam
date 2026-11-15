@@ -179,6 +179,81 @@ pub fn take_window_place(old: &Workspace, row: usize, exe: &str, class: &str, pi
     Some(updated)
 }
 
+/// Workspace `n` of the desk's list, counted from 1 in list order.
+pub fn numbered(list: &[Workspace], n: usize) -> Option<&Workspace> {
+    list.get(n.checked_sub(1)?)
+}
+
+/// What "Add window to workspace" made of a workspace.
+pub struct Added {
+    /// The workspace with the window in it. A folder or page the window showed isn't in
+    /// it: only a capture may set one, so the tray stores `place` after the checks.
+    pub workspace: Workspace,
+    pub row: usize,
+    /// The window got a row of its own, where an existing row would have been updated.
+    pub new: bool,
+    /// The folder or page the window showed, for its row.
+    pub place: Option<Place>,
+}
+
+/// The focused window, read as a capture would, goes into `old`. The row it updates is,
+/// in this order: the one bound to this very window (`bound`, as a switch keeps them);
+/// the only row of its app, even when the window has moved, unless it is bound to another window; with several rows of its app,
+/// the one on the window's screen and in its place. That row takes where the window is now,
+/// its stack included, and keeps its launch details, its start order and its focus. With no
+/// such row the window gets one at the end, with launch off and no Open with. Never
+/// removes a row. `bound` has this window as index 0.
+pub fn add_window(old: &Workspace, fresh: Rule, bound: &[Option<Bound>]) -> Added {
+    let this = as_candidates(std::slice::from_ref(&fresh));
+    let same_app = |r: &Rule| matching::same_app(r, &this[0]);
+    let of_app: Vec<usize> = (0..old.windows.len()).filter(|i| same_app(&old.windows[*i])).collect();
+    let held = of_app.iter().copied().find(|i| matches!(bound.get(*i).copied().flatten(), Some(Bound::Alive(0))));
+    let only = (of_app.len() == 1)
+        .then(|| of_app[0])
+        .filter(|i| !matches!(bound.get(*i).copied().flatten(), Some(Bound::Alive(h)) if h != 0));
+    let filled = || {
+        of_app.iter().copied().find(|i| {
+            let r = &old.windows[*i];
+            r.monitor == fresh.monitor && r.target == fresh.target
+        })
+    };
+    let place = fresh.place.clone();
+    let mut workspace = old.clone();
+    let (row, new) = match held.or(only).or_else(filled) {
+        Some(row) => {
+            let rule = &mut workspace.windows[row];
+            let (focused, z, kept) = (rule.focused, rule.z, rule.place.clone());
+            rule.take_place(&fresh);
+            (rule.focused, rule.z, rule.place) = (focused, z, kept);
+            (row, false)
+        }
+        None => {
+            let z = old.windows.len() as u32;
+            let rule = Rule { launch: false, open_with: None, focused: false, z, place: None, ..fresh };
+            workspace.windows.push(rule);
+            (old.windows.len(), true)
+        }
+    };
+    Added { workspace, row, new, place }
+}
+
+/// Why a window can't be added to a workspace, in the notice's words. `skip` is the
+/// reason a capture leaves a window out, or one of `administrator`, `sticky` and `off screen`.
+pub fn why_not(skip: &str) -> &'static str {
+    match skip {
+        "seam" => "That's one of Seam's own windows",
+        "never include" => "That app is under Left alone, so Seam never saves it",
+        "administrator" => "That app runs as administrator, so Seam couldn't move it later",
+        "sticky" => "That window is kept out of workspace switches, so no workspace holds it",
+        "too small" => "That window is too small for Seam to save",
+        "no title" => "That window has no title, so Seam doesn't save it",
+        "transparent" | "system" | "shell" => "That's part of Windows, not an app window Seam saves",
+        "hidden" | "cloaked" | "off screen" => "That window isn't showing on a screen of this desk",
+        "no exe" => "Seam can't tell which app that window belongs to",
+        _ => "That window has no taskbar button, so Seam doesn't save it",
+    }
+}
+
 /// The rows a switch starts, in start order, cut into stages. A stage ends at a
 /// row that waits for its window. Apps in a stage start together, each after its
 /// own delay, and the next stage starts once the waiting ones are up.
@@ -206,14 +281,25 @@ pub fn tame_delay(ms: u32) -> u32 {
 /// import. A row with nothing safe to start can't be ticked to start, which keeps
 /// an imported workspace's cleared rows from launching. Errors say why, in the
 /// panel's words.
-pub fn checked_update(old: &Workspace, mut new: Workspace, zones: &dyn Fn(&str) -> usize) -> Result<Workspace, String> {
+pub fn checked_update(old: &Workspace, new: Workspace, zones: &dyn Fn(&str) -> usize) -> Result<Workspace, String> {
+    checked_rows(old, new, zones, None)
+}
+
+/// `checked_update`, but with `only` set the Open with of every other row is left as it
+/// is and not checked again, so an add isn't refused for another row's stale one.
+pub fn checked_rows(
+    old: &Workspace,
+    mut new: Workspace,
+    zones: &dyn Fn(&str) -> usize,
+    only: Option<usize>,
+) -> Result<Workspace, String> {
     if new.id != old.id {
         return Err("That's a different workspace".into());
     }
     let name = new.name.trim().to_string();
     new.name = if name.is_empty() { old.name.clone() } else { name };
     let mut focused = false;
-    for rule in &mut new.windows {
+    for (i, rule) in new.windows.iter_mut().enumerate() {
         let known = old.windows.iter().any(|o| o.exe == rule.exe && o.aumid == rule.aumid);
         let exe_ok = rule.exe.is_empty() || safe_exe(&rule.exe);
         let aumid_ok = rule.aumid.as_deref().is_none_or(safe_aumid);
@@ -241,7 +327,8 @@ pub fn checked_update(old: &Workspace, mut new: Workspace, zones: &dyn Fn(&str) 
         let kept = place.filter(|p| old.windows.iter().any(|o| same_app(o) && o.place.as_ref() == Some(p)));
         rule.place = kept;
         // What I typed, checked and stored as it's cleaned.
-        let typed = rule.open_with.take().map(|t| t.trim().to_string()).filter(|t| !t.is_empty());
+        let skip = only.is_some_and(|row| row != i);
+        let typed = rule.open_with.take_if(|_| !skip).map(|t| t.trim().to_string()).filter(|t| !t.is_empty());
         if let Some(typed) = typed {
             match open_with_for(rule, &typed) {
                 Ok(OpenWith::Path(open) | OpenWith::Link(open)) => rule.open_with = Some(open),

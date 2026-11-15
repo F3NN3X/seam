@@ -112,6 +112,17 @@ pub struct Hotkeys {
     /// "Reset sizes": the screen under the pointer goes back to the layout it came from,
     /// with that layout's proportions, or a tiled screen's splits even out.
     pub reset_sizes: Option<String>,
+    /// "Add window to workspace 1" to "9": the focused window joins the desk's workspace
+    /// with that number, in list order.
+    pub add_to_1: Option<String>,
+    pub add_to_2: Option<String>,
+    pub add_to_3: Option<String>,
+    pub add_to_4: Option<String>,
+    pub add_to_5: Option<String>,
+    pub add_to_6: Option<String>,
+    pub add_to_7: Option<String>,
+    pub add_to_8: Option<String>,
+    pub add_to_9: Option<String>,
 }
 
 impl Default for Hotkeys {
@@ -159,6 +170,15 @@ impl Default for Hotkeys {
             overview: None,
             rotate: None,
             reset_sizes: None,
+            add_to_1: None,
+            add_to_2: None,
+            add_to_3: None,
+            add_to_4: None,
+            add_to_5: None,
+            add_to_6: None,
+            add_to_7: None,
+            add_to_8: None,
+            add_to_9: None,
         }
     }
 }
@@ -179,6 +199,21 @@ impl Hotkeys {
             ("swap", "right", self.swap_right.as_ref()),
             ("swap", "up", self.swap_up.as_ref()),
             ("swap", "down", self.swap_down.as_ref()),
+        ]
+    }
+
+    /// The "Add window to workspace" shortcuts, for workspaces 1 to 9, in the order they register.
+    pub fn add_to_workspace(&self) -> [Option<&String>; 9] {
+        [
+            self.add_to_1.as_ref(),
+            self.add_to_2.as_ref(),
+            self.add_to_3.as_ref(),
+            self.add_to_4.as_ref(),
+            self.add_to_5.as_ref(),
+            self.add_to_6.as_ref(),
+            self.add_to_7.as_ref(),
+            self.add_to_8.as_ref(),
+            self.add_to_9.as_ref(),
         ]
     }
 

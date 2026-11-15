@@ -50,7 +50,10 @@ use run::pin_again;
 use stages::{place_rules, run_stages, usable_place};
 
 pub use bind::{bind_rows, capture_bindings, keep_bindings, rebind};
-pub use capture::{CaptureJob, capture, capture_session, capture_window, take_captured, take_session, wait_session};
+pub use capture::{
+    CaptureJob, capture, capture_added, capture_session, capture_window, take_added, take_captured, take_session,
+    wait_session,
+};
 pub use rows::{LiveWorkspace, place_opened, status};
 pub use rules::{AppRules, closed_name, pin_by_rules, place_by_rule, reopen};
 pub use run::{SwitchJob, outside, switch, switching, take_switched};

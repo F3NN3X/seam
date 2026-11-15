@@ -168,6 +168,19 @@ pub fn centred(work: Rect, (w, h): (i32, i32)) -> Rect {
     Rect { x: work.x + (work.w - w) / 2, y: work.y + (work.h - h) / 2, w, h }
 }
 
+/// The order desktops show in, by their place in Windows' list (None when unknown), the
+/// first being the one in front, which always leads. Unknown ones follow in the order
+/// they were met. Returns the order and, for each desktop, its new index.
+pub fn desktop_ranks(places: &[Option<usize>]) -> (Vec<usize>, Vec<usize>) {
+    let mut ranked: Vec<usize> = (0..places.len()).collect();
+    ranked.sort_by_key(|&i| (i != 0, places[i].unwrap_or(usize::MAX), i));
+    let mut index = vec![0; places.len()];
+    for (new, &old) in ranked.iter().enumerate() {
+        index[old] = new;
+    }
+    (ranked, index)
+}
+
 /// A virtual desktop's label: this one, or by its name, or its place in Windows' list
 /// from 1, or a plain word when Windows' list can't be read.
 pub fn desktop_label(current: bool, name: Option<&str>, place: Option<usize>) -> String {
@@ -322,6 +335,37 @@ mod tests {
     fn a_window_moved_to_a_screen_is_centred_and_fits() {
         assert_eq!(centred(r(100, 0, 1000, 800), (400, 300)), r(400, 250, 400, 300));
         assert_eq!(centred(r(0, 0, 1000, 800), (1200, 300)), r(0, 250, 1000, 300));
+    }
+
+    #[test]
+    fn desktops_follow_windows_order_after_the_one_in_front() {
+        // In front (third in Windows' list), one unknown, then the first and second.
+        let (ranked, index) = desktop_ranks(&[Some(2), None, Some(1), Some(0)]);
+        assert_eq!(ranked, vec![0, 3, 2, 1]);
+        assert_eq!(index, vec![0, 3, 2, 1]);
+        assert_eq!(desktop_ranks(&[None]), (vec![0], vec![0]));
+    }
+
+    #[test]
+    fn arrows_stop_at_the_edges_and_ignore_a_tile_out_of_range() {
+        let tiles = [r(0, 0, 100, 100), r(0, 110, 100, 100)];
+        assert_eq!(step(&tiles, 1, Dir::Down), None);
+        assert_eq!(step(&tiles, 0, Dir::Up), None);
+        assert_eq!(step(&tiles, 5, Dir::Down), None);
+    }
+
+    #[test]
+    fn a_screen_too_small_gives_tiles_no_width_rather_than_panicking() {
+        let groups = layout(r(0, 0, 0, 0), &[3, 2], &M);
+        assert!(groups.iter().flat_map(|g| &g.tiles).all(|t| t.w == 0));
+    }
+
+    #[test]
+    fn a_drop_on_a_screen_left_of_the_primary_counts() {
+        let screens = vec![(r(-1920, 0, 1920, 1080), vec![]), (r(0, 0, 100, 100), vec![])];
+        assert_eq!(drop_at(&screens, (-10, 10)), Some(Landing::Screen(0)));
+        // The right edge belongs to the next screen.
+        assert_eq!(drop_at(&screens, (0, 10)), Some(Landing::Screen(1)));
     }
 
     #[test]

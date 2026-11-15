@@ -155,7 +155,8 @@ unsafe fn header(dc: HDC, s: &State, p: &Pane, client: RECT) {
         outline(dc, field, p.t(1), c.hairline);
         let inside = RECT { left: field.left + p.t(12), right: field.right - p.t(12), ..field };
         if s.query.is_empty() {
-            text(dc, "Type to search by title or app", inside, p.t(14), c.muted, DT_LEFT | DT_VCENTER);
+            // Secondary, not muted: muted on the raised field is under 4.5:1.
+            text(dc, "Type to search by title or app", inside, p.t(14), c.secondary, DT_LEFT | DT_VCENTER);
         } else {
             text(dc, &s.query, inside, p.t(14), c.text, DT_LEFT | DT_VCENTER | DT_END_ELLIPSIS);
         }
@@ -208,7 +209,9 @@ unsafe fn tile(dc: HDC, s: &State, p: &Pane, w: usize, r: Rect) {
         };
         let mut title = RECT { left: caption.left + small + p.t(8), ..caption };
         if let Some(status) = status {
-            text(dc, status, caption, p.t(12), c.muted, DT_RIGHT | DT_VCENTER);
+            // A selected tile is raised, where muted text is under 4.5:1.
+            let tone = if selected { c.secondary } else { c.muted };
+            text(dc, status, caption, p.t(12), tone, DT_RIGHT | DT_VCENTER);
             title.right -= p.t(72);
         }
         let name = if win.title.is_empty() { &win.app } else { &win.title };
@@ -234,8 +237,18 @@ unsafe fn tiles(dc: HDC, s: &State, p: &Pane, client: RECT) {
             };
             text(dc, &empty, client, p.t(14), c.secondary, DT_CENTER | DT_VCENTER | DT_END_ELLIPSIS);
         }
-        let hint = "Type to search, arrows and Enter go to a window, drag one to a zone or another screen, Esc closes";
-        footer(dc, p, client, hint, c);
+        match &s.notice {
+            Some(notice) => {
+                let pad = p.t(PAD);
+                let line = row(pad, client.right - pad, client.bottom - pad - p.t(FOOT), p.t(FOOT));
+                text(dc, notice, line, p.t(13), c.text, DT_LEFT | DT_VCENTER | DT_END_ELLIPSIS);
+            }
+            None => {
+                let hint =
+                    "Type to search, arrows and Enter go to a window, drag one to a zone or another screen, Esc closes";
+                footer(dc, p, client, hint, c);
+            }
+        }
     }
 }
 
@@ -280,6 +293,13 @@ unsafe fn zones(dc: HDC, s: &State, i: usize, p: &Pane, client: RECT, drag: &Dra
         };
         footer(dc, p, client, hint, c);
     }
+}
+
+/// Whether a point is in a screen's header band, where the search field is, or on a
+/// desktop's label, which a click doesn't close the overview from.
+pub(super) fn in_header(s: &State, hwnd: HWND, at: (i32, i32)) -> bool {
+    let Some(p) = s.panes.iter().find(|p| p.hwnd == hwnd) else { return false };
+    at.1 < p.rect.y + p.t(PAD + HEAD + GAP) || p.labels.iter().any(|(_, r)| r.contains(at.0, at.1))
 }
 
 pub(super) unsafe fn paint(dc: HDC, s: &State, i: usize, client: RECT) {

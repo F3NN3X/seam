@@ -37,6 +37,9 @@ impl Engine {
         if !unsafe { IsWindow(Some(h)) }.as_bool() {
             return Err("The window closed".into());
         }
+        if winutil::is_elevated_over_us(h) {
+            return Err("That window runs as administrator, so Seam can't move it".into());
+        }
         // A tiled window leaves its tile and floats, and its neighbours fill the gap.
         if self.tiled_window(key) {
             let _ = self.tiling_float(key);

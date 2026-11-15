@@ -109,8 +109,16 @@ fn screen_of(screens: &[Rect], r: Rect) -> usize {
     (0..screens.len()).max_by_key(|&i| overlap(&screens[i])).unwrap_or(0)
 }
 
+/// The window's title from Windows' own copy, which never waits on its app.
+fn title(h: HWND) -> String {
+    let mut buf = [0u16; 512];
+    let len = unsafe { InternalGetWindowText(h, &mut buf) };
+    String::from_utf16_lossy(buf.get(..len.max(0) as usize).unwrap_or_default())
+}
+
 /// The windows to show, topmost first, and each desktop's label, the one in front first.
-/// Only cheap facts are read here; `details` reads the rest after the first paint.
+/// Only cheap facts are read here; `details` reads the rest after the first paint. A
+/// window that has stopped answering is left out, since reading its facts could wait on it.
 pub(super) fn windows(screens: &[Rect]) -> (Vec<Win>, Vec<String>) {
     let own = std::process::id();
     let manager: Option<IVirtualDesktopManager> =
@@ -119,7 +127,17 @@ pub(super) fn windows(screens: &[Rect]) -> (Vec<Win>, Vec<String>) {
     let mut met: Vec<Option<GUID>> = vec![None];
     let mut wins = Vec::new();
     let mut paths: HashMap<u32, Option<String>> = HashMap::new();
+    let mut elevated: HashMap<u32, bool> = HashMap::new();
+    // The desktop of a window the manager places on another one, or None.
+    let elsewhere = |h: HWND| {
+        let m = manager.as_ref()?;
+        let away = unsafe { m.IsWindowOnCurrentVirtualDesktop(h) }.is_ok_and(|on| !on.as_bool());
+        away.then(|| unsafe { m.GetWindowDesktopId(h) }.ok()).flatten().filter(|id| *id != GUID::zeroed())
+    };
     for h in winutil::top_level_windows() {
+        if !unsafe { IsWindowVisible(h) }.as_bool() || winutil::is_hung(h) {
+            continue;
+        }
         let mut facts = winutil::window_facts(h, own);
         if !facts.visible {
             continue;
@@ -127,17 +145,12 @@ pub(super) fn windows(screens: &[Rect]) -> (Vec<Win>, Vec<String>) {
         let mut desktop = None;
         if facts.cloaked {
             // Only the shell's cloak of a window on another desktop counts.
-            let elsewhere = cloak(h) == DWM_CLOAKED_SHELL
-                && manager
-                    .as_ref()
-                    .is_some_and(|m| unsafe { m.IsWindowOnCurrentVirtualDesktop(h) }.is_ok_and(|on| !on.as_bool()));
-            let id = elsewhere
-                .then(|| manager.as_ref().and_then(|m| unsafe { m.GetWindowDesktopId(h) }.ok()))
-                .flatten()
-                .filter(|id| *id != GUID::zeroed());
-            let Some(id) = id else { continue };
+            let Some(id) = elsewhere(h).filter(|_| cloak(h) & DWM_CLOAKED_SHELL != 0) else { continue };
             facts.cloaked = false;
             desktop = Some(id);
+        } else if facts.minimized {
+            // A minimized window may not be cloaked, wherever it is.
+            desktop = elsewhere(h);
         }
         if classify(&facts, &|_| false) != Verdict::Capture {
             continue;
@@ -157,9 +170,10 @@ pub(super) fn windows(screens: &[Rect]) -> (Vec<Win>, Vec<String>) {
             }
         };
         let icon = unsafe { GetClassLongPtrW(h, GCLP_HICON) };
+        let elevated = *elevated.entry(pid).or_insert_with(|| winutil::elevated_over_us(pid));
         wins.push(Win {
             hwnd: h,
-            title: winutil::title(h),
+            title: title(h),
             app: stem(&path),
             exe: path,
             screen: screen_of(screens, facts.rect),
@@ -169,14 +183,15 @@ pub(super) fn windows(screens: &[Rect]) -> (Vec<Win>, Vec<String>) {
             icon: (icon != 0).then_some(HICON(icon as *mut _)),
             thumb: 0,
             source: (0, 0),
+            elevated,
+            gone: false,
         });
     }
     // The desktops in Explorer's order, the one in front first.
     let order = desktop_order();
     let place = |d: &Option<GUID>| d.and_then(|id| order.iter().position(|o| *o == id));
-    let mut ranked: Vec<usize> = (0..met.len()).collect();
-    ranked.sort_by_key(|&i| (i != 0, place(&met[i]).unwrap_or(usize::MAX), i));
-    let new_index: Vec<usize> = (0..met.len()).map(|i| ranked.iter().position(|&r| r == i).unwrap_or(i)).collect();
+    let places: Vec<Option<usize>> = met.iter().map(place).collect();
+    let (ranked, new_index) = overview::desktop_ranks(&places);
     for w in &mut wins {
         w.desktop = new_index[w.desktop];
     }
@@ -206,21 +221,34 @@ fn asked_icon(h: HWND) -> Option<HICON> {
     ask(ICON_BIG).or_else(|| ask(ICON_SMALL2))
 }
 
-/// The slower facts, read after the first paint: the app's own name and its icon.
-pub(super) fn details(wins: &mut [Win]) {
-    let mut names: HashMap<String, Option<String>> = HashMap::new();
-    for w in wins.iter_mut() {
-        // A Store app's frame belongs to ApplicationFrameHost, whose description isn't the app's.
-        let framed = winutil::class_name(w.hwnd) == "ApplicationFrameWindow";
-        let read = || winutil::app_name(w.hwnd).filter(|_| !framed);
-        let name = names.entry(w.exe.clone()).or_insert_with(read).clone();
-        if let Some(name) = name {
+/// The slower facts, read after the first paint: the app's own name and its icon. It reads
+/// from window `from` until `budget` is spent, so the overview's keys and clicks go on
+/// between slices, and returns where the next slice starts, `wins.len()` once all are read.
+pub(super) fn details(
+    wins: &mut [Win],
+    names: &mut HashMap<String, Option<String>>,
+    from: usize,
+    budget: Duration,
+) -> usize {
+    let started = Instant::now();
+    for (i, w) in wins.iter_mut().enumerate().skip(from) {
+        if i > from && started.elapsed() >= budget {
+            return i;
+        }
+        // A Store app's frame belongs to ApplicationFrameHost, whose description isn't the
+        // app's, and its title is the app's name.
+        if winutil::class_name(w.hwnd) == "ApplicationFrameWindow" {
+            if !w.title.is_empty() {
+                w.app = w.title.clone();
+            }
+        } else if let Some(name) = names.entry(w.exe.clone()).or_insert_with(|| winutil::app_name(w.hwnd)).clone() {
             w.app = name;
         }
         if let Some(icon) = asked_icon(w.hwnd) {
             w.icon = Some(icon);
         }
     }
+    wins.len()
 }
 
 /// Start a COM apartment for the desktop manager. False when one of another kind was there.

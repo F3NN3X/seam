@@ -22,6 +22,7 @@ use seam::overview::{self, Dir, Landing};
 use seam::winutil;
 use seam::zones::Rect;
 use std::cell::RefCell;
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::mpsc::channel;
 use std::sync::{Mutex, MutexGuard};
@@ -53,6 +54,8 @@ const TIMER_FOCUS: usize = 1;
 const FOCUS_GRACE_MS: u32 = 300;
 const TIMER_FOCUS_LAST: usize = 2;
 const FOCUS_LAST_MS: u32 = 500;
+/// How long one slice of the details may take before the queue is pumped again.
+const DETAILS_SLICE: Duration = Duration::from_millis(30);
 
 const CLASS: PCWSTR = w!("SeamOverview");
 
@@ -189,6 +192,10 @@ struct Win {
     /// Its live preview, 0 for none, and the size it comes in.
     thumb: isize,
     source: (i32, i32),
+    /// It runs as administrator and Seam doesn't, so Seam can't move it.
+    elevated: bool,
+    /// It closed while the overview was open.
+    gone: bool,
 }
 
 /// One screen's window and what it shows.
@@ -258,6 +265,13 @@ struct State {
     /// Panes painted so far, for the first-paint log line.
     painted: usize,
     listed_ms: u128,
+    /// A line in place of the footer's hint: why the last thing asked couldn't be done.
+    notice: Option<String>,
+    /// App names read so far, by exe path, and the next window whose details are read.
+    names: HashMap<String, Option<String>>,
+    details_next: usize,
+    /// The first half of a typed character outside the BMP, waiting for its second.
+    surrogate: Option<u16>,
 }
 
 impl State {
@@ -273,6 +287,7 @@ impl State {
     fn search(&mut self) {
         let keys: Vec<(&str, &str)> = self.wins.iter().map(|w| (w.title.as_str(), w.app.as_str())).collect();
         self.shown = overview::rank(&self.query, &keys);
+        self.shown.retain(|&w| !self.wins[w].gone);
         draw::lay_out(self);
         let order = self.tiles();
         if !self.selected.is_some_and(|s| order.iter().any(|(w, _)| *w == s)) {
@@ -342,20 +357,11 @@ pub fn close() -> bool {
     open != 0
 }
 
-/// For the key: close the overview if it's up, and say so. One already on its way
-/// out is waited for a moment, and then the key opens a new one.
+/// For the key: close the overview if it's up, and say so. One already on its way out
+/// counts as closed, so the key opens a new one, which replaces it.
 pub fn close_for_key() -> bool {
     let open = OPEN.load(Ordering::SeqCst);
-    if open == 0 {
-        return false;
-    }
-    if CLOSING.load(Ordering::SeqCst) == open {
-        for _ in 0..20 {
-            if !is_open() {
-                break;
-            }
-            std::thread::sleep(Duration::from_millis(10));
-        }
+    if open == 0 || CLOSING.load(Ordering::SeqCst) == open {
         return false;
     }
     close()

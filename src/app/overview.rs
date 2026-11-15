@@ -35,9 +35,9 @@ pub(super) fn open_overview(app: &mut App, toggle: bool, from_api: bool) {
     });
 }
 
-/// Make the moves the overview dropped. False when the snapping was busy, and the
-/// rest wait for the next try.
-pub(super) fn overview_moves() -> bool {
+/// Make the moves the overview dropped, and say why one couldn't be made. False when
+/// the snapping was busy, and the rest wait for the next try.
+pub(super) fn overview_moves(app: &mut App) -> bool {
     let mut busy = Vec::new();
     for m in overview_win::take_moves() {
         if !busy.is_empty() {
@@ -46,7 +46,10 @@ pub(super) fn overview_moves() -> bool {
         }
         match snap::overview_place(m.hwnd, &m.screen, m.zone, m.free) {
             Some(Ok(())) => {}
-            Some(Err(why)) => log::info!("overview: {why}"),
+            Some(Err(why)) => {
+                log::info!("overview: {why}");
+                notify(app, "Overview", &why, BalloonAction::None);
+            }
             None => busy.push(m),
         }
     }

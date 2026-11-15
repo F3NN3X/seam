@@ -134,13 +134,13 @@ pub(super) unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARA
                 LRESULT(0)
             }
             crate::overview_win::WM_APP_OVERVIEW => {
-                if !overview::overview_moves() {
+                if with_app(overview::overview_moves) != Some(true) {
                     SetTimer(Some(hwnd), TIMER_OVERVIEW, 50, None);
                 }
                 LRESULT(0)
             }
             WM_TIMER if wparam.0 == TIMER_OVERVIEW => {
-                if overview::overview_moves() {
+                if with_app(overview::overview_moves) == Some(true) {
                     let _ = KillTimer(Some(hwnd), TIMER_OVERVIEW);
                 }
                 LRESULT(0)

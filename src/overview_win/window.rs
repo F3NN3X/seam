@@ -31,9 +31,16 @@ fn held(vk: VIRTUAL_KEY) -> bool {
 
 /// Go to a window: restore it if it is minimized and give it the focus through the
 /// window manager's input credit, as a stack's cycle does. One on another virtual
-/// desktop takes Windows there. Then the overview closes.
-fn go(s: &State, w: usize) {
+/// desktop takes Windows there. Then the overview closes. A window that closed since
+/// leaves the list instead, and the overview stays.
+fn go(s: &mut State, w: usize) {
     let h = s.wins[w].hwnd;
+    if !unsafe { IsWindow(Some(h)) }.as_bool() {
+        s.wins[w].gone = true;
+        s.notice = Some("That window closed".into());
+        s.search();
+        return;
+    }
     unsafe {
         if IsIconic(h).as_bool() {
             let _ = ShowWindowAsync(h, SW_RESTORE);
@@ -44,7 +51,7 @@ fn go(s: &State, w: usize) {
 }
 
 /// Esc: back to the window that was in front, when it is one of the listed ones.
-fn leave(s: &State) {
+fn leave(s: &mut State) {
     if let Some(w) = s.wins.iter().position(|w| w.hwnd.0 as isize == s.before) {
         go(s, w);
     } else {
@@ -58,6 +65,7 @@ fn searched(s: &mut State) {
 }
 
 fn key(s: &mut State, vk: u16) -> bool {
+    s.notice = None;
     match VIRTUAL_KEY(vk) {
         VK_ESCAPE if s.drag.is_some() => cancel_drag(s),
         VK_ESCAPE => leave(s),
@@ -85,16 +93,22 @@ fn key(s: &mut State, vk: u16) -> bool {
     true
 }
 
-/// A typed character goes into the search.
+/// A typed character goes into the search. One outside the BMP comes as two UTF-16
+/// units, the first kept until the second arrives.
 fn typed(s: &mut State, unit: u32) -> bool {
-    match char::from_u32(unit) {
-        Some(c) if !c.is_control() => {
-            s.query.push(c);
-            searched(s);
-            true
-        }
-        _ => false,
+    let unit = unit as u16;
+    if (0xD800..0xDC00).contains(&unit) {
+        s.surrogate = Some(unit);
+        return false;
     }
+    let units: Vec<u16> = s.surrogate.take().into_iter().chain([unit]).collect();
+    let Some(Ok(c)) = char::decode_utf16(units).last() else { return false };
+    if c.is_control() {
+        return false;
+    }
+    s.query.push(c);
+    searched(s);
+    true
 }
 
 /// The screens and their zones, for what a drop lands on.
@@ -144,6 +158,15 @@ fn drop_window(s: &mut State) {
         }
     };
     let p = &s.panes[screen];
+    // A move to a screen keeps the window's real size: its pixels scale with the screens' DPI.
+    let free = match zone {
+        None => {
+            let from = winutil::monitor_dpi(win.hwnd).max(96) as i32;
+            let scale = |v: i32| v * p.dpi as i32 / from;
+            overview::centred(p.work, (scale(win.frame.w), scale(win.frame.h)))
+        }
+        Some(_) => free,
+    };
     if win.minimized && !winutil::is_hung(win.hwnd) {
         winutil::place_restored(win.hwnd, free, p.dpi);
     }
@@ -171,9 +194,22 @@ fn on_mouse_move(hwnd: HWND, lparam: LPARAM) -> LRESULT {
         if let Some(press) = &s.press {
             let (dx, dy) = unsafe { (GetSystemMetrics(SM_CXDRAG), GetSystemMetrics(SM_CYDRAG)) };
             let far = (at.0 - press.at.0).abs() > dx || (at.1 - press.at.1).abs() > dy;
-            // A window on another desktop can only be gone to (D572).
-            if far && s.wins[press.win].desktop == 0 {
-                start_drag(s, hwnd, press.win, at);
+            if !far {
+                return;
+            }
+            let (win, w) = (press.win, &s.wins[press.win]);
+            // A window on another desktop can only be gone to (D572), and Windows doesn't let
+            // Seam move one running as administrator.
+            if w.elevated {
+                s.notice = Some(format!("{} runs as administrator, so Seam can't move it", w.app));
+                s.press = None;
+                redraw(s);
+            } else if w.desktop != 0 {
+                s.notice = Some("A window on another desktop can't be moved from here".into());
+                s.press = None;
+                redraw(s);
+            } else {
+                start_drag(s, hwnd, win, at);
             }
             return;
         }
@@ -199,6 +235,8 @@ fn on_button_down(hwnd: HWND, lparam: LPARAM) -> LRESULT {
                 s.selected = Some(win);
                 redraw(s);
             }
+            // The header with its search field and the desktops' labels take no click.
+            None if draw::in_header(s, hwnd, at) => {}
             // A click away from every tile closes, as one outside quick layout does.
             None => quit(),
         }
@@ -257,10 +295,14 @@ unsafe fn on_paint(hwnd: HWND) -> LRESULT {
     }
 }
 
-/// After the first paint: the app names and icons that wait on other apps.
-fn on_details() -> LRESULT {
+/// After the first paint: the app names and icons that wait on other apps, a slice at a
+/// time, so keys and clicks are taken between slices.
+fn on_details(hwnd: HWND) -> LRESULT {
     with_state(|s| {
-        list::details(&mut s.wins);
+        s.details_next = list::details(&mut s.wins, &mut s.names, s.details_next, DETAILS_SLICE);
+        if s.details_next < s.wins.len() {
+            let _ = unsafe { PostMessageW(Some(hwnd), WM_APP_DETAILS, WPARAM(0), LPARAM(0)) };
+        }
         searched(s);
         redraw(s);
     });
@@ -333,7 +375,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
             }
             WM_TIMER if matches!(wparam.0, TIMER_FOCUS | TIMER_FOCUS_LAST) => on_focus_timer(hwnd, wparam.0),
             WM_ACTIVATEAPP => on_activate_app(wparam),
-            WM_APP_DETAILS => on_details(),
+            WM_APP_DETAILS => on_details(hwnd),
             WM_CLOSE | WM_DISPLAYCHANGE => {
                 quit();
                 LRESULT(0)
@@ -460,6 +502,10 @@ fn run(spec: Spec, ready: std::sync::mpsc::Sender<()>) {
             pressed: spec.pressed,
             painted: 0,
             listed_ms,
+            notice: None,
+            names: HashMap::new(),
+            details_next: 0,
+            surrogate: None,
         };
         draw::register_thumbs(&mut state);
         state.search();
@@ -504,5 +550,6 @@ pub fn show(spec: Spec) {
         log::info!("overview: couldn't start: {e}");
         return;
     }
-    let _ = opened.recv_timeout(Duration::from_millis(500));
+    // The thread answers once its queue exists, before it reads any window.
+    let _ = opened.recv_timeout(Duration::from_millis(50));
 }

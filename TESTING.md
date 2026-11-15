@@ -90,7 +90,12 @@ Set a key for **Show overview** on Shortcuts (it has no key until you set one). 
 - [ ] **Drag to a zone.** Drag a tile a little way: the previews go and each screen shows its zones, numbered. The zone under the pointer is lit amber. Drop it there: the window lands in that zone, focused, and the overview closes. Drag it out of the zone afterwards: it gets the size it had before.
 - [ ] **Drag to a screen.** On a screen with no zones, the whole screen is one target, "Move to screen N". A drop centres the window there at its size. The window's own screen, with no zones, says it has none and isn't a target.
 - [ ] **Drag cancel.** Esc during a drag goes back to the tiles, with no move. So does a drop in a gap between zones.
-- [ ] **Other desktop.** A tile under "Mail" doesn't start a drag.
+- [ ] **Other desktop.** A tile under "Mail" doesn't start a drag, and the footer says why. Minimize a window on "Mail": it shows under "Mail", not "This desktop".
+- [ ] **Administrator.** Run a terminal as administrator and drag its tile: no drag starts, and the footer says it runs as administrator, so Seam can't move it.
+- [ ] **Search field.** A click on the search field or a desktop's label leaves the overview open.
+- [ ] **Closed meanwhile.** Close a window from its taskbar button while the overview is open, then press Enter on its tile: the tile goes, the footer says the window closed, and the overview stays.
+- [ ] **Busy apps.** With a not-responding app open, the key still opens the overview at once, without that app, and Esc closes it at once while icons are still filling in.
+- [ ] **Search with an emoji.** A title with an emoji is found by typing the emoji (Win+.).
 - [ ] **Minimized drop.** Drag the minimized window's tile to a zone: it is restored straight into the zone.
 - [ ] **Smart tiling.** With tiling on for screen 1, drag one of its tiled windows to screen 2's zone: it lands there, its old neighbours fill the gap, and it isn't tiled again when a new window opens. Drag a window onto a tiled screen's zone: the footer says it floats there, and it lands over that tile without taking it.
 - [ ] **Stacks.** Open the overview with a stack member in front and close it with Esc: the stack's top hasn't changed and its mark doesn't flicker.

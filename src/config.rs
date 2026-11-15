@@ -258,6 +258,8 @@ pub struct ZoneSettings {
     pub drag_hints: bool,
     /// Dropping a window on another window's edge puts the two side by side.
     pub snap_beside: bool,
+    /// "Put windows back when Seam quits": a quit the user asked for frees every tiled screen first.
+    pub tiling_free_on_quit: bool,
     /// Exe file names, case-insensitive.
     pub exclude: Vec<String>,
 }
@@ -278,6 +280,7 @@ impl Default for ZoneSettings {
             pause_to_snap: false,
             drag_hints: false,
             snap_beside: true,
+            tiling_free_on_quit: false,
             exclude: Vec::new(),
         }
     }
@@ -477,6 +480,14 @@ pub struct Desk {
     /// an older Seam drops it, which turns tiling off.
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     pub tiling: BTreeMap<String, TileScreen>,
+}
+
+/// Tiling off on every screen and virtual desktop of a desk, as quitting with Put windows back
+/// leaves it, including those that were never tiled this session. A screen left with no
+/// desktops and its default family is dropped.
+pub fn clear_tiling(tiling: &mut BTreeMap<String, TileScreen>) {
+    tiling.values_mut().for_each(|entry| entry.desktops.clear());
+    tiling.retain(|_, entry| *entry != TileScreen::default());
 }
 
 /// Smart tiling on one screen of a desk: the family, and the virtual desktops it is

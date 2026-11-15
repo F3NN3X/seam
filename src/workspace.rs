@@ -20,8 +20,8 @@ mod tests;
 
 pub use assist::{Edit, MAX_ASSISTANT_WORKSPACES, MAX_NAME, RowChange, checked_name, edited, survivors};
 pub use capture::{
-    Added, add_window, checked_update, merge_capture, moved_rows, numbered, recapture_row, stages, take_window_place,
-    tame_delay, why_not,
+    Added, add_window, checked_rows, checked_update, merge_capture, moved_rows, numbered, recapture_row, stages,
+    take_window_place, tame_delay, why_not,
 };
 pub use export::{
     Export, OpenWith, ScreenInfo, explorer_arg, has_places, import, open_with_for, page_of, safe_aumid, safe_exe,

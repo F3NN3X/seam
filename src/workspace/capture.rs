@@ -196,20 +196,34 @@ pub struct Added {
     pub place: Option<Place>,
 }
 
-/// The focused window, read as a capture would, goes into `old`. A row of the same app
-/// that pairs with it, as a switch would, takes where the window is now and keeps its
-/// launch details, its start order and its focus. Otherwise the window gets a row at the
-/// end, with launch off and no Open with. Never removes a row. `bound` and `elsewhere` as `pair`.
-pub fn add_window(old: &Workspace, fresh: Rule, bound: &[Option<Bound>], elsewhere: &HashSet<isize>) -> Added {
-    let found = pair(&old.windows, std::slice::from_ref(&fresh), bound, elsewhere);
+/// The focused window, read as a capture would, goes into `old`. The row it updates is
+/// the one bound to this very window (`bound`, as a switch keeps them), else the row of
+/// its app whose screen and place the window now fills; never one picked by app alone.
+/// That row takes where the window is now and keeps its launch details, its start order,
+/// its focus and, while the window stays in the same place, its stack position. With no
+/// such row the window gets one at the end, with launch off and no Open with. Never
+/// removes a row. `bound` has this window as index 0.
+pub fn add_window(old: &Workspace, fresh: Rule, bound: &[Option<Bound>]) -> Added {
+    let this = as_candidates(std::slice::from_ref(&fresh));
+    let same_app = |r: &Rule| matching::same_app(r, &this[0]);
+    let held = old
+        .windows
+        .iter()
+        .enumerate()
+        .position(|(i, r)| same_app(r) && matches!(bound.get(i).copied().flatten(), Some(Bound::Alive(0))));
+    let filled =
+        || old.windows.iter().position(|r| same_app(r) && r.monitor == fresh.monitor && r.target == fresh.target);
     let place = fresh.place.clone();
     let mut workspace = old.clone();
-    let (row, new) = match found.iter().position(Option::is_some) {
+    let (row, new) = match held.or_else(filled) {
         Some(row) => {
             let rule = &mut workspace.windows[row];
             let (focused, z, kept) = (rule.focused, rule.z, rule.place.clone());
+            let (target, stack) = (rule.target.clone(), rule.stack);
             rule.take_place(&fresh);
             (rule.focused, rule.z, rule.place) = (focused, z, kept);
+            // The window isn't read for its stack, so it keeps the one it had while it sits in the same place.
+            rule.stack = if rule.target == target { stack } else { None };
             (row, false)
         }
         None => {
@@ -230,6 +244,9 @@ pub fn why_not(skip: &str) -> &'static str {
         "never include" => "That app is under Left alone, so Seam never saves it",
         "administrator" => "That app runs as administrator, so Seam couldn't move it later",
         "sticky" => "That window is kept out of workspace switches, so no workspace holds it",
+        "too small" => "That window is too small for Seam to save",
+        "no title" => "That window has no title, so Seam doesn't save it",
+        "transparent" | "system" | "shell" => "That's part of Windows, not an app window Seam saves",
         "hidden" | "cloaked" | "off screen" => "That window isn't showing on a screen of this desk",
         "no exe" => "Seam can't tell which app that window belongs to",
         _ => "That window has no taskbar button, so Seam doesn't save it",
@@ -263,14 +280,25 @@ pub fn tame_delay(ms: u32) -> u32 {
 /// import. A row with nothing safe to start can't be ticked to start, which keeps
 /// an imported workspace's cleared rows from launching. Errors say why, in the
 /// panel's words.
-pub fn checked_update(old: &Workspace, mut new: Workspace, zones: &dyn Fn(&str) -> usize) -> Result<Workspace, String> {
+pub fn checked_update(old: &Workspace, new: Workspace, zones: &dyn Fn(&str) -> usize) -> Result<Workspace, String> {
+    checked_rows(old, new, zones, None)
+}
+
+/// `checked_update`, but with `only` set the Open with of every other row is left as it
+/// is and not checked again, so an add isn't refused for another row's stale one.
+pub fn checked_rows(
+    old: &Workspace,
+    mut new: Workspace,
+    zones: &dyn Fn(&str) -> usize,
+    only: Option<usize>,
+) -> Result<Workspace, String> {
     if new.id != old.id {
         return Err("That's a different workspace".into());
     }
     let name = new.name.trim().to_string();
     new.name = if name.is_empty() { old.name.clone() } else { name };
     let mut focused = false;
-    for rule in &mut new.windows {
+    for (i, rule) in new.windows.iter_mut().enumerate() {
         let known = old.windows.iter().any(|o| o.exe == rule.exe && o.aumid == rule.aumid);
         let exe_ok = rule.exe.is_empty() || safe_exe(&rule.exe);
         let aumid_ok = rule.aumid.as_deref().is_none_or(safe_aumid);
@@ -298,7 +326,8 @@ pub fn checked_update(old: &Workspace, mut new: Workspace, zones: &dyn Fn(&str) 
         let kept = place.filter(|p| old.windows.iter().any(|o| same_app(o) && o.place.as_ref() == Some(p)));
         rule.place = kept;
         // What I typed, checked and stored as it's cleaned.
-        let typed = rule.open_with.take().map(|t| t.trim().to_string()).filter(|t| !t.is_empty());
+        let skip = only.is_some_and(|row| row != i);
+        let typed = rule.open_with.take_if(|_| !skip).map(|t| t.trim().to_string()).filter(|t| !t.is_empty());
         if let Some(typed) = typed {
             match open_with_for(rule, &typed) {
                 Ok(OpenWith::Path(open) | OpenWith::Link(open)) => rule.open_with = Some(open),

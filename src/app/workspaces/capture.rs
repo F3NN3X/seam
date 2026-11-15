@@ -349,6 +349,11 @@ pub(in crate::app) fn captured(app: &mut App) {
 /// The editor saved a workspace of this desk. It's checked as `checked_update`
 /// says, then saved and applied through the same path as `config.patch`.
 pub(in crate::app) fn update_workspace(app: &mut App, id: &str, sent: Value) -> Reply {
+    update_rows(app, id, sent, None)
+}
+
+/// `update_workspace`; with `only` set, the Open with of the other rows isn't checked again.
+pub(super) fn update_rows(app: &mut App, id: &str, sent: Value, only: Option<usize>) -> Reply {
     let Some(desk) = app.cfg.desks.get(&app.sig) else { return refused("This desk has no workspaces") };
     let Some(old) = workspace::list(&desk.workspaces).into_iter().find(|w| w.id == id) else {
         return Err(RpcError::new(api::NOT_FOUND, "no such workspace on this desk"));
@@ -366,7 +371,7 @@ pub(in crate::app) fn update_workspace(app: &mut App, id: &str, sent: Value) -> 
         let layout = desk.zones.get(monitor).and_then(zones::layout_of);
         layout.map_or(0, |l| zones::leaf_count(&l.tree))
     };
-    let checked = match workspace::checked_update(&old, sent, &zones) {
+    let checked = match workspace::checked_rows(&old, sent, &zones, only) {
         Ok(ws) => ws,
         Err(why) => return refused(why),
     };

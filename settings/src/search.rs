@@ -161,6 +161,12 @@ const ENTRIES: &[Entry] = &[
         "Smart, Columns, Main + stack or Grid, while smart tiling is on",
         "smart tiling family columns main stack grid dwindle layout shape",
     ),
+    entry(
+        Page::Zones,
+        "Put windows back when Seam quits",
+        "Quitting Seam frees every tiled screen first, as Free all windows does",
+        "smart tiling quit exit free all windows put back restore arrangement",
+    ),
     Entry {
         page: Page::Zones,
         title: "Leave out of smart tiling",

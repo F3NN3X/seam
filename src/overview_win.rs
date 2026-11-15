@@ -273,6 +273,8 @@ struct State {
     details_next: usize,
     /// The first half of a typed character outside the BMP, waiting for its second.
     surrogate: Option<u16>,
+    /// Wheel turns over a label not yet worth a jump, in WHEEL_DELTA units.
+    wheel: i32,
 }
 
 impl State {
@@ -306,6 +308,20 @@ impl State {
         if let Some(to) = overview::step(&rects, from, dir) {
             self.selected = Some(order[to].0);
         }
+    }
+
+    /// Ctrl+Tab, Page Down and Page Up, and the wheel over a label: to the first window of
+    /// the next or previous desktop, wrapping.
+    fn jump(&mut self, by: isize) {
+        let shown: Vec<(usize, usize)> = self.tiles().iter().map(|&(w, _)| (w, self.wins[w].desktop)).collect();
+        if let Some(w) = overview::desktop_jump(&shown, self.selected, by) {
+            self.selected = Some(w);
+        }
+    }
+
+    /// Whether a point on the desk is over a desktop's label.
+    fn label_at(&self, (x, y): (i32, i32)) -> bool {
+        self.panes.iter().flat_map(|p| &p.labels).any(|(_, r)| r.contains(x, y))
     }
 
     /// Tab and Shift+Tab, and Home and End: through the tiles in order, wrapping.

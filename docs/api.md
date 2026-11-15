@@ -18,7 +18,7 @@ It is local only. Seam opens one named pipe for the signed-in user, and nothing 
 
 ## Turning it on and off
 
-**Let other apps control Seam** on the General page of the Seam window switches the API. It is on by default, and General shows how many apps are connected.
+**Let other apps control Seam** on the General page of the Seam window switches the API. It is on by default, and General shows how many apps are connected. Assistants through `seam-mcp.exe` have two more switches under it, off by default, and are counted apart. See [MCP](#mcp).
 
 When it is off, every other client gets error `5` from `hello` and from everything else. The Seam window and the updater keep working, because they identify themselves as Seam (see [Security model](#security-model)).
 
@@ -64,6 +64,9 @@ Most methods are open to any client while **Let other apps control Seam** is on.
 | Panel | Only the settings window, with the token |
 | Panel or Seam | The settings window, or a Seam exe |
 | Seam | Only a Seam exe |
+| Panel or Assistant | The settings window, or `seam-mcp.exe` while **Let assistants change workspaces** is on |
+
+**Assistants.** A client whose process is a `seam-mcp.exe`, from any folder, is held to a short list of methods whatever it calls itself: `app.info`, `state.get`, `desks.list`, `workspaces.list`, `workspace.get`, `workspace.status`, `workspace.switch`, `workspace.snap_back`, `workspace.switch_back`, `workspace.quick_save`, `events.subscribe`, and the edits above while they're allowed. Everything else answers `4` ("Assistants can't do that"). Its `workspace.switch` always leaves the other windows alone, whatever `alongside` says. While **Let assistants use Seam (MCP)** is off, its `hello` and every call answer `5` with "Assistant access is off in Seam, General". This changes at once, with no restart. **Let other apps control Seam** has to be on as well. See [MCP](#mcp).
 
 Error `4` is therefore not a bug in your call. It means the method isn't open to third parties. Settings are changed through the Seam window, and everything else a client needs is in the open methods.
 
@@ -201,6 +204,12 @@ Workspaces belong to a desk, and these methods act on the desk that is connected
 | `workspace.switch_back` | none | `{ok: true}` | Any | 1, 3 | `{"method":"workspace.switch_back"}` |
 | `workspace.status` | `id` | `[{rule_index, state}]` | Any | 1 | `{"method":"workspace.status","params":{"id":"ws_7f3a"}}` |
 | `workspace.update` | `id`, `workspace`: the whole workspace object | `{ok: true}` | Panel | 1, 3, 4 | `{"method":"workspace.update","params":{"id":"ws_7f3a","workspace":{...}}}` |
+| `workspace.get` | `id` | `{id, name, show_all, other_windows, rows: [{row, app, title, screen, target, shown, launch}]}` | Any | 1 | `{"method":"workspace.get","params":{"id":"ws_7f3a"}}` |
+| `workspace.create` | `name` | `{id, name}` | Panel or Assistant | 3, 4, 5 | `{"method":"workspace.create","params":{"name":"Review"}}` |
+| `workspace.rename` | `id`, `name` | `{ok: true}` | Panel or Assistant | 1, 3, 4, 5 | `{"method":"workspace.rename","params":{"id":"ws_7f3a","name":"Mail"}}` |
+| `workspace.edit_row` | `id`, `row`, and at least one of `target`, `shown`, `launch` (only `false`) | `{ok: true}` | Panel or Assistant | 1, 3, 4, 5 | `{"method":"workspace.edit_row","params":{"id":"ws_7f3a","row":0,"shown":"minimized"}}` |
+| `workspace.remove_row` | `id`, `row` | `{ok: true}` | Panel or Assistant | 1, 3, 4, 5 | `{"method":"workspace.remove_row","params":{"id":"ws_7f3a","row":2}}` |
+| `workspace.set_show_all` | `id`, `on` | `{ok: true}` | Panel or Assistant | 1, 3, 4, 5 | `{"method":"workspace.set_show_all","params":{"id":"ws_7f3a","on":true}}` |
 | `workspace.set_default` | `id`: a workspace id, or `null` to clear | `{id}` | Panel or Seam | 1, 3, 4 | `{"method":"workspace.set_default","params":{"id":"ws_7f3a"}}` |
 | `session.restore` | none | `{ok: true}` | Panel or Seam | 1, 3, 4 | `{"method":"session.restore"}` |
 
@@ -212,6 +221,8 @@ Workspaces belong to a desk, and these methods act on the desk that is connected
 - `workspace.switch_back` switches to the workspace that was in use on this desk before the current one, as `workspace.switch` does, and a second call goes back again. Error `1` ("No workspace to switch back to") when there is none, or it was deleted.
 - `workspace.status` gives each app's state, by its row number from 0: `in_place`, `moved`, `minimized`, `not_running`, `background` (the app runs with no window, as one closed to the tray does) or `cant_move` (it runs as administrator). Error `1` when the id isn't on this desk.
 - `workspace.update` saves one edited workspace of the current desk, the way the editor does. The workspace's `show_all` (default false, "Show every window") makes a switch, Snap back and auto-apply restore a window saved minimized, onto its rect or maximized, and count it as moved while it's minimized. An older Seam ignores the field, and drops it when it saves the workspace. Without a `zones` key the workspace keeps the layouts it has, and with one, `zones` replaces them. A new or changed entry must be a layout of at most 128 zones nested at most 12 deep, and is stored as read, without fields Seam doesn't know. It answers `3` when a new program isn't safe to launch, a chosen zone isn't on its screen, or a layout can't be used. A row's `place` can be kept or removed, but one that no row of the same app (same `exe`, and same `class` when set) already had is dropped.
+- `workspace.get` reads one workspace of this desk from the snapshot. `app` is the program's file name, or its AUMID for a Store app, and `target`, `shown` and `launch` are as the workspace stores them. The program's path, its AUMID when there is a path, and a row's folder or page aren't included.
+- `workspace.create`, `rename`, `edit_row`, `remove_row` and `set_show_all` are the small edits an assistant may make. The Seam window can send them too, but it has `workspace.update`. Any other client gets `4`, and an assistant gets `4` while **Let assistants change workspaces** is off and `5` while **Let assistants use Seam (MCP)** is off. Each is saved as `workspace.update` saves, with the same checks, so the zone of a `target` must be on its screen (`3`), and shows a notification that undoes it for 8 seconds, like a quick save. `create` makes an empty workspace named `name` (kept apart from the others by adding " 2"), not in use; a name is 1 to 64 characters. `edit_row` changes the row `row`, counted from 0, and nothing else about it: `target` is `{zone, span_to?}`, `{rect: [x, y, w, h]}` as fractions of the screen, or `{state: "max"}` or `{state: "keep"}`; `shown` is `normal`, `minimized`, `maximized` or `fullscreen`; `launch` can only be `false`, to stop Seam starting that app, and `true` is `-32602`. None of these can set a program, an AUMID, a shortcut, Other windows or a folder or page, and `workspace.update` is not open to an assistant. `remove_row` moves the rows after it up, and the windows Seam placed for them follow.
 - `session.restore` restores the desk's last session through the workspace switch, with other windows left alone. Its result arrives as `workspace.switched` with `id` `last_session`. Error `1` when no session is saved for the desk.
 
 ### Updates and the app window
@@ -295,7 +306,7 @@ Subscribe with `events.subscribe` and a list of topics. An event belongs to the 
 | `hotkey_errors` | Shortcuts Seam couldn't register because another app holds them. `action` names the shortcut and `combo` is its keys |
 | `last_align` | The result of the last change to Windows' arrangement, `{ok, message}`, or `null` |
 | `update` | An update waiting to install, `{available, ready}`, or `null`. `ready` means it is downloaded and checked |
-| `clients` | The names of the connected API clients. The settings window shows as `panel` |
+| `clients` | The names of the connected API clients. The settings window shows as `panel`, and an assistant's `seam-mcp.exe` as `seam-mcp (<assistant>)` |
 
 ## Error codes
 
@@ -309,7 +320,7 @@ Subscribe with `events.subscribe` and a list of topics. An event belongs to the 
 | `2` | busy | Line Up or a capture is already running, a newer window command replaced this one, or Seam didn't answer within 60 seconds |
 | `3` | refused | Seam understood and said no. `message` is a human reason, such as "No window in that direction" |
 | `4` | forbidden | The method is only open to the Seam window or a Seam exe. See [Security model](#security-model) |
-| `5` | disabled | **Let other apps control Seam** is off |
+| `5` | disabled | **Let other apps control Seam** is off, or for `seam-mcp.exe`, **Let assistants use Seam (MCP)** is |
 
 ## Examples
 
@@ -476,42 +487,39 @@ The first two lines out are the replies to `hello` and `events.subscribe`. After
 
 ## MCP
 
-An MCP server for Seam isn't built yet. It is something I plan to add on top of this API, so an AI assistant could switch workspaces or line things up the way a Stream Deck key does. There is no date. Follow the [issues](https://github.com/F3NN3X/seam/issues) and the [changelog](../CHANGELOG.md).
+`seam-mcp.exe` lets an AI assistant that speaks the [Model Context Protocol](https://modelcontextprotocol.io) use Seam. It sits next to `seam.exe` (the installer and the zip both put it there), speaks newline-delimited JSON-RPC 2.0 over stdio, and turns each tool call into a call on this API. It is a separate program, so Seam itself stays as it was: no new port, and no network.
 
-You don't have to wait, because the API is enough to wrap yourself. The shape is simple:
+**Turning it on.** **Let assistants use Seam (MCP)** on the General page is off by default, and so is the switch under it, **Let assistants change workspaces**. Both take effect at once, with no restart, and **Let other apps control Seam** has to be on too. General shows whether an assistant is connected, and the path to `seam-mcp.exe` with a **Copy** button. While the first switch is off, Seam refuses `seam-mcp.exe` at `hello`, and every tool answers with an error result saying "Assistant access is off in Seam, General".
 
-1. Write a small MCP server (the official SDKs are on [modelcontextprotocol.io](https://modelcontextprotocol.io)). It runs as a local process, started by your MCP client, on the same Windows account as Seam.
-2. Keep one pipe connection to Seam inside it, the way the Node example does. Call `hello` once, and connect again if the pipe closes or a call finds it gone.
-3. Turn each Seam method you want to expose into an MCP tool, with a name, a description and an input schema. `state.get` and `workspaces.list` make good read tools, and `workspace.switch`, `workspace.snap_back` and `window.move` good action tools.
-4. Keep the tool set small and think about what you allow: an assistant that can switch workspaces can also close other windows through a workspace's Close setting. Leave out what you wouldn't press yourself.
+**Adding it to an assistant.** Give the assistant a stdio server that runs the path from General, with no arguments. For Claude Desktop that is an entry under `mcpServers` in its config file:
 
-An outline in TypeScript. It is a sketch, so check the names against the SDK's own docs:
-
-```ts
-import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
-import { z } from "zod";
-import { call } from "./seam.js"; // the pipe client from the Node example
-
-const server = new McpServer({ name: "seam", version: "0.1.0" });
-
-server.registerTool(
-  "seam_state",
-  { description: "What Seam is doing: remap, zones, desk, active workspace" },
-  async () => ({ content: [{ type: "text", text: JSON.stringify(await call("state.get")) }] }),
-);
-
-server.registerTool(
-  "seam_switch_workspace",
-  { description: "Switch to a workspace on the current desk", inputSchema: { name: z.string() } },
-  async ({ name }) => {
-    await call("workspace.switch", { name });
-    return { content: [{ type: "text", text: `Switching to ${name}` }] };
-  },
-);
-
-await server.connect(new StdioServerTransport());
+```json
+{ "mcpServers": { "seam": { "command": "C:\\Users\\you\\AppData\\Local\\Programs\\Seam\\seam-mcp.exe" } } }
 ```
+
+**What it speaks.** `initialize` (it answers with the client's `protocolVersion` when it knows it: 2025-11-25, 2025-06-18, 2025-03-26 or 2024-11-05, and its newest otherwise), `notifications/initialized`, `ping`, `tools/list` and `tools/call`. A tool answers with `content` text and `isError`. An unknown tool or a bad `arguments` is a JSON-RPC error. Nothing but protocol lines goes to stdout.
+
+| Tool | Does | API method |
+|---|---|---|
+| `seam_state` | What Seam is doing now | `state.get` |
+| `seam_workspaces` | The desk's workspaces | `workspaces.list` |
+| `seam_workspace` | One workspace's rows | `workspace.get` |
+| `seam_workspace_status` | How each app of a workspace is doing | `workspace.status` |
+| `seam_switch_workspace` | Switch, always with `alongside: true` | `workspace.switch` |
+| `seam_snap_back` | Put the windows of the workspace in use back | `workspace.snap_back` |
+| `seam_switch_back` | Go back to the workspace before | `workspace.switch_back` |
+| `seam_quick_save` | Save the windows on screen | `workspace.quick_save` |
+| `seam_create_workspace` | Make an empty workspace | `workspace.create` |
+| `seam_rename_workspace` | Rename one | `workspace.rename` |
+| `seam_edit_row` | Change a row's place or how it is shown, or turn its launch off | `workspace.edit_row` |
+| `seam_remove_row` | Remove a row | `workspace.remove_row` |
+| `seam_set_show_all` | Show every window on or off | `workspace.set_show_all` |
+
+The last five need **Let assistants change workspaces**. Each shows the notification that undoes the change, and Seam's log (with **Debug log** on) names the assistant that made it.
+
+**What it can't do.** An assistant can't close a window, change a setting, set which program a workspace starts or its shortcut, turn launch on, or use anything not in the table, even if it talks to the pipe itself: Seam holds any `seam-mcp.exe` to the list in [Security model](#security-model), by the process, not by the name it gives. Switching can still start the apps a workspace lists that aren't running, because that is what the workspace says. `workspace.update` stays with the Seam window.
+
+**Your own server.** The pipe is open to your own tools as always, and a server you write yourself follows the same [Transport](#transport) and [Lifecycle](#lifecycle). It is held only by **Let other apps control Seam**, and has the methods marked **Any**.
 
 ## Versioning
 

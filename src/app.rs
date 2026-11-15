@@ -87,7 +87,7 @@ use workspaces::{
     show_spotlight, snap_back, start_capture, start_focus_only, start_switch, start_switch_job, start_window,
     switch_back, switched, sync_live, undo_quick_save, update_workspace, ws_moved,
 };
-use workspaces::{start_group, window_planned};
+use workspaces::{create_workspace, edit_workspace, start_group, window_planned};
 
 const WM_APP_TRAY: u32 = WM_APP + 1;
 /// A worker finished `arrangement.align`.

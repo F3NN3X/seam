@@ -139,7 +139,10 @@ pub fn render(panel: &mut Panel, window: &mut Window, cx: &mut Context<Panel>) -
         setter(&view, |on| json!({ "step_aside_fullscreen": on })),
     );
     let standing_by = standing_by_note(panel, p, cx);
-    let connected = panel.state.as_ref().map_or(0, |s| s.clients.iter().filter(|c| *c != "panel").count());
+    let connected = panel
+        .state
+        .as_ref()
+        .map_or(0, |s| s.clients.iter().filter(|c| *c != "panel" && !c.starts_with(seam::api::MCP_CLIENT)).count());
     let api_about =
         format!("Stream Deck and tools on this PC can read status and switch workspaces. {connected} connected");
     let api = switch(
@@ -159,6 +162,7 @@ pub fn render(panel: &mut Panel, window: &mut Window, cx: &mut Context<Panel>) -
         setter(&view, |on| json!({ "debug_log": on })),
     );
     let files = files_section(debug_log, p, cx);
+    let assistants = super::assistants::render(panel, &view, window, cx);
 
     div()
         .flex()
@@ -186,6 +190,7 @@ pub fn render(panel: &mut Panel, window: &mut Window, cx: &mut Context<Panel>) -
             card(vec![row("Let other apps control Seam", Some(api_about.into()), api, p)], p),
             p,
         ))
+        .child(assistants)
         .child(files)
         .child(div().text_size(px(12.)).text_color(p.muted).child("Seam follows your Windows light or dark mode"))
 }

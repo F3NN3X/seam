@@ -146,7 +146,7 @@ If the secret key might have been exposed, treat the key as lost: make a new pai
 
 ## Release on GitHub
 
-1. Set `version` to the same number in `Cargo.toml` and `settings/Cargo.toml`. CI fails if the two differ.
+1. Set `version` to the same number in `Cargo.toml`, `settings/Cargo.toml` and `mcp/Cargo.toml`. CI fails if they differ.
 2. In `CHANGELOG.md`, move **Unreleased** under a `## [X.Y.Z] - YYYY-MM-DD` heading. That section becomes the release notes, and its `- ` bullets become the notes the updater shows.
 3. Merge that through a pull request, then tag the merge commit on `main` and push the tag:
 

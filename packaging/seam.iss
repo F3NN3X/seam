@@ -15,7 +15,7 @@
   #error Pass /DAppId= with the app_id from packaging\installer.json
 #endif
 #ifndef SourceDir
-  #error Pass /DSourceDir= with the folder that holds seam.exe and seam-settings.exe
+  #error Pass /DSourceDir= with the folder that holds seam.exe, seam-settings.exe and seam-mcp.exe
 #endif
 
 ; Inno wants "{{" for a literal brace in AppId.
@@ -76,6 +76,7 @@ RestartApplications=no
 Source: "{#SourceDir}\seam-settings.exe"; DestDir: "{tmp}"; Flags: dontcopy
 Source: "{#SourceDir}\seam.exe"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#SourceDir}\seam-settings.exe"; DestDir: "{app}"; Flags: ignoreversion
+Source: "{#SourceDir}\seam-mcp.exe"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\LICENSE"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\README.md"; DestDir: "{app}"; Flags: ignoreversion
 

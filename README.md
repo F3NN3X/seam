@@ -35,6 +35,7 @@ Seam makes the pointer cross exactly where your screens physically meet, snaps w
   - [Help](#help)
   - [Stream Deck](#stream-deck)
   - [Local API](#local-api)
+  - [Assistants (MCP)](#assistants-mcp)
 - [Getting started](#getting-started)
   - [Install](#install)
   - [First run](#first-run)
@@ -243,6 +244,10 @@ When Seam isn't running, every key says so and reconnects by itself once it is. 
 
 Other programs on the PC can read Seam's status, switch workspaces, line up screens and move windows through a local, per-user named pipe, with no network. That is how the Stream Deck plugin works. **Let other apps control Seam** on General turns it on or off. The [API docs](docs/api.md) cover every method, event and error, with client examples in PowerShell, Node and Python.
 
+### Assistants (MCP)
+
+An AI assistant that speaks MCP, such as Claude, can use Seam through `seam-mcp.exe`, which sits next to `seam.exe`. It can read status and your workspaces, switch workspaces without closing any window, Snap back, Switch back and Quick save. **Let assistants use Seam (MCP)** on General is off until you turn it on, and takes effect at once. **Let assistants change workspaces** under it, also off, lets it rename, create and edit rows, each with an Undo notice. It can't close windows, change your settings or choose which programs a workspace starts. General has the path to paste into the assistant's MCP settings. See [MCP](docs/api.md#mcp).
+
 ## Getting started
 
 ### Install
@@ -250,12 +255,12 @@ Other programs on the PC can read Seam's status, switch workspaces, line up scre
 | | Download | Notes |
 |---|---|---|
 | **Installer** (recommended) | `Seam-Setup-X.Y.Z.exe` from [Releases](https://github.com/F3NN3X/seam/releases) | For you only, no admin prompt. Adds Seam to the Start menu and to Installed apps. |
-| **Portable zip** | `seam-X.Y.Z-windows-x64.zip` from the same page | Unzip it and keep both exes together. |
+| **Portable zip** | `seam-X.Y.Z-windows-x64.zip` from the same page | Unzip it and keep the exes together. |
 | **Microsoft Store** | Once it's live | The Store updates it, and winget finds it through the `msstore` source. |
 
 Each comes in two builds. **x64** is for most PCs. **ARM64** (`Seam-Setup-X.Y.Z-arm64.exe`, `seam-X.Y.Z-windows-arm64.zip`) is for PCs with an ARM processor, such as Snapdragon laptops. The x64 build runs on those too, emulated. Both installers use the same folder, so running the other one's setup switches your install over, and the updater keeps each build on its own architecture.
 
-The installer and the zip are unsigned, so Windows SmartScreen warns about an unknown publisher the first time. Choose **More info**, then **Run anyway**. See [Troubleshooting](#troubleshooting). To update the zip by hand, download the new zip, quit Seam, and replace both exes.
+The installer and the zip are unsigned, so Windows SmartScreen warns about an unknown publisher the first time. Choose **More info**, then **Run anyway**. See [Troubleshooting](#troubleshooting). To update the zip by hand, download the new zip, quit Seam, and replace the exes. Seam's updater only replaces `seam.exe` and `seam-settings.exe`, so `seam-mcp.exe` is replaced by hand or by the installer.
 
 Seam has a built-in updater that only installs releases signed with Seam's key. It checks once a day, and About shows the result of each check.
 

@@ -6,6 +6,7 @@ use crate::groups::Side;
 use crate::library;
 use crate::process;
 use crate::state::Snapshot;
+use crate::workspace;
 use crate::zones;
 use serde::Serialize;
 use serde_json::{Value, json};
@@ -154,6 +155,20 @@ pub enum Command {
         id: String,
         workspace: Value,
     },
+    /// `workspace.create`: an empty workspace on this desk. Panel, or an assistant allowed to edit.
+    WorkspaceCreate {
+        name: String,
+    },
+    /// `workspace.rename`, `edit_row`, `remove_row` and `set_show_all`, which an
+    /// assistant allowed to edit may send. The tray saves them as the editor would.
+    WorkspaceEdit {
+        id: String,
+        edit: workspace::Edit,
+    },
+    /// `workspace.get`: the rows of one workspace on this desk, read from the snapshot.
+    WorkspaceGet {
+        id: String,
+    },
     /// How each app of a workspace on this desk is doing right now.
     WorkspaceStatus {
         id: String,
@@ -240,7 +255,19 @@ pub struct Peer {
     pub own_image: bool,
     /// "Let other apps control Seam".
     pub api_enabled: bool,
+    /// The client process is a `seam-mcp.exe`, whatever folder it sits in.
+    pub mcp: bool,
+    /// "Let assistants use Seam (MCP)".
+    pub mcp_on: bool,
+    /// "Let assistants change workspaces", while `mcp_on`.
+    pub assistants_edit: bool,
 }
+
+/// The name `seam-mcp.exe` gives in `hello`, which General counts as an assistant.
+pub const MCP_CLIENT: &str = "seam-mcp";
+
+/// What `seam-mcp` tells an assistant while "Let assistants use Seam (MCP)" is off.
+pub const MCP_OFF: &str = "Assistant access is off in Seam, General";
 
 /// A request that can't be answered, with the id to answer it under.
 pub type Rejected = (Value, RpcError);
@@ -300,6 +327,34 @@ pub fn workspaces_list(snapshot: &Snapshot, desk: Option<&str>) -> Reply {
         })
     });
     Ok(Value::Array(workspaces.collect()))
+}
+
+/// `workspace.get`: one workspace's rows, with the app's file name and what a client
+/// may edit. The program's path, its AUMID and the folder or page it showed stay out.
+pub fn workspace_get(snapshot: &Snapshot, id: &str) -> Reply {
+    let desk = snapshot.config["desks"].get(&snapshot.state.desk.sig);
+    let found = desk.and_then(|d| d["workspaces"].as_array()).and_then(|list| list.iter().find(|w| w["id"] == id));
+    let Some(ws) = found else { return Err(RpcError::new(NOT_FOUND, "no such workspace on this desk")) };
+    let rows = ws["windows"].as_array().into_iter().flatten().enumerate().map(|(row, r)| {
+        let exe = r["exe"].as_str().unwrap_or_default();
+        let app = exe.rsplit('\\').next().filter(|n| !n.is_empty()).or_else(|| r["aumid"].as_str());
+        json!({
+            "row": row,
+            "app": app,
+            "title": r["title_hint"],
+            "screen": r["monitor"],
+            "target": r["target"],
+            "shown": r["shown"],
+            "launch": r["launch"],
+        })
+    });
+    Ok(json!({
+        "id": ws["id"],
+        "name": ws["name"],
+        "show_all": ws["show_all"],
+        "other_windows": ws["other_windows"],
+        "rows": rows.collect::<Vec<_>>(),
+    }))
 }
 
 /// `zones.layouts`: the layouts a screen can be given, with the id of the one it has.

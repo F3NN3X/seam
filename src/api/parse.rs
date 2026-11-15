@@ -1,6 +1,7 @@
 //! Turning a request line into a command, and who may send it.
 
 use super::*;
+use crate::workspace::Edit;
 
 fn str_param(params: &Value, key: &str) -> Result<Option<String>, RpcError> {
     match params.get(key) {
@@ -55,6 +56,17 @@ fn command(method: &str, p: &Value) -> Result<Command, RpcError> {
         "workspace.switch" => workspace_switch(p)?,
         "workspace.capture" => workspace_capture(p)?,
         "workspace.update" => workspace_update(p)?,
+        "workspace.create" => Command::WorkspaceCreate { name: name_param(p)? },
+        "workspace.rename" => workspace_edit(p, Edit::Rename(name_param(p)?))?,
+        "workspace.edit_row" => {
+            let edit = Edit::Row { row: row_param(p)?, change: row_change(p)? };
+            workspace_edit(p, edit)?
+        }
+        "workspace.remove_row" => workspace_edit(p, Edit::RemoveRow(row_param(p)?))?,
+        "workspace.set_show_all" => workspace_edit(p, Edit::ShowAll(on_param(p)?))?,
+        "workspace.get" => Command::WorkspaceGet {
+            id: str_param(p, "id")?.ok_or_else(|| RpcError::new(INVALID_PARAMS, "id is required"))?,
+        },
         "workspace.status" => Command::WorkspaceStatus {
             id: str_param(p, "id")?.ok_or_else(|| RpcError::new(INVALID_PARAMS, "id is required"))?,
         },
@@ -171,6 +183,45 @@ fn workspace_capture(p: &Value) -> Result<Command, RpcError> {
     Ok(Command::WorkspaceCapture { name: str_param(p, "name")?, into, row, pick })
 }
 
+/// A workspace's `name`, trimmed and short.
+fn name_param(p: &Value) -> Result<String, RpcError> {
+    let name = str_param(p, "name")?.ok_or_else(|| RpcError::new(INVALID_PARAMS, "name is required"))?;
+    workspace::checked_name(&name).map_err(|why| RpcError::new(INVALID_PARAMS, why))
+}
+
+fn row_param(p: &Value) -> Result<usize, RpcError> {
+    p.get("row")
+        .and_then(Value::as_u64)
+        .and_then(|n| usize::try_from(n).ok())
+        .ok_or_else(|| RpcError::new(INVALID_PARAMS, "row must be a row number"))
+}
+
+/// What `workspace.edit_row` may change: `target`, `shown` and `launch: false`.
+fn row_change(p: &Value) -> Result<workspace::RowChange, RpcError> {
+    fn part<T: serde::de::DeserializeOwned>(p: &Value, key: &str, what: &str) -> Result<Option<T>, RpcError> {
+        match p.get(key) {
+            None | Some(Value::Null) => Ok(None),
+            Some(v) => serde_json::from_value(v.clone()).map(Some).map_err(|_| RpcError::new(INVALID_PARAMS, what)),
+        }
+    }
+    let target = part(p, "target", "target must be {zone}, {rect} or {state}")?;
+    let shown = part(p, "shown", "shown must be normal, minimized, maximized or fullscreen")?;
+    let launch_off = match p.get("launch") {
+        None | Some(Value::Null) => false,
+        Some(Value::Bool(false)) => true,
+        Some(_) => return Err(RpcError::new(INVALID_PARAMS, "launch can only be turned off")),
+    };
+    if target.is_none() && shown.is_none() && !launch_off {
+        return Err(RpcError::new(INVALID_PARAMS, "nothing to change"));
+    }
+    Ok(workspace::RowChange { target, shown, launch_off })
+}
+
+fn workspace_edit(p: &Value, edit: Edit) -> Result<Command, RpcError> {
+    let id = str_param(p, "id")?.ok_or_else(|| RpcError::new(INVALID_PARAMS, "id is required"))?;
+    Ok(Command::WorkspaceEdit { id, edit })
+}
+
 fn workspace_update(p: &Value) -> Result<Command, RpcError> {
     Ok(Command::WorkspaceUpdate {
         id: str_param(p, "id")?.ok_or_else(|| RpcError::new(INVALID_PARAMS, "id is required"))?,
@@ -270,10 +321,41 @@ fn zones_apply(p: &Value) -> Result<Command, RpcError> {
     })
 }
 
+/// What `seam-mcp.exe` may send, and only while "Let assistants use Seam (MCP)" is on.
+/// Switch, Snap back, Switch back and Quick save never close a window, and edits need
+/// the second switch. Everything else, launch settings, Close and Open with included,
+/// stays out of reach.
+fn assistant_allowed(command: &Command, peer: Peer) -> Result<(), RpcError> {
+    if !peer.mcp_on {
+        return Err(RpcError::new(DISABLED, MCP_OFF));
+    }
+    match command {
+        Command::AppInfo
+        | Command::StateGet
+        | Command::DesksList
+        | Command::WorkspacesList { .. }
+        | Command::WorkspaceGet { .. }
+        | Command::WorkspaceStatus { .. }
+        | Command::WorkspaceSwitch { .. }
+        | Command::WorkspaceSnapBack
+        | Command::WorkspaceSwitchBack
+        | Command::WorkspaceQuickSave
+        | Command::EventsSubscribe(_) => Ok(()),
+        Command::WorkspaceCreate { .. } | Command::WorkspaceEdit { .. } if peer.assistants_edit => Ok(()),
+        Command::WorkspaceCreate { .. } | Command::WorkspaceEdit { .. } => {
+            Err(RpcError::new(FORBIDDEN, "Changing workspaces is off for assistants in Seam, General"))
+        }
+        _ => Err(RpcError::new(FORBIDDEN, "Assistants can't do that")),
+    }
+}
+
 fn allowed(command: &Command, peer: Peer) -> Result<(), RpcError> {
     // The token in `hello` is what makes a client the panel, so it always gets through.
     if matches!(command, Command::Hello { .. }) {
         return Ok(());
+    }
+    if peer.mcp && !peer.panel {
+        return assistant_allowed(command, peer);
     }
     if !peer.api_enabled && !peer.panel && !peer.own_image {
         return Err(RpcError::new(DISABLED, "Other apps can't control Seam right now"));
@@ -282,6 +364,8 @@ fn allowed(command: &Command, peer: Peer) -> Result<(), RpcError> {
         Command::ConfigPatch(_)
         | Command::ZonesPick { .. }
         | Command::WorkspaceUpdate { .. }
+        | Command::WorkspaceCreate { .. }
+        | Command::WorkspaceEdit { .. }
         | Command::CursorEasingSet(_)
         | Command::LayoutShow(_) => peer.panel,
         Command::AppQuit
@@ -308,6 +392,11 @@ pub fn parse_request(line: &str, peer: Peer) -> Result<(Value, Command), Rejecte
     };
     let params = request.get("params").cloned().unwrap_or_else(|| json!({}));
     let parsed = command(method, &params).and_then(|c| allowed(&c, peer).map(|()| c));
+    // An assistant's switch never closes windows, whatever it asked for.
+    let parsed = parsed.map(|c| match c {
+        Command::WorkspaceSwitch { id, name, .. } if peer.mcp => Command::WorkspaceSwitch { id, name, alongside: true },
+        c => c,
+    });
     match parsed {
         Ok(command) => Ok((id, command)),
         Err(e) => Err((id, e)),
@@ -458,5 +547,82 @@ mod tests {
         assert_eq!(id, 7);
         let (id, _) = parse_request(&request("nope", "{}"), anyone).unwrap_err();
         assert_eq!(id, 7, "errors answer under the request's id");
+    }
+
+    #[test]
+    fn assistants_get_a_short_list_behind_two_switches() {
+        let assistant =
+            |edit| Peer { mcp: true, mcp_on: true, assistants_edit: edit, api_enabled: true, ..Peer::default() };
+        let off = Peer { mcp: true, api_enabled: true, ..Peer::default() };
+        let panel = Peer { panel: true, api_enabled: true, ..Peer::default() };
+        let request =
+            |method: &str, params: &str| format!(r#"{{"jsonrpc":"2.0","id":7,"method":"{method}","params":{params}}}"#);
+        let code = |line: &str, peer| parse_request(line, peer).map(|(_, c)| c).map_err(|(_, e)| (e.code, e.message));
+
+        // A switch from an assistant never closes windows, whatever it sent.
+        let switch = code(&request("workspace.switch", r#"{"name":"Mail","alongside":false}"#), assistant(false));
+        assert_eq!(switch, Ok(Command::WorkspaceSwitch { id: None, name: Some("Mail".into()), alongside: true }));
+        for method in
+            ["state.get", "workspaces.list", "workspace.snap_back", "workspace.switch_back", "workspace.quick_save"]
+        {
+            assert!(code(&request(method, "{}"), assistant(false)).is_ok(), "{method}");
+        }
+        assert!(code(&request("workspace.status", r#"{"id":"ws_1"}"#), assistant(false)).is_ok());
+
+        // With the master switch off, every call says so.
+        let refused = code(&request("state.get", "{}"), off);
+        assert_eq!(refused, Err((DISABLED, MCP_OFF.to_string())));
+        assert_eq!(code(&request("workspace.rename", r#"{"id":"a","name":"b"}"#), off).map_err(|e| e.0), Err(DISABLED));
+
+        // Nothing outside the list: no closing, no settings, no Open with, no full workspace write.
+        let forbidden = [
+            ("config.patch", r#"{"patch":{}}"#),
+            ("workspace.update", r#"{"id":"ws_1","workspace":{}}"#),
+            ("workspace.capture", r#"{"into":"ws_1"}"#),
+            ("workspace.set_default", r#"{"id":"ws_1"}"#),
+            ("window.fit", "{}"),
+            ("app.quit", "{}"),
+            ("session.restore", "{}"),
+            ("layout.show", r#"{"view":"seam"}"#),
+        ];
+        for (method, params) in forbidden {
+            let got = code(&request(method, params), assistant(true)).map_err(|e| e.0);
+            assert_eq!(got, Err(FORBIDDEN), "{method}");
+        }
+
+        // Edits wait for the second switch.
+        let edits = [
+            ("workspace.create", r#"{"name":"New"}"#),
+            ("workspace.rename", r#"{"id":"ws_1","name":"Mail"}"#),
+            ("workspace.edit_row", r#"{"id":"ws_1","row":0,"shown":"minimized","launch":false}"#),
+            ("workspace.remove_row", r#"{"id":"ws_1","row":1}"#),
+            ("workspace.set_show_all", r#"{"id":"ws_1","on":true}"#),
+        ];
+        for (method, params) in edits {
+            assert_eq!(code(&request(method, params), assistant(false)).map_err(|e| e.0), Err(FORBIDDEN), "{method}");
+            assert!(code(&request(method, params), assistant(true)).is_ok(), "{method}");
+            assert!(code(&request(method, params), panel).is_ok(), "{method}");
+        }
+        let anyone = Peer { api_enabled: true, ..Peer::default() };
+        assert_eq!(code(&request("workspace.create", r#"{"name":"New"}"#), anyone).map_err(|e| e.0), Err(FORBIDDEN));
+
+        // A row edit can't turn launch on, set a program, or change nothing.
+        let row = |params: &str| code(&request("workspace.edit_row", params), assistant(true)).map_err(|e| e.0);
+        assert_eq!(row(r#"{"id":"a","row":0,"launch":true}"#), Err(INVALID_PARAMS));
+        assert_eq!(row(r#"{"id":"a","row":0}"#), Err(INVALID_PARAMS));
+        assert_eq!(row(r#"{"id":"a","row":0,"shown":"hidden"}"#), Err(INVALID_PARAMS));
+        // Fields it doesn't know, a program among them, are ignored.
+        let want = Command::WorkspaceEdit {
+            id: "a".into(),
+            edit: Edit::Row {
+                row: 0,
+                change: workspace::RowChange {
+                    target: Some(workspace::Target::Zone { zone: 2, span_to: None }),
+                    ..Default::default()
+                },
+            },
+        };
+        let evil = r#"{"id":"a","row":0,"target":{"zone":2},"exe":"c:\\evil.exe","open_with":"x"}"#;
+        assert_eq!(code(&request("workspace.edit_row", evil), assistant(true)), Ok(want));
     }
 }

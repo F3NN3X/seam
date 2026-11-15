@@ -172,6 +172,26 @@ pub fn follow(before: &[Value], config: &mut Config) {
     }
 }
 
+/// Whether a screen's layout is the Zones page's "Changed": its own, no template's and
+/// no library layout's, since the library has no layout under its link.
+pub fn changed(entries: &[Entry], layout: &ZoneLayout) -> bool {
+    layout.template == Template::Custom && !layout.custom.as_ref().is_some_and(|id| entries.iter().any(|e| e.id == *id))
+}
+
+/// The layout a changed screen's tree came from, for Reset sizes. A layout keeps no
+/// record of it, so it is the template or the library layout offered on the screen that
+/// cuts the screen the same way, the nearest in its ratios, a template first on a tie.
+/// None when none cuts it so.
+pub fn origin(saved: &[Value], device: &str, tree: &Node) -> Option<ZoneLayout> {
+    let entries = entries(saved);
+    let templates = Template::ALL.into_iter().filter_map(ZoneLayout::of);
+    let custom = for_screen(&entries, device).map(Entry::layout);
+    templates
+        .chain(custom)
+        .filter(|l| zones::same_shape(&l.tree, tree))
+        .min_by(|a, b| zones::ratio_gap(&a.tree, tree).total_cmp(&zones::ratio_gap(&b.tree, tree)))
+}
+
 /// A layout the tray is about to save for a screen. A `fresh` one, from Save from
 /// windows on the screen with that device path, adds its tree to the library under
 /// its id as "Custom N", for that screen. Any other
@@ -223,6 +243,32 @@ mod tests {
         edited["tree"] = json!("leaf");
         let config = config.patched(&json!({ "custom_layouts": [edited] })).unwrap();
         assert_eq!(zones::layout_of(&config.desks["S"].zones["M"]).unwrap(), now);
+    }
+
+    // Reset sizes: a dragged divider leaves a Custom layout, and the template it cuts like is where it goes back.
+    #[test]
+    fn a_changed_layout_goes_back_to_the_nearest_layout_that_cuts_it_the_same() {
+        let columns = zones::template_tree(Template::Columns).unwrap();
+        let dragged = zones::set_ratio(&columns, &[], 0.45);
+        let layout = ZoneLayout { template: Template::Custom, custom: None, tree: dragged.clone() };
+        assert!(changed(&[], &layout));
+        assert!(!changed(&[], &ZoneLayout::of(Template::Columns).unwrap()));
+        // Columns and Priority cut alike, so its ratios say which one it was.
+        assert_eq!(origin(&[], "M", &dragged), ZoneLayout::of(Template::Columns));
+        let priority = zones::template_tree(Template::Priority).unwrap();
+        let near = zones::set_ratio(&priority, &[], 0.3);
+        assert_eq!(origin(&[], "M", &near), ZoneLayout::of(Template::Priority));
+        // A library layout offered on the screen counts, and the layout it gives follows the library.
+        let entry = |screens: Vec<String>| Entry { id: "a1".into(), name: "Mine".into(), tree: near.clone(), screens };
+        let mine = entry(vec!["M".into()]);
+        assert_eq!(origin(&[mine.value()], "m", &near), Some(mine.layout()));
+        assert!(!changed(&entries(&[mine.value()]), &mine.layout()));
+        // One tied to another screen doesn't.
+        let tied = entry(vec!["Other".into()]);
+        assert_eq!(origin(&[tied.value()], "M", &near), ZoneLayout::of(Template::Priority));
+        // A split zone cuts like none of them.
+        let split = zones::split_leaf(&columns, 0, zones::Dir::Horizontal).unwrap();
+        assert_eq!(origin(&[], "M", &split), None);
     }
 
     #[test]

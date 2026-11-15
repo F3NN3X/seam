@@ -13,6 +13,7 @@ mod start;
 mod tile;
 mod tiling;
 mod tray_icon;
+mod turn;
 mod update;
 mod workspaces;
 
@@ -69,7 +70,7 @@ use tray_icon::{add_icon, make_icon, notify, show_menu, tray_data, update_tip};
 use update::{
     arm_auto_install, auto_install, check_for_updates, clean_up_after_update, read_update_state, update_read,
 };
-use wincontrol::tile::At;
+use wincontrol::tile::{At, Verb};
 use windows::Win32::Foundation::*;
 use windows::Win32::Graphics::Gdi::*;
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
@@ -182,6 +183,11 @@ const HOTKEY_FLOAT_TILE: i32 = 72;
 const HOTKEY_FREE_TILING: i32 = 73;
 /// The overview of every window.
 const HOTKEY_OVERVIEW: i32 = 74;
+/// Rotate windows and Reset sizes on the screen under the pointer. Rotate windows
+/// has the same key with Shift added for the other way, from the next id.
+const HOTKEY_ROTATE: i32 = 75;
+const HOTKEY_RESET_SIZES: i32 = 76;
+const HOTKEY_ROTATE_BACK: i32 = 77;
 /// One hotkey id per workspace on the desk, from here up.
 const HOTKEY_WORKSPACE: i32 = 100;
 const NIN_KEYSELECT: u32 = NIN_SELECT | NINF_KEY;
@@ -298,6 +304,8 @@ struct TileUndo {
     back: Vec<wincontrol::tile::Back>,
     /// Windows a split renumbered, given their old zone numbers back.
     keep: Vec<snap::Zoned>,
+    /// A tiled screen's splits before Reset sizes, given back to its tree.
+    tree: Option<zones::Node>,
     /// The ad-hoc group Fit group to screen stretched, and its area before.
     group: Option<(u64, zones::Rect)>,
     until: Instant,

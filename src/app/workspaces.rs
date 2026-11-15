@@ -66,6 +66,9 @@ pub(super) fn apply_hotkeys(app: &mut App) {
         (HOTKEY_FLOAT_TILE, "float_tile".to_string(), keys.float_tile.clone()),
         (HOTKEY_FREE_TILING, "free_tiling".to_string(), keys.free_tiling.clone()),
         (HOTKEY_OVERVIEW, "overview".to_string(), keys.overview.clone()),
+        (HOTKEY_ROTATE, "rotate".to_string(), keys.rotate.clone()),
+        (HOTKEY_RESET_SIZES, "reset_sizes".to_string(), keys.reset_sizes.clone()),
+        (HOTKEY_ROTATE_BACK, "rotate".to_string(), keys.rotate.as_deref().and_then(hotkey::with_shift)),
     ];
     for (id, (verb, dir, combo)) in (HOTKEY_WINDOW..).zip(keys.directional()) {
         wanted.push((id, format!("{verb}_{dir}"), combo.cloned()));

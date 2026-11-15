@@ -372,6 +372,31 @@ pub fn snap_ratio(ratio: f32) -> f32 {
     near.unwrap_or(ratio).clamp(0.1, 0.9)
 }
 
+/// Whether two trees cut the screen the same way, whatever their ratios.
+pub fn same_shape(a: &Node, b: &Node) -> bool {
+    match (a, b) {
+        (Node::Leaf(_), Node::Leaf(_)) => true,
+        (Node::Split { split: d, a: a1, b: b1, .. }, Node::Split { split: e, a: a2, b: b2, .. }) => {
+            d == e && same_shape(a1, a2) && same_shape(b1, b2)
+        }
+        _ => false,
+    }
+}
+
+/// How far apart the ratios of two trees of the same shape are: the squares of their
+/// differences, added. Infinite when the shapes differ.
+pub fn ratio_gap(a: &Node, b: &Node) -> f32 {
+    match (a, b) {
+        (Node::Leaf(_), Node::Leaf(_)) => 0.0,
+        (Node::Split { split: d, ratio: r, a: a1, b: b1 }, Node::Split { split: e, ratio: s, a: a2, b: b2 })
+            if d == e =>
+        {
+            (r - s).powi(2) + ratio_gap(a1, a2) + ratio_gap(b1, b2)
+        }
+        _ => f32::INFINITY,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -243,6 +243,15 @@ pub enum Command {
     ScreenIdentify(u32),
     /// Tile the loose windows of a screen: its Line Up number, or the one under the pointer.
     ScreenTile(Option<u32>),
+    /// `screen.rotate`: every window snapped on a screen moves to the next zone, or with
+    /// `back` the previous one. Its Line Up number, or the one under the pointer.
+    ScreenRotate {
+        number: Option<u32>,
+        back: bool,
+    },
+    /// `screen.reset_sizes`: a screen whose layout was changed goes back to the layout it
+    /// came from, or a tiled one evens out its splits. Its Line Up number, or the one under the pointer.
+    ScreenResetSizes(Option<u32>),
     /// Save the windows on a screen as a new custom layout: its Line Up number, or the one under the pointer.
     ZonesFromWindows(Option<u32>),
     /// Open the quick layout overlay on a screen: its Line Up number, or the one under the pointer.

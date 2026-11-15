@@ -53,11 +53,11 @@ pub(super) fn pointer() -> At {
 /// A tile, a pick or a split by a drag's keys finished: say what it did and keep
 /// what Undo puts back, or say why nothing happened. Undo is a click on the notice,
 /// as with a quick save.
-pub(super) fn tile_finished(app: &mut App, result: Option<Result<wincontrol::tile::Done, String>>) {
+pub(super) fn tile_finished(app: &mut App, result: Option<Result<wincontrol::tile::Done, wincontrol::Refusal>>) {
     match result {
         None => {}
-        Some(Err(why)) => {
-            notify(app, "Tile windows", &why, BalloonAction::None);
+        Some(Err((title, why))) => {
+            notify(app, title, &why, BalloonAction::None);
         }
         Some(Ok(done)) => {
             let n = done.tiled;
@@ -67,7 +67,23 @@ pub(super) fn tile_finished(app: &mut App, result: Option<Result<wincontrol::til
                 return;
             }
             let windows = if n == 1 { "window" } else { "windows" };
-            let (title, body) = if done.pulled {
+            let (title, body) = if let Some(turn) = &done.turn {
+                let left = match done.left {
+                    0 => String::new(),
+                    left => format!("{left} left where they were. "),
+                };
+                match turn.verb {
+                    Verb::Rotate => {
+                        log::info!("rotate windows screen {}: {n} moved, {} left", done.number, done.left);
+                        (format!("Rotated {n} {windows} on screen {}", done.number), format!("{left}Click to undo"))
+                    }
+                    Verb::Reset => {
+                        log::info!("reset sizes screen {}: {n} followed", done.number);
+                        let body = format!("{n} {windows} followed. {left}Click to undo");
+                        (format!("Screen {}'s sizes are back", done.number), body)
+                    }
+                }
+            } else if done.pulled {
                 (format!("Took the window out of screen {}'s layout", done.number), "Click to undo".to_string())
             } else if done.split {
                 ("Split the zone".to_string(), "Click to undo".to_string())
@@ -94,6 +110,7 @@ pub(super) fn tile_finished(app: &mut App, result: Option<Result<wincontrol::til
                 changed: done.changed,
                 back: done.back,
                 keep: done.keep,
+                tree: done.turn.and_then(|t| t.tree),
                 group: None,
                 until,
             });
@@ -257,6 +274,7 @@ pub(super) fn pick_layout(
                     pick: true,
                     split: false,
                     pulled: false,
+                    turn: None,
                 };
                 tile_finished(app, Some(Ok(done)));
             }
@@ -285,6 +303,10 @@ pub(super) fn undo_tile(app: &mut App) {
     }
     // Where the screen kept another layout, the numbers are not the old layout's to give back.
     snap::rezone(if changed && !layout_back { Vec::new() } else { undo.keep });
+    // A tiled screen's splits come back before its windows do, so they land in the right tiles.
+    if let Some(node) = undo.tree {
+        snap::tiling_restore(&undo.screen, node);
+    }
     let here = |b: &wincontrol::tile::Back| {
         let h = HWND(b.place.hwnd as *mut _);
         let (set, sized) = (b.set, seam::winutil::is_resizable(h));
@@ -321,6 +343,7 @@ pub(super) fn stacks_changed(app: &mut App) {
         changed: None,
         back: vec![back],
         keep: Vec::new(),
+        tree: None,
         group: None,
         until: Instant::now() + QUICK_UNDO_FOR,
     });
@@ -357,6 +380,7 @@ pub(super) fn fit_group(app: &mut App, hwnd: Option<isize>, reply: Option<Sender
         changed: None,
         back: fitted.back,
         keep: Vec::new(),
+        tree: None,
         group: fitted.group,
         until: Instant::now() + QUICK_UNDO_FOR,
     });

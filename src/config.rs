@@ -106,6 +106,12 @@ pub struct Hotkeys {
     pub free_tiling: Option<String>,
     /// "Show overview": every window on every screen and virtual desktop, to search and go to.
     pub overview: Option<String>,
+    /// "Rotate windows": every snapped window on the screen under the pointer moves to the
+    /// next zone. The same key with Shift added goes the other way.
+    pub rotate: Option<String>,
+    /// "Reset sizes": the screen under the pointer goes back to the layout it came from,
+    /// with that layout's proportions, or a tiled screen's splits even out.
+    pub reset_sizes: Option<String>,
 }
 
 impl Default for Hotkeys {
@@ -151,6 +157,8 @@ impl Default for Hotkeys {
             float_tile: None,
             free_tiling: None,
             overview: None,
+            rotate: None,
+            reset_sizes: None,
         }
     }
 }

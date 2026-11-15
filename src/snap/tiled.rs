@@ -20,6 +20,9 @@ use std::collections::BTreeMap;
 use std::time::Duration;
 
 mod hand;
+mod turn;
+
+pub use turn::Turned;
 
 /// One screen's tree on one virtual desktop.
 pub(super) struct Tiled {
@@ -124,6 +127,22 @@ pub fn tiled_dragged(screen: &str, tree: &Node) -> bool {
 /// window it tiled goes back to where it was before. Returns how many.
 pub fn tiling_free(screen: &str) -> usize {
     with_engine(|e| e.tiling_free(screen)).unwrap_or(0)
+}
+
+/// Rotate windows on a tiled screen: its tiles' windows step to the next tile in zone
+/// order, or the previous one, by the one rule.
+pub fn tiling_rotate(screen: &str, forward: bool) -> Result<Turned, String> {
+    with_engine(|e| e.tiled_rotate(screen, forward)).unwrap_or_else(|| Err("Seam is busy, try again".into()))
+}
+
+/// Reset sizes on a tiled screen: every split even again, and its windows follow.
+pub fn tiling_reset(screen: &str) -> Result<Turned, String> {
+    with_engine(|e| e.tiled_reset(screen)).unwrap_or_else(|| Err("Seam is busy, try again".into()))
+}
+
+/// Undo of a reset: a tiled screen's splits as they were.
+pub fn tiling_restore(screen: &str, node: Node) {
+    with_engine(|e| e.tiled_restore(screen, node));
 }
 
 /// "Float or tile this window": a tiled window floats and the others close up, and a

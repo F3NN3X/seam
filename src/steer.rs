@@ -209,6 +209,7 @@ impl Engine {
             pick: false,
             split: true,
             pulled: false,
+            turn: None,
         };
         wincontrol::save_split(self.owner, id, split.layout, done);
     }
@@ -306,6 +307,7 @@ impl Engine {
             pick: false,
             split: false,
             pulled: true,
+            turn: None,
         };
         wincontrol::save_split(self.owner, id, layout, done);
     }

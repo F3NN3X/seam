@@ -400,6 +400,24 @@ impl Engine {
         more
     }
 
+    /// Moves are about to send every window of a stack to the same zones, as a rotation, a
+    /// reset or the Undo of either does: the stack stays one there, and its top shows once
+    /// its windows have landed. A stack only some of whose windows are in the list leaves
+    /// for other zones as it always did.
+    pub(super) fn stack_keep(&mut self, list: &[Placement]) {
+        let to = |m: &isize| list.iter().find(|p| p.hwnd == *m).and_then(|p| p.zone.clone());
+        let whole: Vec<(Vec<isize>, isize)> = self
+            .stacks
+            .iter()
+            .filter(|s| to(&s.members[0]).is_some() && s.members.iter().all(|m| to(m) == to(&s.members[0])))
+            .map(|s| (s.members.clone(), s.top()))
+            .collect();
+        for (members, top) in whole {
+            self.carried.extend(members);
+            self.restack.push(top);
+        }
+    }
+
     /// A re-fit is over: each stack's others go back below its top.
     pub(super) fn stack_raise_tops(&self) {
         for s in self.stacks.iter() {

@@ -10,7 +10,7 @@ use super::{
 use crate::snap::Placement;
 use seam::groups;
 use seam::winutil;
-use seam::zones::{self, Rect, ZoneLayout};
+use seam::zones::{self, Node, Rect, ZoneLayout};
 use windows::Win32::Foundation::HWND;
 use windows::Win32::UI::WindowsAndMessaging::{GWL_EXSTYLE, GetWindowLongW, WS_EX_TOPMOST};
 
@@ -67,6 +67,23 @@ pub struct Done {
     pub split: bool,
     /// A drop that took a window out of the layout, closing its gap.
     pub pulled: bool,
+    /// Rotate windows or Reset sizes rather than a tile.
+    pub turn: Option<Turn>,
+}
+
+/// Which of the two keys that move a screen's windows round a turn was.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Verb {
+    Rotate,
+    Reset,
+}
+
+/// What a Rotate windows or Reset sizes did beyond a tile's.
+pub struct Turn {
+    pub verb: Verb,
+    /// A tiled screen's tree before a reset, which Undo puts back. Its windows are tiled,
+    /// not in zones of the saved layout, so no layout change says what they were.
+    pub tree: Option<Node>,
 }
 
 /// A window the tile moved.
@@ -89,7 +106,7 @@ pub struct Plan {
     pub done: Done,
 }
 
-fn topmost(h: HWND) -> bool {
+pub(super) fn topmost(h: HWND) -> bool {
     unsafe { GetWindowLongW(h, GWL_EXSTYLE) as u32 & WS_EX_TOPMOST.0 != 0 }
 }
 
@@ -157,7 +174,7 @@ fn closest_first(zones: &[Rect], open: &mut Vec<usize>, windows: &[(usize, (i32,
 
 /// The zones a window is already snapped in on screen `s`: the snapping's own
 /// record if the window is still where it put it, or else the stamp if it fits.
-fn placed(job: &Job, geo: &[super::Geo], s: usize, h: HWND, rect: Rect) -> Option<(usize, usize)> {
+pub(super) fn placed(job: &Job, geo: &[super::Geo], s: usize, h: HWND, rect: Rect) -> Option<(usize, usize)> {
     let g = &geo[s];
     let sized = winutil::is_resizable(h);
     let record = job.members.iter().find(|m| {
@@ -263,6 +280,7 @@ pub(super) fn run(job: &Job, at: At) -> Result<Outcome, String> {
         pick: false,
         split: false,
         pulled: false,
+        turn: None,
     };
     let layout = existing.is_none().then(|| (g.id.clone(), layout));
     Ok(Outcome::Tile(Box::new(Plan { list, layout, done })))
@@ -318,6 +336,47 @@ pub(super) fn pick(job: &Job, p: &Pick) -> Result<Outcome, String> {
         pick: true,
         split: false,
         pulled: false,
+        turn: None,
+    };
+    Ok(Outcome::Tile(Box::new(Plan { list, layout: Some((p.screen.clone(), p.layout.clone())), done })))
+}
+
+/// Reset sizes on a screen with zones: it goes back to the layout it came from, and each
+/// window keeps its zones, now at the layout's proportions. The screen's old layout is
+/// still in the job, so the stamps are read against it. Windows past the zones stay.
+pub(super) fn reset(job: &Job, p: &Pick) -> Result<Outcome, String> {
+    let screens = direction::desk_screens(&job.mons, &job.links);
+    let geo = geometry(job, &screens);
+    let s = geo.iter().position(|g| g.id == p.screen).ok_or("No such screen")?;
+    let g = &geo[s];
+    let gap = (job.gap.min(MAX_GAP) as f32 * g.dpi as f32 / 96.0).round() as i32;
+    let zones = zones::rects(&p.layout.tree, g.work, gap);
+    if zones.len() != g.zones.len() {
+        return Err("The screen's layout changed since".into());
+    }
+    let seen = windows_on(job, g);
+    let span = |zones: &[Rect], (a, b): (usize, usize)| zones::span(zones[a], zones[b]);
+    let mut list = Vec::new();
+    let mut back = Vec::new();
+    for (h, rect) in &seen {
+        let Some(ab) = placed(job, &geo, s, *h, *rect) else { continue };
+        let target = span(&zones, ab);
+        list.push(into_zone(*h, g, ab.0, ab.1, target));
+        let place = into_zone(*h, g, ab.0, ab.1, span(&g.zones, ab));
+        back.push(Back { place, set: target, maximized: winutil::is_maximized(*h), pulled: None });
+    }
+    let done = Done {
+        number: g.number,
+        tiled: list.len(),
+        left: 0,
+        screen: p.screen.clone(),
+        changed: Some(Change { now: Some(p.layout.clone()), before: p.before.clone() }),
+        back,
+        keep: Vec::new(),
+        pick: false,
+        split: false,
+        pulled: false,
+        turn: Some(Turn { verb: Verb::Reset, tree: None }),
     };
     Ok(Outcome::Tile(Box::new(Plan { list, layout: Some((p.screen.clone(), p.layout.clone())), done })))
 }

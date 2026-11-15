@@ -60,3 +60,30 @@ pub fn parse(text: &str) -> Option<Combo> {
     }
     Some(Combo { mods: flags | MOD_NOREPEAT, vk: key_code(key.trim())? })
 }
+
+/// The combo with Shift added before its key, which is how Rotate windows goes the other
+/// way. None when it holds Shift already, as the one key can't mean both.
+pub fn with_shift(combo: &str) -> Option<String> {
+    let (mods, key) = combo.rsplit_once('+')?;
+    if mods.split('+').any(|part| part.trim().eq_ignore_ascii_case("shift")) {
+        return None;
+    }
+    Some(format!("{mods}+Shift+{key}"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn shift_is_added_before_the_key_unless_it_is_there() {
+        assert_eq!(with_shift("Ctrl+Alt+R").as_deref(), Some("Ctrl+Alt+Shift+R"));
+        assert_eq!(with_shift("Win+Left").as_deref(), Some("Win+Shift+Left"));
+        assert_eq!(with_shift("Ctrl+Shift+R"), None);
+        assert_eq!(with_shift("ctrl+SHIFT+alt+r"), None);
+        assert_eq!(with_shift("R"), None);
+        let shifted = with_shift("Ctrl+Alt+R").and_then(|c| parse(&c)).unwrap();
+        assert_eq!(shifted.mods & MOD_SHIFT, MOD_SHIFT);
+        assert_eq!(shifted.vk, parse("Ctrl+Alt+R").unwrap().vk);
+    }
+}

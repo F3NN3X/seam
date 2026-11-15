@@ -1,0 +1,508 @@
+//! The overview's windows, one per screen: keys, mouse, a drag to a zone or screen,
+//! and the thread that runs them.
+
+use super::*;
+
+/// The state, unless a call made while it is borrowed came back into the window procedure.
+fn with_state<R>(f: impl FnOnce(&mut State) -> R) -> Option<R> {
+    STATE.with(|s| s.try_borrow_mut().ok()?.as_mut().map(f))
+}
+
+fn redraw(s: &State) {
+    for p in &s.panes {
+        let _ = unsafe { InvalidateRect(Some(p.hwnd), None, false) };
+    }
+}
+
+fn pane_of(s: &State, hwnd: HWND) -> Option<usize> {
+    s.panes.iter().position(|p| p.hwnd == hwnd)
+}
+
+/// A point in a pane's own pixels, in screen pixels.
+fn on_screen(s: &State, hwnd: HWND, lparam: LPARAM) -> Option<(i32, i32)> {
+    let (x, y) = ((lparam.0 & 0xffff) as i16 as i32, ((lparam.0 >> 16) & 0xffff) as i16 as i32);
+    let p = &s.panes[pane_of(s, hwnd)?];
+    Some((p.rect.x + x, p.rect.y + y))
+}
+
+fn held(vk: VIRTUAL_KEY) -> bool {
+    unsafe { GetKeyState(i32::from(vk.0)) < 0 }
+}
+
+/// Go to a window: restore it if it is minimized and give it the focus through the
+/// window manager's input credit, as a stack's cycle does. One on another virtual
+/// desktop takes Windows there. Then the overview closes.
+fn go(s: &State, w: usize) {
+    let h = s.wins[w].hwnd;
+    unsafe {
+        if IsIconic(h).as_bool() {
+            let _ = ShowWindowAsync(h, SW_RESTORE);
+        }
+    }
+    wincontrol::focus(h, true);
+    quit();
+}
+
+/// Esc: back to the window that was in front, when it is one of the listed ones.
+fn leave(s: &State) {
+    if let Some(w) = s.wins.iter().position(|w| w.hwnd.0 as isize == s.before) {
+        go(s, w);
+    } else {
+        quit();
+    }
+}
+
+/// The search changed: lay the tiles out again for what it keeps.
+fn searched(s: &mut State) {
+    s.search();
+}
+
+fn key(s: &mut State, vk: u16) -> bool {
+    match VIRTUAL_KEY(vk) {
+        VK_ESCAPE if s.drag.is_some() => cancel_drag(s),
+        VK_ESCAPE => leave(s),
+        VK_RETURN => match s.selected {
+            Some(w) => go(s, w),
+            None => return false,
+        },
+        VK_LEFT => s.arrow(Dir::Left),
+        VK_RIGHT => s.arrow(Dir::Right),
+        VK_UP => s.arrow(Dir::Up),
+        VK_DOWN => s.arrow(Dir::Down),
+        VK_TAB => s.advance(if held(VK_SHIFT) { -1 } else { 1 }),
+        VK_HOME => s.advance(isize::MIN),
+        VK_END => s.advance(isize::MAX),
+        VK_BACK if held(VK_CONTROL) => {
+            s.query.clear();
+            searched(s);
+        }
+        VK_BACK => {
+            s.query.pop();
+            searched(s);
+        }
+        _ => return false,
+    }
+    true
+}
+
+/// A typed character goes into the search.
+fn typed(s: &mut State, unit: u32) -> bool {
+    match char::from_u32(unit) {
+        Some(c) if !c.is_control() => {
+            s.query.push(c);
+            searched(s);
+            true
+        }
+        _ => false,
+    }
+}
+
+/// The screens and their zones, for what a drop lands on.
+fn drop_targets(s: &State) -> Vec<(Rect, Vec<Rect>)> {
+    s.panes.iter().map(|p| (p.rect, p.zones.clone())).collect()
+}
+
+/// What the pointer is over during a drag. The window's own screen, when it has no
+/// zones, is no move.
+fn over(s: &State, win: usize, at: (i32, i32)) -> Option<Landing> {
+    match overview::drop_at(&drop_targets(s), at) {
+        Some(Landing::Screen(i)) if i == s.wins[win].screen => None,
+        other => other,
+    }
+}
+
+fn start_drag(s: &mut State, hwnd: HWND, win: usize, at: (i32, i32)) {
+    s.press = None;
+    s.drag = Some(Drag { win, at, over: over(s, win, at) });
+    draw::sync_thumbs(s);
+    unsafe { SetCapture(hwnd) };
+    redraw(s);
+}
+
+fn cancel_drag(s: &mut State) {
+    if s.drag.take().is_some() {
+        let _ = unsafe { ReleaseCapture() };
+        draw::sync_thumbs(s);
+        redraw(s);
+    }
+}
+
+/// The drop: the window goes to its zone or screen through the snapping on the tray's
+/// thread, gets the focus, and the overview closes. A minimized one is restored onto
+/// its new place first, here, since that waits on its app.
+fn drop_window(s: &mut State) {
+    let Some(drag) = s.drag.take() else { return };
+    let _ = unsafe { ReleaseCapture() };
+    let win = &s.wins[drag.win];
+    let (screen, zone, free) = match drag.over {
+        Some(Landing::Zone(i, z)) => (i, Some(z), s.panes[i].zones[z]),
+        Some(Landing::Screen(i)) => (i, None, overview::centred(s.panes[i].work, (win.frame.w, win.frame.h))),
+        None => {
+            draw::sync_thumbs(s);
+            redraw(s);
+            return;
+        }
+    };
+    let p = &s.panes[screen];
+    if win.minimized && !winutil::is_hung(win.hwnd) {
+        winutil::place_restored(win.hwnd, free, p.dpi);
+    }
+    locked(&MOVES).push(Move { hwnd: win.hwnd.0 as isize, screen: p.id.clone(), zone, free });
+    unsafe {
+        let _ = PostMessageW(Some(HWND(s.tray as *mut _)), WM_APP_OVERVIEW, WPARAM(0), LPARAM(0));
+    }
+    go(s, drag.win);
+}
+
+fn on_mouse_move(hwnd: HWND, lparam: LPARAM) -> LRESULT {
+    with_state(|s| {
+        let Some(at) = on_screen(s, hwnd, lparam) else { return };
+        if let Some(drag) = &s.drag {
+            let now = over(s, drag.win, at);
+            if let Some(drag) = s.drag.as_mut() {
+                drag.at = at;
+                if drag.over != now {
+                    drag.over = now;
+                    redraw(s);
+                }
+            }
+            return;
+        }
+        if let Some(press) = &s.press {
+            let (dx, dy) = unsafe { (GetSystemMetrics(SM_CXDRAG), GetSystemMetrics(SM_CYDRAG)) };
+            let far = (at.0 - press.at.0).abs() > dx || (at.1 - press.at.1).abs() > dy;
+            // A window on another desktop can only be gone to (D572).
+            if far && s.wins[press.win].desktop == 0 {
+                start_drag(s, hwnd, press.win, at);
+            }
+            return;
+        }
+        // The pointer picks the tile under it once it moves, not when a tile appears under it.
+        if s.pointer.is_some_and(|p| p != at)
+            && let Some(w) = s.tile_at(at)
+            && s.selected != Some(w)
+        {
+            s.selected = Some(w);
+            redraw(s);
+        }
+        s.pointer = Some(at);
+    });
+    LRESULT(0)
+}
+
+fn on_button_down(hwnd: HWND, lparam: LPARAM) -> LRESULT {
+    with_state(|s| {
+        let Some(at) = on_screen(s, hwnd, lparam) else { return };
+        match s.tile_at(at) {
+            Some(win) => {
+                s.press = Some(Press { win, at });
+                s.selected = Some(win);
+                redraw(s);
+            }
+            // A click away from every tile closes, as one outside quick layout does.
+            None => quit(),
+        }
+    });
+    LRESULT(0)
+}
+
+fn on_button_up(hwnd: HWND, lparam: LPARAM) -> LRESULT {
+    with_state(|s| {
+        if s.drag.is_some() {
+            drop_window(s);
+            return;
+        }
+        let Some(press) = s.press.take() else { return };
+        if on_screen(s, hwnd, lparam).and_then(|at| s.tile_at(at)) == Some(press.win) {
+            go(s, press.win);
+        }
+    });
+    LRESULT(0)
+}
+
+unsafe fn on_paint(hwnd: HWND) -> LRESULT {
+    unsafe {
+        let mut ps = PAINTSTRUCT::default();
+        let dc = BeginPaint(hwnd, &mut ps);
+        let mut client = RECT::default();
+        let _ = GetClientRect(hwnd, &mut client);
+        // Drawn off screen and copied over, so a change doesn't flicker.
+        let back = CreateCompatibleDC(Some(dc));
+        let bitmap = CreateCompatibleBitmap(dc, client.right, client.bottom);
+        let old = SelectObject(back, bitmap.into());
+        with_state(|s| {
+            let Some(i) = pane_of(s, hwnd) else { return };
+            draw::paint(back, s, i, client);
+            s.painted += 1;
+            if s.painted == s.panes.len() {
+                if log::enabled() {
+                    let previews = s.wins.iter().filter(|w| w.thumb != 0).count();
+                    log::info!(
+                        "overview: first paint {} ms after the key (list {} ms), {} windows, {previews} previews, {} screens",
+                        s.pressed.elapsed().as_millis(),
+                        s.listed_ms,
+                        s.wins.len(),
+                        s.panes.len()
+                    );
+                }
+                let _ = PostMessageW(Some(hwnd), WM_APP_DETAILS, WPARAM(0), LPARAM(0));
+            }
+        });
+        let _ = BitBlt(dc, 0, 0, client.right, client.bottom, Some(back), 0, 0, SRCCOPY);
+        SelectObject(back, old);
+        let _ = DeleteObject(bitmap.into());
+        let _ = DeleteDC(back);
+        let _ = EndPaint(hwnd, &ps);
+        LRESULT(0)
+    }
+}
+
+/// After the first paint: the app names and icons that wait on other apps.
+fn on_details() -> LRESULT {
+    with_state(|s| {
+        list::details(&mut s.wins);
+        searched(s);
+        redraw(s);
+    });
+    LRESULT(0)
+}
+
+unsafe fn on_focus_timer(hwnd: HWND, id: usize) -> LRESULT {
+    unsafe {
+        let _ = KillTimer(Some(hwnd), id);
+        let ours = with_state(|s| s.panes.iter().any(|p| p.hwnd == GetForegroundWindow())).unwrap_or(true);
+        match (ours, id) {
+            (true, _) => {}
+            (false, TIMER_FOCUS) => {
+                let _ = SetForegroundWindow(hwnd);
+                let _ = SetTimer(Some(hwnd), TIMER_FOCUS_LAST, FOCUS_LAST_MS, None);
+            }
+            (false, _) => {
+                log::info!("overview: Windows kept the focus elsewhere, so it closes");
+                quit();
+            }
+        }
+        LRESULT(0)
+    }
+}
+
+/// Another app took the focus: the overview closes. Moving between its own windows
+/// isn't that, since they share a thread.
+fn on_activate_app(wparam: WPARAM) -> LRESULT {
+    let gone = with_state(|s| {
+        let was = s.active;
+        s.active |= wparam.0 != 0;
+        wparam.0 == 0 && was
+    });
+    if gone == Some(true) {
+        quit();
+    }
+    LRESULT(0)
+}
+
+unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
+    unsafe {
+        match msg {
+            WM_PAINT => on_paint(hwnd),
+            WM_ERASEBKGND => LRESULT(1),
+            WM_KEYDOWN => {
+                let used = with_state(|s| {
+                    let used = key(s, wparam.0 as u16);
+                    if used {
+                        redraw(s);
+                    }
+                    used
+                });
+                if used == Some(true) { LRESULT(0) } else { DefWindowProcW(hwnd, msg, wparam, lparam) }
+            }
+            WM_CHAR => {
+                with_state(|s| {
+                    if typed(s, wparam.0 as u32) {
+                        redraw(s);
+                    }
+                });
+                LRESULT(0)
+            }
+            WM_MOUSEMOVE => on_mouse_move(hwnd, lparam),
+            WM_LBUTTONDOWN => on_button_down(hwnd, lparam),
+            WM_LBUTTONUP => on_button_up(hwnd, lparam),
+            // Lost to something else mid-drag: the drag ends where it was, with no move.
+            WM_CAPTURECHANGED => {
+                with_state(cancel_drag);
+                LRESULT(0)
+            }
+            WM_TIMER if matches!(wparam.0, TIMER_FOCUS | TIMER_FOCUS_LAST) => on_focus_timer(hwnd, wparam.0),
+            WM_ACTIVATEAPP => on_activate_app(wparam),
+            WM_APP_DETAILS => on_details(),
+            WM_CLOSE | WM_DISPLAYCHANGE => {
+                quit();
+                LRESULT(0)
+            }
+            _ => DefWindowProcW(hwnd, msg, wparam, lparam),
+        }
+    }
+}
+
+/// Clears `OPEN` when the overview's thread ends, however it ends.
+struct Closing(u32);
+
+impl Drop for Closing {
+    fn drop(&mut self) {
+        let _ = OPEN.compare_exchange(self.0, 0, Ordering::SeqCst, Ordering::SeqCst);
+    }
+}
+
+/// One window per screen, not shown yet. None when one couldn't be made.
+unsafe fn make_windows(screens: &[Screen]) -> Option<Vec<HWND>> {
+    unsafe {
+        let hinst = GetModuleHandleW(None).unwrap_or_default();
+        let wc = WNDCLASSEXW {
+            cbSize: size_of::<WNDCLASSEXW>() as u32,
+            lpfnWndProc: Some(wndproc),
+            hInstance: hinst.into(),
+            lpszClassName: CLASS,
+            hCursor: LoadCursorW(None, IDC_ARROW).unwrap_or_default(),
+            ..Default::default()
+        };
+        RegisterClassExW(&wc); // fails harmlessly if already registered
+        let mut made = Vec::new();
+        for s in screens {
+            let r = rect_of(&s.rect);
+            // A tool window has no taskbar button and stays out of Alt+Tab.
+            let created = CreateWindowExW(
+                WS_EX_TOPMOST | WS_EX_TOOLWINDOW,
+                CLASS,
+                w!("Seam overview"),
+                WS_POPUP,
+                r.x,
+                r.y,
+                r.w,
+                r.h,
+                None,
+                None,
+                Some(hinst.into()),
+                None,
+            );
+            match created {
+                Ok(hwnd) => made.push(hwnd),
+                Err(_) => {
+                    for hwnd in made {
+                        let _ = DestroyWindow(hwnd);
+                    }
+                    return None;
+                }
+            }
+        }
+        Some(made)
+    }
+}
+
+fn run(spec: Spec, ready: std::sync::mpsc::Sender<()>) {
+    if spec.screens.is_empty() {
+        return;
+    }
+    unsafe {
+        let id = GetCurrentThreadId();
+        let _closing = Closing(id);
+        // The queue exists before the tray hears of it, so a close is never lost.
+        let mut msg = MSG::default();
+        let _ = PeekMessageW(&mut msg, None, 0, 0, PM_NOREMOVE);
+        OPEN.store(id, Ordering::SeqCst);
+        let _ = ready.send(());
+        let com = list::com_start();
+        let started = Instant::now();
+        let rects: Vec<Rect> = spec.screens.iter().map(|s| rect_of(&s.rect)).collect();
+        let (wins, desktops) = list::windows(&rects);
+        let listed_ms = started.elapsed().as_millis();
+        let Some(hwnds) = make_windows(&spec.screens) else {
+            log::info!("overview: couldn't make its windows");
+            list::com_end(com);
+            return;
+        };
+        let panes = spec
+            .screens
+            .into_iter()
+            .zip(&hwnds)
+            .map(|(s, &hwnd)| {
+                let rect = rect_of(&s.rect);
+                let dpi = dpi_of(hwnd);
+                let work = winutil::work_area(rect).map_or(rect, |(work, _)| work);
+                Pane {
+                    hwnd,
+                    number: s.number,
+                    id: s.id,
+                    rect,
+                    work,
+                    dpi,
+                    zones: s.zones,
+                    tiled: s.tiled,
+                    labels: Vec::new(),
+                    tiles: Vec::new(),
+                }
+            })
+            .collect();
+        let mut pointer = POINT::default();
+        let _ = GetCursorPos(&mut pointer);
+        let mut state = State {
+            panes,
+            wins,
+            desktops,
+            query: String::new(),
+            shown: Vec::new(),
+            selected: None,
+            before: spec.before,
+            tray: spec.tray,
+            colours: colours(),
+            press: None,
+            drag: None,
+            pointer: Some((pointer.x, pointer.y)),
+            active: false,
+            pressed: spec.pressed,
+            painted: 0,
+            listed_ms,
+        };
+        draw::register_thumbs(&mut state);
+        state.search();
+        // The window in front is where the selection starts.
+        if let Some(w) = state.wins.iter().position(|w| w.hwnd.0 as isize == spec.before)
+            && state.tiles().iter().any(|(x, _)| *x == w)
+        {
+            state.selected = Some(w);
+        }
+        let main = state.panes.iter().position(|p| p.rect.contains(pointer.x, pointer.y)).unwrap_or(0);
+        let shown: Vec<(HWND, Rect)> = state.panes.iter().map(|p| (p.hwnd, p.rect)).collect();
+        STATE.with(|s| *s.borrow_mut() = Some(state));
+        for (i, (hwnd, r)) in shown.iter().enumerate() {
+            let quiet = if i == main { SWP_SHOWWINDOW } else { SWP_SHOWWINDOW | SWP_NOACTIVATE };
+            let _ = SetWindowPos(*hwnd, Some(HWND_TOPMOST), r.x, r.y, r.w, r.h, quiet);
+        }
+        let main = shown[main].0;
+        wincontrol::focus(main, spec.from_api);
+        let _ = SetTimer(Some(main), TIMER_FOCUS, FOCUS_GRACE_MS, None);
+        while GetMessageW(&mut msg, None, 0, 0).as_bool() {
+            let _ = TranslateMessage(&msg);
+            DispatchMessageW(&msg);
+        }
+        if let Some(mut state) = STATE.with(|s| s.borrow_mut().take()) {
+            draw::unregister_thumbs(&mut state);
+        }
+        for hwnd in hwnds {
+            let _ = DestroyWindow(hwnd);
+        }
+        list::com_end(com);
+    }
+}
+
+/// Open the overview, replacing one that's up. It runs on a thread of its own, and this
+/// returns once that thread can take a close.
+pub fn show(spec: Spec) {
+    let _launching = locked(&LAUNCH);
+    close();
+    let (ready, opened) = channel();
+    let spawned = std::thread::Builder::new().name("seam-overview".into()).spawn(move || run(spec, ready));
+    if let Err(e) = spawned {
+        log::info!("overview: couldn't start: {e}");
+        return;
+    }
+    let _ = opened.recv_timeout(Duration::from_millis(500));
+}

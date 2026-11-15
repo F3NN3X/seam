@@ -74,6 +74,31 @@ Set a key for **Quick layout** on Shortcuts (it has no key until you set one). M
 - [ ] **API.** `zones.quick` with no params opens it on the screen under the pointer and takes focus. `{"number":9}` answers error 1.
 - [ ] **Stream Deck.** The **Quick layout** action opens the panel.
 
+## Overview
+
+Set a key for **Show overview** on Shortcuts (it has no key until you set one). Make two virtual desktops (Win+Ctrl+D), rename the second "Mail", and open windows on both: some on every screen, one minimized, one File Explorer folder, one Store app (Calculator), and Seam's own window. Turn on debug logging.
+
+- [ ] **Speed.** With 30 or more windows open, press the key. The log's `overview: first paint N ms after the key (list M ms), …` line gives the time to the first full paint. Write N and M down here for the desk, at debug level. Repeat three times; the first can be slower while the virtual desktop manager starts.
+- [ ] **Every screen.** Each screen fills with its own windows, each in a tile with a live preview that moves (play a video), the app's icon and its title under it. The window that was in front is selected with a white ring and says "In use". The minimized one shows its app's icon and name instead of a preview, and says "Minimized". No tile is tinted amber and nothing has a pill.
+- [ ] **Not listed.** Seam's own window, the taskbar, tool windows and the overview itself aren't tiles. Alt+Tab while it's open doesn't show it.
+- [ ] **Desktops.** With windows on "Mail", each screen shows "This desktop" over its own windows and "Mail" over those on the other desktop, with icons, not previews. A desktop without a name shows as "Desktop 2". Calculator suspended on another desktop shows once, or not at all, never as a blank tile.
+- [ ] **Search.** Type part of a title: only matching tiles stay, the best first, and the header counts them. Type an app's name ("explorer", "file explorer" once the names are read): its windows come first. Backspace widens it, Ctrl+Backspace clears it. A search with no match says so and how to change it.
+- [ ] **Arrows.** The arrows move the ring to the next tile that way, and past the last tile on a screen onto the screen beside it. Tab and Shift+Tab go through every tile in order and wrap. Home and End go to the first and last.
+- [ ] **Go.** Enter, or a click on a tile, brings that window to front and closes the overview. A minimized one is restored. A tile under "Mail" takes Windows to that desktop with the window in front.
+- [ ] **Esc.** Esc closes it and the window that was in front is in front again. A click away from every tile closes it too, as does Alt+Tab to another app.
+- [ ] **Toggle.** Pressing the key again while it is open closes it. The tray menu's **Overview** opens it.
+- [ ] **Drag to a zone.** Drag a tile a little way: the previews go and each screen shows its zones, numbered. The zone under the pointer is lit amber. Drop it there: the window lands in that zone, focused, and the overview closes. Drag it out of the zone afterwards: it gets the size it had before.
+- [ ] **Drag to a screen.** On a screen with no zones, the whole screen is one target, "Move to screen N". A drop centres the window there at its size. The window's own screen, with no zones, says it has none and isn't a target.
+- [ ] **Drag cancel.** Esc during a drag goes back to the tiles, with no move. So does a drop in a gap between zones.
+- [ ] **Other desktop.** A tile under "Mail" doesn't start a drag.
+- [ ] **Minimized drop.** Drag the minimized window's tile to a zone: it is restored straight into the zone.
+- [ ] **Smart tiling.** With tiling on for screen 1, drag one of its tiled windows to screen 2's zone: it lands there, its old neighbours fill the gap, and it isn't tiled again when a new window opens. Drag a window onto a tiled screen's zone: the footer says it floats there, and it lands over that tile without taking it.
+- [ ] **Stacks.** Open the overview with a stack member in front and close it with Esc: the stack's top hasn't changed and its mark doesn't flicker.
+- [ ] **Full screen.** With a game or an F11 browser in front and Step aside on, the key does nothing. With the overview open, Seam doesn't step aside (the log has no "Seam steps aside" line).
+- [ ] **High contrast.** Turn on a high contrast theme and open it: it takes the theme's colours, and the lit zone and the ring use the highlight colour.
+- [ ] **Scaling.** On a desk with screens at 100% and 150%, the text and tiles are the same physical size on both, and the previews are sharp.
+- [ ] **API.** `overview.show` opens it and answers at once; a second call while it's open changes nothing. From `seam-mcp` it answers error 4.
+
 ## Tray and shortcuts
 
 - [ ] **Menu.** Right-click the tray icon: status line, **Open Seam…**, **Line Up Screens…**, the **Workspaces** menu when there are workspaces, **Tile windows**, **Remap pointer at borders**, **Release pinned windows**, **Quit Seam**.

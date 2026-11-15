@@ -247,6 +247,8 @@ pub enum Command {
     ZonesFromWindows(Option<u32>),
     /// Open the quick layout overlay on a screen: its Line Up number, or the one under the pointer.
     ZonesQuick(Option<u32>),
+    /// `overview.show`: open the overview of every window on every screen.
+    OverviewShow,
     /// The panel picking a screen's layout (None for no zones): the screen's snapped
     /// windows follow it, with Undo.
     ZonesPick {

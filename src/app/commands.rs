@@ -211,6 +211,10 @@ fn command_result(app: &mut App, command: Command, panel: bool) -> Reply {
             Ok(()) => ok(),
             Err(why) => refused(why),
         },
+        Command::OverviewShow => {
+            overview::open_overview(app, false, true);
+            ok()
+        }
         Command::ScreenIdentify(number) => match number.checked_sub(1).and_then(|i| app.mons.get(i as usize)) {
             Some(mon) => {
                 identify::show(number, mon.rect);

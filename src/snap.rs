@@ -30,6 +30,7 @@ pub(crate) use edges::Member;
 #[path = "adhoc.rs"]
 mod adhoc;
 mod drag;
+mod overview;
 mod placing;
 mod stacks;
 #[path = "steer.rs"]
@@ -40,6 +41,7 @@ mod sync;
 mod tiled;
 
 pub use adhoc::{adhoc_area, adhoc_dragged, fit, is_adhoc};
+pub use overview::{overview_place, overview_targets};
 pub use refit::{WM_APP_REFIT, display_changed, found as refit_found, line_up_ended};
 pub use stacks::{
     StackInfo, WM_APP_STACKS, WM_APP_STACKS_FOUND, cycle as stack_cycle, rebuild as rebuild_stacks, set as stack_set,

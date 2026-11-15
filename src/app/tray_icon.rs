@@ -188,6 +188,7 @@ pub(super) fn show_menu(app: &mut App) {
         let pause = if standby::paused() { w!("Resume Seam") } else { w!("Pause Seam") };
         let _ = AppendMenuW(menu, MF_STRING, ID_PAUSE_SEAM, pause);
         let _ = AppendMenuW(menu, MF_STRING, ID_LINEUP, w!("Line Up Screens…"));
+        let _ = AppendMenuW(menu, MF_STRING, ID_OVERVIEW, w!("Overview"));
         let workspaces = desk_workspaces(app);
         add_workspaces_menu(app, menu, &workspaces);
         add_tile_menu(app, menu);
@@ -207,6 +208,7 @@ pub(super) fn show_menu(app: &mut App) {
         let _ = DestroyMenu(menu);
         match cmd.0 as usize {
             ID_LINEUP => start_lineup(app),
+            ID_OVERVIEW => overview::open_overview(app, false, false),
             ID_OPEN => {
                 open_panel(app, None);
             }

@@ -32,6 +32,8 @@ mod minsize;
 #[cfg(windows)]
 mod overlay;
 #[cfg(windows)]
+mod overview_win;
+#[cfg(windows)]
 mod places;
 #[cfg(windows)]
 mod quicklayout;

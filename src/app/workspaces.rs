@@ -65,6 +65,7 @@ pub(super) fn apply_hotkeys(app: &mut App) {
         (HOTKEY_STACK_PREV, "stack_prev".to_string(), keys.stack_prev.clone()),
         (HOTKEY_FLOAT_TILE, "float_tile".to_string(), keys.float_tile.clone()),
         (HOTKEY_FREE_TILING, "free_tiling".to_string(), keys.free_tiling.clone()),
+        (HOTKEY_OVERVIEW, "overview".to_string(), keys.overview.clone()),
     ];
     for (id, (verb, dir, combo)) in (HOTKEY_WINDOW..).zip(keys.directional()) {
         wanted.push((id, format!("{verb}_{dir}"), combo.cloned()));

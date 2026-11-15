@@ -238,6 +238,9 @@ pub const TOPICS: &[Topic] = &[
                 "**Move and resize from anywhere in a window**, on the Zones page, lets you hold Alt and drag anywhere in a window to move it, or right-drag to resize it from the nearest edge or corner. A maximized window comes back to its normal size under the pointer. Hold the show key as well and the window snaps into zones as with any drag. Some apps use Alt+click themselves, such as VS Code for an extra cursor, so you can pick Win or Ctrl+Alt as the key instead. Full-screen apps, excluded apps and apps running as administrator get the click as usual.",
             ),
             Text(
+                "**Show overview** fills every screen with the windows on it: a live preview of each, or its app's icon when Windows has no preview to give, as for a minimized window or one on another virtual desktop. Windows on other desktops show under that desktop's name. Type to search by title or app, use the arrows, Tab or the mouse to pick one, and press Enter or click it to go to it; a window on another desktop takes you to that desktop. Drag a window onto a zone, or onto another screen with no zones, to move it there. On a screen smart tiling arranges, the window floats over that zone. Windows only lets an app move its own windows between desktops, so the overview can't. Esc closes it and goes back to the window you were using. Open it from the tray menu too. The shortcut has no key until you set one.",
+            ),
+            Text(
                 "Seam leaves alone the windows of apps running as administrator, windows that aren't responding, and its own.",
             ),
             Text(

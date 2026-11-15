@@ -133,6 +133,18 @@ pub(super) unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARA
                 snap::stacks_found();
                 LRESULT(0)
             }
+            crate::overview_win::WM_APP_OVERVIEW => {
+                if !overview::overview_moves() {
+                    SetTimer(Some(hwnd), TIMER_OVERVIEW, 50, None);
+                }
+                LRESULT(0)
+            }
+            WM_TIMER if wparam.0 == TIMER_OVERVIEW => {
+                if overview::overview_moves() {
+                    let _ = KillTimer(Some(hwnd), TIMER_OVERVIEW);
+                }
+                LRESULT(0)
+            }
             crate::tiler::WM_APP_TILING => {
                 // Busy elsewhere: the events stay with the worker's queue, and a timer tries again.
                 if with_app(tiling::tiling_events) != Some(true) {
@@ -407,6 +419,9 @@ unsafe fn on_hotkey(id: i32) {
                 }
             }
             HOTKEY_FLOAT_TILE => tiling::float_or_tile(),
+            HOTKEY_OVERVIEW => {
+                with_app(|a| overview::open_overview(a, true, false));
+            }
             HOTKEY_FREE_TILING => {
                 with_app(|a| tiling::free_tiling(a, None, None));
             }

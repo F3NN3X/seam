@@ -369,6 +369,11 @@ impl Engine {
         self.tiling.trees.len() - 1
     }
 
+    /// Whether a window is in a tiled tree, on any desktop.
+    pub(in crate::snap) fn tiled_window(&self, key: isize) -> bool {
+        self.tree_of(key).is_some()
+    }
+
     /// The tree a window is tiled in, in a tile or stacked in one.
     fn tree_of(&self, key: isize) -> Option<usize> {
         let has = |t: &Tiled| t.tree.zone_of(key).is_some() || t.overflow.iter().any(|(k, _)| *k == key);

@@ -139,6 +139,11 @@ pub enum Command {
     Spotlight {
         on: bool,
     },
+    /// Smart tiling is on somewhere, so opens, restores, closes, minimizes and focus
+    /// changes are told to its worker.
+    Tiling {
+        on: bool,
+    },
 }
 
 static DETECTED: Mutex<Option<&'static str>> = Mutex::new(None);
@@ -218,6 +223,16 @@ pub fn app_rules(on: bool) {
 /// The hooks for spotlight exist only while it is on.
 pub fn spotlight(on: bool) {
     send(Command::Spotlight { on });
+}
+
+/// The hooks for smart tiling exist only while it is on for a screen. Told only when it changes.
+pub fn tiling(on: bool) {
+    static SENT: Mutex<Option<bool>> = Mutex::new(None);
+    let mut sent = SENT.lock().unwrap_or_else(|e| e.into_inner());
+    if *sent != Some(on) {
+        *sent = Some(on);
+        send(Command::Tiling { on });
+    }
 }
 
 /// Release all on a clean exit. Waits for it, but not for long.
@@ -382,11 +397,15 @@ struct Wm {
     app_rules: bool,
     /// Spotlight is on.
     spotlight: bool,
+    /// Smart tiling is on for some screen.
+    tiling: bool,
     /// Windows that were there before, or were already looked at, so showing or
     /// renaming one isn't an open. Kept while auto-apply runs.
     seen_before: HashSet<isize>,
     /// Windows that opened, and when they have settled enough to be placed.
     settling: Vec<(isize, Instant)>,
+    /// Tiled windows restored from minimized, and when they have settled.
+    restoring: Vec<(isize, Instant)>,
     settle_timer: usize,
     /// Workspace keys of stamped windows that moved, told when the burst is over.
     relocated: Vec<u32>,

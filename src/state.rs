@@ -161,6 +161,17 @@ pub struct StackRef {
     pub top: isize,
 }
 
+/// Smart tiling on one screen, for the virtual desktop in front.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct TilingRef {
+    /// Line Up number of its screen, from 1.
+    pub screen: u32,
+    pub on: bool,
+    pub family: crate::tiling::Family,
+    /// Windows it tiles now, stacked ones included.
+    pub windows: usize,
+}
+
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(default)]
 pub struct State {
@@ -191,6 +202,8 @@ pub struct State {
     pub clients: Vec<String>,
     /// Every stack of windows in zones on this desk.
     pub stacks: Vec<StackRef>,
+    /// Smart tiling on each screen, for the virtual desktop in front.
+    pub tiling: Vec<TilingRef>,
 }
 
 /// What API reads are served from. The tray replaces it whole, so a reader

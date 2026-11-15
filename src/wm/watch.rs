@@ -17,11 +17,12 @@ impl Wm {
         } else if !auto {
             self.seen_before.clear();
             self.settling.clear();
+            self.restoring.clear();
             self.stop_settle_timer();
         }
         let (show, destroy) = (EVENT_OBJECT_SHOW, EVENT_OBJECT_DESTROY);
         let foreground = EVENT_SYSTEM_FOREGROUND;
-        sync_hook(&mut self.foreground_hook, foreground, foreground, painting || self.spotlight);
+        sync_hook(&mut self.foreground_hook, foreground, foreground, painting || self.spotlight || self.tiling);
         sync_hook(&mut self.destroy_hook, destroy, destroy, !self.pinned.is_empty() || auto);
         sync_hook(&mut self.show_hook, show, show, self.shown_to.is_some() || auto);
         sync_hook(&mut self.name_hook, EVENT_OBJECT_NAMECHANGE, EVENT_OBJECT_NAMECHANGE, auto);
@@ -33,7 +34,7 @@ impl Wm {
             active || self.app_rules,
         );
         let minimize = (EVENT_SYSTEM_MINIMIZESTART, EVENT_SYSTEM_MINIMIZEEND);
-        sync_hook(&mut self.minimize_hook, minimize.0, minimize.1, active || self.spotlight);
+        sync_hook(&mut self.minimize_hook, minimize.0, minimize.1, active || self.spotlight || self.tiling);
         // Win+arrow snaps and the maximize button send no drag or minimize event.
         let location = EVENT_OBJECT_LOCATIONCHANGE;
         sync_hook(&mut self.location_hook, location, location, active);
@@ -63,9 +64,9 @@ impl Wm {
         self.workspace_active && self.auto_apply
     }
 
-    /// Windows that open are looked at: auto-apply runs or an app rule exists.
+    /// Windows that open are looked at: auto-apply runs, an app rule exists, or smart tiling is on.
     fn opening(&self) -> bool {
-        self.auto_applying() || self.app_rules
+        self.auto_applying() || self.app_rules || self.tiling
     }
 
     fn stop_settle_timer(&mut self) {
@@ -77,7 +78,8 @@ impl Wm {
 
     /// Wake when the next opened window has settled.
     fn arm_settle_timer(&mut self) {
-        let Some(next) = self.settling.iter().map(|(_, at)| *at).min() else { return self.stop_settle_timer() };
+        let next = self.settling.iter().chain(&self.restoring).map(|(_, at)| *at).min();
+        let Some(next) = next else { return self.stop_settle_timer() };
         let ms = next.saturating_duration_since(Instant::now()).as_millis().max(1) as u32;
         self.settle_timer = unsafe { SetTimer(None, self.settle_timer, ms, None) };
     }
@@ -113,6 +115,11 @@ impl Wm {
         self.settling = waiting;
         for (key, _) in due {
             crate::live::opened(key);
+        }
+        let (due, waiting): (Vec<_>, Vec<_>) = self.restoring.drain(..).partition(|(_, at)| *at <= now);
+        self.restoring = waiting;
+        for (key, _) in due {
+            crate::tiler::restored(key);
         }
         self.arm_settle_timer();
     }
@@ -225,11 +232,18 @@ impl Wm {
                 if self.spotlight {
                     crate::spotlight::reorder();
                 }
+                if self.tiling {
+                    crate::tiler::foreground(h.0 as isize);
+                }
             }
             EVENT_OBJECT_DESTROY => {
                 let key = h.0 as isize;
                 self.seen_before.remove(&key);
                 self.settling.retain(|(k, _)| *k != key);
+                self.restoring.retain(|(k, _)| *k != key);
+                if self.tiling && crate::tiler::is_tiled(key) {
+                    crate::tiler::left(key, false);
+                }
                 self.pinned.retain(|p| *p != key);
                 if self.bordered == Some(key) {
                     self.bordered = None;
@@ -260,9 +274,26 @@ impl Wm {
             EVENT_SYSTEM_MOVESIZESTART => {
                 let key = h.0 as isize;
                 self.settling.retain(|(k, _)| *k != key);
+                self.restoring.retain(|(k, _)| *k != key);
             }
             EVENT_SYSTEM_MOVESIZEEND => self.moved(h),
             EVENT_SYSTEM_MINIMIZESTART | EVENT_SYSTEM_MINIMIZEEND => {
+                let key = h.0 as isize;
+                // A tiled window leaves its tile as it minimizes, and takes a share again once
+                // restored and settled. Not during a workspace switch, which minimizes and
+                // restores windows of its own (D564).
+                if self.tiling && crate::tiler::is_tiled(key) {
+                    // A switch's minimizes, and its late ones, never reflow; a restore is kept for after it.
+                    if event == EVENT_SYSTEM_MINIMIZESTART {
+                        if !crate::tiler::switch_settling() {
+                            crate::tiler::left(key, true);
+                        }
+                    } else {
+                        self.restoring.retain(|(k, _)| *k != key);
+                        self.restoring.push((key, Instant::now() + SETTLE));
+                        self.arm_settle_timer();
+                    }
+                }
                 if self.workspace_active {
                     self.moved(h);
                 }

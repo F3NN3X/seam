@@ -335,6 +335,42 @@ pub fn set_stack_stamp(h: HWND, bits: u64) {
     }
 }
 
+/// The order smart tiling took a window in, from 1, so a restart of the tray tiles
+/// its windows again in that order.
+const TILE: PCWSTR = w!("Seam_tile");
+/// Smart tiling leaves this window alone: it was floated by hand, by the key or a drag.
+const FLOAT: PCWSTR = w!("Seam_float");
+
+/// The window's `Seam_tile` order, or 0 for none.
+pub fn tile_stamp(h: HWND) -> u32 {
+    unsafe { GetPropW(h, TILE).0 as usize as u32 }
+}
+
+/// Replace the tile stamp. 0 removes it.
+pub fn set_tile_stamp(h: HWND, order: u32) {
+    unsafe {
+        if order == 0 {
+            let _ = RemovePropW(h, TILE);
+        } else {
+            let _ = SetPropW(h, TILE, Some(HANDLE(order as usize as *mut _)));
+        }
+    }
+}
+
+pub fn is_floated(h: HWND) -> bool {
+    unsafe { !GetPropW(h, FLOAT).0.is_null() }
+}
+
+pub fn set_floated(h: HWND, on: bool) {
+    unsafe {
+        if on {
+            let _ = SetPropW(h, FLOAT, Some(HANDLE(usize::from(on) as *mut _)));
+        } else {
+            let _ = RemovePropW(h, FLOAT);
+        }
+    }
+}
+
 /// Pins and the focus border, kept on the window like the zone stamp, so a
 /// tray that starts again finds them (§3.5).
 const PIN: PCWSTR = w!("Seam_pin");

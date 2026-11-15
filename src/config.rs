@@ -99,6 +99,11 @@ pub struct Hotkeys {
     pub stack_next: Option<String>,
     /// "Previous window in stack".
     pub stack_prev: Option<String>,
+    /// "Float or tile this window": the focused window leaves smart tiling, or joins it again.
+    pub float_tile: Option<String>,
+    /// "Free all windows": smart tiling stops on the screen under the pointer, and its
+    /// windows go back to where they were before.
+    pub free_tiling: Option<String>,
 }
 
 impl Default for Hotkeys {
@@ -141,6 +146,8 @@ impl Default for Hotkeys {
             fit_group: None,
             stack_next: None,
             stack_prev: None,
+            float_tile: None,
+            free_tiling: None,
         }
     }
 }
@@ -420,6 +427,27 @@ pub struct Desk {
     /// The id of the workspace taken as in use at start when none was remembered.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub default_workspace: Option<String>,
+    /// Monitor device path -> smart tiling on that screen. Left out while empty, and
+    /// an older Seam drops it, which turns tiling off.
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub tiling: BTreeMap<String, TileScreen>,
+}
+
+/// Smart tiling on one screen of a desk: the family, and the virtual desktops it is
+/// on for, by id. Off on every desktop by default.
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default)]
+pub struct TileScreen {
+    pub family: crate::tiling::Family,
+    /// Ids of the virtual desktops it tiles on. An empty id is a Windows that doesn't
+    /// say which desktop a window is on.
+    pub desktops: Vec<String>,
+}
+
+impl TileScreen {
+    pub fn on(&self, desktop: &str) -> bool {
+        self.desktops.iter().any(|d| d == desktop)
+    }
 }
 
 impl Desk {

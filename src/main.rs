@@ -45,6 +45,8 @@ mod standby;
 #[cfg(windows)]
 mod switcher;
 #[cfg(windows)]
+mod tiler;
+#[cfg(windows)]
 mod wincontrol;
 #[cfg(windows)]
 mod wm;

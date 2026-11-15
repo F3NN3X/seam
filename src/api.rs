@@ -217,6 +217,15 @@ pub enum Command {
     /// `window.stack_cycle`: the next window of the focused window's stack goes on top,
     /// or the previous one with `false`.
     WindowStackCycle(bool),
+    /// `tiling.set`: smart tiling on or off on a screen for the virtual desktop in front,
+    /// and its family. The screen's Line Up number, or the one under the pointer.
+    TilingSet {
+        number: Option<u32>,
+        on: Option<bool>,
+        family: Option<crate::tiling::Family>,
+    },
+    /// `tiling.free`: Free all windows on a screen, by Line Up number or under the pointer.
+    TilingFree(Option<u32>),
     /// `on` is None to toggle.
     WindowPin {
         kind: PinKind,

@@ -10,6 +10,7 @@ mod share;
 mod signin;
 mod start;
 mod tile;
+mod tiling;
 mod tray_icon;
 mod update;
 mod workspaces;
@@ -97,6 +98,8 @@ const WM_APP_UPDATE: u32 = WM_APP + 13;
 const TIMER_REFRESH: usize = 1;
 /// Retries the quick layout overlay's picks the app was too busy for (menu open).
 const TIMER_QUICK: usize = 40;
+/// Retries taking smart tiling's events the app was too busy for (menu open).
+const TIMER_TILING: usize = 42;
 /// Retries a divider menu's choice the app was too busy for (menu open).
 const TIMER_DIVIDER: usize = 41;
 /// Windows silently removes low-level hooks that ever time out, so re-arm periodically.
@@ -171,6 +174,9 @@ const HOTKEY_FIT_GROUP: i32 = 66;
 /// The next or previous window of the focused window's stack goes on top.
 const HOTKEY_STACK_NEXT: i32 = 70;
 const HOTKEY_STACK_PREV: i32 = 71;
+/// Smart tiling: float or tile the focused window, and Free all windows on the screen under the pointer.
+const HOTKEY_FLOAT_TILE: i32 = 72;
+const HOTKEY_FREE_TILING: i32 = 73;
 /// One hotkey id per workspace on the desk, from here up.
 const HOTKEY_WORKSPACE: i32 = 100;
 const NIN_KEYSELECT: u32 = NIN_SELECT | NINF_KEY;
@@ -185,6 +191,9 @@ const ID_SWITCH_BACK: usize = 10;
 const ID_PAUSE_SEAM: usize = 12;
 /// Tile with one screen, or with several when the submenu couldn't be made.
 const ID_TILE: usize = 11;
+/// Menu ids of Free all windows, one per tiled screen from here, up to screen 7.
+const ID_FREE_TILING: usize = 13;
+const FREE_TILING_MAX: usize = 7;
 /// Menu ids of the screens in the Tile windows submenu, from here up to the workspaces.
 const ID_TILE_SCREEN: usize = 20;
 /// Menu ids of the workspaces in the submenu, from here up.
@@ -329,6 +338,8 @@ struct App {
     quick_undo: Option<QuickUndo>,
     /// The last tile, while it can still be undone.
     tile_undo: Option<TileUndo>,
+    /// Smart tiling settings waiting to know which virtual desktop is in front.
+    tiling_wait: Vec<tiling::TilingWait>,
     clients: Vec<String>,
     last_state_event: Option<Instant>,
     /// The Store copy: Windows updates it, so the updater stays off.

@@ -140,6 +140,7 @@ unsafe fn new_app(hwnd: HWND, cfg: Config) -> App {
             capturing: None,
             quick_undo: None,
             tile_undo: None,
+            tiling_wait: Vec::new(),
             clients: Vec::new(),
             last_state_event: None,
             packaged: package::is_packaged(),

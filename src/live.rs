@@ -241,6 +241,9 @@ fn work(jobs: Receiver<Job>) {
                 && let Some(what) = switcher::place_by_rule(set, live.as_ref().map(|l| &l.workspace), hwnd)
             {
                 log::info!("app rule {what}");
+            } else if !owned {
+                // No row or rule claims it, so smart tiling may, on a screen where it is on.
+                crate::tiler::opened(hwnd);
             }
         }
         if pin_open && !switcher::switching() {

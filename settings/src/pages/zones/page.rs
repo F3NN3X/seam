@@ -6,6 +6,7 @@ use crate::theme::Palette;
 use crate::ui::{section, switch};
 use gpui_kit::component::slider::Slider;
 use seam::config::{WindowSettings, ZoneSettings};
+use seam::tiling::Family;
 
 pub fn render(panel: &mut Panel, window: &mut Window, cx: &mut Context<Panel>) -> impl IntoElement + use<> {
     let p = palette(cx);
@@ -44,10 +45,12 @@ pub fn render(panel: &mut Panel, window: &mut Window, cx: &mut Context<Panel>) -
     let number = panel.zone_screen.min(panel.mons.len() - 1) + 1;
     let (picker, own) = layout_picker(panel, &mon, saved.as_ref(), number, p, window, cx);
     let stage = stage(panel, &mon, saved.as_ref(), own, number, window, cx);
+    let tiling = tiling_card(panel, number, p, window, cx);
 
     body = body
         .child(div().flex().child(tabs))
         .child(div().flex().flex_col().min_w_0().child(stage))
+        .child(tiling)
         .child(picker)
         .child(snapping)
         .child(windows)
@@ -500,6 +503,43 @@ fn size_rows(
             .child(row("Also when I drag a window to another screen", None, on_drag, p))
             .into_any_element(),
     )
+}
+
+/// Smart tiling on the chosen screen, for the virtual desktop in front: the switch,
+/// and while it is on, the family. The tray keeps it per desktop, so the state says.
+fn tiling_card(panel: &Panel, number: usize, p: Palette, window: &mut Window, cx: &mut Context<Panel>) -> Div {
+    let now = panel.state.as_ref().and_then(|s| s.tiling.iter().find(|t| t.screen as usize == number).cloned());
+    let (on, family) = now.map_or((false, Family::Smart), |t| (t.on, t.family));
+    let view = cx.entity();
+    let toggle = switch("zone-tiling", "Arrange new windows automatically", on, window, cx, {
+        let view = view.clone();
+        move |on, window, cx| {
+            view.update(cx, |panel, cx| {
+                panel.command("tiling.set", json!({ "number": number, "on": on }), window, cx);
+            })
+        }
+    });
+    let mut rows = vec![row(
+        "Arrange new windows automatically",
+        Some("Smart tiling: each new window takes a share of this screen, on this desktop".into()),
+        toggle,
+        p,
+    )];
+    if on {
+        let titles: Vec<&'static str> = Family::ALL.iter().map(|f| f.title()).collect();
+        let at = Family::ALL.iter().position(|f| *f == family).unwrap_or(0);
+        let choice = ui::segmented("zone-tiling-family", "How windows are arranged", &titles, at, window, cx, {
+            move |i, window, cx| {
+                view.update(cx, |panel, cx| {
+                    let family = Family::ALL[i].name();
+                    panel.command("tiling.set", json!({ "number": number, "family": family }), window, cx);
+                })
+            }
+        });
+        let about = "Smart splits the largest window's space. The others share the screen evenly";
+        rows.push(row("How windows are arranged", Some(about.into()), choice, p));
+    }
+    card(rows, p)
 }
 
 /// The screen picker above the preview.

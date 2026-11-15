@@ -150,6 +150,30 @@ unsafe fn add_tile_menu(app: &App, menu: HMENU) {
     }
 }
 
+/// Free all windows, for each screen tiled on the desktop in front: one item, or a
+/// submenu naming them when there are several. None while nothing is tiled.
+unsafe fn add_free_menu(app: &App, menu: HMENU, tiled: &[usize]) {
+    let tiled: Vec<usize> = tiled.iter().copied().filter(|n| *n <= FREE_TILING_MAX).collect();
+    unsafe {
+        match tiled.as_slice() {
+            [] => {}
+            [one] if app.mons.len() == 1 => {
+                let _ = AppendMenuW(menu, MF_STRING, ID_FREE_TILING + one - 1, w!("Free all windows"));
+            }
+            several => {
+                let Ok(sub) = CreatePopupMenu() else { return };
+                for n in several {
+                    let label: Vec<u16> = format!("Screen {n}").encode_utf16().chain(std::iter::once(0)).collect();
+                    let _ = AppendMenuW(sub, MF_STRING, ID_FREE_TILING + n - 1, PCWSTR(label.as_ptr()));
+                }
+                if AppendMenuW(menu, MF_POPUP, sub.0 as usize, w!("Free all windows")).is_err() {
+                    let _ = DestroyMenu(sub);
+                }
+            }
+        }
+    }
+}
+
 pub(super) fn show_menu(app: &mut App) {
     unsafe {
         let Ok(menu) = CreatePopupMenu() else { return };
@@ -167,6 +191,8 @@ pub(super) fn show_menu(app: &mut App) {
         let workspaces = desk_workspaces(app);
         add_workspaces_menu(app, menu, &workspaces);
         add_tile_menu(app, menu);
+        let tiled = tiling::tiled_screens(app);
+        add_free_menu(app, menu, &tiled);
         let _ = AppendMenuW(menu, MF_SEPARATOR, 0, None);
         let _ = AppendMenuW(menu, checked_flag(app.cfg.enabled), ID_ENABLED, w!("Remap pointer at borders"));
         let _ = AppendMenuW(menu, MF_STRING, ID_RELEASE, w!("Release pinned windows"));
@@ -197,6 +223,9 @@ pub(super) fn show_menu(app: &mut App) {
             }
             // The screen the pointer was on when the menu opened.
             ID_TILE => start_tile(app, At::Point(pt.x, pt.y), None),
+            id if (ID_FREE_TILING..ID_FREE_TILING + FREE_TILING_MAX).contains(&id) => {
+                tiling::free_tiling(app, Some((id - ID_FREE_TILING + 1) as u32), None);
+            }
             id if (ID_TILE_SCREEN..ID_WORKSPACE).contains(&id) => {
                 start_tile(app, At::Screen(id - ID_TILE_SCREEN + 1), None);
             }

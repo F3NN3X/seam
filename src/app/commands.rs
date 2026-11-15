@@ -99,6 +99,15 @@ pub(super) fn run_command(app: &mut App, queued: Queued) {
         Command::ScreenTile(Some(number)) if number.checked_sub(1).and_then(|i| app.mons.get(i as usize)).is_none() => {
             Err(RpcError::new(api::NOT_FOUND, "no such screen"))
         }
+        // Answered once the setting is made, which may wait to know the desktop in front.
+        Command::TilingSet { number, on, family } => {
+            tiling::set_tiling(app, number, on, family, Some(reply));
+            return;
+        }
+        Command::TilingFree(number) => {
+            tiling::free_tiling(app, number, Some(reply));
+            return;
+        }
         Command::ScreenTile(number) => {
             let at = number.map_or_else(tile::pointer, |n| At::Screen(n as usize));
             start_tile(app, at, Some(reply));

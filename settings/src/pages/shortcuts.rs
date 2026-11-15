@@ -97,6 +97,8 @@ fn caption(action: &str) -> Option<&'static str> {
         "pause_seam" => Some("Pause or resume everything Seam does"),
         "fit_group" => Some("Stretch the focused window's group to fill its screen"),
         "stack_next" => Some("Put the next window of the focused window's stack on top"),
+        "float_tile" => Some("Take the focused window out of smart tiling, or put it back in"),
+        "free_tiling" => Some("Stop smart tiling on the screen under the pointer, and put its windows back"),
         "stack_prev" => Some("Put the previous window of the focused window's stack on top"),
         _ => None,
     }
@@ -186,6 +188,8 @@ pub fn render(panel: &mut Panel, _: &mut Window, cx: &mut Context<Panel>) -> imp
         row("Fit group to screen", "fit_group", keys.fit_group.as_ref(), 960),
         row("Next window in stack", "stack_next", keys.stack_next.as_ref(), 970),
         row("Previous window in stack", "stack_prev", keys.stack_prev.as_ref(), 971),
+        row("Float or tile this window", "float_tile", keys.float_tile.as_ref(), 980),
+        row("Free all windows", "free_tiling", keys.free_tiling.as_ref(), 981),
     ]);
     window_rows.extend([
         row("Pin window on top", "pin_top", keys.pin_top.as_ref(), 17),

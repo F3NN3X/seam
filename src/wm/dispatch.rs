@@ -61,6 +61,13 @@ impl Wm {
                     self.sync_hooks();
                 }
             }
+            Command::Tiling { on } => {
+                if on != self.tiling {
+                    self.tiling = on;
+                    self.sync_hooks();
+                    log::info!("wm: smart tiling {on}");
+                }
+            }
         }
     }
 

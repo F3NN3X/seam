@@ -161,8 +161,10 @@ fn run(generation: u64) {
                         } else if timer && wait != 0 && msg.wParam.0 == wait {
                             let _ = KillTimer(None, wait);
                             wait = 0;
-                            // Where the pointer is now, not where the hook last saw it.
-                            let inside = in_corner(cursor());
+                            // Where the pointer is now, not where the hook last saw it. A read
+                            // that fails counts as out of the corner, since 0,0 may be in one.
+                            let mut pt = POINT::default();
+                            let inside = GetCursorPos(&mut pt).is_ok() && in_corner(pt);
                             let (rest, step) = REST.get().tick(inside, button_down(), GetTickCount());
                             REST.set(rest);
                             match step {

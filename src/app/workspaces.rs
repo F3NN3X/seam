@@ -61,6 +61,8 @@ pub(super) fn apply_hotkeys(app: &mut App) {
         (HOTKEY_DIVIDER_MENU, "divider_menu".to_string(), keys.divider_menu.clone()),
         (HOTKEY_PAUSE_SEAM, "pause_seam".to_string(), keys.pause_seam.clone()),
         (HOTKEY_FIT_GROUP, "fit_group".to_string(), keys.fit_group.clone()),
+        (HOTKEY_STACK_NEXT, "stack_next".to_string(), keys.stack_next.clone()),
+        (HOTKEY_STACK_PREV, "stack_prev".to_string(), keys.stack_prev.clone()),
     ];
     for (id, (verb, dir, combo)) in (HOTKEY_WINDOW..).zip(keys.directional()) {
         wanted.push((id, format!("{verb}_{dir}"), combo.cloned()));
@@ -240,6 +242,7 @@ pub(super) fn switched(app: &mut App) {
     }
     // Apps opened by hand during the switch go to their places now.
     live::switch_ended();
+    snap::rebuild_stacks(done.stacks);
     focus_only::forget();
     windows_changed(app);
     publish(app);

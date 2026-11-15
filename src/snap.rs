@@ -31,6 +31,7 @@ pub(crate) use edges::Member;
 mod adhoc;
 mod drag;
 mod placing;
+mod stacks;
 #[path = "steer.rs"]
 mod steer;
 #[path = "swap.rs"]
@@ -39,6 +40,10 @@ mod sync;
 
 pub use adhoc::{adhoc_area, adhoc_dragged, fit, is_adhoc};
 pub use refit::{WM_APP_REFIT, display_changed, found as refit_found, line_up_ended};
+pub use stacks::{
+    StackInfo, WM_APP_STACKS, WM_APP_STACKS_FOUND, cycle as stack_cycle, rebuild as rebuild_stacks, set as stack_set,
+    stacks, stacks_found, take_joined,
+};
 pub use swap::{WM_APP_SWAP_LOOK, look_ready};
 
 /// A window the tray couldn't move, probably because it runs as administrator.
@@ -227,6 +232,16 @@ struct Engine {
     member_global: Vec<HWINEVENTHOOK>,
     /// Waits for a moved member to stay put.
     adhoc_timer: usize,
+    /// Windows that share a zone, one of them on top (`stacks`).
+    stacks: seam::stack::Stacks,
+    /// Focus changes, while there is a stack, so the window that takes it is its stack's top.
+    stack_hook: Option<HWINEVENTHOOK>,
+    /// Windows sent to other zones with their whole stack, which they stay in.
+    carried: Vec<isize>,
+    /// The stack stamps were looked for this run, as after a restart of the tray.
+    stacks_looked: bool,
+    /// The stacks' marks last handed to the overlay.
+    marks: Vec<zone_paint::Mark>,
 }
 
 /// Where window control wants a window, worked out on its worker.
@@ -337,6 +352,8 @@ pub fn update(owner: HWND, cfg: &Config, sig: &str, mons: &[Mon], aside: Option<
         e.sync_hook();
         e.sync_overlay();
         e.sync_dividers();
+        e.stack_marks();
+        e.stacks_look();
     });
 }
 
@@ -368,6 +385,8 @@ pub fn keep_all(list: Vec<Zoned>) {
             e.keep_snapped(z.hwnd, &screen, (from, to), z.at);
         }
         e.sync_dividers();
+        // The hidden windows of a stack whose top moved follow it now.
+        e.stacks_settle();
     });
 }
 

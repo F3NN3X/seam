@@ -104,7 +104,8 @@ impl Engine {
         let mut screens: Vec<dividers::Screen> = self.geometry().into_iter().filter_map(screen).collect();
         let mut known = self.zoned();
         self.adhoc_scene(&mut screens, &mut known);
-        dividers::Scene { owner: self.owner, screens, known, exclude: self.exclude.to_vec() }
+        let hidden = self.stack_hidden();
+        dividers::Scene { owner: self.owner, screens, known, exclude: self.exclude.to_vec(), hidden }
     }
 
     /// Hand the divider handles the zones as they are now, or none with zones off,

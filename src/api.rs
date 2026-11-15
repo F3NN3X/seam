@@ -208,6 +208,15 @@ pub enum Command {
     WindowFit {
         hwnd: Option<isize>,
     },
+    /// `window.stack`: on stacks a window, or the focused one, with the others in its
+    /// zones; off takes it out of its stack.
+    WindowStack {
+        hwnd: Option<isize>,
+        on: bool,
+    },
+    /// `window.stack_cycle`: the next window of the focused window's stack goes on top,
+    /// or the previous one with `false`.
+    WindowStackCycle(bool),
     /// `on` is None to toggle.
     WindowPin {
         kind: PinKind,

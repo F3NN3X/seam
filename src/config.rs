@@ -95,6 +95,10 @@ pub struct Hotkeys {
     pub pause_seam: Option<String>,
     /// "Fit group to screen": stretch the focused window's group to fill its screen.
     pub fit_group: Option<String>,
+    /// "Next window in stack": the next window of the focused window's stack goes on top.
+    pub stack_next: Option<String>,
+    /// "Previous window in stack".
+    pub stack_prev: Option<String>,
 }
 
 impl Default for Hotkeys {
@@ -135,6 +139,8 @@ impl Default for Hotkeys {
             divider_menu: None,
             pause_seam: None,
             fit_group: None,
+            stack_next: None,
+            stack_prev: None,
         }
     }
 }

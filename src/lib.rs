@@ -13,6 +13,7 @@ pub mod layout;
 pub mod library;
 pub mod log;
 pub mod palette;
+pub mod stack;
 pub mod state;
 pub mod updates;
 pub mod workspace;

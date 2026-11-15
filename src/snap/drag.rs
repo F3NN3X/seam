@@ -272,7 +272,8 @@ impl Engine {
         if drag.keys.hooked && !drag.keys.off {
             dragkeys::set_live(live);
         }
-        let hint = (drag.keys.hooked && self.settings.drag_hints).then(|| dragkeys::HINT.to_string());
+        let text = if drag.keys.stack { dragkeys::STACK_HINT } else { dragkeys::HINT };
+        let hint = (drag.keys.hooked && self.settings.drag_hints).then(|| text.to_string());
         if let Some(view) = view {
             let g = &drag.geometry[view.screen];
             // The whole span stays lit, and a share of it from the keys is lit again inside it.
@@ -329,6 +330,8 @@ impl Engine {
         }
         self.finish_drag(&mut drag, dropped, hwnd);
         self.sync_dividers();
+        // An edge's drag may have moved a stack's top, which its hidden windows follow now.
+        self.stacks_settle();
         // A re-fit that had to wait for this drag can go now.
         self.refit_resume();
     }
@@ -415,6 +418,10 @@ impl Engine {
         }
         let g = &drag.geometry[screen];
         self.snap_to(hwnd, g, (a.min(b), a.max(b)), out.rect, drag.was_snapped);
+        if let Some(onto) = out.stack {
+            self.stack_join(drag, onto, g, (a.min(b), a.max(b)), out.rect);
+            return;
+        }
         self.swap_start(out.swap);
     }
 

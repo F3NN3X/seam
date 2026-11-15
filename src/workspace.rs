@@ -170,6 +170,11 @@ pub struct Rule {
     /// `exe`, a link goes to the shell (`safe_open_with`).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub open_with: Option<String>,
+    /// The window's place in a stack in its zone at capture, 0 being the top. The rows
+    /// with one in the same zone are a stack again after a switch. An older Seam drops
+    /// it, and the windows only overlap in their zone.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stack: Option<u32>,
 }
 
 impl Default for Rule {
@@ -194,6 +199,7 @@ impl Default for Rule {
             captured_on: None,
             place: None,
             open_with: None,
+            stack: None,
         }
     }
 }
@@ -265,6 +271,7 @@ impl Rule {
         self.size_px = from.size_px;
         self.size_mm = from.size_mm;
         self.captured_on = from.captured_on.clone();
+        self.stack = from.stack;
         // A capture that read no folder or page keeps the one saved.
         if from.place.is_some() {
             self.place = from.place.clone();

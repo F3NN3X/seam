@@ -143,6 +143,8 @@ These act on the window in the foreground, using the screens as they stand on yo
 | `window.share` | `hwnd`: optional, the focused window by default; `axis`: `"width"` or `"height"`; `fraction`: 0.1 to 0.9 | `{ok: true}` | Any | 2, 3 | `{"method":"window.share","params":{"axis":"width","fraction":0.6667}}` |
 | `window.ungroup` | `hwnd`: optional, the focused window by default | `{ok: true}` | Any | 3 | `{"method":"window.ungroup","params":{}}` |
 | `window.fit` | `hwnd`: optional, the focused window by default | `{ok: true}` | Any | 3 | `{"method":"window.fit","params":{}}` |
+| `window.stack` | `on`: `true` or `false`; `hwnd`: optional, the focused window by default | `{on, windows}` | Any | 3 | `{"method":"window.stack","params":{"on":true}}` |
+| `window.stack_cycle` | `dir`: `"next"` or `"prev"` | `{hwnd, position, windows}` | Any | 3 | `{"method":"window.stack_cycle","params":{"dir":"next"}}` |
 | `screen.tile` | `number?`: Line Up number, from 1; the screen under the pointer when left out | `{ok: true, tiled, left}` | Any | 1, 2, 3 | `{"method":"screen.tile","params":{"number":2}}` |
 | `zones.from_windows` | `number?`: Line Up number, from 1; the screen under the pointer when left out | `{ok: true, id}` | Any | 1, 2, 3 | `{"method":"zones.from_windows","params":{"number":1}}` |
 | `zones.quick` | `number?`: Line Up number, from 1; the screen under the pointer when left out | `{ok: true}` | Any | 1, 3 | `{"method":"zones.quick","params":{"number":2}}` |
@@ -155,6 +157,8 @@ Error `3` carries the reason in `message`: no window has focus, nothing in that 
 `window.share` moves the divider beside a window in a zone so the window gets `fraction` of the span of itself and the zones beside it along `axis`, as the right-click menu of a divider handle does. Of the dividers on its two sides along that axis, it takes the one towards the bigger neighbour. The windows on both sides follow, none goes below the smallest size its app allows, and the layout is saved as for `window.resize`, with the same errors. `window.ungroup` takes a window out of its zones: it gets its size from before it was snapped, centred on those zones, and the layout and the other windows stay. A window snapped before the tray started, or maximized before it was snapped, gets two thirds of its zones. It answers `3` when the window isn't in a zone, with zones off, for the same windows Seam can't move, and while another window manager has Seam leaving placement alone. Both act on `hwnd` when it is given, and on the focused window otherwise.
 
 `window.fit` is **Fit group to screen**: it stretches a window's group over its screen's work area, keeping each window's share and order, and offers Undo for 8 seconds. A group is the ad-hoc group a drop beside a window made on a screen with no zones. A window in no group is given the work area itself, not maximized. It answers `3` with "Already fills its screen" for a window in zones, whose layout covers the work area already, and for a group or window that fills it already, and for the same windows Seam can't move, one of a group's included, and while another window manager has Seam leaving placement alone. It acts on `hwnd` when it is given, and on the focused window otherwise. `config.patch` sets its shortcut as `hotkeys.fit_group` (no key by default), and `zones.snap_beside` (default `true`): while zones show in a drag, the pointer in the band along the edge of another window (15% of its size, 24 to 120 px) puts the dragged window beside it instead of in a zone, splitting the zone that window holds on a screen with zones, or making an ad-hoc group on a screen with none. Ad-hoc groups are kept in memory only.
+
+`window.stack` with `on: true` makes a stack of a window in a zone and the other windows Seam has in the same zones, with the window on top, and answers how many windows the stack has. With `on: false` it takes the window out of its stack, where it stays in its zone, and answers `windows: 0`. A stack keeps every window sized to its zones and hides the others behind the top one by stacking order only, so Alt+Tab and the taskbar still reach each, and the window that takes the focus is the top. `window.stack_cycle` puts the next or previous window of the focused window's stack on top and gives it the focus, and answers its handle, its place in the stack from 1 (`position`) and how many windows the stack has. Both answer `3` when the window isn't in a zone, shares it with no other window, or isn't in a stack, with zones off, and while another window manager has Seam leaving placement alone. A drop makes a stack too: press S while zones show in a drag, and the window goes on top of the one in the zone rather than swapping with it, with Undo for 8 seconds. Each window keeps a `Seam_stack` property with its stack and place in it, so a restart of Seam finds its stacks again. `config.patch` sets the shortcuts as `hotkeys.stack_next` and `hotkeys.stack_prev` (no key by default). A workspace row has `stack`, its window's place in a stack from the top at capture (0 is the top), left out when the window wasn't in one. The rows in one zone with a `stack` are a stack again after a switch. An older Seam drops the field, and those windows only overlap in their zone.
 
 `screen.tile` puts the loose windows of one screen into its zones, up to nine, and answers how many it placed (`tiled`) and how many found no zone or were past the ninth (`left`). A window already in a zone keeps it. A screen with no layout is given one for the number of windows and keeps it. It answers `3` with "Nothing to tile" when there is nothing to place, and while zones are off or another window manager has the windows, and `1` for a number that isn't a screen. Pinned, sticky, minimized and administrator windows are left alone.
 
@@ -282,7 +286,8 @@ Subscribe with `events.subscribe` and a list of topics. An event belongs to the 
   "hotkey_errors": [{ "action": "workspace:ws_9c21", "combo": "Ctrl+Shift+Alt+2" }],
   "last_align": { "ok": false, "message": "..." },
   "update": { "available": "0.6.1", "ready": true },
-  "clients": ["panel", "streamdeck"]
+  "clients": ["panel", "streamdeck"],
+  "stacks": [{ "screen": 1, "zone": 2, "windows": [264412, 198230], "top": 198230 }]
 }
 ```
 
@@ -310,6 +315,7 @@ Subscribe with `events.subscribe` and a list of topics. An event belongs to the 
 | `last_align` | The result of the last change to Windows' arrangement, `{ok, message}`, or `null` |
 | `update` | An update waiting to install, `{available, ready}`, or `null`. `ready` means it is downloaded and checked |
 | `clients` | The names of the connected API clients. The settings window shows as `panel`, and an assistant's `seam-mcp.exe` as `seam-mcp (<assistant>)` |
+| `stacks` | Every stack of windows in zones on this desk. `screen` is the Line Up number, `zone` the zone from 1, and `span_to` the last zone when the stack spans several, left out otherwise. `windows` are the window handles in the order Next steps through them, and `top` the one on top. Empty in an older Seam |
 
 ## Error codes
 

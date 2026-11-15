@@ -308,6 +308,23 @@ pub(super) fn undo_tile(app: &mut App) {
     log::info!("tile screen: undone");
 }
 
+/// The stacks changed: the state says so, and a drop that made a stack offers Undo,
+/// which puts the window back where its drag began, as a split's notice does.
+pub(super) fn stacks_changed(app: &mut App) {
+    publish(app);
+    let Some((screen, back)) = snap::take_joined() else { return };
+    app.tile_undo = Some(TileUndo {
+        sig: app.sig.clone(),
+        screen,
+        changed: None,
+        back: vec![back],
+        keep: Vec::new(),
+        group: None,
+        until: Instant::now() + QUICK_UNDO_FOR,
+    });
+    notify(app, "Stacked the window", "Click to undo", BalloonAction::UndoTile);
+}
+
 /// Fit group to screen, for a window or the focused one: an ad-hoc group stretches
 /// over its screen's work area, a loose window takes the work area, and a window in
 /// zones fills its screen already. A notice offers Undo, as a tile's does; a key

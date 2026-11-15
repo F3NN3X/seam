@@ -12,6 +12,10 @@
 //! ready yet shows as soon as it is, with nobody waiting for it. A preview adds
 //! outlines where other windows will land and, while the drag's keys are live, a
 //! strip naming them, drawn when asked for and gone when the drag ends.
+//!
+//! A stack's mark lives here too: a slim row of short bars along the bottom of its
+//! zone, one per window, the one on top brighter. It stays up as long as the stack
+//! does, drawn again only when it changes.
 
 use crate::{log, overlay};
 use seam::zones::Rect;
@@ -44,6 +48,16 @@ const HINT_TEXT: f32 = 13.;
 const HINT_HEIGHT: f32 = 32.;
 const HINT_PAD: f32 = 16.;
 const HINT_BOTTOM: f32 = 24.;
+/// A stack's mark: each bar's width and height, the space between bars, the padding
+/// round them, and the mark's distance from the bottom of the zone, at 96 DPI. At most
+/// `MARK_MAX` bars are drawn.
+const MARK_BAR: f32 = 12.;
+const MARK_THICK: f32 = 3.;
+const MARK_GAP: f32 = 4.;
+const MARK_PAD: f32 = 4.;
+const MARK_BOTTOM: f32 = 8.;
+const MARK_RADIUS: f32 = 2.;
+const MARK_MAX: usize = 12;
 const WM_APP_WAKE: u32 = WM_APP + 1;
 
 type Key = (i32, i32, i32, i32);
@@ -63,8 +77,20 @@ pub struct ScreenSpec {
     pub zones: Vec<Rect>,
 }
 
+/// A stack's mark: its zone with the gap, how many windows it has, which is on top,
+/// and the screen's DPI over 96.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Mark {
+    pub zone: Rect,
+    pub count: usize,
+    pub top: usize,
+    pub scale: f32,
+}
+
 enum Command {
     Build(u64, Vec<ScreenSpec>),
+    /// Every stack's mark that shows now. An empty list takes them all down.
+    Marks(Vec<Mark>),
     /// A screen, its lit rect, the share of it the window takes, outlines where other
     /// windows land, and the key strip's text.
     Preview(String, Option<Rect>, Option<Rect>, Vec<Rect>, Option<String>),
@@ -141,6 +167,14 @@ pub fn hide_all() {
     send(Command::HideAll);
 }
 
+/// Show these stacks' marks and no others. Marks already up that haven't changed stay.
+pub fn marks(list: Vec<Mark>) {
+    if list.is_empty() && SHARED.get().is_none() {
+        return;
+    }
+    send(Command::Marks(list));
+}
+
 /// Zones are off or there is nothing to show: free every window and bitmap.
 pub fn clear() {
     if SHARED.get().is_some() {
@@ -178,6 +212,8 @@ struct Overlay {
     part: Option<(Key, HWND)>,
     /// The key strip shown now: its screen, text and window.
     hint: Option<(String, String, HWND)>,
+    /// The stacks' marks shown now.
+    marks: Vec<(Mark, HWND)>,
 }
 
 unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
@@ -302,6 +338,7 @@ impl Overlay {
                     self.share("", None, false);
                     self.strip("", None);
                 }
+                Command::Marks(list) => self.marks(list),
                 Command::Clear => self.clear(),
             }
         }
@@ -312,6 +349,7 @@ impl Overlay {
         self.outline("", Vec::new());
         self.share("", None, false);
         self.strip("", None);
+        self.marks(Vec::new());
         self.todo.clear();
         for (_, screen) in self.screens.drain() {
             screen.destroy();
@@ -493,6 +531,26 @@ impl Overlay {
             if let Some(window) = outline_window(rect, s) {
                 show_on_top(window);
                 self.others.push((k, window));
+            }
+        }
+    }
+
+    /// The stacks' marks: the ones that changed or went are taken down, new ones drawn.
+    fn marks(&mut self, list: Vec<Mark>) {
+        let (keep, gone): (Vec<_>, Vec<_>) = self.marks.drain(..).partition(|(m, _)| list.contains(m));
+        for (_, window) in gone {
+            unsafe {
+                let _ = DestroyWindow(window);
+            }
+        }
+        self.marks = keep;
+        for mark in list {
+            if self.marks.iter().any(|(m, _)| *m == mark) {
+                continue;
+            }
+            if let Some(window) = mark_window(&mark) {
+                show_on_top(window);
+                self.marks.push((mark, window));
             }
         }
     }
@@ -738,6 +796,32 @@ fn hint_window(work: Rect, text: &str, s: f32) -> Option<HWND> {
                     canvas.blend(pad + x - first, y, scale(ink, cover as f32 / 255.));
                 }
             }
+        }
+    });
+    Some(hwnd)
+}
+
+/// A hidden window with a stack's mark: a bar per window on a dark strip, centred at
+/// the bottom of the zone, the top window's bar in full ink and the others muted.
+fn mark_window(mark: &Mark) -> Option<HWND> {
+    let s = mark.scale;
+    let px = |v: f32| (v * s).round() as i32;
+    let n = mark.count.clamp(2, MARK_MAX) as i32;
+    let (bar, thick, gap, pad) = (px(MARK_BAR), px(MARK_THICK).max(2), px(MARK_GAP), px(MARK_PAD));
+    let (w, h) = (n * bar + (n - 1) * gap + 2 * pad, thick + 2 * pad);
+    let z = mark.zone;
+    if w > z.w || h > z.h {
+        return None;
+    }
+    let at = Rect { x: z.x + (z.w - w) / 2, y: z.y + z.h - h - px(MARK_BOTTOM), w, h };
+    let hwnd = create()?;
+    let back = pm(SHADE, 0.9);
+    render(hwnd, at, |canvas| {
+        canvas.rounded(Rect { x: 0, y: 0, w, h }, MARK_RADIUS, back, Some((pm(INK, 0.4), OUTLINE)), s);
+        for i in 0..n {
+            let alpha = if i as usize == mark.top.min(MARK_MAX - 1) { 1. } else { 0.4 };
+            let r = Rect { x: pad + i * (bar + gap), y: pad, w: bar, h: thick };
+            canvas.rounded(r, 1., over(back, pm(INK, alpha)), None, s);
         }
     });
     Some(hwnd)

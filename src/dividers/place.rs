@@ -42,8 +42,9 @@ pub(super) fn spots(scene: &Scene) -> (Vec<Spot>, HashSet<isize>) {
     for (i, s) in scene.screens.iter().enumerate().filter(|(_, s)| s.gap >= MIN_GAP_PX) {
         let tree = &s.layout.tree;
         let (cells, placed) = (zones::rects(tree, s.work, 0), zones::rects(tree, s.work, s.gap));
-        let found = wincontrol::screen_members(&s.id, s.bounds, &placed, &scene.known, &scene.exclude);
+        let mut found = wincontrol::screen_members(&s.id, s.bounds, &placed, &scene.known, &scene.exclude);
         seen.extend(found.iter().map(|(h, ..)| h.0 as isize));
+        found.retain(|(h, ..)| !scene.hidden.contains(&(h.0 as isize)));
         // A window Seam may not move gets no handle.
         let members: Vec<(isize, usize, usize)> = found
             .into_iter()

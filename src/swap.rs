@@ -464,8 +464,11 @@ impl Engine {
 
     /// Start the moves `swap_plan` made, once the dropped window has been sent to its zones.
     pub(super) fn swap_start(&mut self, plan: Option<Swap>) {
-        let Some((list, snapped, saw)) = plan else { return };
+        let Some((mut list, snapped, saw)) = plan else { return };
         self.saw.extend(saw);
+        // A stack's top swapped into other zones takes its stack along.
+        let carried = self.stack_carry(&list);
+        list.extend(carried);
         let was = if snapped { "snapped" } else { "loose" };
         log::info!("zone swap: moved {} window(s), the dropped window was {was}", list.len());
         self.queued.extend(list);

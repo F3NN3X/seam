@@ -374,6 +374,25 @@ Columns on screen 1 and no layout on screen 2, gap 8 px, **Snap beside a window*
 - [ ] **Many windows.** Make groups on screen 2 until they hold more than 128 windows between them, or as many as you can. Close or minimize the last one made: its group closes up. With `--log`, no `a group hook wasn't installed` line.
 - [ ] **Turned off.** Turn off **Snap beside a window**: an edge band shows the zones as usual and nothing groups. Search for "beside" finds the row, and "fit" finds the shortcut.
 
+### Stacks
+
+Columns on screen 1 with Notepad snapped in the middle zone, **Swap with the window already in a zone** on, **Show keys while dragging** on, the debug log on.
+
+- [ ] **Make a stack.** Drag a browser with Shift over the middle zone. The strip says "S stack". Press S: the strip says "Stacks on the window here", and the grey outline of Notepad moving away goes. Let go: the browser fills the middle zone over Notepad, Notepad stays where it is behind it, a "Stacked the window" notice offers Undo, and the log has `stacks: a drop made a stack of 2 windows`. A slim row of two bars sits at the bottom of the zone, the right one brighter. No amber.
+- [ ] **S again swaps.** Start another drag over the zone, press S twice: the strip is back to "S stack", and the drop swaps as before.
+- [ ] **Undo.** Make a stack, then click the notice within 8 s: the browser goes back where its drag began, and the bars go.
+- [ ] **Cycle by key.** Record keys for **Next window in stack** and **Previous window in stack**. Focus the browser and press Next: Notepad comes to the top with the focus, and the brighter bar moves. Press Previous: the browser is back. With three windows, Next steps through all three and wraps. On a window in no stack the key does nothing, and the log says "That window isn't in a stack".
+- [ ] **Focus from elsewhere.** With Notepad behind, pick it with Alt+Tab, then with its taskbar button: it comes on top each time, and the bars follow. Neither window was minimized or hidden from Alt+Tab.
+- [ ] **Leaving.** Drag the top window to another zone: it leaves, the other one is the top, and with two windows the bars go. Minimize or maximize a member: it leaves. Close one: it leaves. Move the top one with Shift+Win+Alt+arrow: it moves to the next zone and leaves the stack, the other stays.
+- [ ] **Swap moves the stack.** Drop a third window, no S, on the stack's zone: the stack's top swaps to the third window's old zone, and once it has landed the window behind it follows there. The bars move with it.
+- [ ] **Edges and dividers.** Drag the edge of the stack's top with **Resize neighbours with a window** on: the top and the neighbours follow live, and the window behind follows once you let go. The same with a divider handle beside the stack. With `--log`, the drag's main max stays as before.
+- [ ] **Re-fit.** With **Re-fit after a display change** on, change the scale of screen 1 and back: every member is fitted, and the top one is on top again.
+- [ ] **Restart.** Quit and start Seam: within a second the bars are back on the stack, the log says `stacks: found 1 again after a restart`, and Next still cycles.
+- [ ] **Workspaces.** Capture a workspace with a stack: the rows of its windows have `stack` 0 for the top and 1 for the other. Rearrange, then switch to it: the windows are in the zone again as a stack with the same top. With an older Seam, the same workspace puts both windows in the zone, overlapping.
+- [ ] **API.** `window.stack` with `{"on":true}` on a window sharing its zone with another answers `{"on":true,"windows":2}`; on a window alone in its zone it answers `3`. `{"on":false}` takes it out. `window.stack_cycle` with `{"dir":"next"}` answers the new top's `hwnd`, `position` and `windows`, and `state.get` lists the stack under `stacks`.
+- [ ] **No stacks beside.** On a screen with no zones, a snap-beside group: S during a drag changes nothing there and the drop groups as before.
+- [ ] **While paused.** Pause Seam: the bars go, and the keys are given back to the app. Resume: they come back.
+
 ### Pull a window out of its zone
 
 Columns on screen 1 with three windows snapped, one to a zone (A, B, C from the left), the debug log on.
@@ -1037,7 +1056,7 @@ Set **Switch back to the previous workspace** on Shortcuts (it has no key until 
 
 Build the plugin with `pnpm install`, `pnpm build` and `pnpm run pack` in `integrations/streamdeck`. Run these with Seam running and **Let other apps control Seam** on, and the Stream Deck app open.
 
-- [ ] **Install the packed file.** Double-click `dist\co.f3nn3x.seam.streamDeckPlugin`. Stream Deck installs it, and a Seam group with twenty actions appears in the action list. General in Seam lists "streamdeck" among the connected apps.
+- [ ] **Install the packed file.** Double-click `dist\co.f3nn3x.seam.streamDeckPlugin`. Stream Deck installs it, and a Seam group with twenty-one actions appears in the action list. General in Seam lists "streamdeck" among the connected apps.
 - [ ] **Switch workspace.** Drag the action to a key and pick a workspace in the dropdown, which lists the current desk's workspaces. The key shows its name. Press it: the workspace is applied, and the key lights once it's in use. Switch to another workspace by hotkey. The key goes dark.
 - [ ] **Drift dot.** With the key's workspace in use, drag one of its windows away. Within a second a small amber dot shows in the key's top-right corner. Press the key: the window goes back and the dot goes. Switch to another workspace: the key goes dark with no dot. Quit Seam while the dot shows: the key says "Seam isn't running" with no dot.
 - [ ] **Snap back.** Drag the action to a key. Move a window of the workspace in use and press it: the window goes back. With no workspace in use the key shows an alert.
@@ -1046,6 +1065,7 @@ Build the plugin with `pnpm install`, `pnpm build` and `pnpm run pack` in `integ
 - [ ] **Pause or resume remap.** The key reads "Remap on" and is lit. Press it. Crossings stop remapping, and the key reads "Remap paused". Press it again to resume. Pause from the tray menu instead. The key follows. With no borders lined up, the key shows paused.
 - [ ] **Zones on or off.** The key follows the Zones page. Press it to turn zones off and on. Change the setting on the Zones page. The key follows.
 - [ ] **Next and previous zone.** Focus a window and press each key. The window moves one zone forward or back. Press one with the desktop focused. The key shows an alert.
+- [ ] **Cycle stack.** Make a stack of two windows in a zone and focus one. Press the key: the other comes on top with the focus. Press it on a window in no stack: the key shows an alert. The plugin shows version 0.8.3.
 - [ ] **Move window.** Drag the action to a key and pick each direction in its settings. The key's title names the direction. Press it: the focused window moves that way as Shift+Win+Alt+arrows does. With nothing that way the key shows an alert.
 - [ ] **Focus window.** Drag the action to a key, pick a direction and press it while an app is focused. The window that way takes focus, even though the press came from the Stream Deck. With no window that way the key shows an alert.
 - [ ] **Apply layout by name.** Drag the action to a key. In its settings pick screen 1 and a layout, say Grid. The key shows "Grid". Press it: screen 1 takes the layout, as picking its tile on the Zones page does, and the key lights. With `zones.layouts` and `{"number":1}`, `current` is `grid`. The API's `zones.apply` with `{"number":1,"layout":"main + STACK"}` works too, and `{"number":1,"layout":"nope"}` answers `3`, `{}` answers `-32602`.

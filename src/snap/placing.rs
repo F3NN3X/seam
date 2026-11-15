@@ -6,6 +6,8 @@ impl Engine {
     /// The window stopped being in a zone, so forget it, including the stamp on the window.
     pub(super) fn unsnap(&mut self, hwnd: HWND, stamped: bool) {
         self.snapped.remove(&(hwnd.0 as isize));
+        // Out of its zones, it's out of its stack.
+        self.stack_leave(hwnd.0 as isize);
         if stamped {
             winutil::clear_zone_stamp(hwnd);
         } else {
@@ -36,8 +38,9 @@ impl Engine {
         };
         // The screen's DPI, not the window's: a window that ignores DPI needs no extra step.
         let crosses = winutil::monitor_dpi(hwnd) != g.dpi;
-        // Into zones, it's out of any ad-hoc group.
+        // Into zones, it's out of any ad-hoc group, and out of its stack for other zones.
         self.leave_adhoc(key);
+        self.stack_moving(key, (&g.id, from, to));
         self.place(hwnd, rect, crosses, false);
         self.snapped.insert(key, Snapped { old, screen: g.id.clone(), from, to, at: rect });
         // The zones the window covers, kept on the window so a restart of the tray remembers them.
@@ -107,6 +110,8 @@ impl Engine {
         if self.pending.is_none() {
             self.refit_pump();
         }
+        // Every move is over, so the stacks are looked at, and their hidden windows follow.
+        self.stacks_settle();
     }
 
     /// Start window control's next move once the one before is over.
@@ -142,6 +147,7 @@ impl Engine {
         let geometry = self.geometry();
         match p.zone.and_then(|(id, from, to)| Some((geometry.iter().find(|g| g.id == id)?, from, to))) {
             Some((g, from, to)) if to < g.zones.len() => {
+                self.stack_moving(p.hwnd, (&g.id, from, to));
                 self.keep_snapped(p.hwnd, &g.id, (from, to), p.target);
                 winutil::stamp_zones(h, &refit::covered(&g.cells, from, to));
             }

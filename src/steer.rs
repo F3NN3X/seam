@@ -27,10 +27,12 @@ pub(super) struct Outcome {
     pub(super) rect: Rect,
     pub(super) split: Option<Split>,
     pub(super) swap: Option<swap::Swap>,
+    /// With S from the drag's keys: the window in the zones it goes on top of, in a stack.
+    pub(super) stack: Option<HWND>,
 }
 
 impl Outcome {
-    /// Where other windows land, for the preview's outlines.
+    /// Where other windows land, for the preview's outlines. A stack moves none.
     pub(super) fn others(&self) -> Vec<Rect> {
         match &self.split {
             Some(split) => split.occupant.map(|_| split.zones[split.rest]).into_iter().collect(),
@@ -59,15 +61,20 @@ pub(super) struct Split {
 impl Engine {
     /// What a drop on zones `(a, b)` of the drag's screen `s` does. A part from the
     /// keys cuts the zones in two when they are one part of the layout, both pieces
-    /// are big enough, and at most one window holds them. Otherwise it's the usual
-    /// drop, with a swap.
+    /// are big enough, and at most one window holds them. With S, a window that fills
+    /// the zones is stacked on rather than swapped with. Otherwise it's the usual drop,
+    /// with a swap.
     pub(super) fn outcome(&self, drag: &Drag, s: usize, (a, b): (usize, usize), cut: Option<(Part, Side)>) -> Outcome {
         let (a, b) = (a.min(b), a.max(b));
         if let Some(split) = cut.and_then(|cut| self.split_plan(drag, s, (a, b), cut)) {
-            return Outcome { rect: split.zones[split.at], split: Some(split), swap: None };
+            return Outcome { rect: split.zones[split.at], split: Some(split), swap: None, stack: None };
         }
         let g = &drag.geometry[s];
-        Outcome { rect: zones::span(g.zones[a], g.zones[b]), split: None, swap: self.swap_plan(drag, s, (a, b)) }
+        let rect = zones::span(g.zones[a], g.zones[b]);
+        if let Some(onto) = drag.keys.stack.then(|| self.stack_onto(drag, s, (a, b))).flatten() {
+            return Outcome { rect, split: None, swap: None, stack: Some(onto) };
+        }
+        Outcome { rect, split: None, swap: self.swap_plan(drag, s, (a, b)), stack: None }
     }
 
     pub(super) fn split_plan(
@@ -418,6 +425,7 @@ impl Engine {
                     view.and_then(|v| Some((v.screen, zones::zone_at(&drag.geometry[v.screen].cells, pt.x, pt.y)?)));
                 (drag.keys.side, drag.keys.side_at) = (Some(side), at);
             }
+            Key::Stack => drag.keys.stack = !drag.keys.stack,
             Key::Cancel | Key::Button => {
                 // This drop doesn't snap, so the keys go back to the apps, once the
                 // release of this press has been swallowed too.

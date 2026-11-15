@@ -315,6 +315,26 @@ pub fn clear_zone_stamp(h: HWND) {
     }
 }
 
+/// Which stack a window is in and its place there, beside the zone stamp, so a restart
+/// of the tray finds its stacks again. The bits are `stack::stamp`'s.
+const STACK: PCWSTR = w!("Seam_stack");
+
+/// The window's `Seam_stack` bits, or 0 for none.
+pub fn stack_stamp(h: HWND) -> u64 {
+    unsafe { GetPropW(h, STACK).0 as usize as u64 }
+}
+
+/// Replace the stack stamp. 0 removes it.
+pub fn set_stack_stamp(h: HWND, bits: u64) {
+    unsafe {
+        if bits == 0 {
+            let _ = RemovePropW(h, STACK);
+        } else {
+            let _ = SetPropW(h, STACK, Some(HANDLE(bits as usize as *mut _)));
+        }
+    }
+}
+
 /// Pins and the focus border, kept on the window like the zone stamp, so a
 /// tray that starts again finds them (§3.5).
 const PIN: PCWSTR = w!("Seam_pin");

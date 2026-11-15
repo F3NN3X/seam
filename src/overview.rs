@@ -181,6 +181,27 @@ pub fn desktop_ranks(places: &[Option<usize>]) -> (Vec<usize>, Vec<usize>) {
     (ranked, index)
 }
 
+/// What Esc does.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Escape {
+    /// A drag is on: it ends with no move, and the overview stays.
+    CancelDrag,
+    /// The overview closes and this window, the one in front before, gets the focus back.
+    Back(usize),
+    /// The overview closes.
+    Close,
+}
+
+/// Esc always closes the overview, but for ending a drag first. The window that was in
+/// front gets the focus back only while it still exists; one that closed is skipped.
+pub fn escape(dragging: bool, before: Option<usize>, alive: impl Fn(usize) -> bool) -> Escape {
+    match before {
+        _ if dragging => Escape::CancelDrag,
+        Some(w) if alive(w) => Escape::Back(w),
+        _ => Escape::Close,
+    }
+}
+
 /// A virtual desktop's label: this one, or by its name, or its place in Windows' list
 /// from 1, or a plain word when Windows' list can't be read.
 pub fn desktop_label(current: bool, name: Option<&str>, place: Option<usize>) -> String {
@@ -335,6 +356,36 @@ mod tests {
     fn a_window_moved_to_a_screen_is_centred_and_fits() {
         assert_eq!(centred(r(100, 0, 1000, 800), (400, 300)), r(400, 250, 400, 300));
         assert_eq!(centred(r(0, 0, 1000, 800), (1200, 300)), r(0, 250, 1000, 300));
+    }
+
+    #[test]
+    fn esc_closes_even_when_the_window_in_front_is_gone() {
+        assert_eq!(escape(false, Some(3), |_| true), Escape::Back(3));
+        assert_eq!(escape(false, Some(3), |_| false), Escape::Close);
+        assert_eq!(escape(false, None, |_| true), Escape::Close);
+        // A drag ends first; the next Esc closes.
+        assert_eq!(escape(true, Some(3), |_| true), Escape::CancelDrag);
+    }
+
+    #[test]
+    fn a_search_handles_repeats_empty_fields_and_other_scripts() {
+        // Each word counts, a repeated one too.
+        assert_eq!(score("mail mail", "Mail", "Outlook"), Some(60));
+        assert_eq!(score("x", "", ""), None);
+        assert_eq!(score("note", "", "Notepad"), Some(40));
+        assert_eq!(score("ÉTÉ", "Photos d'été", "Photos"), Some(30));
+        assert_eq!(score("longer than the title", "long", "app"), None);
+    }
+
+    #[test]
+    fn many_desktops_on_a_short_screen_stay_inside_it() {
+        let area = r(0, 0, 1200, 900);
+        let groups = layout(area, &[6, 4, 3, 2], &M);
+        assert_eq!(groups.len(), 4);
+        let bottom = groups.iter().flat_map(|g| &g.tiles).map(|t| t.y + t.h).max().unwrap();
+        assert!(bottom <= area.h, "{bottom}");
+        // The widest allowed tile still caps them.
+        assert!(groups.iter().flat_map(|g| &g.tiles).all(|t| t.w <= M.max_w));
     }
 
     #[test]

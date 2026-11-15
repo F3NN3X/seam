@@ -93,8 +93,9 @@ Set a key for **Show overview** on Shortcuts (it has no key until you set one). 
 - [ ] **Other desktop.** A tile under "Mail" doesn't start a drag, and the footer says why. Minimize a window on "Mail": it shows under "Mail", not "This desktop".
 - [ ] **Administrator.** Run a terminal as administrator and drag its tile: no drag starts, and the footer says it runs as administrator, so Seam can't move it.
 - [ ] **Search field.** A click on the search field or a desktop's label leaves the overview open.
-- [ ] **Closed meanwhile.** Close a window from its taskbar button while the overview is open, then press Enter on its tile: the tile goes, the footer says the window closed, and the overview stays.
-- [ ] **Busy apps.** With a not-responding app open, the key still opens the overview at once, without that app, and Esc closes it at once while icons are still filling in.
+- [ ] **Closed meanwhile.** Close a window from its taskbar button while the overview is open, then press Enter on its tile: the overview closes. Open it from a terminal, close the terminal with a timer (`timeout 5 & exit` in cmd), and press Esc after it has gone: the overview closes.
+- [ ] **Not responding.** With an app hung (a debugger paused on it works), its tile shows its icon and "Not responding", Enter brings it to front, and a drag says it can't be moved.
+- [ ] **Busy apps.** With a not-responding app open, the key still opens the overview at once, and Esc closes it at once while icons are still filling in.
 - [ ] **Search with an emoji.** A title with an emoji is found by typing the emoji (Win+.).
 - [ ] **Minimized drop.** Drag the minimized window's tile to a zone: it is restored straight into the zone.
 - [ ] **Smart tiling.** With tiling on for screen 1, drag one of its tiled windows to screen 2's zone: it lands there, its old neighbours fill the gap, and it isn't tiled again when a new window opens. Drag a window onto a tiled screen's zone: the footer says it floats there, and it lands over that tile without taking it.

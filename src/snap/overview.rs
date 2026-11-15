@@ -25,8 +25,8 @@ pub fn overview_targets() -> Vec<Target> {
     with_engine(targets).unwrap_or_default()
 }
 
-/// Put a window the overview dropped: in a zone of `screen`, or at `free` there. None
-/// while the snapping is busy, to be tried again.
+/// Put a window the overview dropped: in zone `zone` of `screen`, whose rect it showed
+/// as `free`, or at `free` there. None while the snapping is busy, to be tried again.
 pub fn overview_place(hwnd: isize, screen: &str, zone: Option<usize>, free: Rect) -> Option<Result<(), String>> {
     with_engine(|e| e.overview_place(hwnd, screen, zone, free))
 }
@@ -48,6 +48,10 @@ impl Engine {
         let g = geometry.iter().find(|g| g.id == screen);
         let crosses = |dpi: u32| winutil::monitor_dpi(h) != dpi;
         match (g, zone) {
+            // The zone the overview showed isn't there any more: the layout changed meanwhile.
+            (Some(g), Some(z)) if g.zones.get(z) != Some(&free) => {
+                return Err("The zones changed while the overview was open, so the window stayed".into());
+            }
             (Some(g), Some(z)) if z < g.zones.len() && !self.tiling_on(screen) => {
                 self.snap_to(h, g, (z, z), g.zones[z], None);
             }

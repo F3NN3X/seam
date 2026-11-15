@@ -18,7 +18,7 @@ use crate::geom;
 use crate::log;
 use crate::showlayout::{Color, fill, text};
 use crate::wincontrol;
-use seam::overview::{self, Dir, Landing};
+use seam::overview::{self, Dir, Escape, Landing};
 use seam::winutil;
 use seam::zones::Rect;
 use std::cell::RefCell;
@@ -47,15 +47,16 @@ pub use window::show;
 
 /// Moves are waiting for the tray: `take_moves` has them.
 pub const WM_APP_OVERVIEW: u32 = WM_APP + 39;
-/// To the overview's own window: read the slower details, app names and icons, after the first paint.
-const WM_APP_DETAILS: u32 = WM_APP + 1;
 /// Closes the overview if Windows kept the focus elsewhere.
 const TIMER_FOCUS: usize = 1;
 const FOCUS_GRACE_MS: u32 = 300;
 const TIMER_FOCUS_LAST: usize = 2;
 const FOCUS_LAST_MS: u32 = 500;
+/// Reads the details a slice at a time. A timer comes after input in the queue, so keys
+/// and clicks are always taken between slices.
+const TIMER_DETAILS: usize = 3;
 /// How long one slice of the details may take before the queue is pumped again.
-const DETAILS_SLICE: Duration = Duration::from_millis(30);
+const DETAILS_SLICE: Duration = Duration::from_millis(16);
 
 const CLASS: PCWSTR = w!("SeamOverview");
 
@@ -194,8 +195,8 @@ struct Win {
     source: (i32, i32),
     /// It runs as administrator and Seam doesn't, so Seam can't move it.
     elevated: bool,
-    /// It closed while the overview was open.
-    gone: bool,
+    /// It isn't responding: it shows its icon and is never asked anything that waits on it.
+    hung: bool,
 }
 
 /// One screen's window and what it shows.
@@ -287,7 +288,6 @@ impl State {
     fn search(&mut self) {
         let keys: Vec<(&str, &str)> = self.wins.iter().map(|w| (w.title.as_str(), w.app.as_str())).collect();
         self.shown = overview::rank(&self.query, &keys);
-        self.shown.retain(|&w| !self.wins[w].gone);
         draw::lay_out(self);
         let order = self.tiles();
         if !self.selected.is_some_and(|s| order.iter().any(|(w, _)| *w == s)) {

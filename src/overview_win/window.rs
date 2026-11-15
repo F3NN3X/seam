@@ -31,14 +31,13 @@ fn held(vk: VIRTUAL_KEY) -> bool {
 
 /// Go to a window: restore it if it is minimized and give it the focus through the
 /// window manager's input credit, as a stack's cycle does. One on another virtual
-/// desktop takes Windows there. Then the overview closes. A window that closed since
-/// leaves the list instead, and the overview stays.
-fn go(s: &mut State, w: usize) {
+/// desktop takes Windows there. The overview closes whatever happens, also when the
+/// window closed meanwhile.
+fn go(s: &State, w: usize) {
     let h = s.wins[w].hwnd;
     if !unsafe { IsWindow(Some(h)) }.as_bool() {
-        s.wins[w].gone = true;
-        s.notice = Some("That window closed".into());
-        s.search();
+        log::info!("overview: the window closed meanwhile");
+        quit();
         return;
     }
     unsafe {
@@ -50,12 +49,15 @@ fn go(s: &mut State, w: usize) {
     quit();
 }
 
-/// Esc: back to the window that was in front, when it is one of the listed ones.
-fn leave(s: &mut State) {
-    if let Some(w) = s.wins.iter().position(|w| w.hwnd.0 as isize == s.before) {
-        go(s, w);
-    } else {
-        quit();
+/// Esc, by `overview::escape`: end a drag, or close, giving the focus back to the window
+/// that was in front while it still exists.
+fn escape(s: &mut State) {
+    let before = s.wins.iter().position(|w| w.hwnd.0 as isize == s.before);
+    let alive = |w: usize| unsafe { IsWindow(Some(s.wins[w].hwnd)) }.as_bool();
+    match overview::escape(s.drag.is_some(), before, alive) {
+        Escape::CancelDrag => cancel_drag(s),
+        Escape::Back(w) => go(s, w),
+        Escape::Close => quit(),
     }
 }
 
@@ -67,8 +69,7 @@ fn searched(s: &mut State) {
 fn key(s: &mut State, vk: u16) -> bool {
     s.notice = None;
     match VIRTUAL_KEY(vk) {
-        VK_ESCAPE if s.drag.is_some() => cancel_drag(s),
-        VK_ESCAPE => leave(s),
+        VK_ESCAPE => escape(s),
         VK_RETURN => match s.selected {
             Some(w) => go(s, w),
             None => return false,
@@ -200,7 +201,11 @@ fn on_mouse_move(hwnd: HWND, lparam: LPARAM) -> LRESULT {
             let (win, w) = (press.win, &s.wins[press.win]);
             // A window on another desktop can only be gone to (D572), and Windows doesn't let
             // Seam move one running as administrator.
-            if w.elevated {
+            if w.hung {
+                s.notice = Some(format!("{} isn't responding, so Seam can't move it", w.app));
+                s.press = None;
+                redraw(s);
+            } else if w.elevated {
                 s.notice = Some(format!("{} runs as administrator, so Seam can't move it", w.app));
                 s.press = None;
                 redraw(s);
@@ -219,6 +224,7 @@ fn on_mouse_move(hwnd: HWND, lparam: LPARAM) -> LRESULT {
             && s.selected != Some(w)
         {
             s.selected = Some(w);
+            s.notice = None;
             redraw(s);
         }
         s.pointer = Some(at);
@@ -229,6 +235,7 @@ fn on_mouse_move(hwnd: HWND, lparam: LPARAM) -> LRESULT {
 fn on_button_down(hwnd: HWND, lparam: LPARAM) -> LRESULT {
     with_state(|s| {
         let Some(at) = on_screen(s, hwnd, lparam) else { return };
+        s.notice = None;
         match s.tile_at(at) {
             Some(win) => {
                 s.press = Some(Press { win, at });
@@ -283,7 +290,7 @@ unsafe fn on_paint(hwnd: HWND) -> LRESULT {
                         s.panes.len()
                     );
                 }
-                let _ = PostMessageW(Some(hwnd), WM_APP_DETAILS, WPARAM(0), LPARAM(0));
+                let _ = SetTimer(Some(hwnd), TIMER_DETAILS, 1, None);
             }
         });
         let _ = BitBlt(dc, 0, 0, client.right, client.bottom, Some(back), 0, 0, SRCCOPY);
@@ -295,17 +302,18 @@ unsafe fn on_paint(hwnd: HWND) -> LRESULT {
     }
 }
 
-/// After the first paint: the app names and icons that wait on other apps, a slice at a
-/// time, so keys and clicks are taken between slices.
+/// After the first paint: the app names and icons that wait on other apps, a slice per
+/// timer tick, so keys, clicks and paints are taken between slices.
 fn on_details(hwnd: HWND) -> LRESULT {
-    with_state(|s| {
+    let done = with_state(|s| {
         s.details_next = list::details(&mut s.wins, &mut s.names, s.details_next, DETAILS_SLICE);
-        if s.details_next < s.wins.len() {
-            let _ = unsafe { PostMessageW(Some(hwnd), WM_APP_DETAILS, WPARAM(0), LPARAM(0)) };
-        }
         searched(s);
         redraw(s);
+        s.details_next >= s.wins.len()
     });
+    if done != Some(false) {
+        let _ = unsafe { KillTimer(Some(hwnd), TIMER_DETAILS) };
+    }
     LRESULT(0)
 }
 
@@ -375,7 +383,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
             }
             WM_TIMER if matches!(wparam.0, TIMER_FOCUS | TIMER_FOCUS_LAST) => on_focus_timer(hwnd, wparam.0),
             WM_ACTIVATEAPP => on_activate_app(wparam),
-            WM_APP_DETAILS => on_details(hwnd),
+            WM_TIMER if wparam.0 == TIMER_DETAILS => on_details(hwnd),
             WM_CLOSE | WM_DISPLAYCHANGE => {
                 quit();
                 LRESULT(0)
@@ -550,6 +558,8 @@ pub fn show(spec: Spec) {
         log::info!("overview: couldn't start: {e}");
         return;
     }
-    // The thread answers once its queue exists, before it reads any window.
-    let _ = opened.recv_timeout(Duration::from_millis(50));
+    // The thread answers once its queue exists, before it reads any window, so this is a
+    // ceiling the normal case never reaches. Long enough that a busy machine doesn't let a
+    // second key start a second overview.
+    let _ = opened.recv_timeout(Duration::from_millis(200));
 }

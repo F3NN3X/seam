@@ -57,7 +57,7 @@ fn fit((sw, sh): (i32, i32), b: Rect) -> Rect {
 pub(super) fn register_thumbs(s: &mut State) -> usize {
     let mut made = 0;
     for w in &mut s.wins {
-        if w.desktop != 0 || w.minimized {
+        if w.desktop != 0 || w.minimized || w.hung {
             continue;
         }
         let Some(p) = s.panes.get(w.screen) else { continue };
@@ -200,7 +200,9 @@ unsafe fn tile(dc: HDC, s: &State, p: &Pane, w: usize, r: Rect) {
         let caption = row(local.left + p.t(INSET), local.right - p.t(INSET), local.bottom - p.t(CAPTION), p.t(CAPTION));
         let small = p.t(ICON);
         icon(dc, win, (caption.left, caption.top + (p.t(CAPTION) - small) / 2), small, c);
-        let status = if win.hwnd.0 as isize == s.before {
+        let status = if win.hung {
+            Some("Not responding")
+        } else if win.hwnd.0 as isize == s.before {
             Some("In use")
         } else if win.minimized {
             Some("Minimized")
@@ -212,7 +214,7 @@ unsafe fn tile(dc: HDC, s: &State, p: &Pane, w: usize, r: Rect) {
             // A selected tile is raised, where muted text is under 4.5:1.
             let tone = if selected { c.secondary } else { c.muted };
             text(dc, status, caption, p.t(12), tone, DT_RIGHT | DT_VCENTER);
-            title.right -= p.t(72);
+            title.right -= p.t(if win.hung { 104 } else { 72 });
         }
         let name = if win.title.is_empty() { &win.app } else { &win.title };
         text(dc, name, title, p.t(13), c.text, DT_LEFT | DT_VCENTER | DT_END_ELLIPSIS);

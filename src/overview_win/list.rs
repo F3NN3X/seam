@@ -117,8 +117,9 @@ fn title(h: HWND) -> String {
 }
 
 /// The windows to show, topmost first, and each desktop's label, the one in front first.
-/// Only cheap facts are read here; `details` reads the rest after the first paint. A
-/// window that has stopped answering is left out, since reading its facts could wait on it.
+/// Only cheap facts are read here, none by a call that waits on the window's app, so a
+/// window that stopped answering is listed too, marked so (D571); `details` reads the
+/// rest after the first paint.
 pub(super) fn windows(screens: &[Rect]) -> (Vec<Win>, Vec<String>) {
     let own = std::process::id();
     let manager: Option<IVirtualDesktopManager> =
@@ -135,10 +136,10 @@ pub(super) fn windows(screens: &[Rect]) -> (Vec<Win>, Vec<String>) {
         away.then(|| unsafe { m.GetWindowDesktopId(h) }.ok()).flatten().filter(|id| *id != GUID::zeroed())
     };
     for h in winutil::top_level_windows() {
-        if !unsafe { IsWindowVisible(h) }.as_bool() || winutil::is_hung(h) {
+        if !unsafe { IsWindowVisible(h) }.as_bool() {
             continue;
         }
-        let mut facts = winutil::window_facts(h, own);
+        let mut facts = winutil::window_facts_quiet(h, own);
         if !facts.visible {
             continue;
         }
@@ -184,7 +185,7 @@ pub(super) fn windows(screens: &[Rect]) -> (Vec<Win>, Vec<String>) {
             thumb: 0,
             source: (0, 0),
             elevated,
-            gone: false,
+            hung: winutil::is_hung(h),
         });
     }
     // The desktops in Explorer's order, the one in front first.
@@ -237,6 +238,7 @@ pub(super) fn details(
         }
         // A Store app's frame belongs to ApplicationFrameHost, whose description isn't the
         // app's, and its title is the app's name.
+        w.hung = winutil::is_hung(w.hwnd);
         if winutil::class_name(w.hwnd) == "ApplicationFrameWindow" {
             if !w.title.is_empty() {
                 w.app = w.title.clone();
@@ -244,7 +246,7 @@ pub(super) fn details(
         } else if let Some(name) = names.entry(w.exe.clone()).or_insert_with(|| winutil::app_name(w.hwnd)).clone() {
             w.app = name;
         }
-        if let Some(icon) = asked_icon(w.hwnd) {
+        if let Some(icon) = asked_icon(w.hwnd).filter(|_| !w.hung) {
             w.icon = Some(icon);
         }
     }

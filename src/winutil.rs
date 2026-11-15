@@ -625,6 +625,19 @@ fn layered_alpha(h: HWND) -> Option<u8> {
 /// What the capture rules look at, without opening the window's process: the
 /// caller fills in the exe's name, once per process. A hidden window stops at that.
 pub fn window_facts(h: HWND, own_pid: u32) -> WindowFacts {
+    facts_of(h, own_pid, |h| unsafe { GetWindowTextLengthW(h) }.max(0) as usize)
+}
+
+/// `window_facts` with the title's length from Windows' own copy of it, so no call
+/// waits on the app, even one that stopped answering a moment ago.
+pub fn window_facts_quiet(h: HWND, own_pid: u32) -> WindowFacts {
+    facts_of(h, own_pid, |h| {
+        let mut buf = [0u16; 512];
+        unsafe { InternalGetWindowText(h, &mut buf) }.max(0) as usize
+    })
+}
+
+fn facts_of(h: HWND, own_pid: u32, title_len: fn(HWND) -> usize) -> WindowFacts {
     unsafe {
         if h.is_invalid() || !IsWindowVisible(h).as_bool() {
             return WindowFacts::default();
@@ -639,7 +652,7 @@ pub fn window_facts(h: HWND, own_pid: u32) -> WindowFacts {
             style: GetWindowLongW(h, GWL_STYLE) as u32,
             ex_style,
             class: class_name(h),
-            title_len: GetWindowTextLengthW(h).max(0) as usize,
+            title_len: title_len(h),
             visible: true,
             cloaked: is_cloaked(h),
             minimized,

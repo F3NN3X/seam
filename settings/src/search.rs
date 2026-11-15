@@ -392,6 +392,12 @@ const ENTRIES: &[Entry] = &[
         "hotkey keyboard overview expose mission control all windows virtual desktop search switch preview",
     ),
     entry(
+        Page::Zones,
+        "Open the overview when the pointer rests in a corner",
+        "Rest the pointer in a corner of the desk to show every window",
+        "hot corner screen corner overview expose mission control pointer mouse rest",
+    ),
+    entry(
         Page::Shortcuts,
         "Rotate windows",
         "Move every snapped window on the screen under the pointer to the next zone. Shift added goes back",

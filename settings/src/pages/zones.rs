@@ -35,6 +35,13 @@ const KEYS: [(&str, &str); 3] = [("shift", "Shift"), ("ctrl", "Ctrl"), ("alt", "
 const SPAN_ORDER: [usize; 3] = [1, 0, 2];
 /// The keys "Move and resize from anywhere in a window" can be held with.
 const DRAG_KEYS: [(&str, &str); 3] = [("alt", "Alt"), ("win", "Win"), ("ctrl_alt", "Ctrl+Alt")];
+/// The corners "Open the overview when the pointer rests in a corner" offers.
+const CORNERS: [(&str, &str); 4] = [
+    ("top_left", "Top left"),
+    ("top_right", "Top right"),
+    ("bottom_left", "Bottom left"),
+    ("bottom_right", "Bottom right"),
+];
 /// A tile's width and the size of its drawing: your layouts, and the smaller built-in ones.
 const TILE: (f32, (f32, f32)) = (96., (80., 44.));
 const BUILT_IN_TILE: (f32, (f32, f32)) = (76., (68., 38.));

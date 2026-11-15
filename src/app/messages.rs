@@ -139,6 +139,10 @@ pub(super) unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARA
                 }
                 LRESULT(0)
             }
+            mousewatch::WM_APP_CORNER => {
+                with_app(overview::corner_rest);
+                LRESULT(0)
+            }
             WM_TIMER if wparam.0 == TIMER_OVERVIEW => {
                 if with_app(overview::overview_moves) == Some(true) {
                     let _ = KillTimer(Some(hwnd), TIMER_OVERVIEW);
@@ -512,6 +516,7 @@ unsafe fn on_destroy() {
         }
         snap::shutdown();
         altdrag::stop();
+        mousewatch::stop();
         spotlight::stop();
         with_app(|a| {
             let nid = tray_data(a);

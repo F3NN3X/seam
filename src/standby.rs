@@ -236,6 +236,19 @@ fn overlay_window(h: HWND) -> bool {
     answer
 }
 
+/// The window class is the shell's own, a menu or a toast, which leaves the answer as it was.
+fn is_transient(class: &str) -> bool {
+    TRANSIENT_CLASSES.contains(&class)
+}
+
+/// Whether a full-screen app is in front now, by the same look as stepping aside, so the
+/// desktop, the shell's own windows and system overlays never count. For features that
+/// keep clear of full-screen apps with "Step aside" on or off. Tray thread only.
+pub fn full_screen_in_front() -> bool {
+    let foreground = unsafe { GetForegroundWindow() };
+    !foreground.is_invalid() && matches!(look(foreground), Seen::Full(_))
+}
+
 /// The exe is one of the system overlays that count for nothing.
 fn is_overlay(exe: Option<&str>) -> bool {
     exe.is_some_and(|exe| OVERLAY_EXES.contains(&exe))
@@ -271,7 +284,7 @@ fn covers_screen(h: HWND, exact: bool) -> bool {
 fn look(foreground: HWND) -> Seen {
     let transient = unsafe { foreground == GetDesktopWindow() || foreground == GetShellWindow() }
         || winutil::process_id(foreground) == std::process::id()
-        || TRANSIENT_CLASSES.contains(&winutil::class_name(foreground).as_str());
+        || is_transient(&winutil::class_name(foreground));
     if transient {
         return Seen::Keep;
     }
@@ -407,5 +420,14 @@ mod tests {
         assert!(is_overlay(Some("lockapp.exe")));
         assert!(!is_overlay(Some("game.exe")));
         assert!(!is_overlay(None));
+    }
+
+    #[test]
+    fn the_desktop_and_the_shell_never_count_as_full_screen() {
+        for class in ["Progman", "WorkerW", "Shell_TrayWnd", "Shell_SecondaryTrayWnd", "MultitaskingViewFrame"] {
+            assert!(is_transient(class), "{class}");
+        }
+        assert!(!is_transient("Chrome_WidgetWin_1"));
+        assert!(!is_transient("UnityWndClass"));
     }
 }

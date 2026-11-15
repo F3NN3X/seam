@@ -250,6 +250,9 @@ pub const TOPICS: &[Topic] = &[
                 "**Show overview** fills every screen with the windows on it: a live preview of each, or its app's icon when Windows has no preview to give, as for a minimized window or one on another virtual desktop. Windows on other desktops show under that desktop's name. Type to search by title or app, use the arrows, Tab or the mouse to pick one, and press Enter or click it to go to it; a window on another desktop takes you to that desktop. Drag a window onto a zone, or onto another screen with no zones, to move it there. On a screen smart tiling arranges, the window floats over that zone. Windows only lets an app move its own windows between desktops, so the overview can't. Esc closes it and goes back to the window you were using. Open it from the tray menu too. The shortcut has no key until you set one.",
             ),
             Text(
+                "**Open the overview when the pointer rests in a corner**, in Windows on the Zones page, is off until you turn it on. Pick the corner beside it: top left, top right, bottom left or bottom right. Push the pointer into that corner of the whole desk and leave it there a moment, with no mouse button down, and the overview opens. It opens once per visit: move away and back to open it again. Only a corner on the outside of the desk counts, never one where two screens meet, so on two screens side by side, top left is the left screen's. Nothing opens during a drag, while Seam is paused or steps aside, with a full-screen app in front, or while the overview is already open.",
+            ),
+            Text(
                 "In **Show overview**, Ctrl+Tab and Page Down go to the first window of the next virtual desktop's group, and Ctrl+Shift+Tab and Page Up to the previous one, wrapping around. The mouse wheel over a group's label does the same. With a search typed, only groups with a match count.",
             ),
             Text(

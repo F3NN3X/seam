@@ -35,6 +35,24 @@ pub(super) fn open_overview(app: &mut App, toggle: bool, from_api: bool) {
     });
 }
 
+/// The pointer rested in the overview's corner. Nothing opens during a drag, while
+/// Seam stands by, with a full-screen app in front, or with the overview up already.
+pub(super) fn corner_rest(app: &mut App) {
+    // A rest posted just before the setting went off.
+    if !app.cfg.windows.corner_overview.on {
+        return;
+    }
+    if standby::reason().is_some() || overview_win::is_open() || dividers::dragging() || mousewatch::button_down() {
+        return;
+    }
+    // Step aside may be off, and a full-screen app is still not to be covered. Its own
+    // look, so the desktop and the shell's windows never count.
+    if standby::full_screen_in_front() {
+        return;
+    }
+    open_overview(app, false, false);
+}
+
 /// Make the moves the overview dropped, and say why one couldn't be made. False when
 /// the snapping was busy, and the rest wait for the next try.
 pub(super) fn overview_moves(app: &mut App) -> bool {

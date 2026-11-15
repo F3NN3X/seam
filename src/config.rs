@@ -305,6 +305,8 @@ pub struct WindowSettings {
     pub pins_stay_on_switch: bool,
     /// "Move and resize from anywhere in a window".
     pub alt_drag: AltDrag,
+    /// "Open the overview when the pointer rests in a corner".
+    pub corner_overview: CornerOverview,
 }
 
 /// Hold a key and drag anywhere in a window to move it, or right-drag to resize it.
@@ -314,6 +316,15 @@ pub struct AltDrag {
     pub on: bool,
     /// "alt", "win" or "ctrl_alt". Anything else reads as "alt".
     pub key: String,
+}
+
+/// Rest the pointer in an outer corner of the desk to open the overview.
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default)]
+pub struct CornerOverview {
+    pub on: bool,
+    /// "top_left", "top_right", "bottom_left" or "bottom_right". Anything else reads as "top_left".
+    pub corner: String,
 }
 
 impl Default for WindowSettings {
@@ -326,6 +337,7 @@ impl Default for WindowSettings {
             notify_pinned_close: false,
             pins_stay_on_switch: false,
             alt_drag: AltDrag { on: false, key: "alt".into() },
+            corner_overview: CornerOverview { on: false, corner: "top_left".into() },
         }
     }
 }

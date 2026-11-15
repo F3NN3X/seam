@@ -46,7 +46,7 @@ pub use stacks::{
     stacks, stacks_found, take_joined,
 };
 pub use swap::{WM_APP_SWAP_LOOK, look_ready};
-pub use tiled::{tiled, tiled_dragged, tiling_desktop, tiling_events, tiling_float, tiling_free};
+pub use tiled::{is_tiled, tiled, tiled_dragged, tiling_desktop, tiling_events, tiling_float, tiling_free};
 
 /// A window the tray couldn't move, probably because it runs as administrator.
 pub const WM_APP_SNAP_BLOCKED: u32 = WM_APP + 14;

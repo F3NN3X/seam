@@ -232,7 +232,9 @@ pub(super) fn pick_layout(
         let _ = reply.send(Ok(json!({ "ok": true })));
         return;
     }
-    let moving = aside(app).is_none() && app.cfg.zones.enabled && !crate::switcher::switching();
+    // A tiled screen's windows stay in its tree; the pick is its own layout, for when tiling is off.
+    let moving =
+        aside(app).is_none() && app.cfg.zones.enabled && !crate::switcher::switching() && !snap::is_tiled(&screen);
     match layout {
         Some(layout) if moving => {
             let pick = wincontrol::tile::Pick { screen, layout, before, focused };

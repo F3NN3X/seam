@@ -118,6 +118,11 @@ pub fn tiling_float(hwnd: HWND) -> Result<bool, String> {
     with_engine(|e| e.tiling_float(hwnd.0 as isize)).unwrap_or_else(|| Err("Seam is busy, try again".into()))
 }
 
+/// Whether a screen is tiled on the desktop in front.
+pub fn is_tiled(screen: &str) -> bool {
+    with_engine(|e| e.tiling_on(screen)).unwrap_or(false)
+}
+
 /// The desktop in front, once the worker has said.
 pub fn tiling_desktop() -> Option<String> {
     with_engine(|e| e.tiling.known.then(|| e.tiling.desktop.clone())).flatten()
@@ -135,7 +140,7 @@ pub fn tiled() -> Vec<TiledInfo> {
 
 impl Engine {
     /// Tiling is on for this screen on the desktop in front.
-    fn tiling_on(&self, screen: &str) -> bool {
+    pub(super) fn tiling_on(&self, screen: &str) -> bool {
         self.tiling.known && self.tiling.config.get(screen).is_some_and(|t| t.on(&self.tiling.desktop))
     }
 
@@ -246,6 +251,9 @@ impl Engine {
             winutil::set_tile_stamp(hwnd_of(k), 0);
             if t.desktop == self.tiling.desktop {
                 self.unsnap(hwnd_of(k), true);
+            } else {
+                // Its zones were the tree's, which a re-fit mustn't read as the screen's own.
+                winutil::clear_zone_stamp(hwnd_of(k));
             }
         }
     }

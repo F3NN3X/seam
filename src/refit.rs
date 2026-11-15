@@ -232,6 +232,10 @@ impl Engine {
         if set.iter().any(|i| *i >= g.zones.len()) {
             return false;
         }
+        // On a tiled screen the zones are the tree of the desktop in front, not another desktop's.
+        if winutil::is_cloaked(hwnd) && self.tiling_on(&g.id) {
+            return false;
+        }
         let target = set.iter().map(|i| g.zones[*i]).reduce(zones::span);
         let (screen, dpi) = (g.id.clone(), g.dpi);
         let (Some(target), Some(from), Some(to)) = (target, set.iter().min(), set.iter().max()) else { return false };

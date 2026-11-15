@@ -9,6 +9,7 @@ use seam::config::{Config, WindowSize, ZoneSettings};
 use seam::desk::{self, Mon};
 use seam::geom;
 use seam::groups::Side;
+use seam::margins::Margins;
 use seam::winutil::{self, work_area};
 use seam::zones::{self, Rect, ZoneLayout};
 use std::cell::RefCell;
@@ -85,6 +86,9 @@ struct Screen {
     own: Option<ZoneLayout>,
     /// Physical pixels per inch from EDID, 0 when the screen doesn't report its size.
     raw_dpi: f64,
+    /// Its margins, which the work area is shrunk by. They are in `seam::margins` for every
+    /// lookup; here so a change of them counts as a change of the screens.
+    margins: Margins,
 }
 
 /// A screen's zones in pixels, worked out when they're needed so a moved taskbar counts.
@@ -320,9 +324,12 @@ pub fn update(owner: HWND, cfg: &Config, sig: &str, mons: &[Mon], aside: Option<
     let desk = cfg.desks.get(sig);
     let screens = mons.iter().map(|m| {
         let own = desk.and_then(|d| d.zones.get(&m.id)).and_then(zones::layout_of);
-        Screen { id: m.id.clone(), bounds: rect_of(&m.rect), layout: own.clone(), own, raw_dpi: m.raw_dpi }
+        let margins = desk.and_then(|d| d.margins.get(&m.id)).copied().unwrap_or_default();
+        Screen { id: m.id.clone(), bounds: rect_of(&m.rect), layout: own.clone(), own, raw_dpi: m.raw_dpi, margins }
     });
     let screens: Vec<Screen> = screens.collect();
+    // Every work-area lookup, on any thread, reads these.
+    seam::margins::set(screens.iter().map(|s| (s.bounds, s.margins)).collect());
     let standing_by = crate::standby::reason().is_some();
     let on_drag = cfg.window_size_on_drag && aside.is_none() && !standing_by;
     let drag_size = if on_drag { cfg.window_size_on_move } else { WindowSize::Windows };
@@ -358,6 +365,7 @@ pub fn update(owner: HWND, cfg: &Config, sig: &str, mons: &[Mon], aside: Option<
             return;
         }
         e.cancel_drag();
+        let margins_changed = e.screens.iter().map(|s| s.margins).ne(screens.iter().map(|s| s.margins));
         e.owner = owner.0 as isize;
         e.enabled = cfg.zones.enabled;
         e.aside = aside.map(String::from);
@@ -379,6 +387,10 @@ pub fn update(owner: HWND, cfg: &Config, sig: &str, mons: &[Mon], aside: Option<
         e.stacks_look();
         // Back from zones off, a pause or a full-screen app: the gaps left meanwhile close.
         e.tiled_resume();
+        // New margins move the windows tiling holds now, not at the next change.
+        if margins_changed {
+            e.tiled_refit();
+        }
     });
 }
 

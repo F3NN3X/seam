@@ -3,6 +3,7 @@
 
 use crate::classify::{Verdict, WindowFacts, classify};
 use crate::desk::Date;
+use crate::margins;
 use crate::zones::{Rect, frame_adjust};
 use std::sync::OnceLock;
 use windows::Win32::Foundation::{CloseHandle, ERROR_ACCESS_DENIED, HANDLE, HWND, LPARAM, POINT, RECT};
@@ -470,8 +471,21 @@ pub fn mark_border(h: HWND, colour: Option<u32>) {
     }
 }
 
-/// The work area (taskbar excluded) and effective DPI of the screen at `bounds`.
+/// The work area (taskbar excluded) and effective DPI of the screen at `bounds`, less the
+/// screen's margins. This is the area zones, tiles and groups work in.
 pub fn work_area(bounds: Rect) -> Option<(Rect, u32)> {
+    let (full, dpi, screen) = screen_area(bounds)?;
+    Some((margins::shrink(full, dpi, &margins::of(screen)), dpi))
+}
+
+/// The same with no margins: where maximized windows, workspaces' rects and moves between
+/// screens work, which are not the zones' business.
+pub fn work_area_full(bounds: Rect) -> Option<(Rect, u32)> {
+    screen_area(bounds).map(|(full, dpi, _)| (full, dpi))
+}
+
+/// The work area, the DPI and the whole rect of the screen at `bounds`.
+fn screen_area(bounds: Rect) -> Option<(Rect, u32, Rect)> {
     let r = RECT { left: bounds.x, top: bounds.y, right: bounds.x + bounds.w, bottom: bounds.y + bounds.h };
     unsafe {
         let monitor = MonitorFromRect(&r, MONITOR_DEFAULTTONEAREST);
@@ -482,7 +496,7 @@ pub fn work_area(bounds: Rect) -> Option<(Rect, u32)> {
         let (mut dx, mut dy) = (0u32, 0u32);
         let dpi =
             if GetDpiForMonitor(monitor, MDT_EFFECTIVE_DPI, &mut dx, &mut dy).is_ok() && dx > 0 { dx } else { 96 };
-        Some((rect_of(info.rcWork), dpi))
+        Some((rect_of(info.rcWork), dpi, rect_of(info.rcMonitor)))
     }
 }
 

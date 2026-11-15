@@ -480,6 +480,10 @@ pub struct Desk {
     /// an older Seam drops it, which turns tiling off.
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     pub tiling: BTreeMap<String, TileScreen>,
+    /// Monitor device path -> screen margins on that screen. Left out while empty, and an
+    /// older Seam drops it, which gives the zones the whole work area again.
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub margins: BTreeMap<String, crate::margins::Margins>,
 }
 
 /// Tiling off on every screen and virtual desktop of a desk, as quitting with Put windows back

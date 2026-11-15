@@ -213,6 +213,9 @@ pub const TOPICS: &[Topic] = &[
                 "**Save from windows** makes a library layout from where the windows on the screen are now, a zone for each, and snaps them in. They need to line up: no overlaps, and straight lines across the screen that separate them. A layout that is none of the tiles shows as **Changed**, and **Save as layout** keeps it in the library.",
             ),
             Text(
+                "**Screen margins** keep room free on each side of the chosen screen, in pixels at 100% scale: they grow with the screen's scaling, and no side takes more than a quarter of the screen. Zones, Tile and Fit group, Quick layout, smart tiling, windows snapped beside each other and the overview's drop targets all stay inside what is left. Maximized and full-screen windows, Line Up and the pointer are not affected, and neither are the places a workspace saves. Each screen on each desk has its own margins, and windows smart tiling holds move when you let go of a slider; others move the next time they are snapped.",
+            ),
+            Text(
                 "**Keep windows in their zones** is experimental. It moves snapped windows back after a screen, resolution or scaling change, or after the PC wakes.",
             ),
             Text(

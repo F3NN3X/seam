@@ -99,6 +99,7 @@ pub struct Screen {
 }
 
 /// A screen with its work area and zones in pixels, worked out when a job runs so a moved taskbar counts.
+/// `work` has no margins: workspaces' rects are fractions of it, and a maximized window fills it.
 struct Geo {
     id: String,
     number: usize,
@@ -111,9 +112,10 @@ struct Geo {
 
 fn geometry(screens: &[Screen], gap: u32) -> Vec<Geo> {
     let placed = screens.iter().filter_map(|s| {
-        let (work, dpi) = winutil::work_area(s.bounds)?;
+        let (work, dpi) = winutil::work_area_full(s.bounds)?;
+        let (inset, _) = winutil::work_area(s.bounds)?;
         let gap = (gap.min(MAX_GAP) as f32 * dpi as f32 / 96.0).round() as i32;
-        let zones = s.layout.as_ref().map(|l| zones::rects(&l.tree, work, gap)).unwrap_or_default();
+        let zones = s.layout.as_ref().map(|l| zones::rects(&l.tree, inset, gap)).unwrap_or_default();
         Some(Geo { id: s.id.clone(), number: s.number, bounds: s.bounds, work, dpi, raw_dpi: s.raw_dpi, zones })
     });
     placed.collect()

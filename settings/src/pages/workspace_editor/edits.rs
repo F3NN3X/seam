@@ -97,6 +97,29 @@ pub(super) fn set_delay(panel: &mut Panel, ms: u32, window: &mut Window, cx: &mu
     update_row(panel, &id, i, note, window, cx, |rule| rule.delay_ms = ms);
 }
 
+/// Keep what was typed in "Open with" for the row the field shows. A refusal stays
+/// under the field, and nothing is saved.
+pub(super) fn set_open_with(panel: &mut Panel, window: &mut Window, cx: &mut Context<Panel>) {
+    let Some((id, i)) = panel.editing.open_with_for.clone() else { return };
+    let typed = panel.editing.open_with.read(cx).value().trim().to_string();
+    let open = match typed.as_str() {
+        "" => None,
+        typed => match workspace::safe_open_with(typed) {
+            Ok(workspace::OpenWith::Path(open) | workspace::OpenWith::Link(open)) => Some(open),
+            Err(why) => {
+                panel.editing.open_with_error = Some(why.to_string());
+                return cx.notify();
+            }
+        },
+    };
+    panel.editing.open_with_error = None;
+    let note = |title: &str| match &open {
+        Some(_) => format!("{title} opens with what I typed"),
+        None => format!("{title} opens as usual"),
+    };
+    update_row(panel, &id, i, note, window, cx, |rule| rule.open_with = open.clone());
+}
+
 /// Move a row to another place in the start order.
 pub(super) fn move_row(
     panel: &mut Panel,

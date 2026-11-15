@@ -233,3 +233,98 @@ fn only_local_folders_and_web_pages_are_opened() {
         assert_eq!(page_of(bar), None, "{bar}");
     }
 }
+
+// "Open with" reaches a program's command line or the shell, so what I type must be
+// one full local path or an allowlisted link, and nothing that adds an argument.
+#[test]
+fn open_with_refuses_arguments_and_dangerous_schemes() {
+    let path = |p: &str| Ok(OpenWith::Path(p.into()));
+    let link = |l: &str| Ok(OpenWith::Link(l.into()));
+    assert_eq!(safe_open_with(r"C:\Users\me\My Docs\a.md"), path(r"C:\Users\me\My Docs\a.md"));
+    assert_eq!(safe_open_with(r"  D:\"), path(r"D:\"));
+    assert_eq!(safe_open_with("HTTPS://Example.com/a?b=c#d"), link("https://Example.com/a?b=c#d"));
+    assert_eq!(safe_open_with("obsidian://open?vault=Notes"), link("obsidian://open?vault=Notes"));
+    assert_eq!(safe_open_with("vscode://file/C:/src/seam"), link("vscode://file/C:/src/seam"));
+    assert_eq!(safe_open_with("vscode-insiders://file/C:/x"), link("vscode-insiders://file/C:/x"));
+    assert_eq!(safe_open_with("spotify:playlist:37i9dQ"), link("spotify:playlist:37i9dQ"));
+    // A user name or password goes, and a `@` later in the link stays.
+    assert_eq!(safe_open_with("https://me:pw@a.com/x"), link("https://a.com/x"));
+    assert_eq!(safe_open_with("http://a@b@c.com"), link("http://c.com"));
+    assert_eq!(safe_open_with("https://a.com/@me"), link("https://a.com/@me"));
+
+    let refused = [
+        // Arguments and options.
+        "",
+        "   ",
+        "-flag",
+        "--new-window",
+        "/c calc",
+        r#"C:\a" --evil "b"#,
+        r#"C:\a""#,
+        "C:\\a\nb",
+        "C:\\a\0b",
+        // Paths that aren't one full local path.
+        r"\\server\share\x",
+        r"\\?\C:\x",
+        r"\\.\pipe\x",
+        r"C:\a\..\b",
+        r"C:\..",
+        "C:relative",
+        "C:/a/b",
+        "C:",
+        "relative\\path.txt",
+        "notepad.exe",
+        "::{20D04FE0-3AEA-1069-A2D8-08002B30309D}",
+        // Schemes off the allowlist.
+        "file:///C:/Windows/System32/calc.exe",
+        "javascript:alert(1)",
+        "data:text/html,<b>x</b>",
+        "ms-msdt:/id PCWDiagnostic",
+        "search-ms:query=x",
+        "shell:startup",
+        "cmd:/c calc",
+        "ftp://a.com/x",
+        "mailto:a@b.c",
+        "x:y",
+        // Allowlisted schemes, malformed.
+        "https://",
+        "https:///x",
+        "https://me@",
+        "https:a.com",
+        "https://a b.com",
+        "https://a.com/\"x",
+        r"https://a.com\@evil.com",
+        "obsidian://",
+        "spotify:",
+    ];
+    for text in refused {
+        assert!(safe_open_with(text).is_err(), "{text:?} was let through");
+    }
+    assert!(safe_open_with(&format!("https://a.com/{}", "x".repeat(MAX_URL))).is_err());
+}
+
+#[test]
+fn open_with_is_checked_on_edit_and_left_out_of_files() {
+    let old = Workspace { id: "ws".into(), ..Workspace::default() };
+    let mut typed = rule(r"C:\Program Files\Code\Code.exe", None, "Chrome_WidgetWin_1", "Code");
+    typed.open_with = Some(r"  C:\src\seam  ".into());
+    let mut blank = typed.clone();
+    blank.open_with = Some("  ".into());
+    let new = Workspace { windows: vec![typed.clone(), blank], ..old.clone() };
+    let saved = checked_update(&old, new, &|_| 0).unwrap();
+    assert_eq!(saved.windows[0].open_with.as_deref(), Some(r"C:\src\seam"));
+    assert_eq!(saved.windows[1].open_with, None);
+
+    typed.open_with = Some(r#"C:\src" --evil"#.into());
+    let bad = Workspace { windows: vec![typed], ..old.clone() };
+    assert!(checked_update(&old, bad, &|_| 0).is_err());
+
+    let with = Workspace { windows: saved.windows.clone(), ..old };
+    let value = serde_json::to_value(&with).unwrap();
+    assert_eq!(value["windows"][0]["open_with"], r"C:\src\seam");
+    let stripped = without_open_with(&[value]);
+    assert!(stripped[0]["windows"][0].get("open_with").is_none());
+    // An older file has none, and loads as none.
+    let older: Rule = serde_json::from_str(r#"{"exe":"C:\\a.exe"}"#).unwrap();
+    assert_eq!(older.open_with, None);
+}

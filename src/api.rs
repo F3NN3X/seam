@@ -281,6 +281,19 @@ pub fn desks_list(snapshot: &Snapshot) -> Value {
     Value::Array(desks.collect())
 }
 
+/// `config.get` for a client that isn't the panel: the config without what I typed in
+/// "Open with", which only the panel sees.
+pub fn config_for_others(config: &Value) -> Value {
+    let mut config = config.clone();
+    let desks = config.get_mut("desks").and_then(Value::as_object_mut);
+    for desk in desks.into_iter().flat_map(|d| d.values_mut()) {
+        if let Some(list) = desk.get_mut("workspaces").and_then(Value::as_array_mut) {
+            *list = crate::workspace::without_open_with(list);
+        }
+    }
+    config
+}
+
 pub fn workspaces_list(snapshot: &Snapshot, desk: Option<&str>) -> Reply {
     let sig = desk.unwrap_or(&snapshot.state.desk.sig);
     let Some(desk) = snapshot.config["desks"].get(sig) else {

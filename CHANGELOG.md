@@ -22,6 +22,10 @@ All notable changes to Seam. The format follows [Keep a Changelog](https://keepa
 - **A workspace row no longer keeps a window that isn't its own** when Windows reuses a window handle for another program's window.
 - **Alt+drag** forgets an app's verdict the moment the app exits, so a new program that gets its process id isn't judged by it.
 
+### Added
+
+- **Open with**, under an app's name in a workspace, makes a switch that starts the app open a path or link I typed: a full path on a local drive as the app's one argument, or an http, https, obsidian, vscode, vscode-insiders or spotify link through the shell. Anything else is refused and shows under the app. It is never captured or exported, import drops it, and only the Seam window sees it.
+
 ### Changed
 
 - With the debug log on, each step aside and return says what decided it: the window's class and exe, its rect against its screen and Windows' full-screen state. The zone swap's look at the open windows now starts when a drag does, so it is ready when zones show.

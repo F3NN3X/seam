@@ -217,6 +217,12 @@ const ENTRIES: &[Entry] = &[
         "keep open leave alongside workspace",
     ),
     entry(Page::Workspaces, "Start missing apps", "Ticked apps open if they're closed", "launch"),
+    entry(
+        Page::Workspaces,
+        "Open with",
+        "A path or link the app opens when a switch starts it",
+        "folder file project vault url link argument start",
+    ),
     entry(Page::Workspaces, "Other windows", "Leave, minimize or politely close the rest", "close minimize leave"),
     entry(Page::Workspaces, "Export workspace", "Save a workspace to a file", "import share backup"),
     entry(Page::Workspaces, "Add an app", "Add an open window or an installed app", "picker store start menu"),

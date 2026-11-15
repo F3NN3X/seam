@@ -190,6 +190,21 @@ fn details(panel: &mut Panel, i: usize, ws: &Workspace, window: &mut Window, cx:
             });
         },
     );
+    // The field follows the open row, and starts from what is saved for it.
+    let shown_for = Some((ws.id.clone(), i));
+    if panel.editing.open_with_for != shown_for {
+        panel.editing.open_with_for = shown_for;
+        panel.editing.open_with_error = None;
+        let saved = rule.open_with.clone().unwrap_or_default();
+        panel.editing.open_with.update(cx, |input, cx| input.set_value(saved, window, cx));
+    }
+    let open_with =
+        div().w(px(320.)).font_family(cx.theme().mono_font_family.clone()).child(Input::new(&panel.editing.open_with));
+    let open_with_about = match &panel.editing.open_with_error {
+        Some(why) => ui::description(why.clone(), p).text_color(p.negative).into_any_element(),
+        None => ui::description("A full path on this PC for the app to open, or a link, when a switch starts it", p)
+            .into_any_element(),
+    };
     let delay_about = match value {
         0 => "Opens as soon as its stage starts".to_string(),
         ms => format!("{} after its stage starts", seconds(ms)),
@@ -201,6 +216,7 @@ fn details(panel: &mut Panel, i: usize, ws: &Workspace, window: &mut Window, cx:
         .pb(px(8.))
         .child(row("Show as", None, show, p))
         .child(row("Delay before opening", Some(delay_about.into()), slider, p))
+        .child(ui::row_with("Open with", Some(open_with_about), open_with))
         .child(row(
             "Wait for this app's window before opening the next",
             Some("The apps below start once it's open, or after 15 s".into()),

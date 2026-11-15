@@ -170,11 +170,11 @@ fn capture_rules(job: &CaptureJob, session: bool) -> Captured {
         });
     }
     // A window in a stack in its zone keeps its place in it, from the top.
-    let ids: Vec<Option<u32>> = rules
+    let ids: Vec<Option<(u32, usize)>> = rules
         .iter()
         .zip(&hwnds)
         .map(|(rule, h)| match rule.target {
-            Target::Zone { .. } => stack::unstamp(winutil::stack_stamp(hwnd_of(*h))).map(|(id, _)| id),
+            Target::Zone { .. } => stack::unstamp(winutil::stack_stamp(hwnd_of(*h))),
             _ => None,
         })
         .collect();

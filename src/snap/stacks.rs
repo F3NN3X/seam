@@ -117,13 +117,16 @@ impl Engine {
         }
     }
 
-    /// Whether `m` is still the window that joined: the same process, started at the
-    /// same time, and still stamped as in a stack.
-    fn same_window(&self, m: isize) -> bool {
+    /// Whether `m` is still the window that joined: still stamped as in a stack, which a
+    /// handle Windows gives to a new window isn't, and in the same process. Cheap, for
+    /// every settle. `full` also reads when the process started, for a cycle, which is
+    /// about to give the window the focus.
+    fn same_window(&self, m: isize, full: bool) -> bool {
         let h = hwnd_of(m);
+        let owner = self.stack_owners.get(&m);
         unsafe { IsWindow(Some(h)) }.as_bool()
             && winutil::stack_stamp(h) != 0
-            && self.stack_owners.get(&m).is_none_or(|o| *o == owner_of(m))
+            && owner.is_none_or(|o| if full { *o == owner_of(m) } else { o.0 == winutil::process_id(h) })
     }
 
     /// `key` leaves its stack, if it is in one. A stack left with one window is gone.
@@ -196,7 +199,7 @@ impl Engine {
             let record = self.snapped.get(m);
             stack::Seen {
                 hwnd: *m,
-                live: self.same_window(*m) && !winutil::is_minimized(h) && !winutil::is_maximized(h),
+                live: self.same_window(*m, false) && !winutil::is_minimized(h) && !winutil::is_maximized(h),
                 in_place: self.current(h).is_some(),
                 place: record.map(|x| ((x.screen.clone(), x.from, x.to), x.at)),
             }
@@ -242,12 +245,14 @@ impl Engine {
             log::info!("stacks: {} hidden windows follow their top", follow.len());
             self.queued.extend(follow);
             self.window_pump();
-            return;
         }
-        for top in std::mem::take(&mut self.restack) {
-            if self.stacks.of(top).is_some_and(|s| s.top() == top) {
-                winutil::raise(hwnd_of(top));
-                self.stack_order(top);
+        // A carried top shows once its windows have landed; until then it waits.
+        if self.pending.is_none() && self.queued.is_empty() {
+            for top in std::mem::take(&mut self.restack) {
+                if self.stacks.of(top).is_some_and(|s| s.top() == top) {
+                    winutil::raise(hwnd_of(top));
+                    self.stack_order(top);
+                }
             }
         }
         self.stack_marks();
@@ -301,15 +306,16 @@ impl Engine {
         self.stack_marks();
     }
 
-    /// The mark of the stack whose top is the window in front, on the current desktop,
-    /// or none, and none while zones are off, Seam stands by or another window manager
-    /// has the windows. The window in front has nothing over it but topmost windows, so
-    /// the mark never sits over another window. Only a screen with zones has the
-    /// overlay that draws it.
+    /// The mark of the stack a window in front belongs to, on the current desktop, or
+    /// none, and none while zones are off, Seam stands by or another window manager has
+    /// the windows. The window in front has nothing over it but topmost windows, so the
+    /// mark never sits over another window. Any window of the stack counts, so a cycle,
+    /// which changes the top before the focus follows, redraws the mark in place rather
+    /// than taking it down. Only a screen with zones has the overlay that draws it.
     pub(super) fn stack_marks(&mut self) {
         let front = unsafe { GetForegroundWindow() }.0 as isize;
         let mark = |s: &stack::Stack| {
-            if s.top() != front || winutil::is_cloaked(hwnd_of(front)) {
+            if s.position(front).is_none() || winutil::is_cloaked(hwnd_of(front)) {
                 return None;
             }
             let t = self.snapped.get(&s.top())?;
@@ -414,6 +420,15 @@ impl Engine {
             return Err(why);
         }
         self.stacks_settle();
+        // About to take the focus: each window is checked in full first.
+        let stale: Vec<isize> = self
+            .stacks
+            .of(key)
+            .map(|s| s.members.iter().copied().filter(|m| !self.same_window(*m, true)).collect())
+            .unwrap_or_default();
+        for m in stale {
+            self.stack_leave(m);
+        }
         let new = self.stacks.cycle(key, forward).ok_or("That window isn't in a stack")?;
         let s = self.stacks.of(new).ok_or("That window isn't in a stack")?;
         let done = (new, s.position(new).unwrap_or(0) + 1, s.members.len());

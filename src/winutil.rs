@@ -717,11 +717,14 @@ pub fn set_rect(h: HWND, r: Rect) {
 }
 
 /// Raise the window to the top of the others that aren't topmost, without activating it.
-/// Put `h` directly below `above` in the stacking order, without activating it.
+/// Put `h` directly below `above` in the stacking order, without activating it. Below a
+/// topmost window it goes to the top of the others instead, so it never turns topmost.
 pub fn place_below(h: HWND, above: HWND) {
     let flags = SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_ASYNCWINDOWPOS;
+    let topmost = unsafe { GetWindowLongPtrW(above, GWL_EXSTYLE) } as u32 & WS_EX_TOPMOST.0 != 0;
+    let after = if topmost { HWND_TOP } else { above };
     unsafe {
-        let _ = SetWindowPos(h, Some(above), 0, 0, 0, 0, flags);
+        let _ = SetWindowPos(h, Some(after), 0, 0, 0, 0, flags);
     }
 }
 

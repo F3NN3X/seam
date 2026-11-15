@@ -44,6 +44,16 @@ fn signature_is_order_independent() {
 }
 
 #[test]
+fn an_older_file_has_no_stack_keys_and_an_older_state_no_stacks() {
+    let c: Config = serde_json::from_str(r#"{"hotkeys": {"line_up": "Ctrl+Alt+L"}}"#).unwrap();
+    assert_eq!((c.hotkeys.stack_next, c.hotkeys.stack_prev), (None, None));
+    let s: crate::state::State = serde_json::from_str(r#"{"seam_version": "0.8.0"}"#).unwrap();
+    assert!(s.stacks.is_empty());
+    let one = crate::state::StackRef { screen: 1, zone: 2, span_to: None, windows: vec![5, 6], top: 6 };
+    assert!(serde_json::to_value(&one).unwrap().get("span_to").is_none());
+}
+
+#[test]
 fn old_files_get_defaults() {
     let c: Config = serde_json::from_str("{}").unwrap();
     assert!(c.enabled && c.align_arrangement && c.desks.is_empty());

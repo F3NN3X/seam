@@ -242,18 +242,22 @@ pub fn unstamp(bits: u64) -> Option<(u32, usize)> {
     (pos != 0).then(|| ((bits >> 16) as u32, pos - 1))
 }
 
-/// For a capture: the stack each window's stamp names, topmost first, turned into each
-/// window's place in its stack from the top, 0 being the top. A stack only one window
-/// of it was captured from has none.
-pub fn ranks(ids: &[Option<u32>]) -> Vec<Option<u32>> {
-    let count = |id: u32| ids.iter().filter(|x| **x == Some(id)).count();
-    ids.iter()
-        .enumerate()
-        .map(|(i, id)| {
-            let id = (*id).filter(|id| count(*id) >= 2)?;
-            Some(ids[..i].iter().filter(|x| **x == Some(id)).count() as u32)
-        })
-        .collect()
+/// For a capture: the stack and position each window's stamp names, topmost first,
+/// turned into each window's place in its stack counted on from the top in the order
+/// Next steps through, 0 being the top, the topmost one. A stack only one window of it
+/// was captured from has none.
+pub fn ranks(found: &[Option<(u32, usize)>]) -> Vec<Option<u32>> {
+    let rank = |this: &Option<(u32, usize)>| {
+        let (id, pos) = (*this)?;
+        let same: Vec<usize> = found.iter().flatten().filter(|(i, _)| *i == id).map(|(_, p)| *p).collect();
+        if same.len() < 2 {
+            return None;
+        }
+        let (top, span) = (same[0], same.iter().max()? + 1);
+        let from_top = |p: usize| (p + span - top) % span;
+        Some(same.iter().filter(|p| from_top(**p) < from_top(pos)).count() as u32)
+    };
+    found.iter().map(rank).collect()
 }
 
 /// For a switch: the rows that make a stack, from each row's zone and place in its
@@ -393,8 +397,11 @@ mod tests {
 
     #[test]
     fn a_capture_ranks_each_stack_from_its_top() {
-        let ranked = ranks(&[Some(4), None, Some(9), Some(4), Some(4)]);
+        let ranked = ranks(&[Some((4, 2)), None, Some((9, 0)), Some((4, 0)), Some((4, 1))]);
         assert_eq!(ranked, vec![Some(0), None, None, Some(1), Some(2)]);
+        // Next's order from the top, not the stacking order, which every cycle changes.
+        let ranked = ranks(&[Some((7, 0)), Some((7, 2)), Some((7, 1))]);
+        assert_eq!(ranked, vec![Some(0), Some(2), Some(1)]);
     }
 
     fn seen(hwnd: isize, live: bool, in_place: bool, place: Option<(u8, u8)>) -> Seen<u8, u8> {

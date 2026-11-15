@@ -215,6 +215,8 @@ pub struct ZoneSettings {
     pub drag_hints: bool,
     /// Dropping a window on another window's edge puts the two side by side.
     pub snap_beside: bool,
+    /// "Put windows back when Seam quits": a quit the user asked for frees every tiled screen first.
+    pub tiling_free_on_quit: bool,
     /// Exe file names, case-insensitive.
     pub exclude: Vec<String>,
 }
@@ -235,6 +237,7 @@ impl Default for ZoneSettings {
             pause_to_snap: false,
             drag_hints: false,
             snap_beside: true,
+            tiling_free_on_quit: false,
             exclude: Vec::new(),
         }
     }

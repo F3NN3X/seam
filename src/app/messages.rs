@@ -487,6 +487,10 @@ unsafe fn on_destroy() {
         hook::enable(false);
         if with_app(|a| a.release_on_exit).unwrap_or(false) {
             wm::release_before_exit();
+            // A quit the user asked for, the same signal as pins: not an update, a crash or a sign-out.
+            if with_app(|a| a.cfg.zones.tiling_free_on_quit).unwrap_or(false) {
+                snap::tiling_free_for_quit(Duration::from_secs(1));
+            }
         }
         snap::shutdown();
         altdrag::stop();

@@ -181,6 +181,26 @@ pub fn desktop_ranks(places: &[Option<usize>]) -> (Vec<usize>, Vec<usize>) {
     (ranked, index)
 }
 
+/// The window a desktop jump selects: `tiles` are the shown windows in order, each with its
+/// desktop's index, and `by` is 1 for the next desktop and -1 for the previous. Only desktops
+/// with a shown window count, in index order, and the jump wraps. It lands on the first
+/// window of that desktop. With nothing selected it starts from the edge it moves away from.
+pub fn desktop_jump(tiles: &[(usize, usize)], selected: Option<usize>, by: isize) -> Option<usize> {
+    let mut groups: Vec<usize> = tiles.iter().map(|&(_, d)| d).collect();
+    groups.sort_unstable();
+    groups.dedup();
+    let here =
+        tiles.iter().find(|&&(w, _)| Some(w) == selected).and_then(|&(_, d)| groups.iter().position(|&g| g == d));
+    let n = groups.len() as isize;
+    let to = match here {
+        Some(i) => (i as isize + by).rem_euclid(n.max(1)),
+        None if by < 0 => n - 1,
+        None => 0,
+    };
+    let group = *groups.get(usize::try_from(to).ok()?)?;
+    tiles.iter().find(|&&(_, d)| d == group).map(|&(w, _)| w)
+}
+
 /// What the snapping knows about a drop, read before anything changes.
 #[derive(Clone, Debug)]
 pub struct DropFacts<'a> {
@@ -501,6 +521,47 @@ mod tests {
         assert_eq!(drop_at(&screens, (-10, 10)), Some(Landing::Screen(0)));
         // The right edge belongs to the next screen.
         assert_eq!(drop_at(&screens, (0, 10)), Some(Landing::Screen(1)));
+    }
+
+    // Windows 10 and 11 on desktop 0, 12 on 1, 20 and 21 on 2.
+    const SHOWN: [(usize, usize); 5] = [(10, 0), (11, 0), (12, 1), (20, 2), (21, 2)];
+
+    #[test]
+    fn a_jump_lands_on_the_first_window_of_the_next_desktop() {
+        assert_eq!(desktop_jump(&SHOWN, Some(11), 1), Some(12));
+        assert_eq!(desktop_jump(&SHOWN, Some(12), 1), Some(20));
+        assert_eq!(desktop_jump(&SHOWN, Some(21), -1), Some(12));
+    }
+
+    #[test]
+    fn a_jump_wraps_around_both_ways() {
+        assert_eq!(desktop_jump(&SHOWN, Some(21), 1), Some(10));
+        assert_eq!(desktop_jump(&SHOWN, Some(10), -1), Some(20));
+    }
+
+    #[test]
+    fn with_one_desktop_a_jump_goes_to_its_first_window() {
+        let one = [(3, 4), (5, 4)];
+        assert_eq!(desktop_jump(&one, Some(5), 1), Some(3));
+        assert_eq!(desktop_jump(&one, Some(3), -1), Some(3));
+    }
+
+    #[test]
+    fn a_desktop_with_no_windows_is_skipped_and_nothing_shown_gives_nothing() {
+        // Desktop 1 has no window shown, as when the search keeps none of its windows.
+        let kept = [(10, 0), (20, 2)];
+        assert_eq!(desktop_jump(&kept, Some(10), 1), Some(20));
+        assert_eq!(desktop_jump(&kept, Some(20), 1), Some(10));
+        assert_eq!(desktop_jump(&[], None, 1), None);
+        assert_eq!(desktop_jump(&[], Some(1), -1), None);
+    }
+
+    #[test]
+    fn with_nothing_selected_a_jump_starts_from_the_edge() {
+        assert_eq!(desktop_jump(&SHOWN, None, 1), Some(10));
+        assert_eq!(desktop_jump(&SHOWN, None, -1), Some(20));
+        // A selection that isn't shown counts as none.
+        assert_eq!(desktop_jump(&SHOWN, Some(99), 1), Some(10));
     }
 
     #[test]

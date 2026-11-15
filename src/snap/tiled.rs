@@ -126,6 +126,33 @@ pub fn tiling_free(screen: &str) -> usize {
     with_engine(|e| e.tiling_free(screen)).unwrap_or(0)
 }
 
+/// Seam is quitting and the user wants the windows back: every screen tiled on the desktop
+/// in front is freed, and the moves are posted. Waits for them to land, but not past `cap`
+/// (a hung window never holds the quit). Returns how many windows were freed.
+pub fn tiling_free_for_quit(cap: Duration) -> usize {
+    let landing = with_engine(|e| e.tiling_free_for_quit()).unwrap_or_default();
+    let until = Instant::now() + cap;
+    // A window that can't take its place (a minimum size) stops changing, so it counts as landed.
+    let mut last: Vec<Option<Rect>> = vec![None; landing.len()];
+    let mut still = vec![0u8; landing.len()];
+    while Instant::now() < until {
+        let mut waiting = false;
+        for (i, (key, target)) in landing.iter().enumerate() {
+            let h = hwnd_of(*key);
+            let now = winutil::visible_rect(h);
+            let gone = !unsafe { IsWindow(Some(h)) }.as_bool();
+            still[i] = if now == last[i] { still[i].saturating_add(1) } else { 0 };
+            last[i] = now;
+            waiting |= !gone && now != Some(*target) && still[i] < 3;
+        }
+        if !waiting {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(15));
+    }
+    landing.len()
+}
+
 /// "Float or tile this window": a tiled window floats and the others close up, and a
 /// window on a tiled screen is asked for again. Returns whether it floats now.
 pub fn tiling_float(hwnd: HWND) -> Result<bool, String> {

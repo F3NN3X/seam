@@ -185,9 +185,24 @@ impl Engine {
     }
 
     pub(in crate::snap) fn tiling_free(&mut self, screen: &str) -> usize {
+        self.free_screen(screen, false).0
+    }
+
+    /// Seam quits and was asked to put windows back: every screen tiled on the desktop in
+    /// front is freed, and its moves are posted at once, since no timer will run them.
+    /// Returns where the windows are going.
+    pub(in crate::snap) fn tiling_free_for_quit(&mut self) -> Vec<(isize, Rect)> {
+        let desktop = self.tiling.desktop.clone();
+        let screens: Vec<String> =
+            self.tiling.trees.iter().filter(|t| t.desktop == desktop).map(|t| t.screen.clone()).collect();
+        screens.iter().flat_map(|s| self.free_screen(s, true).1).collect()
+    }
+
+    /// Free one screen. With `now` the moves are posted here rather than queued.
+    fn free_screen(&mut self, screen: &str, now: bool) -> (usize, Vec<(isize, Rect)>) {
         let desktop = self.tiling.desktop.clone();
         let Some(i) = self.tiling.trees.iter().position(|t| t.screen == screen && t.desktop == desktop) else {
-            return 0;
+            return (0, Vec::new());
         };
         let t = self.tiling.trees.remove(i);
         let dpi = self.tile_area(screen).map_or(96, |(_, dpi, _)| dpi);
@@ -209,9 +224,12 @@ impl Engine {
         }
         log::info!("tiling: freed {} windows", windows.len());
         self.tiled_sync();
+        if now {
+            return (windows.len(), moves.into_iter().filter_map(|p| self.land_now(p)).collect());
+        }
         self.queued.extend(moves);
         self.window_pump();
-        windows.len()
+        (windows.len(), Vec::new())
     }
 
     pub(in crate::snap) fn tiling_float(&mut self, key: isize) -> Result<bool, String> {

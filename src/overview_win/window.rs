@@ -78,6 +78,9 @@ fn key(s: &mut State, vk: u16) -> bool {
         VK_RIGHT => s.arrow(Dir::Right),
         VK_UP => s.arrow(Dir::Up),
         VK_DOWN => s.arrow(Dir::Down),
+        VK_TAB if held(VK_CONTROL) => s.jump(if held(VK_SHIFT) { -1 } else { 1 }),
+        VK_NEXT => s.jump(1),
+        VK_PRIOR => s.jump(-1),
         VK_TAB => s.advance(if held(VK_SHIFT) { -1 } else { 1 }),
         VK_HOME => s.advance(isize::MIN),
         VK_END => s.advance(isize::MAX),
@@ -176,6 +179,20 @@ fn drop_window(s: &mut State) {
         let _ = PostMessageW(Some(HWND(s.tray as *mut _)), WM_APP_OVERVIEW, WPARAM(0), LPARAM(0));
     }
     go(s, drag.win);
+}
+
+/// The wheel over a desktop's label moves between desktops. Its position is the screen's,
+/// not the window's.
+fn on_wheel(wparam: WPARAM, lparam: LPARAM) -> LRESULT {
+    let delta = (wparam.0 >> 16) as u16 as i16;
+    let at = (lparam.0 as i16 as i32, (lparam.0 >> 16) as i16 as i32);
+    with_state(|s| {
+        if delta != 0 && s.drag.is_none() && s.label_at(at) {
+            s.jump(if delta < 0 { 1 } else { -1 });
+            redraw(s);
+        }
+    });
+    LRESULT(0)
 }
 
 fn on_mouse_move(hwnd: HWND, lparam: LPARAM) -> LRESULT {
@@ -373,6 +390,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                 });
                 LRESULT(0)
             }
+            WM_MOUSEWHEEL => on_wheel(wparam, lparam),
             WM_MOUSEMOVE => on_mouse_move(hwnd, lparam),
             WM_LBUTTONDOWN => on_button_down(hwnd, lparam),
             WM_LBUTTONUP => on_button_up(hwnd, lparam),

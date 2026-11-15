@@ -308,6 +308,20 @@ impl State {
         }
     }
 
+    /// Ctrl+Tab, Page Down and Page Up, and the wheel over a label: to the first window of
+    /// the next or previous desktop, wrapping.
+    fn jump(&mut self, by: isize) {
+        let shown: Vec<(usize, usize)> = self.tiles().iter().map(|&(w, _)| (w, self.wins[w].desktop)).collect();
+        if let Some(w) = overview::desktop_jump(&shown, self.selected, by) {
+            self.selected = Some(w);
+        }
+    }
+
+    /// Whether a point on the desk is over a desktop's label.
+    fn label_at(&self, (x, y): (i32, i32)) -> bool {
+        self.panes.iter().flat_map(|p| &p.labels).any(|(_, r)| r.contains(x, y))
+    }
+
     /// Tab and Shift+Tab, and Home and End: through the tiles in order, wrapping.
     fn advance(&mut self, by: isize) {
         let order = self.tiles();

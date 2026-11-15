@@ -27,7 +27,7 @@ fn export(panel: &Panel, window: &mut Window, cx: &mut Context<Panel>) {
         let desks = config.get_mut("desks").and_then(Value::as_object_mut);
         for desk in desks.into_iter().flat_map(|d| d.values_mut()) {
             if let Some(list) = desk.get_mut("workspaces").and_then(Value::as_array_mut) {
-                *list = workspace::without_places(list);
+                *list = workspace::without_open_with(&workspace::without_places(list));
             }
         }
         cx.spawn_in(window, async move |_, cx| {

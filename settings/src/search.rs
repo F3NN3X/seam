@@ -219,6 +219,12 @@ const ENTRIES: &[Entry] = &[
     entry(Page::Workspaces, "Start missing apps", "Ticked apps open if they're closed", "launch"),
     entry(
         Page::Workspaces,
+        "Open with",
+        "A path or link the app opens when a switch starts it",
+        "folder file project vault url link argument start",
+    ),
+    entry(
+        Page::Workspaces,
         "Show every window",
         "A window saved minimized comes back, in its place",
         "minimized restore show all",

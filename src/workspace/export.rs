@@ -76,6 +76,182 @@ pub fn safe_url(url: &str) -> bool {
         && !url.chars().any(|c| c.is_whitespace() || c.is_control() || c == '"')
 }
 
+/// The schemes a link in "Open with" may have. The shell hands the link to whatever
+/// app has registered that scheme, so nothing but these may reach it.
+const OPEN_WITH_SCHEMES: [&str; 6] = ["http", "https", "obsidian", "vscode", "vscode-insiders", "spotify"];
+
+/// What "Open with" may open, checked.
+#[derive(Clone, Debug, PartialEq)]
+pub enum OpenWith {
+    /// A full path on a drive letter, passed to the row's program as one quoted argument.
+    Path(String),
+    /// A link on the allowlist, without a user name or password, passed to the shell.
+    Link(String),
+}
+
+/// A link with the user name and password before its host cut out, or `None` when
+/// nothing is left of it to open.
+fn without_credentials(link: &str) -> Option<String> {
+    let (scheme, rest) = link.split_once(':')?;
+    let Some(after) = rest.strip_prefix("//") else { return (!rest.is_empty()).then(|| link.to_string()) };
+    let end = after.find(['/', '?', '#']).unwrap_or(after.len());
+    let (authority, tail) = after.split_at(end);
+    let host = authority.rsplit_once('@').map_or(authority, |(_, host)| host);
+    let open = !host.is_empty() || !tail.trim_start_matches(['/', '?', '#']).is_empty();
+    open.then(|| format!("{scheme}://{host}{tail}"))
+}
+
+/// The longest "Open with" kept.
+const MAX_OPEN_WITH: usize = 1024;
+
+/// Programs that run a file, script or command they're given, so a path "Open with" on
+/// one would run it. A link is no argument to them, so it still works. This covers
+/// the common script hosts, which is no guarantee that no program will run a path.
+const LAUNCHERS: &[&str] = &[
+    "cmd",
+    "powershell",
+    "powershell_ise",
+    "wscript",
+    "cscript",
+    "mshta",
+    "rundll32",
+    "regsvr32",
+    "msiexec",
+    "wsl",
+    "bash",
+    "conhost",
+    "wt",
+    "schtasks",
+    "forfiles",
+    "py",
+    "node",
+    "java",
+    "javaw",
+    "cmstp",
+    "msbuild",
+    "installutil",
+    "certutil",
+    "bitsadmin",
+    "ssh",
+    "perl",
+    "ruby",
+    "php",
+    "deno",
+    "bun",
+    "npx",
+];
+
+/// Launchers that come with a version in their name (`python3.12`, `pwsh-preview`).
+const LAUNCHER_PREFIXES: [&str; 2] = ["python", "pwsh"];
+
+/// Whether a name is a DOS device (`CON`, `NUL`, `COM1`, `CONIN$`...), with or without an extension.
+fn is_device(name: &str) -> bool {
+    let stem = name.split('.').next().unwrap_or_default().trim_end().to_ascii_uppercase();
+    let numbered = |prefix: &str| {
+        stem.strip_prefix(prefix).is_some_and(|n| matches!(n.chars().collect::<Vec<_>>()[..], [d] if d.is_ascii_digit() || "\u{b9}\u{b2}\u{b3}".contains(d)))
+    };
+    matches!(stem.as_str(), "CON" | "PRN" | "AUX" | "NUL" | "CONIN$" | "CONOUT$") || numbered("COM") || numbered("LPT")
+}
+
+/// Characters that show as nothing, or reorder what is shown, so a link can hide what it opens.
+fn invisible(c: char) -> bool {
+    matches!(c, '\u{ad}' | '\u{200b}'..='\u{200f}' | '\u{202a}'..='\u{202e}' | '\u{2060}'..='\u{2064}' | '\u{2066}'..='\u{2069}' | '\u{feff}')
+}
+
+/// Whether every `%` of a link is the start of a percent escape, `%` and two hex digits.
+fn only_escapes(text: &str) -> bool {
+    let bytes = text.as_bytes();
+    let escape = |i: usize| bytes.get(i + 1..i + 3).is_some_and(|h| h.iter().all(u8::is_ascii_hexdigit));
+    (0..bytes.len()).filter(|i| bytes[*i] == b'%').all(escape)
+}
+
+/// What a path may not have beyond `safe_folder`: a `:` after the drive (a stream), a
+/// name ending in `.` or a space, or a device name for any part.
+fn plain_path(path: &str) -> Result<(), &'static str> {
+    if path[2..].contains(':') {
+        return Err("A path can't have a : after the drive");
+    }
+    for name in path[2..].split('\\').filter(|n| !n.is_empty()) {
+        if name.ends_with(['.', ' ']) {
+            return Err("A name in the path can't end in a dot or a space");
+        }
+        if is_device(name) {
+            return Err("A path can't name a device such as CON or NUL");
+        }
+    }
+    Ok(())
+}
+
+/// `safe_open_with` for what one row would start: a path is refused for a program that
+/// runs what it's given (`LAUNCHERS`), for a row that starts by its package id, and, for
+/// Explorer, when it is a file. A link is fine for any row.
+pub fn open_with_for(rule: &Rule, text: &str) -> Result<OpenWith, &'static str> {
+    let open = safe_open_with(text)?;
+    if let OpenWith::Path(path) = &open {
+        let exe = Path::new(&rule.exe).file_stem().map(|s| s.to_string_lossy().to_ascii_lowercase());
+        let exe = exe.unwrap_or_default();
+        if LAUNCHERS.contains(&exe.as_str()) || LAUNCHER_PREFIXES.iter().any(|p| exe.starts_with(p)) {
+            return Err("A path would make this program run it, so only a link works for it");
+        }
+        if exe == "explorer" && Path::new(path).is_file() {
+            return Err("Explorer opens a folder here, not a file");
+        }
+        if rule.aumid.is_some() {
+            return Err("Open with a path needs the app's exe; this app starts by its package id");
+        }
+    }
+    Ok(open)
+}
+
+/// What a typed "Open with" may be, as it will be stored, or why not, in the panel's
+/// words. A path is a full path on a drive letter, with no UNC, `..`, `/`, quote or
+/// control character, and it starts with no `-`. A link has a scheme on
+/// `OPEN_WITH_SCHEMES`, with no space, quote, backslash or control character, and loses
+/// any user name or password. An http or https link needs a host. Whether a path's
+/// drive is local and the path exists is checked where it's opened.
+pub fn safe_open_with(text: &str) -> Result<OpenWith, &'static str> {
+    let text = text.trim();
+    if text.is_empty() || text.len() > MAX_OPEN_WITH {
+        return Err("It's empty or too long");
+    }
+    if text.chars().any(char::is_control) || text.contains('"') {
+        return Err("It has a quote or a control character");
+    }
+    if text.starts_with(['-', '/']) {
+        return Err("It must be a full path or a link, not an option");
+    }
+    let bytes = text.as_bytes();
+    if bytes.len() >= 2 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':' {
+        if text.contains('%') {
+            return Err("A path can't have a %");
+        }
+        if !safe_folder(text) {
+            return Err("A path must be a full one on a drive letter, with no .. or /");
+        }
+        return plain_path(text).map(|()| OpenWith::Path(text.to_string()));
+    }
+    let Some((scheme, rest)) = text.split_once(':') else { return Err("It must be a full path or a link") };
+    let scheme = scheme.to_ascii_lowercase();
+    if !OPEN_WITH_SCHEMES.contains(&scheme.as_str()) {
+        return Err("Only http, https, obsidian, vscode, vscode-insiders and spotify links open");
+    }
+    if text.contains('\\') || text.chars().any(char::is_whitespace) {
+        return Err("A link can't have a space or a backslash");
+    }
+    if text.chars().any(invisible) {
+        return Err("A link can't have an invisible character");
+    }
+    if !only_escapes(text) {
+        return Err("A link can only have a % in front of two hex digits");
+    }
+    let link = without_credentials(&format!("{scheme}:{rest}")).ok_or("That link has nothing to open")?;
+    let web = scheme.starts_with("http");
+    if web && !link.strip_prefix(&format!("{scheme}://")).is_some_and(|r| !r.starts_with(['/', '?', '#'])) {
+        return Err("A web link needs a host");
+    }
+    Ok(OpenWith::Link(link))
+}
+
 /// Bits of a query parameter's name that say it can carry a sign-in or a secret. A
 /// page with any such parameter is kept without its query.
 const SECRET_PARTS: [&str; 13] =
@@ -159,12 +335,22 @@ pub fn has_places(saved: &[Value]) -> bool {
 
 /// "Forget saved folders and pages": the saved workspaces as stored, without them.
 pub fn without_places(saved: &[Value]) -> Vec<Value> {
+    without_field(saved, "place")
+}
+
+/// The saved workspaces as stored, without what I typed in "Open with": it stays on
+/// this PC, so a settings export and an import leave it out.
+pub fn without_open_with(saved: &[Value]) -> Vec<Value> {
+    without_field(saved, "open_with")
+}
+
+fn without_field(saved: &[Value], field: &str) -> Vec<Value> {
     let mut saved = saved.to_vec();
     for ws in &mut saved {
         let rows = ws.get_mut("windows").and_then(Value::as_array_mut);
         for row in rows.into_iter().flatten() {
             if let Some(fields) = row.as_object_mut() {
-                fields.remove("place");
+                fields.remove(field);
             }
         }
     }
@@ -224,6 +410,8 @@ pub fn import(file: Export, here: &BTreeMap<String, ScreenInfo>, names: &[String
         rule.aumid = rule.aumid.take().filter(|a| safe_aumid(a));
         // A folder or page from a file is never opened (D98, D330).
         rule.place = None;
+        // Nor is what a file says to open (D520).
+        rule.open_with = None;
     }
     workspace.launch_missing = false;
     // Close and Minimize are the user's opt-in, so a file can't arm them.

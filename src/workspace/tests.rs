@@ -233,3 +233,185 @@ fn only_local_folders_and_web_pages_are_opened() {
         assert_eq!(page_of(bar), None, "{bar}");
     }
 }
+
+// "Open with" reaches a program's command line or the shell, so what I type must be
+// one full local path or an allowlisted link, and nothing that adds an argument.
+#[test]
+fn open_with_refuses_arguments_and_dangerous_schemes() {
+    let path = |p: &str| Ok(OpenWith::Path(p.into()));
+    let link = |l: &str| Ok(OpenWith::Link(l.into()));
+    assert_eq!(safe_open_with(r"C:\Users\me\My Docs\a.md"), path(r"C:\Users\me\My Docs\a.md"));
+    assert_eq!(safe_open_with(r"  D:\"), path(r"D:\"));
+    assert_eq!(safe_open_with("HTTPS://Example.com/a?b=c#d"), link("https://Example.com/a?b=c#d"));
+    assert_eq!(safe_open_with("obsidian://open?vault=Notes"), link("obsidian://open?vault=Notes"));
+    assert_eq!(safe_open_with("vscode://file/C:/src/seam"), link("vscode://file/C:/src/seam"));
+    assert_eq!(safe_open_with("vscode-insiders://file/C:/x"), link("vscode-insiders://file/C:/x"));
+    assert_eq!(safe_open_with("spotify:playlist:37i9dQ"), link("spotify:playlist:37i9dQ"));
+    // A user name or password goes, and a `@` later in the link stays.
+    assert_eq!(safe_open_with("https://me:pw@a.com/x"), link("https://a.com/x"));
+    assert_eq!(safe_open_with("http://a@b@c.com"), link("http://c.com"));
+    assert_eq!(safe_open_with("https://a.com/@me"), link("https://a.com/@me"));
+
+    let refused = [
+        // Arguments and options.
+        "",
+        "   ",
+        "-flag",
+        "--new-window",
+        "/c calc",
+        r#"C:\a" --evil "b"#,
+        r#"C:\a""#,
+        "C:\\a\nb",
+        "C:\\a\0b",
+        // Paths that aren't one full local path.
+        r"\\server\share\x",
+        r"\\?\C:\x",
+        r"\\.\pipe\x",
+        r"C:\a\..\b",
+        r"C:\..",
+        "C:relative",
+        "C:/a/b",
+        "C:",
+        "relative\\path.txt",
+        "notepad.exe",
+        "::{20D04FE0-3AEA-1069-A2D8-08002B30309D}",
+        // Schemes off the allowlist.
+        "file:///C:/Windows/System32/calc.exe",
+        "javascript:alert(1)",
+        "data:text/html,<b>x</b>",
+        "ms-msdt:/id PCWDiagnostic",
+        "search-ms:query=x",
+        "shell:startup",
+        "cmd:/c calc",
+        "ftp://a.com/x",
+        "mailto:a@b.c",
+        "x:y",
+        // Allowlisted schemes, malformed.
+        "https://",
+        "https:///x",
+        "https://me@",
+        "https:a.com",
+        "https://a b.com",
+        "https://a.com/\"x",
+        r"https://a.com\@evil.com",
+        "obsidian://",
+        "spotify:",
+        // % expands in the shell, and a stream, a device or a trailing dot or space isn't a plain file.
+        "%APPDATA%",
+        r"C:\%TEMP%\x",
+        "https://x/?%USERNAME%",
+        "https://x/?%2",
+        "https://x/?%zz",
+        "https://x/%",
+        r"C:\a\100%",
+        r"C:\a\%41",
+        r"C:\a\COM0",
+        r"C:\a\LPT0.txt",
+        "C:\\a\\COM\u{b9}",
+        "C:\\a\\lpt\u{b2}.txt",
+        "C:\\a\\COM\u{b3}",
+        "https://a.com/\u{200b}x",
+        "https://a.com/x\u{202e}gpj",
+        "https://a.com/\u{ad}x",
+        "https://a.com/\u{feff}",
+        "https://a.com/\u{2066}x",
+        "obsidian://open?vault=%USERPROFILE%",
+        r"C:\a\b.txt:evil",
+        r"C:\a:b",
+        r"C:\a\CON",
+        r"C:\a\nul.txt",
+        r"C:\COM1\x",
+        r"C:\lpt9.log",
+        r"C:\a\Aux .txt",
+        r"C:\a\CONIN$",
+        r"C:\a\conout$",
+        r"C:\a\dir.\x",
+        r"C:\a\dir \x",
+        r"C:\a\file.",
+        // Whitespace that isn't a space.
+        "https://a.com/\tx",
+        "https://a.com/\u{a0}x",
+        "https://a.com/\u{2003}x",
+        "https://a.com/\u{3000}x",
+    ];
+    for text in refused {
+        assert!(safe_open_with(text).is_err(), "{text:?} was let through");
+    }
+    assert!(safe_open_with(&format!("https://a.com/{}", "x".repeat(1024))).is_err());
+    assert!(safe_open_with(&format!(r"C:\{}", "x".repeat(1024))).is_err());
+    assert!(safe_open_with(&format!(r"C:\{}", "x".repeat(1000))).is_ok());
+    // A % is fine in a link only as an escape.
+    assert!(safe_open_with("obsidian://open?vault=My%20Notes").is_ok());
+    assert!(safe_open_with("https://a.com/%41%7e").is_ok());
+    // Names that only look like a device are fine.
+    assert!(safe_open_with(r"C:\a\console\com10\lpt\nulled.txt").is_ok());
+}
+
+// A path goes to the row's program as its argument, so a program that runs what it's
+// given, one that starts by package id, and Explorer given a file are refused.
+#[test]
+fn open_with_a_path_needs_a_program_that_only_opens_it() {
+    let on = |exe: &str, aumid: Option<&str>| rule(exe, aumid, "c", "t");
+    let dir = std::env::temp_dir();
+    let dir = dir.to_string_lossy().to_string();
+    for exe in [
+        r"C:\Windows\System32\cmd.exe",
+        r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe",
+        r"C:\Program Files\PowerShell\7\PWSH.EXE",
+        r"C:\Windows\System32\wscript.exe",
+        r"C:\Windows\System32\mshta.exe",
+        r"C:\Windows\System32\rundll32.exe",
+        r"C:\Python\python.exe",
+        r"C:\Program Files\nodejs\node.exe",
+        r"C:\Python312\python3.12.exe",
+        r"C:\Windows\py.exe",
+        r"C:\Tools\perl.exe",
+        r"C:\Windows\System32\certutil.exe",
+        r"C:\Program Files\PowerShell\7-preview\pwsh-preview.exe",
+        r"C:\Windows\System32\OpenSSH\ssh.exe",
+        r"C:\Program Files\Java\bin\javaw.exe",
+    ] {
+        assert!(open_with_for(&on(exe, None), r"C:\src\run.bat").is_err(), "{exe}");
+        // A link isn't an argument to it.
+        assert!(open_with_for(&on(exe, None), "https://example.com").is_ok(), "{exe}");
+    }
+    let code = on(r"C:\Program Files\Code\Code.exe", None);
+    assert!(open_with_for(&code, r"C:\src\seam").is_ok());
+    // Explorer opens a folder, and a file that exists is refused.
+    let explorer = on(r"C:\Windows\explorer.exe", None);
+    let file = std::env::temp_dir().join("seam-open-with-test.txt");
+    std::fs::write(&file, "x").unwrap();
+    assert!(open_with_for(&explorer, &file.to_string_lossy()).is_err());
+    let _ = std::fs::remove_file(&file);
+    assert!(open_with_for(&explorer, &dir).is_ok());
+    // A package id row has no program to hand a path to, but a link works.
+    let packaged = on("", Some("Pkg.App!App"));
+    assert!(open_with_for(&packaged, r"C:\src\seam").is_err());
+    assert!(open_with_for(&packaged, "spotify:track:x").is_ok());
+}
+
+#[test]
+fn open_with_is_checked_on_edit_and_left_out_of_files() {
+    let old = Workspace { id: "ws".into(), ..Workspace::default() };
+    let mut typed = rule(r"C:\Program Files\Code\Code.exe", None, "Chrome_WidgetWin_1", "Code");
+    typed.open_with = Some(r"  C:\src\seam  ".into());
+    let mut blank = typed.clone();
+    blank.open_with = Some("  ".into());
+    let new = Workspace { windows: vec![typed.clone(), blank], ..old.clone() };
+    let saved = checked_update(&old, new, &|_| 0).unwrap();
+    assert_eq!(saved.windows[0].open_with.as_deref(), Some(r"C:\src\seam"));
+    assert_eq!(saved.windows[1].open_with, None);
+
+    typed.open_with = Some(r#"C:\src" --evil"#.into());
+    let bad = Workspace { windows: vec![typed], ..old.clone() };
+    assert!(checked_update(&old, bad, &|_| 0).is_err());
+
+    let with = Workspace { windows: saved.windows.clone(), ..old };
+    let value = serde_json::to_value(&with).unwrap();
+    assert_eq!(value["windows"][0]["open_with"], r"C:\src\seam");
+    let stripped = without_open_with(&[value]);
+    assert!(stripped[0]["windows"][0].get("open_with").is_none());
+    // An older file has none, and loads as none.
+    let older: Rule = serde_json::from_str(r#"{"exe":"C:\\a.exe"}"#).unwrap();
+    assert_eq!(older.open_with, None);
+}

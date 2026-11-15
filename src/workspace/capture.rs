@@ -240,6 +240,14 @@ pub fn checked_update(old: &Workspace, mut new: Workspace, zones: &dyn Fn(&str) 
         let same_app = |o: &Rule| o.exe == rule.exe && (rule.class.is_empty() || o.class == rule.class);
         let kept = place.filter(|p| old.windows.iter().any(|o| same_app(o) && o.place.as_ref() == Some(p)));
         rule.place = kept;
+        // What I typed, checked and stored as it's cleaned.
+        let typed = rule.open_with.take().map(|t| t.trim().to_string()).filter(|t| !t.is_empty());
+        if let Some(typed) = typed {
+            match open_with_for(rule, &typed) {
+                Ok(OpenWith::Path(open) | OpenWith::Link(open)) => rule.open_with = Some(open),
+                Err(why) => return Err(format!("{}: {why}", rule.title_hint)),
+            }
+        }
         // At most one window has the focus.
         rule.focused &= !focused;
         focused |= rule.focused;

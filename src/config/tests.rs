@@ -57,7 +57,7 @@ fn an_older_file_has_no_stack_keys_and_an_older_state_no_stacks() {
 fn an_older_file_tiles_nothing_and_an_empty_tiling_isnt_written() {
     let c: Config = serde_json::from_str(r#"{"desks": {"d": {"name": "Desk"}}}"#).unwrap();
     assert!(c.desks["d"].tiling.is_empty());
-    assert_eq!((c.hotkeys.float_tile, c.hotkeys.free_tiling), (None, None));
+    assert_eq!((c.hotkeys.float_tile, c.hotkeys.free_tiling, c.hotkeys.overview), (None, None, None));
     assert!(serde_json::to_value(&c.desks["d"]).unwrap().get("tiling").is_none());
     let on: Desk = serde_json::from_str(r#"{"tiling": {"screen-a": {"desktops": ["x"]}}}"#).unwrap();
     let screen = &on.tiling["screen-a"];

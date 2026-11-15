@@ -100,6 +100,7 @@ fn caption(action: &str) -> Option<&'static str> {
         "float_tile" => Some("Take the focused window out of smart tiling, or put it back in"),
         "free_tiling" => Some("Stop smart tiling on the screen under the pointer, and put its windows back"),
         "stack_prev" => Some("Put the previous window of the focused window's stack on top"),
+        "overview" => Some("Every window on every screen and desktop, to search and go to"),
         _ => None,
     }
 }
@@ -190,6 +191,7 @@ pub fn render(panel: &mut Panel, _: &mut Window, cx: &mut Context<Panel>) -> imp
         row("Previous window in stack", "stack_prev", keys.stack_prev.as_ref(), 971),
         row("Float or tile this window", "float_tile", keys.float_tile.as_ref(), 980),
         row("Free all windows", "free_tiling", keys.free_tiling.as_ref(), 981),
+        row("Show overview", "overview", keys.overview.as_ref(), 990),
     ]);
     window_rows.extend([
         row("Pin window on top", "pin_top", keys.pin_top.as_ref(), 17),

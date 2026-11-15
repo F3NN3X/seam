@@ -104,6 +104,8 @@ pub struct Hotkeys {
     /// "Free all windows": smart tiling stops on the screen under the pointer, and its
     /// windows go back to where they were before.
     pub free_tiling: Option<String>,
+    /// "Show overview": every window on every screen and virtual desktop, to search and go to.
+    pub overview: Option<String>,
 }
 
 impl Default for Hotkeys {
@@ -148,6 +150,7 @@ impl Default for Hotkeys {
             stack_prev: None,
             float_tile: None,
             free_tiling: None,
+            overview: None,
         }
     }
 }

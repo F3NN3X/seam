@@ -2,6 +2,7 @@
 
 mod commands;
 mod messages;
+mod overview;
 mod pause;
 mod pointer;
 mod report;
@@ -102,6 +103,8 @@ const TIMER_QUICK: usize = 40;
 const TIMER_TILING: usize = 42;
 /// Retries a divider menu's choice the app was too busy for (menu open).
 const TIMER_DIVIDER: usize = 41;
+/// Retries the overview's moves the snapping was too busy for (menu open).
+const TIMER_OVERVIEW: usize = 43;
 /// Windows silently removes low-level hooks that ever time out, so re-arm periodically.
 const TIMER_REARM: usize = 2;
 /// Retries API commands the app was too busy for (menu open).
@@ -177,6 +180,8 @@ const HOTKEY_STACK_PREV: i32 = 71;
 /// Smart tiling: float or tile the focused window, and Free all windows on the screen under the pointer.
 const HOTKEY_FLOAT_TILE: i32 = 72;
 const HOTKEY_FREE_TILING: i32 = 73;
+/// The overview of every window.
+const HOTKEY_OVERVIEW: i32 = 74;
 /// One hotkey id per workspace on the desk, from here up.
 const HOTKEY_WORKSPACE: i32 = 100;
 const NIN_KEYSELECT: u32 = NIN_SELECT | NINF_KEY;
@@ -184,6 +189,8 @@ const NIN_KEYSELECT: u32 = NIN_SELECT | NINF_KEY;
 const ID_LINEUP: usize = 1;
 const ID_ENABLED: usize = 2;
 const ID_RELEASE: usize = 3;
+/// The overview of every window.
+const ID_OVERVIEW: usize = 4;
 const ID_OPEN: usize = 6;
 const ID_QUIT: usize = 9;
 const ID_SWITCH_BACK: usize = 10;

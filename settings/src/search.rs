@@ -373,6 +373,12 @@ const ENTRIES: &[Entry] = &[
         "Stop smart tiling on the screen under the pointer, and put its windows back",
         "hotkey keyboard smart tiling free release untile restore",
     ),
+    entry(
+        Page::Shortcuts,
+        "Show overview",
+        "Every window on every screen and desktop, to search and go to",
+        "hotkey keyboard overview expose mission control all windows virtual desktop search switch preview",
+    ),
     entry(Page::Shortcuts, "Pin window on top", "Global shortcut", "hotkey keyboard topmost always"),
     entry(Page::Shortcuts, "Keep window out of workspace switches", "Global shortcut", "hotkey keyboard sticky pin"),
     entry(Page::Shortcuts, "Release pinned windows", "Global shortcut", "hotkey keyboard unpin reset border"),

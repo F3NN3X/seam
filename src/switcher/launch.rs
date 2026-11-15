@@ -131,7 +131,7 @@ fn open_with(rule: &Rule, target: &str) -> Result<(), &'static str> {
         log::info!("{app}: open with not used, {why}");
         Err("open with refused")
     };
-    match workspace::safe_open_with(target) {
+    match workspace::open_with_for(rule, target) {
         Err(why) => refused(why),
         Ok(OpenWith::Link(link)) => match shell_open(&link, None) {
             true => Ok(()),
@@ -143,6 +143,10 @@ fn open_with(rule: &Rule, target: &str) -> Result<(), &'static str> {
             }
             if !Path::new(&path).exists() {
                 return refused("the path is gone");
+            }
+            let explorer = Path::new(&rule.exe).file_stem().is_some_and(|s| s.eq_ignore_ascii_case("explorer"));
+            if explorer && !Path::new(&path).is_dir() {
+                return refused("Explorer opens a folder here");
             }
             if !workspace::safe_exe(&rule.exe) || is_network_drive(&rule.exe) || !Path::new(&rule.exe).is_file() {
                 return refused("the program can't be started from there");

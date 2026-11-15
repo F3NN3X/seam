@@ -19,8 +19,8 @@ mod tests;
 
 pub use capture::{checked_update, merge_capture, moved_rows, recapture_row, stages, take_window_place, tame_delay};
 pub use export::{
-    Export, OpenWith, ScreenInfo, explorer_arg, has_places, import, page_of, safe_aumid, safe_exe, safe_folder,
-    safe_open_with, safe_url, without_open_with, without_places,
+    Export, OpenWith, ScreenInfo, explorer_arg, has_places, import, open_with_for, page_of, safe_aumid, safe_exe,
+    safe_folder, safe_open_with, safe_url, without_open_with, without_places,
 };
 pub use geometry::{from_fractions, rect_for, target_of, to_fractions};
 pub use matching::{Bound, Candidate, assign, assign_bound};

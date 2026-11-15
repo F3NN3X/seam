@@ -24,7 +24,7 @@ All notable changes to Seam. The format follows [Keep a Changelog](https://keepa
 
 ### Added
 
-- **Open with**, under an app's name in a workspace, makes a switch that starts the app open a path or link I typed: a full path on a local drive as the app's one argument, or an http, https, obsidian, vscode, vscode-insiders or spotify link through the shell. Anything else is refused and shows under the app. It is never captured or exported, import drops it, and only the Seam window sees it.
+- **Open with**, under an app's name in a workspace, makes a switch that starts the app open a path or link I typed: a full path on a local drive as the app's one argument, or an http, https, obsidian, vscode, vscode-insiders or spotify link through the shell. Anything else is refused and shows under the app, and so is a path for a program that would run it. It is never captured or exported, import drops it, and only the Seam window sees it.
 
 ### Changed
 

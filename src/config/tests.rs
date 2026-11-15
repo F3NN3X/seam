@@ -203,3 +203,22 @@ fn a_corrupt_file_is_not_destroyed_by_the_next_save() {
     let _ = std::fs::remove_dir_all(dir);
     assert!(kept, "the only copy of the saved layouts is gone");
 }
+
+// What I typed in "Open with" stays on this PC: an imported file never brings it, and
+// a client that is not the panel never reads it.
+#[test]
+fn open_with_is_dropped_on_import_and_hidden_from_other_clients() {
+    let row = json!({ "exe": r"C:\a.exe", "open_with": r"C:\x", "place": { "folder": r"C:\y" } });
+    let desk = json!({ "workspaces": [{ "id": "w", "windows": [row] }] });
+    let file = json!({ "version": CURRENT_VERSION, "desks": { "a": desk } });
+    let imported = Config::from_import(file.to_string().as_bytes()).unwrap();
+    let desk = &imported.desks["a"];
+    assert!(desk.workspaces[0]["windows"][0].get("open_with").is_none());
+
+    let config = json!({ "desks": { "a": { "workspaces": [{ "id": "w", "windows": [{ "exe": r"C:\a.exe", "open_with": r"C:\x" }] }] } } });
+    let seen = crate::api::config_for_others(&config);
+    assert!(seen["desks"]["a"]["workspaces"][0]["windows"][0].get("open_with").is_none());
+    assert_eq!(seen["desks"]["a"]["workspaces"][0]["windows"][0]["exe"], r"C:\a.exe");
+    // The saved config, which the panel reads whole, still has it.
+    assert_eq!(config["desks"]["a"]["workspaces"][0]["windows"][0]["open_with"], r"C:\x");
+}

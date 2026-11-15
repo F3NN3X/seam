@@ -101,6 +101,81 @@ fn without_credentials(link: &str) -> Option<String> {
     open.then(|| format!("{scheme}://{host}{tail}"))
 }
 
+/// The longest "Open with" kept.
+const MAX_OPEN_WITH: usize = 1024;
+
+/// Programs that run a file, script or command they're given, so a path "Open with" on
+/// one would run it. A link is no argument to them, so it still works.
+const LAUNCHERS: [&str; 21] = [
+    "cmd",
+    "powershell",
+    "pwsh",
+    "wscript",
+    "cscript",
+    "mshta",
+    "rundll32",
+    "regsvr32",
+    "msiexec",
+    "wsl",
+    "bash",
+    "conhost",
+    "wt",
+    "schtasks",
+    "forfiles",
+    "py",
+    "python",
+    "pythonw",
+    "node",
+    "java",
+    "javaw",
+];
+
+/// Whether a name is a DOS device (`CON`, `NUL`, `COM1`, `CONIN$`...), with or without an extension.
+fn is_device(name: &str) -> bool {
+    let stem = name.split('.').next().unwrap_or_default().trim_end().to_ascii_uppercase();
+    let numbered =
+        |prefix: &str| stem.strip_prefix(prefix).is_some_and(|n| n.len() == 1 && n.as_bytes()[0].is_ascii_digit());
+    matches!(stem.as_str(), "CON" | "PRN" | "AUX" | "NUL" | "CONIN$" | "CONOUT$") || numbered("COM") || numbered("LPT")
+}
+
+/// What a path may not have beyond `safe_folder`: a `:` after the drive (a stream), a
+/// name ending in `.` or a space, or a device name for any part.
+fn plain_path(path: &str) -> Result<(), &'static str> {
+    if path[2..].contains(':') {
+        return Err("A path can't have a : after the drive");
+    }
+    for name in path[2..].split('\\').filter(|n| !n.is_empty()) {
+        if name.ends_with(['.', ' ']) {
+            return Err("A name in the path can't end in a dot or a space");
+        }
+        if is_device(name) {
+            return Err("A path can't name a device such as CON or NUL");
+        }
+    }
+    Ok(())
+}
+
+/// `safe_open_with` for what one row would start: a path is refused for a program that
+/// runs what it's given (`LAUNCHERS`), for a row that starts by its package id, and, for
+/// Explorer, when it is a file. A link is fine for any row.
+pub fn open_with_for(rule: &Rule, text: &str) -> Result<OpenWith, &'static str> {
+    let open = safe_open_with(text)?;
+    if let OpenWith::Path(path) = &open {
+        let exe = Path::new(&rule.exe).file_stem().map(|s| s.to_string_lossy().to_ascii_lowercase());
+        let exe = exe.unwrap_or_default();
+        if LAUNCHERS.contains(&exe.as_str()) {
+            return Err("A path would make this program run it, so only a link works for it");
+        }
+        if exe == "explorer" && Path::new(path).is_file() {
+            return Err("Explorer opens a folder here, not a file");
+        }
+        if rule.aumid.is_some() {
+            return Err("Open with a path needs the app's exe; this app starts by its package id");
+        }
+    }
+    Ok(open)
+}
+
 /// What a typed "Open with" may be, as it will be stored, or why not, in the panel's
 /// words. A path is a full path on a drive letter, with no UNC, `..`, `/`, quote or
 /// control character, and it starts with no `-`. A link has a scheme on
@@ -109,28 +184,28 @@ fn without_credentials(link: &str) -> Option<String> {
 /// drive is local and the path exists is checked where it's opened.
 pub fn safe_open_with(text: &str) -> Result<OpenWith, &'static str> {
     let text = text.trim();
-    if text.is_empty() || text.len() > MAX_URL {
+    if text.is_empty() || text.len() > MAX_OPEN_WITH {
         return Err("It's empty or too long");
     }
-    if text.chars().any(char::is_control) || text.contains('"') {
-        return Err("It has a quote or a control character");
+    if text.chars().any(char::is_control) || text.contains(['"', '%']) {
+        return Err("It has a quote, a % or a control character");
     }
     if text.starts_with(['-', '/']) {
         return Err("It must be a full path or a link, not an option");
     }
     let bytes = text.as_bytes();
     if bytes.len() >= 2 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':' {
-        return match safe_folder(text) {
-            true => Ok(OpenWith::Path(text.to_string())),
-            false => Err("A path must be a full one on a drive letter, with no .. or /"),
-        };
+        if !safe_folder(text) {
+            return Err("A path must be a full one on a drive letter, with no .. or /");
+        }
+        return plain_path(text).map(|()| OpenWith::Path(text.to_string()));
     }
     let Some((scheme, rest)) = text.split_once(':') else { return Err("It must be a full path or a link") };
     let scheme = scheme.to_ascii_lowercase();
     if !OPEN_WITH_SCHEMES.contains(&scheme.as_str()) {
         return Err("Only http, https, obsidian, vscode, vscode-insiders and spotify links open");
     }
-    if text.contains(['\\', ' ']) {
+    if text.contains('\\') || text.chars().any(char::is_whitespace) {
         return Err("A link can't have a space or a backslash");
     }
     let link = without_credentials(&format!("{scheme}:{rest}")).ok_or("That link has nothing to open")?;

@@ -243,7 +243,7 @@ pub fn checked_update(old: &Workspace, mut new: Workspace, zones: &dyn Fn(&str) 
         // What I typed, checked and stored as it's cleaned.
         let typed = rule.open_with.take().map(|t| t.trim().to_string()).filter(|t| !t.is_empty());
         if let Some(typed) = typed {
-            match safe_open_with(&typed) {
+            match open_with_for(rule, &typed) {
                 Ok(OpenWith::Path(open) | OpenWith::Link(open)) => rule.open_with = Some(open),
                 Err(why) => return Err(format!("{}: {why}", rule.title_hint)),
             }

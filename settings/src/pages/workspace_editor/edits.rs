@@ -102,9 +102,10 @@ pub(super) fn set_delay(panel: &mut Panel, ms: u32, window: &mut Window, cx: &mu
 pub(super) fn set_open_with(panel: &mut Panel, window: &mut Window, cx: &mut Context<Panel>) {
     let Some((id, i)) = panel.editing.open_with_for.clone() else { return };
     let typed = panel.editing.open_with.read(cx).value().trim().to_string();
+    let Some(rule) = by_id(panel, &id).and_then(|ws| ws.windows.get(i).cloned()) else { return };
     let open = match typed.as_str() {
         "" => None,
-        typed => match workspace::safe_open_with(typed) {
+        typed => match workspace::open_with_for(&rule, typed) {
             Ok(workspace::OpenWith::Path(open) | workspace::OpenWith::Link(open)) => Some(open),
             Err(why) => {
                 panel.editing.open_with_error = Some(why.to_string());

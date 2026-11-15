@@ -296,11 +296,74 @@ fn open_with_refuses_arguments_and_dangerous_schemes() {
         r"https://a.com\@evil.com",
         "obsidian://",
         "spotify:",
+        // % expands in the shell, and a stream, a device or a trailing dot or space isn't a plain file.
+        "%APPDATA%",
+        r"C:\%TEMP%\x",
+        "https://a.com/%41",
+        "obsidian://open?vault=%USERPROFILE%",
+        r"C:\a\b.txt:evil",
+        r"C:\a:b",
+        r"C:\a\CON",
+        r"C:\a\nul.txt",
+        r"C:\COM1\x",
+        r"C:\lpt9.log",
+        r"C:\a\Aux .txt",
+        r"C:\a\CONIN$",
+        r"C:\a\conout$",
+        r"C:\a\dir.\x",
+        r"C:\a\dir \x",
+        r"C:\a\file.",
+        // Whitespace that isn't a space.
+        "https://a.com/\tx",
+        "https://a.com/\u{a0}x",
+        "https://a.com/\u{2003}x",
+        "https://a.com/\u{3000}x",
     ];
     for text in refused {
         assert!(safe_open_with(text).is_err(), "{text:?} was let through");
     }
-    assert!(safe_open_with(&format!("https://a.com/{}", "x".repeat(MAX_URL))).is_err());
+    assert!(safe_open_with(&format!("https://a.com/{}", "x".repeat(1024))).is_err());
+    assert!(safe_open_with(&format!(r"C:\{}", "x".repeat(1024))).is_err());
+    assert!(safe_open_with(&format!(r"C:\{}", "x".repeat(1000))).is_ok());
+    // Names that only look like a device are fine.
+    assert!(safe_open_with(r"C:\a\console\com10\lpt\nulled.txt").is_ok());
+}
+
+// A path goes to the row's program as its argument, so a program that runs what it's
+// given, one that starts by package id, and Explorer given a file are refused.
+#[test]
+fn open_with_a_path_needs_a_program_that_only_opens_it() {
+    let on = |exe: &str, aumid: Option<&str>| rule(exe, aumid, "c", "t");
+    let dir = std::env::temp_dir();
+    let dir = dir.to_string_lossy().to_string();
+    for exe in [
+        r"C:\Windows\System32\cmd.exe",
+        r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe",
+        r"C:\Program Files\PowerShell\7\PWSH.EXE",
+        r"C:\Windows\System32\wscript.exe",
+        r"C:\Windows\System32\mshta.exe",
+        r"C:\Windows\System32\rundll32.exe",
+        r"C:\Python\python.exe",
+        r"C:\Program Files\nodejs\node.exe",
+        r"C:\Program Files\Java\bin\javaw.exe",
+    ] {
+        assert!(open_with_for(&on(exe, None), r"C:\src\run.bat").is_err(), "{exe}");
+        // A link isn't an argument to it.
+        assert!(open_with_for(&on(exe, None), "https://example.com").is_ok(), "{exe}");
+    }
+    let code = on(r"C:\Program Files\Code\Code.exe", None);
+    assert!(open_with_for(&code, r"C:\src\seam").is_ok());
+    // Explorer opens a folder, and a file that exists is refused.
+    let explorer = on(r"C:\Windows\explorer.exe", None);
+    let file = std::env::temp_dir().join("seam-open-with-test.txt");
+    std::fs::write(&file, "x").unwrap();
+    assert!(open_with_for(&explorer, &file.to_string_lossy()).is_err());
+    let _ = std::fs::remove_file(&file);
+    assert!(open_with_for(&explorer, &dir).is_ok());
+    // A package id row has no program to hand a path to, but a link works.
+    let packaged = on("", Some("Pkg.App!App"));
+    assert!(open_with_for(&packaged, r"C:\src\seam").is_err());
+    assert!(open_with_for(&packaged, "spotify:track:x").is_ok());
 }
 
 #[test]

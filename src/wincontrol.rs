@@ -332,6 +332,7 @@ fn centre(r: Rect) -> (i32, i32) {
 }
 
 /// A screen's work area, scale and zones in pixels, in the order of the desk's screens.
+/// `work` has no margins, so a move between screens keeps a window's share of the room.
 struct Geo {
     id: String,
     /// Line Up number.
@@ -346,10 +347,11 @@ struct Geo {
 
 fn geometry(job: &Job, screens: &[Screen]) -> Vec<Geo> {
     let geo = |s: &Screen| {
-        let (work, dpi) = winutil::work_area(s.px).unwrap_or((s.px, 96));
+        let (work, dpi) = winutil::work_area_full(s.px).unwrap_or((s.px, 96));
+        let inset = winutil::work_area(s.px).map_or(work, |(inset, _)| inset);
         let gap = (job.gap.min(MAX_GAP) as f32 * dpi as f32 / 96.0).round() as i32;
         let layout = job.layouts.get(s.mm.index).and_then(Option::as_ref);
-        let zones = layout.map(|l| zones::rects(&l.tree, work, gap)).unwrap_or_default();
+        let zones = layout.map(|l| zones::rects(&l.tree, inset, gap)).unwrap_or_default();
         let mon = &job.mons[s.mm.index];
         Geo { id: mon.id.clone(), number: s.mm.index + 1, bounds: s.px, work, dpi, raw_dpi: mon.raw_dpi, zones }
     };

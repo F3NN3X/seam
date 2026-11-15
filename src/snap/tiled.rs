@@ -369,6 +369,16 @@ impl Engine {
         }
     }
 
+    /// The work area changed under the trees of the desktop in front: each puts its windows in
+    /// the zones it has now.
+    pub(super) fn tiled_refit(&mut self) {
+        for i in 0..self.tiling.trees.len() {
+            if self.here(i) {
+                self.tiled_apply(i);
+            }
+        }
+    }
+
     /// The snapping forgets the windows it held in a screen's own zones, which tiling's
     /// tree replaces. They stay where they are.
     fn tiled_adopt_none(&mut self, screen: &str) {

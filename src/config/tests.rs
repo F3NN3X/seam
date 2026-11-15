@@ -22,6 +22,18 @@ fn sign_in_migrates_once_and_patches_merge() {
     assert!(!off.keeps_session("a") && !off.restore_session);
 }
 
+#[test]
+fn margins_are_per_screen_and_an_older_desk_has_none() {
+    let desk: Desk = serde_json::from_value(json!({ "name": "d" })).unwrap();
+    assert!(desk.margins.is_empty());
+    assert!(!serde_json::to_string(&desk).unwrap().contains("margins"));
+    let mut config = Config::default();
+    config.desks.insert("a".into(), desk);
+    let patched = config.patched(&json!({ "desks": { "a": { "margins": { "m1": { "top": 12, "left": 4 } } } } }));
+    let m = patched.unwrap().desks["a"].margins["m1"];
+    assert_eq!(m.sides(), [12, 0, 0, 4]);
+}
+
 fn border(a: &str, b: &str, side: Side, s: f64, o: f64) -> SavedBorder {
     SavedBorder { a: a.into(), b: b.into(), side, map: EdgeMap { s, o }, glued: false, not_on_desk: false }
 }

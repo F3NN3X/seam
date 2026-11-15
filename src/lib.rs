@@ -12,6 +12,7 @@ pub mod hotkey;
 pub mod layout;
 pub mod library;
 pub mod log;
+pub mod margins;
 pub mod overview;
 pub mod palette;
 pub mod stack;

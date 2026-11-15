@@ -81,9 +81,10 @@ pub enum Verb {
 /// What a Rotate windows or Reset sizes did beyond a tile's.
 pub struct Turn {
     pub verb: Verb,
-    /// A tiled screen's tree before a reset, which Undo puts back. Its windows are tiled,
+    /// A tiled screen's splits before a reset and after it. Undo puts the first back,
+    /// unless a handle moved the second since. Its windows are tiled,
     /// not in zones of the saved layout, so no layout change says what they were.
-    pub tree: Option<Node>,
+    pub tree: Option<(Node, Node)>,
 }
 
 /// A window the tile moved.

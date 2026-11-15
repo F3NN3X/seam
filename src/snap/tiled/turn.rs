@@ -17,7 +17,7 @@ pub struct Turned {
     /// Each window that moved, and the ones stacked with it, for Undo.
     pub back: Vec<Back>,
     /// A reset's tree before it, which Undo puts back.
-    pub tree: Option<Node>,
+    pub tree: Option<(Node, Node)>,
 }
 
 /// A window Seam's zone path leaves where it is, which the one rule doesn't know of: pinned
@@ -98,19 +98,40 @@ impl Engine {
             back.extend(self.turn_back(*key, screen, *zone, before[*zone], after[*zone], dpi));
         }
         let was = tree.layout();
+        let now = even.layout();
         self.tiling.trees[i].tree = even;
         log::info!("tiling: evened out the splits, {} tiled windows followed", moving.len());
         self.tiled_apply(i);
-        Ok(Turned { moved: moving.len(), left: left.len(), back, tree: Some(was) })
+        Ok(Turned { moved: moving.len(), left: left.len(), back, tree: Some((was, now)) })
     }
 
-    /// Undo of a reset: the tree's splits are as they were, if its tiles still are.
-    pub(in crate::snap) fn tiled_restore(&mut self, screen: &str, node: Node) {
+    /// Undo of a reset: the tree's splits are as they were, unless a handle moved them
+    /// from `after`, the evened ones, or a window opened or closed, since.
+    pub(in crate::snap) fn tiled_restore(&mut self, screen: &str, before: Node, after: Node) {
         let desktop = self.tiling.desktop.clone();
         let Some(i) = self.tiling.trees.iter().position(|t| t.screen == screen && t.desktop == desktop) else { return };
-        if zones::leaf_count(&node) == self.tiling.trees[i].tree.tiles.len() {
-            self.tiling.trees[i].tree.node = Some(node);
+        if untouched(self.tiling.trees[i].tree.node.as_ref(), &after) {
+            self.tiling.trees[i].tree.node = Some(before);
             self.tiled_sync();
         }
+    }
+}
+
+/// Whether a tree's splits are still the ones a reset gave it.
+fn untouched(now: Option<&Node>, after: &Node) -> bool {
+    now == Some(after)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn undo_gives_the_splits_back_only_while_they_are_the_reset_ones() {
+        let halves = zones::template_tree(Template::Rows).unwrap();
+        let dragged = zones::set_ratio(&halves, &[], 0.7);
+        assert!(untouched(Some(&halves), &halves));
+        assert!(!untouched(Some(&dragged), &halves));
+        assert!(!untouched(None, &halves));
     }
 }

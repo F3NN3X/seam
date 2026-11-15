@@ -309,8 +309,8 @@ pub(super) fn undo_tile(app: &mut App) {
     // Where the screen kept another layout, the numbers are not the old layout's to give back.
     snap::rezone(if changed && !layout_back { Vec::new() } else { undo.keep });
     // A tiled screen's splits come back before its windows do, so they land in the right tiles.
-    if let Some(node) = undo.tree {
-        snap::tiling_restore(&undo.screen, node);
+    if let Some((before, after)) = undo.tree {
+        snap::tiling_restore(&undo.screen, before, after);
     }
     let here = |b: &wincontrol::tile::Back| {
         let h = HWND(b.place.hwnd as *mut _);

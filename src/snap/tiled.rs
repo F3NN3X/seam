@@ -141,8 +141,8 @@ pub fn tiling_reset(screen: &str) -> Result<Turned, String> {
 }
 
 /// Undo of a reset: a tiled screen's splits as they were.
-pub fn tiling_restore(screen: &str, node: Node) {
-    with_engine(|e| e.tiled_restore(screen, node));
+pub fn tiling_restore(screen: &str, before: Node, after: Node) {
+    with_engine(|e| e.tiled_restore(screen, before, after));
 }
 
 /// "Float or tile this window": a tiled window floats and the others close up, and a

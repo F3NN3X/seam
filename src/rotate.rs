@@ -7,6 +7,8 @@ use super::tile::{At, Back, Done, Plan, Turn, Verb, placed, screen_of, topmost};
 use super::{Job, Outcome, direction, geometry, into_zone, is_seam, movable};
 use seam::turn::{self, Held};
 use seam::winutil;
+use windows::Win32::Foundation::HWND;
+use windows::Win32::UI::WindowsAndMessaging::IsWindow;
 
 pub(super) fn run(job: &Job, at: At, forward: bool) -> Result<Outcome, String> {
     let screens = direction::desk_screens(&job.mons, &job.links);
@@ -36,6 +38,15 @@ pub(super) fn run(job: &Job, at: At, forward: bool) -> Result<Outcome, String> {
         let stuck = winutil::pin_bits(h) != 0 || topmost(h) || movable(h, &job.exclude).is_err();
         held.push(Held { hwnd: h.0 as isize, zone: a, stuck });
         windows.push(h);
+    }
+    // A minimized window, or one on another virtual desktop, keeps its zones for when it is back.
+    for m in &job.members {
+        let h = HWND(m.hwnd as *mut _);
+        let away = winutil::is_minimized(h) || winutil::is_cloaked(h);
+        let (id, a, b) = &m.zone;
+        if away && *id == g.id && a <= b && *b < g.zones.len() && unsafe { IsWindow(Some(h)) }.as_bool() {
+            blocked.extend(*a..=*b);
+        }
     }
     let moves = turn::rotate(g.zones.len(), &held, &blocked, forward);
     if moves.is_empty() {

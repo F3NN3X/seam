@@ -304,8 +304,9 @@ struct TileUndo {
     back: Vec<wincontrol::tile::Back>,
     /// Windows a split renumbered, given their old zone numbers back.
     keep: Vec<snap::Zoned>,
-    /// A tiled screen's splits before Reset sizes, given back to its tree.
-    tree: Option<zones::Node>,
+    /// A tiled screen's splits before Reset sizes and after it, the first given back to its tree
+    /// while it still has the second.
+    tree: Option<(zones::Node, zones::Node)>,
     /// The ad-hoc group Fit group to screen stretched, and its area before.
     group: Option<(u64, zones::Rect)>,
     until: Instant,

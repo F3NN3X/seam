@@ -20,7 +20,7 @@ use std::time::Instant;
 use windows::Win32::Foundation::{HWND, LPARAM, WPARAM};
 use windows::Win32::System::Com::{CLSCTX_ALL, COINIT_APARTMENTTHREADED, CoCreateInstance, CoInitializeEx};
 use windows::Win32::UI::Shell::{IVirtualDesktopManager, VirtualDesktopManager};
-use windows::Win32::UI::WindowsAndMessaging::{GetForegroundWindow, IsWindow, PostMessageW, WM_APP};
+use windows::Win32::UI::WindowsAndMessaging::{GetForegroundWindow, IsWindow, IsWindowVisible, PostMessageW, WM_APP};
 use windows::core::GUID;
 
 /// The worker has events for the snapping. Take them with `take`.
@@ -48,8 +48,9 @@ pub enum Event {
         hwnd: isize,
         minimized: bool,
     },
-    /// The virtual desktop in front, by id.
-    Desktop(String),
+    /// The virtual desktop in front, by id, or None when the shell can't tell, as on a
+    /// desktop with no windows. An empty id is a Windows with no desktop manager.
+    Desktop(Option<String>),
 }
 
 enum Job {
@@ -77,6 +78,10 @@ static EXCLUDE: Mutex<Vec<String>> = Mutex::new(Vec::new());
 /// Windows in a tree, so the seam-wm thread passes over every other close and minimize.
 static TILED: Mutex<Option<HashSet<isize>>> = Mutex::new(None);
 static EVENTS: Mutex<Vec<Event>> = Mutex::new(Vec::new());
+/// The shell's virtual desktop manager was there when the worker started.
+static DESKTOPS: AtomicBool = AtomicBool::new(false);
+/// A `look` was answered since the last `take_looked`.
+static LOOKED: AtomicBool = AtomicBool::new(false);
 static WORKER: OnceLock<Option<Sender<Job>>> = OnceLock::new();
 
 /// Who to tell, the apps tiling leaves alone, and whether it is on for any screen.
@@ -99,38 +104,49 @@ pub fn is_tiled(hwnd: isize) -> bool {
 /// A window opened and settled, and no workspace row or app rule claimed it.
 pub fn opened(hwnd: isize) {
     if ON.load(Ordering::SeqCst) {
-        send(Job::Arrived { hwnd, restored: false, asked: false });
+        let _ = send(Job::Arrived { hwnd, restored: false, asked: false });
     }
 }
 
 /// A window came back from minimized and settled.
 pub fn restored(hwnd: isize) {
-    send(Job::Arrived { hwnd, restored: true, asked: false });
+    let _ = send(Job::Arrived { hwnd, restored: true, asked: false });
 }
 
 /// "Float or tile this window" asked to tile it.
 pub fn asked(hwnd: isize) {
-    send(Job::Arrived { hwnd, restored: false, asked: true });
+    let _ = send(Job::Arrived { hwnd, restored: false, asked: true });
 }
 
 /// A tiled window closed or was minimized. From the seam-wm thread.
 pub fn left(hwnd: isize, minimized: bool) {
-    send(Job::Left { hwnd, minimized });
+    let _ = send(Job::Left { hwnd, minimized });
 }
 
 /// Focus moved, maybe to another virtual desktop. From the seam-wm thread.
 pub fn foreground(hwnd: isize) {
-    send(Job::Foreground(hwnd));
+    let _ = send(Job::Foreground(hwnd));
 }
 
 /// Tiling turned on: tile again what a tray that ran before had tiled, and learn the desktop in front.
 pub fn retile() {
-    send(Job::Retile);
+    let _ = send(Job::Retile);
 }
 
-/// A setting waits to know which desktop is in front.
-pub fn look() {
-    send(Job::Look);
+/// A setting waits to know which desktop is in front. False when the worker couldn't start.
+pub fn look() -> bool {
+    send(Job::Look)
+}
+
+/// Whether a `look` was answered since this was last asked.
+pub fn take_looked() -> bool {
+    LOOKED.swap(false, Ordering::SeqCst)
+}
+
+/// Whether Windows says which virtual desktop a window is on. Without it every
+/// desktop counts as one, with an empty id.
+pub fn has_desktops() -> bool {
+    DESKTOPS.load(Ordering::SeqCst)
 }
 
 /// What the worker found, in order.
@@ -138,15 +154,18 @@ pub fn take() -> Vec<Event> {
     std::mem::take(&mut *EVENTS.lock().unwrap_or_else(|e| e.into_inner()))
 }
 
-fn send(job: Job) {
+fn send(job: Job) -> bool {
     let worker = WORKER.get_or_init(|| {
         let (tx, rx) = channel();
         let spawned = std::thread::Builder::new().name("seam-tiling".into()).spawn(move || work(rx));
         spawned.ok().map(|_| tx)
     });
     match worker {
-        Some(tx) if tx.send(job).is_ok() => {}
-        _ => log::info!("tiling worker unavailable"),
+        Some(tx) if tx.send(job).is_ok() => true,
+        _ => {
+            log::info!("tiling worker unavailable");
+            false
+        }
     }
 }
 
@@ -161,24 +180,69 @@ fn post(events: Vec<Event>) {
     }
 }
 
+/// The shell's virtual desktop manager, made again once if Explorer restarted under it.
+struct Desktops(Option<IVirtualDesktopManager>);
+
+/// The manager's process went away: Explorer restarted.
+const RPC_E_DISCONNECTED: i32 = 0x8001_0108_u32 as i32;
+const RPC_S_SERVER_UNAVAILABLE: i32 = 0x8007_06BA_u32 as i32;
+
+impl Desktops {
+    fn make() -> Option<IVirtualDesktopManager> {
+        unsafe { CoCreateInstance(&VirtualDesktopManager, None, CLSCTX_ALL) }.ok()
+    }
+
+    /// The desktop a window is on, as text, or None when the shell doesn't say: a window
+    /// on every desktop, such as the taskbar, or a Windows with no desktops.
+    fn of(&mut self, h: HWND) -> Option<String> {
+        let read = |m: &IVirtualDesktopManager| unsafe { m.GetWindowDesktopId(h) };
+        let id = match read(self.0.as_ref()?) {
+            Err(e) if [RPC_E_DISCONNECTED, RPC_S_SERVER_UNAVAILABLE].contains(&e.code().0) => {
+                self.0 = Desktops::make();
+                read(self.0.as_ref()?)
+            }
+            other => other,
+        };
+        id.ok().filter(|id| *id != GUID::zeroed()).map(|id| format!("{id:?}"))
+    }
+
+    /// The desktop in front: the focused window's, or else that of any shown window not
+    /// cloaked, which only the windows of the desktop in front are. None when it can't
+    /// tell, and an empty id with no manager.
+    fn front(&mut self, focus: HWND) -> Option<String> {
+        if self.0.is_none() {
+            return Some(String::new());
+        }
+        self.of(focus).or_else(|| {
+            let shown = |h: &HWND| {
+                unsafe { IsWindowVisible(*h) }.as_bool() && !winutil::is_cloaked(*h) && !winutil::is_minimized(*h)
+            };
+            winutil::top_level_windows().into_iter().filter(shown).find_map(|h| self.of(h))
+        })
+    }
+}
+
 fn work(jobs: Receiver<Job>) {
     // The virtual desktop manager is a COM object of the shell.
     let _ = unsafe { CoInitializeEx(None, COINIT_APARTMENTTHREADED) };
-    let desktops: Option<IVirtualDesktopManager> =
-        unsafe { CoCreateInstance(&VirtualDesktopManager, None, CLSCTX_ALL) }.ok();
-    if desktops.is_none() {
+    let mut desktops = Desktops(Desktops::make());
+    DESKTOPS.store(desktops.0.is_some(), Ordering::SeqCst);
+    if desktops.0.is_none() {
         log::info!("tiling: no virtual desktop manager, so every desktop counts as one");
     }
     let mut front = None::<String>;
     while let Ok(first) = jobs.recv() {
         let started = Instant::now();
-        let batch: Vec<Job> = std::iter::once(first).chain(jobs.try_iter()).collect();
+        let mut batch: Vec<Job> = std::iter::once(first).chain(jobs.try_iter()).collect();
+        // A close or minimize never waits behind a slow app's arrival.
+        batch.sort_by_key(|j| !matches!(j, Job::Left { .. }));
         let mut events = Vec::new();
         // Only the last focus change of a batch says which desktop is in front.
         let focus = batch.iter().rev().find_map(|j| if let Job::Foreground(h) = j { Some(*h) } else { None });
+        let mut said = false;
         for job in batch {
             match job {
-                Job::Arrived { hwnd, restored, asked } => match arrival(desktops.as_ref(), hwnd, restored, asked) {
+                Job::Arrived { hwnd, restored, asked } => match arrival(&mut desktops, hwnd, restored, asked) {
                     Ok(a) => events.push(Event::Arrived(a)),
                     Err(why) if log::enabled() => {
                         log::info!("tiling: {} floats ({why})", winutil::exe_name(hwnd_of(hwnd)).unwrap_or_default())
@@ -188,25 +252,25 @@ fn work(jobs: Receiver<Job>) {
                 Job::Left { hwnd, minimized } => events.push(Event::Left { hwnd, minimized }),
                 Job::Foreground(_) => {}
                 Job::Look => {
-                    let now = desktop_of(desktops.as_ref(), unsafe { GetForegroundWindow() }).or(front.clone());
-                    front = now.clone();
-                    events.push(Event::Desktop(now.unwrap_or_default()));
+                    front = desktops.front(unsafe { GetForegroundWindow() });
+                    events.push(Event::Desktop(front.clone()));
+                    LOOKED.store(true, Ordering::SeqCst);
+                    said = true;
                 }
                 Job::Retile => {
-                    events.extend(stamped(desktops.as_ref()).into_iter().map(Event::Arrived));
-                    let now = desktop_of(desktops.as_ref(), unsafe { GetForegroundWindow() });
-                    if let Some(now) = now.filter(|d| front.as_ref() != Some(d)) {
-                        front = Some(now.clone());
-                        events.push(Event::Desktop(now));
-                    }
+                    events.extend(stamped(&mut desktops).into_iter().map(Event::Arrived));
+                    front = desktops.front(unsafe { GetForegroundWindow() });
+                    events.push(Event::Desktop(front.clone()));
+                    said = true;
                 }
             }
         }
-        if let Some(h) = focus
-            && let Some(now) = desktop_of(desktops.as_ref(), hwnd_of(h)).filter(|d| front.as_ref() != Some(d))
-        {
-            front = Some(now.clone());
-            events.push(Event::Desktop(now));
+        if let Some(h) = focus.filter(|_| !said) {
+            let now = desktops.front(hwnd_of(h));
+            if now != front {
+                front = now.clone();
+                events.push(Event::Desktop(now));
+            }
         }
         if log::enabled() && !events.is_empty() {
             log::info!("tiling worker: {} events in {} us", events.len(), started.elapsed().as_micros());
@@ -219,23 +283,11 @@ fn hwnd_of(key: isize) -> HWND {
     HWND(key as *mut _)
 }
 
-/// The desktop a window is on, as text, or None when the shell doesn't say: a window on
-/// every desktop, such as the taskbar, or a Windows with no desktops.
-fn desktop_of(desktops: Option<&IVirtualDesktopManager>, h: HWND) -> Option<String> {
-    let id = unsafe { desktops?.GetWindowDesktopId(h) }.ok()?;
-    (id != GUID::zeroed()).then(|| format!("{id:?}"))
-}
-
 /// Whether smart tiling may take this window, and what it needs to know of it. Floats:
 /// dialogs, owned and tool windows, fixed-size windows, apps under Left alone, windows
 /// floated by hand, maximized ones, administrator windows, and windows a workspace or
 /// app rule placed, unless the key asked for it.
-fn arrival(
-    desktops: Option<&IVirtualDesktopManager>,
-    hwnd: isize,
-    restored: bool,
-    asked: bool,
-) -> Result<Arrival, &'static str> {
+fn arrival(desktops: &mut Desktops, hwnd: isize, restored: bool, asked: bool) -> Result<Arrival, &'static str> {
     let h = hwnd_of(hwnd);
     if !unsafe { IsWindow(Some(h)) }.as_bool() {
         return Err("closed");
@@ -243,7 +295,8 @@ fn arrival(
     if winutil::is_floated(h) && !asked {
         return Err("floated by hand");
     }
-    if winutil::ws_stamp(h).is_some() && !asked && !restored {
+    // A restore too: a window a workspace switch placed is the workspace's (D564).
+    if winutil::ws_stamp(h).is_some() && !asked {
         return Err("placed by a workspace or an app rule");
     }
     if winutil::is_maximized(h) || winutil::is_minimized(h) {
@@ -265,12 +318,12 @@ fn arrival(
     }
     let frame = winutil::visible_rect(h).ok_or("no frame")?;
     let min = minsize::of(h, winutil::monitor_dpi(h));
-    let desktop = desktop_of(desktops, h).unwrap_or_default();
+    let desktop = desktops.of(h).unwrap_or_default();
     Ok(Arrival { hwnd, frame, desktop, min, order: winutil::tile_stamp(h), restored })
 }
 
 /// The windows a tray that ran before tiled, oldest first, as arrivals.
-fn stamped(desktops: Option<&IVirtualDesktopManager>) -> Vec<Arrival> {
+fn stamped(desktops: &mut Desktops) -> Vec<Arrival> {
     let mut found: Vec<Arrival> = winutil::top_level_windows()
         .into_iter()
         .filter(|h| winutil::tile_stamp(*h) != 0)

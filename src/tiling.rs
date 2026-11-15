@@ -112,14 +112,54 @@ fn grid(n: usize) -> Node {
     chain(&rows)
 }
 
-/// A fixed family's tree for `n` windows.
-fn fixed(family: Family, n: usize) -> Node {
+/// A fixed family's tree for `n` windows. Main + stack keeps the main share a handle
+/// gave `before`; Columns and Grid are even by count, which is what they promise (D565).
+fn fixed(family: Family, n: usize, before: Option<&Node>) -> Node {
+    let main = match before {
+        Some(Node::Split { split: Dir::Vertical, ratio, .. }) => *ratio,
+        _ => MAIN_SHARE,
+    };
     match family {
         Family::Columns | Family::Smart => even(Dir::Vertical, n),
-        Family::MainStack if n > 1 => split(Dir::Vertical, MAIN_SHARE, leaf(), even(Dir::Horizontal, n - 1)),
+        Family::MainStack if n > 1 => split(Dir::Vertical, main, leaf(), even(Dir::Horizontal, n - 1)),
         Family::MainStack => leaf(),
         Family::Grid => grid(n),
     }
+}
+
+/// Who holds each of `n` zones after a drag, from the windows the snapping recorded
+/// there as (zone, window, on top of its stack). Where several are, the window tiling
+/// had there (`old`) wins, then a stack's top, then the lowest handle, so the choice
+/// never depends on the order they came in. A zone none holds keeps `kept`, a
+/// minimized window waiting for it, or is empty.
+pub fn holders(
+    n: usize,
+    old: &[Option<isize>],
+    kept: &[Option<isize>],
+    held: &[(usize, isize, bool)],
+) -> Vec<Option<isize>> {
+    (0..n)
+        .map(|z| {
+            let here = held.iter().filter(|(at, ..)| *at == z);
+            let rank =
+                |&&(_, h, top): &&(usize, isize, bool)| (old.get(z) == Some(&Some(h)), top, std::cmp::Reverse(h));
+            here.max_by_key(rank).map(|(_, h, _)| *h).or_else(|| kept.get(z).copied().flatten())
+        })
+        .collect()
+}
+
+/// A tiled window this far off its tile, or this much bigger, was moved since. One that
+/// came out a little smaller, as a terminal that sizes itself by whole characters does,
+/// wasn't, and neither was one that can't be resized.
+pub const MOVED_PX: i32 = 4;
+pub const SMALLER_PX: i32 = 48;
+
+/// Whether a window whose frame is `now` was moved or resized off the tile `at`.
+pub fn moved(now: Rect, at: Rect, resizable: bool) -> bool {
+    let off = (now.x - at.x).abs() > MOVED_PX || (now.y - at.y).abs() > MOVED_PX;
+    let bigger = now.w > at.w + MOVED_PX || now.h > at.h + MOVED_PX;
+    let smaller = resizable && (now.w < at.w - SMALLER_PX || now.h < at.h - SMALLER_PX);
+    off || bigger || smaller
 }
 
 fn area_of(r: &Rect) -> i64 {
@@ -210,7 +250,7 @@ impl Tree {
             (Some(_), family) => {
                 let mut tiles = self.tiles.clone();
                 tiles.push(tile);
-                Some(Tree { family, node: Some(fixed(family, tiles.len())), tiles })
+                Some(Tree { family, node: Some(fixed(family, tiles.len(), self.node.as_ref())), tiles })
             }
         };
         // The first window takes the screen whatever its size.
@@ -227,27 +267,44 @@ impl Tree {
     /// in Smart as the zones' own removal does (its sibling takes the space), in a
     /// fixed family by laying the rest out again. None when it isn't tiled here.
     pub fn remove(&self, hwnd: isize) -> Option<Tree> {
-        let at = self.zone_of(hwnd)?;
+        self.remove_zone(self.zone_of(hwnd)?)
+    }
+
+    /// Zone `at` goes, whoever holds it, and the others fill the gap as `remove` says.
+    /// A tree left with no window is empty.
+    pub fn remove_zone(&self, at: usize) -> Option<Tree> {
         let mut tiles = self.tiles.clone();
+        if at >= tiles.len() {
+            return None;
+        }
         tiles.remove(at);
         if tiles.iter().all(|t| t.hwnd.is_none()) {
             return Some(Tree::new(self.family));
         }
         let node = match self.family {
             Family::Smart => zones::remove_leaf(self.node.as_ref()?, at)?,
-            family => fixed(family, tiles.len()),
+            family => fixed(family, tiles.len(), self.node.as_ref()),
         };
         Some(Tree { family: self.family, node: Some(node), tiles })
     }
 
-    /// `hwnd` left its tile by hand: the tile stays, empty, so nothing moves for it.
+    /// `hwnd` left its tile and the tile stays, empty, so nothing moves for it: a window
+    /// minimized, which may come back to it, or moved without a drag. Every tile may be
+    /// empty, so Win+D keeps the shape for the windows to come back to.
     pub fn vacate(&self, hwnd: isize) -> Option<Tree> {
         let at = self.zone_of(hwnd)?;
         let mut tree = self.clone();
         tree.tiles[at].hwnd = None;
-        if tree.tiles.iter().all(|t| t.hwnd.is_none()) {
-            return Some(Tree::new(self.family));
+        Some(tree)
+    }
+
+    /// `hwnd` goes back to zone `at` if that tile is still empty.
+    pub fn back_to(&self, at: usize, hwnd: isize, min: Min) -> Option<Tree> {
+        if self.zone_of(hwnd).is_some() || self.tiles.get(at)?.hwnd.is_some() {
+            return None;
         }
+        let mut tree = self.clone();
+        tree.tiles[at] = Tile { hwnd: Some(hwnd), min };
         Some(tree)
     }
 
@@ -258,16 +315,19 @@ impl Tree {
             return Tree::new(family);
         }
         if family != Family::Smart {
-            return Tree { family, node: Some(fixed(family, tiles.len())), tiles };
+            return Tree { family, node: Some(fixed(family, tiles.len(), None)), tiles };
         }
         let mut tree = Tree::new(family);
         for t in &tiles {
             let Some(hwnd) = t.hwnd else { continue };
             // Every window was tiled before, so none of them ends up stacked by its size here.
-            let relaxed = tree.insert(area, gap, hwnd, (0, 0));
-            if let Some((mut next, Put::Tile(at))) = relaxed {
-                next.tiles[at].min = t.min;
-                tree = next;
+            match tree.insert(area, gap, hwnd, (0, 0)) {
+                Some((mut next, Put::Tile(at))) => {
+                    next.tiles[at].min = t.min;
+                    tree = next;
+                }
+                // Past what Smart can split, it is laid out as columns rather than lost.
+                _ => return Tree { family, node: Some(fixed(Family::Columns, tiles.len(), None)), tiles },
             }
         }
         tree
@@ -396,6 +456,199 @@ mod tests {
         // Tiled already is no insert, and an empty tree takes any window.
         assert_eq!(two.insert(AREA, 0, 2, NONE), None);
         assert!(Tree::new(Family::Grid).insert(AREA, 0, 1, (5000, 5000)).is_some());
+    }
+
+    /// No overlap, nothing outside the area, no zero-size zone, one zone per tile.
+    fn sound(tree: &Tree, area: Rect, gap: i32) {
+        if tree.node.is_none() {
+            assert!(tree.tiles.is_empty());
+            return;
+        }
+        let rects = tree.rects(area, gap);
+        assert_eq!(rects.len(), tree.tiles.len());
+        for (i, r) in rects.iter().enumerate() {
+            assert!(r.w > 0 && r.h > 0, "{r:?}");
+            assert!(r.x >= area.x && r.y >= area.y && r.x + r.w <= area.x + area.w && r.y + r.h <= area.y + area.h);
+            for o in &rects[i + 1..] {
+                let apart = r.x + r.w <= o.x || o.x + o.w <= r.x || r.y + r.h <= o.y || o.y + o.h <= r.y;
+                assert!(apart, "{r:?} overlaps {o:?}");
+            }
+        }
+        let mut seen: Vec<isize> = tree.windows().collect();
+        seen.sort_unstable();
+        seen.dedup();
+        assert_eq!(seen.len(), tree.windows().count(), "a window is in two tiles");
+        assert!(tree.tiles.len() <= MAX_TILES);
+        assert!(zones::within_limits(&tree.layout()));
+    }
+
+    #[test]
+    fn odd_areas_and_gaps_stay_sound_for_every_family() {
+        let areas = [
+            Rect { x: 0, y: 0, w: 1366, h: 728 },
+            Rect { x: -2560, y: 40, w: 2560, h: 1392 },
+            Rect { x: 7, y: 3, w: 1001, h: 997 },
+            Rect { x: 0, y: 0, w: 800, h: 600 },
+        ];
+        for area in areas {
+            for gap in [0, 8, 12] {
+                for family in Family::ALL {
+                    let mut tree = Tree::new(family);
+                    for h in 1..=14 {
+                        tree = tree.insert(area, gap, h, NONE).unwrap().0;
+                        sound(&tree, area, gap);
+                    }
+                }
+            }
+        }
+    }
+
+    /// A small fixed-seed generator, so the walk is the same on every run.
+    struct Lcg(u64);
+
+    impl Lcg {
+        fn next(&mut self, below: u64) -> u64 {
+            self.0 = self.0.wrapping_mul(6_364_136_223_846_793_005).wrapping_add(1_442_695_040_888_963_407);
+            (self.0 >> 33) % below
+        }
+    }
+
+    #[test]
+    fn random_steps_keep_the_tree_sound() {
+        for family in Family::ALL {
+            let mut rng = Lcg(0x5eed ^ family as u64);
+            let mut tree = Tree::new(family);
+            let mut known: Vec<isize> = Vec::new();
+            for step in 0..4000 {
+                let next = step as isize + 100;
+                match rng.next(10) {
+                    0..=4 => {
+                        let min = (rng.next(900) as i32, rng.next(600) as i32);
+                        if let Some((t, put)) = tree.insert(AREA, 8, next, min) {
+                            if let Put::Tile(_) = put {
+                                known.push(next);
+                            }
+                            tree = t;
+                        }
+                    }
+                    5..=6 if !known.is_empty() => {
+                        let h = known.remove(rng.next(known.len() as u64) as usize);
+                        tree = tree.remove(h).unwrap();
+                    }
+                    7 if !known.is_empty() => {
+                        let h = known.remove(rng.next(known.len() as u64) as usize);
+                        tree = tree.vacate(h).unwrap();
+                    }
+                    8 => {
+                        let to = Family::ALL[rng.next(4) as usize];
+                        tree = tree.with_family(to, AREA, 8);
+                        // An empty tile goes with another family.
+                        assert_eq!(tree.windows().count(), known.len());
+                    }
+                    _ => {}
+                }
+                sound(&tree, AREA, 8);
+                let mut have: Vec<isize> = tree.windows().collect();
+                let mut want = known.clone();
+                have.sort_unstable();
+                want.sort_unstable();
+                assert_eq!(have, want, "{family:?} step {step}");
+            }
+        }
+    }
+
+    #[test]
+    fn smart_removes_with_empty_tiles_about() {
+        let three = grow(Family::Smart, 3);
+        let holed = three.vacate(2).unwrap();
+        let less = holed.remove(1).unwrap();
+        assert_eq!((less.tiles.len(), less.windows().collect::<Vec<_>>()), (2, vec![3]));
+        covers(&less);
+        // The last window going, with only empty tiles left, leaves an empty tree.
+        assert_eq!(less.remove(3), Some(Tree::new(Family::Smart)));
+        // Every tile empty keeps the shape, and each window can go back to its own.
+        let rested = three.vacate(1).unwrap().vacate(2).unwrap().vacate(3).unwrap();
+        assert_eq!(rested.rects(AREA, 0), three.rects(AREA, 0));
+        let back = rested.back_to(2, 2, NONE).unwrap();
+        assert_eq!(back.zone_of(2), three.zone_of(2));
+        assert_eq!(back.back_to(2, 9, NONE), None);
+    }
+
+    #[test]
+    fn fixed_families_fill_an_empty_tile_first_then_close_up() {
+        for family in [Family::Columns, Family::MainStack, Family::Grid] {
+            let four = grow(family, 4);
+            let holed = four.vacate(2).unwrap();
+            let (filled, put) = holed.insert(AREA, 0, 9, NONE).unwrap();
+            assert_eq!((put, filled.rects(AREA, 0)), (Put::Tile(four.zone_of(2).unwrap()), four.rects(AREA, 0)));
+            let less = filled.remove(9).unwrap();
+            assert_eq!(less.tiles.len(), 3, "{family:?}");
+            covers(&less);
+        }
+    }
+
+    #[test]
+    fn counts_and_shapes_by_family() {
+        for n in 1..=MAX_TILES {
+            let cols = (1..=n).find(|c| c * c >= n).unwrap();
+            let grid = grow(Family::Grid, n as isize);
+            covers(&grid);
+            let mut lefts: Vec<i32> = grid.rects(AREA, 0).iter().map(|r| r.x).collect();
+            lefts.dedup();
+            assert_eq!((grid.tiles.len(), lefts.len()), (n, cols), "grid of {n}");
+        }
+        let main = grow(Family::MainStack, 2);
+        assert_eq!(main.rects(AREA, 0).iter().map(|r| r.w).collect::<Vec<_>>(), vec![1152, 768]);
+        assert_eq!(grow(Family::Columns, 1).rects(AREA, 0), vec![AREA]);
+    }
+
+    #[test]
+    fn main_stack_keeps_a_handle_dragged_main_share() {
+        let mut three = grow(Family::MainStack, 3);
+        three.node = Some(zones::set_ratio(&three.layout(), &[], 0.75));
+        let four = three.insert(AREA, 0, 4, NONE).unwrap().0;
+        assert_eq!(four.rects(AREA, 0)[0].w, 1440);
+        assert_eq!(four.remove(4).unwrap().rects(AREA, 0)[0].w, 1440);
+    }
+
+    #[test]
+    fn smart_with_a_window_past_its_share_loses_none() {
+        let mut tree = Tree::new(Family::Columns);
+        for h in 1..=MAX_TILES as isize {
+            tree = tree.insert(AREA, 0, h, NONE).unwrap().0;
+        }
+        tree.tiles[0].min = (1900, 1000);
+        let smart = tree.with_family(Family::Smart, AREA, 0);
+        assert_eq!(smart.windows().count(), MAX_TILES);
+        assert_eq!(smart.tiles[smart.zone_of(1).unwrap()].min, (1900, 1000));
+    }
+
+    #[test]
+    fn a_window_counts_as_moved_off_its_tile() {
+        let at = Rect { x: 0, y: 0, w: 960, h: 1080 };
+        assert!(!moved(at, at, true));
+        // A terminal a few characters short of its tile stays.
+        assert!(!moved(Rect { w: 930, h: 1050, ..at }, at, true));
+        assert!(moved(Rect { w: 900, ..at }, at, true));
+        assert!(!moved(Rect { w: 900, ..at }, at, false));
+        assert!(moved(Rect { x: 5, ..at }, at, true));
+        assert!(moved(Rect { w: 965, ..at }, at, true));
+        assert!(!moved(Rect { x: 4, w: 964, ..at }, at, true));
+    }
+
+    #[test]
+    fn a_drag_decides_who_holds_each_zone() {
+        // A swap: each window is recorded in the other's zone.
+        let swapped = holders(2, &[Some(1), Some(2)], &[None, None], &[(0, 2, true), (1, 1, true)]);
+        assert_eq!(swapped, vec![Some(2), Some(1)]);
+        // A stack by S: the window tiling had there keeps the tile, whoever is on top.
+        assert_eq!(holders(1, &[Some(1)], &[None], &[(0, 9, true), (0, 1, false)]), vec![Some(1)]);
+        // A drop from elsewhere into an empty tile; else a stack's top, else the lowest handle.
+        assert_eq!(holders(1, &[None], &[None], &[(0, 7, false), (0, 8, true)]), vec![Some(8)]);
+        assert_eq!(holders(1, &[None], &[None], &[(0, 8, false), (0, 7, false)]), vec![Some(7)]);
+        // Dragged out: its zone is empty, unless a minimized window waits for it.
+        assert_eq!(holders(2, &[Some(1), Some(2)], &[None, Some(2)], &[(0, 1, true)]), vec![Some(1), Some(2)]);
+        assert_eq!(holders(2, &[Some(1), Some(2)], &[None, None], &[(0, 1, true)]), vec![Some(1), None]);
     }
 
     #[test]

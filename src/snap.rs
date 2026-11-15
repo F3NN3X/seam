@@ -329,7 +329,9 @@ pub fn update(owner: HWND, cfg: &Config, sig: &str, mons: &[Mon], aside: Option<
     };
     let exclude: std::sync::Arc<[String]> = cfg.zones.exclude.iter().map(|x| x.to_lowercase()).collect();
     let tiling = desk.map(|d| d.tiling.clone()).unwrap_or_default();
-    let tiles = cfg.zones.enabled && tiling.values().any(|t| !t.desktops.is_empty());
+    // Closes and minimizes are heard while zones are off too, so no tile outlives its
+    // window; nothing moves until tiling is active again.
+    let tiles = tiling.values().any(|t| !t.desktops.is_empty());
     crate::tiler::configure(owner.0 as isize, exclude.to_vec(), tiles);
     crate::wm::tiling(tiles);
     with_engine(|e| {
@@ -369,6 +371,8 @@ pub fn update(owner: HWND, cfg: &Config, sig: &str, mons: &[Mon], aside: Option<
         e.sync_dividers();
         e.stack_marks();
         e.stacks_look();
+        // Back from zones off, a pause or a full-screen app: the gaps left meanwhile close.
+        e.tiled_resume();
     });
 }
 

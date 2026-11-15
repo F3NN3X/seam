@@ -112,7 +112,12 @@ pub(super) fn job_screens(app: &App) -> Vec<SwitchScreen> {
 /// A capture of this desk. The apps the zones leave alone are never captured either.
 pub(super) fn capture_job(app: &App) -> CaptureJob {
     let exclude = app.cfg.zones.exclude.iter().map(|x| x.to_lowercase()).collect();
-    let (screens, gap, places) = (job_screens(app), app.cfg.zones.gap, app.cfg.workspaces_remember_places);
+    let (mut screens, gap, places) = (job_screens(app), app.cfg.zones.gap, app.cfg.workspaces_remember_places);
+    // A tiled screen's tree changes with every open and close, so a zone number from it
+    // would point elsewhere later: its windows are saved by their place (D568).
+    for s in screens.iter_mut().filter(|s| snap::is_tiled(&s.id)) {
+        s.layout = None;
+    }
     let removes = app.cfg.workspaces_update_removes_closed;
     CaptureJob { owner: app.hwnd.0 as isize, screens, gap, exclude, places, removes }
 }

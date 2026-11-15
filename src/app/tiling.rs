@@ -52,10 +52,8 @@ pub(super) fn set_tiling(
     let wait = TilingWait { screen, on, family, reply };
     match snap::tiling_desktop().filter(|_| tracked) {
         Some(desktop) => apply(app, wait, &desktop),
-        None => {
-            app.tiling_wait.push(wait);
-            crate::tiler::look();
-        }
+        None if crate::tiler::look() => app.tiling_wait.push(wait),
+        None => answer(wait.reply, refused("Seam couldn't start smart tiling")),
     }
 }
 
@@ -65,17 +63,35 @@ pub(super) fn tiling_events(app: &mut App) -> bool {
     if !snap::tiling_events() {
         return false;
     }
-    let desktop = snap::tiling_desktop().filter(|_| !app.tiling_wait.is_empty());
-    if let Some(desktop) = desktop {
-        for wait in std::mem::take(&mut app.tiling_wait) {
-            apply(app, wait, &desktop);
+    if !app.tiling_wait.is_empty() {
+        let looked = crate::tiler::take_looked();
+        match snap::tiling_desktop() {
+            Some(desktop) => {
+                for wait in std::mem::take(&mut app.tiling_wait) {
+                    apply(app, wait, &desktop);
+                }
+            }
+            // The worker looked and couldn't tell, as on a desktop with no windows yet.
+            None if looked => {
+                for wait in std::mem::take(&mut app.tiling_wait) {
+                    answer(wait.reply, refused(NO_DESKTOP));
+                }
+            }
+            None => {}
         }
     }
     publish(app);
     true
 }
 
+/// Why a setting can't be made while the desktop in front isn't known.
+const NO_DESKTOP: &str = "Seam can't tell which virtual desktop is in front. Click a window on it and try again";
+
 fn apply(app: &mut App, wait: TilingWait, desktop: &str) {
+    // An empty id is only for a Windows with no desktops; it is never stored otherwise.
+    if desktop.is_empty() && crate::tiler::has_desktops() {
+        return answer(wait.reply, refused(NO_DESKTOP));
+    }
     let Some(desk) = app.cfg.desks.get_mut(&app.sig) else {
         return answer(wait.reply, refused("This desk isn't saved yet"));
     };

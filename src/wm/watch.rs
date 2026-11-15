@@ -279,8 +279,10 @@ impl Wm {
             EVENT_SYSTEM_MOVESIZEEND => self.moved(h),
             EVENT_SYSTEM_MINIMIZESTART | EVENT_SYSTEM_MINIMIZEEND => {
                 let key = h.0 as isize;
-                // A tiled window leaves its tile as it minimizes, and takes a share again once restored and settled.
-                if self.tiling && crate::tiler::is_tiled(key) {
+                // A tiled window leaves its tile as it minimizes, and takes a share again once
+                // restored and settled. Not during a workspace switch, which minimizes and
+                // restores windows of its own (D564).
+                if self.tiling && crate::tiler::is_tiled(key) && !crate::switcher::switching() {
                     if event == EVENT_SYSTEM_MINIMIZESTART {
                         crate::tiler::left(key, true);
                     } else {

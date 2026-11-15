@@ -6,7 +6,7 @@
 
 **Line up your screens on Windows 11, then put your windows where you want them.**
 
-Seam makes the pointer cross exactly where your screens physically meet, snaps windows into zones, and saves your window layouts as workspaces you switch with one shortcut. It is a small tray app for Windows 11 on x64 and ARM64.
+Seam makes the pointer cross exactly where your screens physically meet, snaps windows into zones and stacks, can tile new windows for you, shows every window at once in an overview, and saves your window layouts as workspaces you switch with one shortcut. It is a small tray app for Windows 11 on x64 and ARM64.
 
 [![Latest release](https://img.shields.io/github/v/release/F3NN3X/seam?style=flat-square&cacheSeconds=3600)](https://github.com/F3NN3X/seam/releases/latest)
 [![CI](https://github.com/F3NN3X/seam/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/F3NN3X/seam/actions/workflows/ci.yml)
@@ -26,6 +26,9 @@ Seam makes the pointer cross exactly where your screens physically meet, snaps w
 - [Features](#features)
   - [Pointer and borders](#pointer-and-borders)
   - [Zones](#zones)
+  - [Stacks](#stacks)
+  - [Smart tiling](#smart-tiling)
+  - [Overview](#overview)
   - [Window control](#window-control)
   - [Pins and borders](#pins-and-borders)
   - [Workspaces](#workspaces)
@@ -81,13 +84,10 @@ Pick a layout for each screen (Columns, Rows, Grid, Priority, Main + stack or St
 - **Zones on** turns drag snapping on or off.
 - **Tile this screen's windows** (a shortcut with no key until you set one, **Tile windows** in the tray menu, or `screen.tile` in the API) puts the loose windows on a screen into its zones at once. The focused window, or the one you used last, takes the biggest zone, and each of the others takes the nearest free one. A screen with no layout is given one for the number of windows: two columns, Main + stack, the 2x2 grid, then 3x2 and 3x3. It takes up to nine windows, keeps windows that are already in a zone where they are, and leaves alone pinned and sticky windows, minimized ones, and those of apps running as administrator. A notification offers **Undo** for 8 seconds, which puts each window back and takes away a layout the tile picked.
 - **Quick layout** (a shortcut with no key until you set one, or `zones.quick` in the API) opens a small panel on the screen under the pointer with its layouts as numbered thumbnails: the built-in ones, the custom layouts for that screen, then None. Press 1 to 9, or the arrows and Enter, to pick one as clicking its tile on the Zones page does. **Ctrl+Z** undoes the last pick made there, **Esc** or a click outside closes it, and the panel stays open after a pick so you can try another.
-- **Show overview** (a shortcut with no key until you set one, **Overview** in the tray menu, or `overview.show` in the API) fills every screen with the windows on it, each with a live preview or its app's icon, those on other virtual desktops under their desktop's name. Type to search by title or app, pick one with the arrows or the mouse, and press Enter or click to go to it, on whichever desktop it is. Drag a window onto a zone, or onto another screen with no zones, to move it there. **Esc** closes it.
 - Both keys, the **gap** between zones, and whether a window gets its old size back when you drop it outside a zone are on the Zones page.
 - **Swap with the window already in a zone** (on by default) makes a window you drop on a zone another snapped window holds trade places with it: that window takes the dropped window's old zone, or its old spot if it was loose. Turn it off and they overlap as before. A window that runs as administrator or isn't responding stops the swap.
 - While zones show, the lit zone is exactly where the window lands, and grey outlines show where any window it pushes aside goes. Until you let go, **scroll the mouse wheel** to step through the whole zone, 1/2, 1/3, 2/3, the zone with its neighbour, and the whole screen; it stops at either end. A share sits on the side of the zone nearest the pointer and follows it. **Right-click** drops the window where you let go, without a zone. The keys do the same: **Tab** steps through the zone, the zone with its neighbour on the side the pointer leans to, and the whole screen (**Shift+Tab** goes back, unless Shift is your show key; with Alt held, Tab is Windows' Alt+Tab). **1**, **2** and **3** give the window a half, a third or two thirds of that span and **0** all of it, with the **arrows** picking the side. A part splits the zone in two: the rest becomes a zone, a window that held it moves there, the layout is saved as Custom, and a notification offers **Undo** for 8 seconds. With several windows there, it swaps as usual instead. **Esc** drops the window where you let go, without a zone. Other keys, clicks and moves reach your apps, and the wheel, the right button and those keys are only Seam's while zones show.
 - **Snap beside a window** (on by default): while zones show, point at the edge of another window and the drop puts the two side by side, the dragged window taking half of that window's place on that side and the other window the rest. The wheel, or **1**, **2** and **3**, make the share 1/2, 1/3 or 2/3. On a screen with zones it splits the zone that window holds (or the zone under the pointer), the layout is saved as Custom, and a notification offers **Undo** for 8 seconds. On a screen with no zones the two become a group, kept until Seam restarts: dragging the edge between them resizes both, the gap has a handle, and a third window dropped beside one of them joins. A window you drag away, minimize, maximize or close leaves its group. The middle of a held zone still swaps, and windows running as administrator are never a target.
-- **Smart tiling**, off by default: turn on **Arrange new windows automatically** for a screen on Zones, and each window that opens there takes a share of it, on the virtual desktop you are on. **Smart** splits the largest window's space along its longer side; **Columns**, **Main + stack** and **Grid** share the screen evenly. A window that can't shrink to its share joins a stack, closing or minimizing one lets the others fill the gap, and dragging, S and the gap handles work as with any zones. Dialogs, fixed-size windows, apps under Left alone, apps a rule places or marks **Leave out of smart tiling** float. A window you drag out floats where you drop it and the others close up; one moved another way floats where it is and is never moved back. Win+D keeps the arrangement for the windows to come back to, for 30 seconds if none comes back. **Float or tile this window** takes one out or puts it back, and **Free all windows** in the tray menu puts every window back where it was before. Each virtual desktop keeps its own arrangement.
-- **Stacks** put several windows in one zone, one on top. Press **S** while zones show in a drag and the drop stacks the window on the one in the zone instead of swapping (S again swaps). While you use a window of the stack, a slim row of bars at the bottom of the zone shows how many windows it holds, the top one brighter. **Next window in stack** and **Previous window in stack** (shortcuts with no key until you set them, `window.stack_cycle` in the API, or the Stream Deck's Cycle stack key) put another one on top. The others wait behind it in the same zone, so Alt+Tab and the taskbar still reach them, and the one you click is on top. A window you drag out, close, minimize, maximize or move or swap to another zone with a key leaves its stack. A swap by dragging, an edge or a divider moves the whole stack, the hidden windows once you let go. A notification offers **Undo** for 8 seconds after a drop makes a stack. Workspaces keep their stacks, and a restart of Seam finds them again.
 - **Fit group to screen** (a shortcut with no key until you set one, or `window.fit` in the API) stretches the focused window's group over its screen's work area, keeping each window's share and order. A window in zones already fills its screen, and a window in no group takes the whole work area without being maximized. A notification offers **Undo** for 8 seconds.
 - **Pause to snap** (off by default) shows the zones when you hold the pointer still for a moment while dragging, with no key. **Show keys while dragging** (off by default) puts a strip at the bottom of the screen naming the wheel, right-click and those keys.
 - **Edit layout** makes your own layout: split a zone side by side or top and bottom, drag a divider (it snaps to quarters and thirds), merge two neighbours, then press **Done**. Esc throws the changes away and Ctrl+Z undoes the last one. A layout can have up to 128 zones.
@@ -108,6 +108,47 @@ Pick a layout for each screen (Columns, Rows, Grid, Priority, Main + stack or St
 **Where apps open**, at the bottom of the Zones page, puts an app's window in a place whenever it opens, with or without a workspace. **Add an app**, pick its screen and a zone (or the full screen), and the next window of that app goes there once, a moment after it opens. **Put apps in place when they open** on Workspaces handles the workspace in use, and when that workspace has a row for an app, it owns every window of that app and the rule doesn't apply to it, whether or not that switch is on. Dialogs, apps that run as administrator and apps listed under **Left alone** are never moved, and a rule whose screen isn't connected does nothing. **...**, **Keep on top** on an app's row also pins its windows on top, with the same pin and border as one you make by hand, and **Keep out of workspace switches** gives them the sticky pin. Choose **Doesn't move** as its place to only pin it. A rule pins a window once, when it opens or when you make the rule while the app is open (and again on resume after a pause), so **Release pinned windows** works: the window stays released until you open it again, or the rule is made anew or gains a pin. **Left alone** is the list of apps Seam never manages.
 
 Windows 11 shows its own snap layouts when you drag a window to the top of the screen. Seam leaves that alone. To turn it off, go to **Settings > System > Multitasking** and switch off "Show snap layouts when I drag a window to the top of my screen".
+
+### Stacks
+
+A stack puts several windows in one zone, one on top, and a key brings the next one forward.
+
+- **Make one by dragging.** Press **S** while zones show in a drag, and the drop stacks the window on the one in the zone instead of swapping with it. Press S again to swap after all. A notification offers **Undo** for 8 seconds. `window.stack` does it from the API.
+- **Cycle through it.** **Next window in stack** and **Previous window in stack** put another window on top. They have no key until you set one. `window.stack_cycle` in the API and the Stream Deck's **Cycle stack** key do the same.
+- **The mark.** While you use a window of the stack, a slim row of bars at the bottom of the zone shows how many windows it holds, with the top one brighter.
+- **Nothing is hidden from Windows.** The other windows wait behind the top one, at the same size, so Alt+Tab and the taskbar still reach them. The one you click comes to the top.
+- **Leaving a stack.** A window you drag out, close, minimize or maximize leaves its stack, as does one you move or swap to another zone with a key. A stack of one is no stack.
+- **Moving a stack.** A swap by dragging moves the whole stack. So does dragging a zone's edge or a divider: the top window follows live, and the others follow when you let go. The drag stops where a window behind can't get any smaller.
+- **Kept.** Workspaces keep their stacks, with the same window on top, and a restart of Seam finds them again. Windows running as administrator can't join one.
+
+### Smart tiling
+
+**Arrange new windows automatically**, a row for each screen on the Zones page, tiles the windows you open there. It's off on every screen and virtual desktop until you turn it on, and it needs zones on.
+
+- **How it shares the screen.** Pick a family:
+  - **Smart** gives a new window a share of the largest window's space, split along its longer side.
+  - **Columns**, **Main + stack** and **Grid** share the screen evenly in that shape. Main + stack keeps the main window's share when you drag its handle.
+- **Gaps close.** A window you close leaves a gap the others fill. A minimized window's space waits 600 ms, then closes too, and restoring the window gives it its space back, or a share. Windows minimized together, as by Win+D, keep their spaces until they come back, or for 30 seconds with none back.
+- **Too big for its share.** A window that can't shrink that far joins a stack in that space, and gets a share of its own once there's room.
+- **Dragging works as with any zones.** Drop in the middle of a window to swap, or press S to stack. Drop on its edge to split its space, and drag a gap's handle to resize both sides.
+- **It never fights you.** A window you drag away floats where you drop it, and the others fill its space. So does one you move with Win+arrow keys or resize by hand, one its app moves, and one a workspace switch moves: it floats where it is and is never moved back. Saving a workspace floats nothing.
+- **What always floats:** dialogs, small helper windows, windows that can't be resized, apps under **Left alone**, windows a workspace or an app rule places, and apps whose rule on **Where apps open** has **Leave out of smart tiling**.
+- **Float or tile this window** takes the focused window out of tiling, or puts it back in. It has no key until you set one.
+- **Free all windows**, in the tray menu or on its own shortcut, turns tiling off on that screen and puts every window back where it was before it was tiled. It has no Undo.
+- **When nothing moves.** Nothing moves while Seam is paused or steps aside for a full-screen app, while zones are off, or during a workspace switch. The gaps close afterwards, and windows that opened during a switch are tiled once it ends, except those the switch placed.
+- **Per virtual desktop.** Each virtual desktop keeps its own arrangement, so tiling one never moves windows on another. A restart of Seam tiles the windows again. **Save from windows** keeps an arrangement as a layout.
+- **In the API:** `tiling.set`, `tiling.free`, and `tiling` in the state.
+
+### Overview
+
+**Show overview** fills every screen with the windows on it, so you can find one and go to it. It opens on its shortcut (no key until you set one), from **Overview** in the tray menu, or with `overview.show` in the API.
+
+- **What it shows.** Each window has a live preview, or its app's icon when it's minimized or on another virtual desktop. Windows on other desktops are grouped under their desktop's name.
+- **Find a window.** Type to search by title or app name, pick one with the arrows, Tab, Home and End or the mouse, and press Enter or click to go to it. A window on another desktop takes Windows to that desktop.
+- **Move a window.** Drag a window onto a zone to snap it there, or onto another screen with no zones to centre it there. A tiled window you move this way floats, and its neighbours close the gap.
+- **What it can't move.** Windows on other virtual desktops: Windows only lets an app move its own windows between desktops. Windows running as administrator can't be moved either. The overview says why in place of its hint, and a drop that can't be made changes nothing.
+- **Busy apps.** A window that isn't responding is listed with "Not responding". You can go to it, and the overview never waits on it.
+- **Closing it.** **Esc**, a click in another app, or Enter on a window that has closed in the meantime closes it, and the focus goes back to the window you were using.
 
 ### Window control
 
@@ -209,7 +250,10 @@ Shortcuts work anywhere in Windows, even with the Seam window closed. Each has i
 - **Open Seam...** opens the Seam window, which holds the other settings.
 - **Pause Seam** pauses everything Seam does, and then reads **Resume Seam**.
 - **Line Up Screens...** calibrates.
+- **Overview** shows every window on every screen.
 - **Workspaces** switches to a workspace on this desk. It's only shown when the desk has some.
+- **Tile windows** puts the loose windows on a screen into its zones, with a submenu of screens when you have several.
+- **Free all windows** turns smart tiling off on a screen and puts its windows back. It's only shown while a screen is tiled.
 - **Remap pointer at borders** pauses or resumes the hook.
 - **Release pinned windows** takes back every pin and focus border Seam set.
 - **Quit Seam** closes Seam.
@@ -326,13 +370,13 @@ In `%APPDATA%\Seam`: `config.json` holds your settings, desks, layouts and works
 They have no window to save, so a capture leaves them out. If one is in a workspace, the editor shows "Running in background" instead of "Not running", and it doesn't count as moved. A switch reports it as running in the background rather than missing.
 
 **Does Seam replace PowerToys FancyZones or komorebi?**
-It overlaps with them, and it's built to coexist. Seam's zones work like FancyZones for drag snapping, and its workspaces restore your windows, but its main job is the pointer crossing between screens of different sizes, which neither does. It is not a tiling window manager like komorebi. If komorebi, GlazeWM or LeopardWM is running, Seam notices and leaves placing windows to it, and keeps the pointer remap, Line Up, workspaces, focus keys and pins working. If you run FancyZones too, give the Shift key to only one of them.
+It overlaps with them, and it's built to coexist. Seam's zones work like FancyZones for drag snapping, and its workspaces restore your windows, but its main job is the pointer crossing between screens of different sizes, which neither does. Its [smart tiling](#smart-tiling) is opt-in per screen and arranges only new windows, on top of zones. It is not a full tiling window manager like komorebi. If komorebi, GlazeWM or LeopardWM is running, Seam notices and leaves placing windows to it, and keeps the pointer remap, Line Up, workspaces, focus keys and pins working. If you run FancyZones too, give the Shift key to only one of them.
 
 **Does Seam use the network?**
 No, with one exception: the update check, which asks GitHub for the latest release (`api.github.com`, and downloads from `github.com`). It runs about once a day, and you can turn it off. The Store build leaves updating to the Store. The tray never touches the network, and the local API is a per-user pipe on your PC.
 
 **How do I uninstall it?**
-Use **Settings > Apps > Installed apps**. The installer's uninstaller asks whether to remove your settings. Uninstalling the Store version removes them. For the portable zip, turn off **Start with Windows** on General, quit Seam, delete the two exes, and delete `%APPDATA%\Seam` if you want your settings gone. The screen arrangement Seam aligned stays as it is, and you can change it in Display settings.
+Use **Settings > Apps > Installed apps**. The installer's uninstaller asks whether to remove your settings. Uninstalling the Store version removes them. For the portable zip, turn off **Start with Windows** on General, quit Seam and any assistant using `seam-mcp.exe`, delete the three exes, and delete `%APPDATA%\Seam` if you want your settings gone. The screen arrangement Seam aligned stays as it is, and you can change it in Display settings.
 
 **Will Seam open my apps for me when I sign in?**
 Only if you ask. Set **When I sign in** on General to **Offer my last session** or **Open a workspace**. With **Ask first** on, nothing starts without your click. See [When you sign in](#when-you-sign-in).
@@ -349,7 +393,8 @@ Yes, through the [local API](docs/api.md), which is what the Stream Deck plugin 
 | Shift+Win+Alt+arrows | Move the focused window that way on the desk |
 | Ctrl+Shift+Alt+arrows | Focus the window that way |
 | Shift (while dragging) | Show the zones. Add Ctrl to cover several zones |
-| None until you set one | **Pause Seam**, swap, grow, shrink, two thirds, tile, next and previous zone, the three pin keys, one capture key, **Snap back to this workspace**, **Switch back to the previous workspace**, **Save windows to the active workspace**, **Focus on this window**, **Spotlight**, and one key per workspace |
+| S (while zones show in a drag) | Stack the window on the one in the zone instead of swapping |
+| None until you set one | **Pause Seam**, **Show overview**, swap, grow, shrink, two thirds, tile, **Quick layout**, **Fit group to screen**, **Size menu**, next and previous zone, **Next window in stack**, **Previous window in stack**, **Float or tile this window**, **Free all windows**, the three pin keys, one capture key, **Snap back to this workspace**, **Switch back to the previous workspace**, **Save windows to the active workspace**, **Focus on this window**, **Spotlight**, and one key per workspace |
 
 Set these on the Shortcuts page. Ctrl+Shift+Alt plus a number is a good choice for workspaces, since Ctrl+Alt alone types characters on many keyboards.
 
@@ -382,7 +427,7 @@ The hook runs on its own high-priority thread, so UI work can never delay mouse 
 
 ## Debug log
 
-Turn on **Debug log** on General, run `seam.exe --log`, or set `SEAM_LOG=1`, to append to `%APPDATA%\Seam\seam.log`: monitors, resolved borders, every remap with its time in the hook, a once-a-minute line timing all hook events (with histograms of Seam's own time and of other apps' hooks, and counts over 1 ms), hook install and removal, display changes, and arrangement results. Quit any running Seam first, because a second launch only opens the window of the first one. Logging is off by default, and then adds only an atomic load to the hook.
+Turn on **Debug log** on General, run `seam.exe --log`, or set `SEAM_LOG=1`, to append to `%APPDATA%\Seam\seam.log`: monitors, resolved borders, every remap with its time in the hook, a once-a-minute line timing all hook events (with histograms of Seam's own time and of other apps' hooks, and counts over 1 ms), hook install and removal, display changes, and arrangement results. With smart tiling on, it also counts windows placed twice or moved after you placed them, and the overview logs how long it took to first show. Quit any running Seam first, because a second launch only opens the window of the first one. Logging is off by default, and then adds only an atomic load to the hook.
 
 ## Building from source
 
@@ -392,7 +437,7 @@ On Windows with Rust installed:
 cargo build --release
 ```
 
-This builds the tray app, `target\release\seam.exe`. To include the settings panel, run `cargo build --release --workspace`, which also needs CMake and the Visual Studio C++ tools. Keep `seam-settings.exe` next to `seam.exe`.
+This builds the tray app, `target\release\seam.exe`. To include the settings panel and the MCP server, run `cargo build --release --workspace`, which also needs CMake and the Visual Studio C++ tools. Keep `seam-settings.exe` and `seam-mcp.exe` next to `seam.exe`.
 
 - To build the Store package, see [`packaging/README.md`](packaging/README.md).
 - To cross-compile from Linux, use `./build-cross.sh`. It needs `mingw-w64` and Rust's library sources for `-Zbuild-std`.
@@ -407,6 +452,8 @@ This builds the tray app, `target\release\seam.exe`. To include the settings pan
 - Apps that restore their own positions when they start may move after Seam places them. Seam places a window once and doesn't fight the app.
 - Workspaces open one folder per Explorer window and one page per browser window, with **Remember folders and pages** on. They don't restore a browser's other tabs or open documents.
 - Close only asks. Apps with unsaved work will prompt, and those windows stay open.
+- The overview can't move a window to another virtual desktop, because Windows' public interface only lets an app move its own windows there. It can take you to that desktop.
+- Smart tiling and stacks leave windows of apps running as administrator alone, since Seam can't move or mark them.
 - The tray icon is drawn at runtime.
 
 ## License

@@ -1065,7 +1065,7 @@ Needs a pre-release tag such as `v0.5.0-beta.1` pushed to my repo, so `release.y
 
 - [ ] **Assets.** The draft holds `Seam-Setup-X.Y.Z.exe`, `Seam-Setup-X.Y.Z-arm64.exe`, `seam-X.Y.Z-windows-x64.zip`, `seam-X.Y.Z-windows-arm64.zip`, `seam.exe`, `seam-settings.exe`, `seam-arm64.exe`, `seam-settings-arm64.exe`, `latest.json` and `latest.json.minisig`, and nothing else.
 - [ ] **Signature.** `minisign -Vm latest.json -P <key>` passes on the downloaded pair.
-- [ ] **Manifest.** `latest.json` has `files` with the x64 `seam.exe` and `seam-settings.exe` only, and `arches` with `x86_64` and `aarch64`. Every `sha256` matches its asset (`Get-FileHash`), and the `aarch64` entries name `seam-arm64.exe` and `seam-settings-arm64.exe` as `asset`.
+- [ ] **Manifest.** `latest.json` has `files` with the x64 `seam.exe` and `seam-settings.exe` only, and `arches` with `x86_64` and `aarch64`. Every `sha256` matches its asset (`Get-FileHash`), and the `aarch64` entries name `seam-arm64.exe` and `seam-settings-arm64.exe` as `asset`. `arches` holds exactly those two exes per build, and `seam-mcp.exe` is only under `optional` (`x86_64`, `aarch64`, with `seam-mcp-arm64.exe` as the ARM64 `asset`), so a 0.7.0 updater still accepts the manifest.
 - [ ] **Machine type.** `dumpbin /headers` on the ARM64 exes, from the zip and from the installed folder, says `AA64 machine (ARM64)`. The x64 ones say `8664 machine (x64)`.
 - [ ] **Zips.** Each zip holds `seam.exe`, `seam-settings.exe`, `README.md` and `LICENSE`, and its exes hash the same as that build's entries.
 - [ ] **Old updater.** A 0.4.0 x64 build with **Include pre-releases** on finds the pre-release, downloads the x64 exes, and installs it.

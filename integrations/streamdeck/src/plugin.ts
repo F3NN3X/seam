@@ -1,6 +1,7 @@
 import streamDeck from "@elgato/streamdeck";
 import { seam } from "./seam.js";
 import {
+	CycleStack,
 	LineUp,
 	NextZone,
 	PauseSeam,
@@ -39,6 +40,7 @@ streamDeck.actions.registerAction(new NextZone());
 streamDeck.actions.registerAction(new PreviousZone());
 streamDeck.actions.registerAction(new MoveWindow());
 streamDeck.actions.registerAction(new FocusWindow());
+streamDeck.actions.registerAction(new CycleStack());
 streamDeck.actions.registerAction(new PinOnTop());
 streamDeck.actions.registerAction(new ReleasePinned());
 streamDeck.actions.registerAction(new FocusOnThisWindow());

@@ -29,6 +29,14 @@ export class PreviousZone extends Plain {
 	}
 }
 
+/** Puts the next window of the focused window's stack on top. */
+@action({ UUID: "co.f3nn3x.seam.stack-cycle" })
+export class CycleStack extends Plain {
+	protected async press(): Promise<void> {
+		await seam.call("window.stack_cycle", { dir: "next" });
+	}
+}
+
 /** Pins the focused window on top, or unpins it. State doesn't say which window is pinned, so the key has one look. */
 @action({ UUID: "co.f3nn3x.seam.pin-top" })
 export class PinOnTop extends Plain {

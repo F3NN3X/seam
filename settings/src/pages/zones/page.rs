@@ -548,7 +548,7 @@ fn tiling_card(panel: &Panel, number: usize, p: Palette, window: &mut Window, cx
     }
     rows.push(row(
         "Put windows back when Seam quits",
-        Some("Quit from the tray frees every tiled screen first. An update or a restart keeps the arrangement".into()),
+        Some("Quit from the tray frees every tiled screen, on every desktop, first. An update or a restart keeps the arrangement".into()),
         put_back,
         p,
     ));

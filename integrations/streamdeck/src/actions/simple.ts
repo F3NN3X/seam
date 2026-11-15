@@ -37,6 +37,14 @@ export class CycleStack extends Plain {
 	}
 }
 
+/** Moves every snapped window on the screen under the pointer to the next zone. */
+@action({ UUID: "co.f3nn3x.seam.rotate" })
+export class RotateWindows extends Plain {
+	protected async press(): Promise<void> {
+		await seam.call("screen.rotate");
+	}
+}
+
 /** Pins the focused window on top, or unpins it. State doesn't say which window is pinned, so the key has one look. */
 @action({ UUID: "co.f3nn3x.seam.pin-top" })
 export class PinOnTop extends Plain {

@@ -463,9 +463,14 @@ pub fn leaf_mins(tree: &Node, area: Rect, gap: i32, windows: &[(Vec<usize>, (i32
 
 /// A changed layout keeps its template while its tree is still the template's,
 /// and is Custom otherwise (decision 1). Either way it no longer follows a library layout.
-pub fn relabel(template: Template, tree: Node) -> ZoneLayout {
-    let same = zones::template_tree(template).is_some_and(|t| t == tree);
-    ZoneLayout { template: if same { template } else { Template::Custom }, custom: None, tree }
+/// A layout that changes remembers what it was cut from (`from`), through further changes.
+pub fn relabel(before: &ZoneLayout, tree: Node) -> ZoneLayout {
+    let same = zones::template_tree(before.template).is_some_and(|t| t == tree);
+    if same {
+        return ZoneLayout { template: before.template, custom: None, from: None, tree };
+    }
+    let from = before.from.clone().or_else(|| crate::library::layout_id(Some(before)).filter(|id| id != "none"));
+    ZoneLayout { template: Template::Custom, custom: None, from, tree }
 }
 
 /// Zones `lo` to `hi`, when they are one part of the tree, cut in two: `part` of it
@@ -531,7 +536,7 @@ pub fn pick_for_count(n: usize) -> Option<ZoneLayout> {
         5 | 6 => grid(3, 2),
         _ => grid(3, 3),
     };
-    Some(ZoneLayout { template: Template::Custom, custom: None, tree })
+    Some(ZoneLayout { template: Template::Custom, custom: None, from: None, tree })
 }
 
 /// How far two windows may overlap and still lie either side of a cut, as frames do.

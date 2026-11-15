@@ -49,8 +49,8 @@ pub use stacks::{
 };
 pub use swap::{WM_APP_SWAP_LOOK, look_ready};
 pub use tiled::{
-    is_tiled, take_tiling_refused, tiled, tiled_dragged, tiling_desktop, tiling_events, tiling_float, tiling_free,
-    tiling_free_for_quit, tiling_switch_ended,
+    Turned, is_tiled, take_tiling_refused, tiled, tiled_dragged, tiling_desktop, tiling_events, tiling_float,
+    tiling_free, tiling_free_for_quit, tiling_reset, tiling_restore, tiling_rotate, tiling_switch_ended,
 };
 
 /// A window the tray couldn't move, probably because it runs as administrator.
@@ -503,18 +503,24 @@ pub fn zoned() -> Vec<Zoned> {
 }
 
 /// Put windows where window control worked out, one after another. A newer
-/// list replaces what is still waiting.
-pub fn place_all(list: Vec<Placement>) {
+/// list replaces what is still waiting. With `together`, a stack whose windows are all
+/// in the list, for the same zones, keeps its stack there.
+pub fn place_all(list: Vec<Placement>, together: bool) {
     with_engine(|e| {
+        if together {
+            e.stack_keep(&list);
+        }
         e.queued = list.into();
         e.saw.clear();
         e.window_pump();
     });
 }
 
-/// Add moves to the ones still waiting, which `place_all` would replace.
+/// Add moves to the ones still waiting, which `place_all` would replace. Only Undo
+/// does, and a stack it puts back whole stays one.
 pub fn place_more(list: Vec<Placement>) {
     with_engine(|e| {
+        e.stack_keep(&list);
         e.queued.extend(list);
         e.window_pump();
     });

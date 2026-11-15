@@ -29,6 +29,8 @@ use windows::Win32::UI::WindowsAndMessaging::*;
 mod fromwindows;
 #[path = "regroup.rs"]
 mod regroup;
+#[path = "rotate.rs"]
+mod rotate;
 #[path = "tile.rs"]
 pub mod tile;
 
@@ -51,6 +53,10 @@ pub enum Task {
     FromWindows(tile::At),
     /// A layout picked on the Zones page, which the screen's snapped windows follow.
     Pick(Box<tile::Pick>),
+    /// Rotate windows: every window in the screen's zones takes the next zone, or the previous one.
+    Rotate(tile::At, bool),
+    /// Reset sizes: the screen goes back to the layout it came from, and its windows follow.
+    Reset(Box<tile::Pick>),
 }
 
 /// One window command, with what the worker needs to know about the desk.
@@ -84,6 +90,8 @@ struct Planned {
     layout: Option<(String, ZoneLayout, Option<regroup::Given>)>,
     /// What a tile did.
     tile: Option<tile::Done>,
+    /// Every window of a stack goes to the same zone, so it keeps its stack there.
+    together: bool,
     /// The id of the library layout Save from windows made, which the layout brings into the library.
     fresh: Option<String>,
     reply: Option<Sender<Reply>>,
@@ -99,8 +107,11 @@ static PLANNED: Mutex<Option<Planned>> = Mutex::new(None);
 static DRAGGED: Mutex<Vec<(String, ZoneLayout, Vec<snap::Zoned>)>> = Mutex::new(Vec::new());
 /// What the last split by a drag's keys did, for its notice and Undo once its layout is saved.
 static SPLIT: Mutex<Option<tile::Done>> = Mutex::new(None);
-/// Why a tile with no API client waiting did nothing. It has its own place, so it can't cancel a move waiting in PLANNED.
-static NOTE: Mutex<Option<String>> = Mutex::new(None);
+/// A notice's title and why nothing happened.
+pub type Refusal = (&'static str, String);
+/// What a tile, a rotation or a reset with no API client waiting did nothing for. It has
+/// its own place, so it can't cancel a move waiting in PLANNED.
+static NOTE: Mutex<Option<Refusal>> = Mutex::new(None);
 
 fn answer(reply: Option<Sender<Reply>>, result: Reply) {
     if let Some(tx) = reply {
@@ -133,7 +144,7 @@ pub fn start(job: Job) {
 /// a group command's layout, which is what its windows move to, is the one that stays.
 /// A tile answers with what it did, or with why it did nothing when no API client is
 /// waiting to be told. `save`'s flag says the layout is new to the library, from Save from windows.
-pub fn planned(mut save: impl FnMut(&str, ZoneLayout, bool) -> bool) -> Option<Result<tile::Done, String>> {
+pub fn planned(mut save: impl FnMut(&str, ZoneLayout, bool) -> bool) -> Option<Result<tile::Done, Refusal>> {
     let dragged = std::mem::take(&mut *DRAGGED.lock().unwrap_or_else(|e| e.into_inner()));
     for (screen, layout, moved) in dragged {
         // A divider of an ad-hoc group: the group keeps its tree in memory, and nothing is saved.
@@ -168,10 +179,13 @@ pub fn planned(mut save: impl FnMut(&str, ZoneLayout, bool) -> bool) -> Option<R
     }
     // An empty list would clear window control's moves still waiting.
     if !plan.list.is_empty() {
-        snap::place_all(plan.list);
+        snap::place_all(plan.list, plan.together);
     }
     let done = plan.tile;
-    let counts = done.as_ref().filter(|d| !d.pick).map(|d| json!({ "ok": true, "tiled": d.tiled, "left": d.left }));
+    let counts = done.as_ref().filter(|d| !d.pick).map(|d| match d.turn {
+        Some(_) => json!({ "ok": true, "moved": d.tiled, "left": d.left }),
+        None => json!({ "ok": true, "tiled": d.tiled, "left": d.left }),
+    });
     let made = plan.fresh.map(|id| json!({ "ok": true, "id": id }));
     answer(plan.reply, Ok(counts.or(made).unwrap_or_else(|| json!({ "ok": true }))));
     done.map(Ok)
@@ -246,6 +260,8 @@ fn work() {
             Task::Tile(at) => tile::run(&job, *at),
             Task::FromWindows(at) => fromwindows::run(&job, *at),
             Task::Pick(pick) => tile::pick(&job, pick),
+            Task::Rotate(at, forward) => rotate::run(&job, *at, *forward),
+            Task::Reset(pick) => tile::reset(&job, pick),
         };
         let planned = match outcome {
             Ok(Outcome::Place(list)) => Ok(Some((list, None, None, None))),
@@ -267,7 +283,8 @@ fn work() {
         match planned {
             Ok(None) => answer(reply, Ok(json!({ "ok": true }))),
             Ok(Some((list, layout, tile, fresh))) => {
-                let plan = Planned { list, layout, tile, fresh, reply, at: Instant::now() };
+                let together = matches!(job.task, Task::Rotate(..) | Task::Reset(_));
+                let plan = Planned { list, layout, tile, together, fresh, reply, at: Instant::now() };
                 let earlier = PLANNED.lock().unwrap_or_else(|e| e.into_inner()).replace(plan);
                 if let Some(earlier) = earlier {
                     replaced(earlier.reply);
@@ -283,10 +300,18 @@ fn work() {
                     Task::Tile(_) => log::info!("tile screen: {why}"),
                     Task::FromWindows(_) => log::info!("save from windows: {why}"),
                     Task::Pick(_) => log::info!("zones pick: {why}"),
+                    Task::Rotate(..) => log::info!("rotate windows: {why}"),
+                    Task::Reset(_) => log::info!("reset sizes: {why}"),
                 }
-                // A tile from a key or the tray has nobody to answer, so the screen is told.
-                if matches!(job.task, Task::Tile(_)) && reply.is_none() {
-                    *NOTE.lock().unwrap_or_else(|e| e.into_inner()) = Some(why);
+                // A tile, a rotation or a reset from a key or the tray has nobody to answer, so the screen is told.
+                let title = match job.task {
+                    Task::Tile(_) => Some("Tile windows"),
+                    Task::Rotate(..) => Some("Rotate windows"),
+                    Task::Reset(_) => Some("Reset sizes"),
+                    _ => None,
+                };
+                if let (Some(title), None) = (title, &reply) {
+                    *NOTE.lock().unwrap_or_else(|e| e.into_inner()) = Some((title, why));
                     unsafe {
                         let _ = PostMessageW(Some(hwnd_of(job.owner)), WM_APP_WINDOW, WPARAM(0), LPARAM(0));
                     }

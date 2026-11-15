@@ -273,6 +273,8 @@ struct State {
     details_next: usize,
     /// The first half of a typed character outside the BMP, waiting for its second.
     surrogate: Option<u16>,
+    /// Wheel turns over a label not yet worth a jump, in WHEEL_DELTA units.
+    wheel: i32,
 }
 
 impl State {

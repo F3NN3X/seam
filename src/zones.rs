@@ -76,13 +76,17 @@ pub struct ZoneLayout {
     /// Left out when there is none, and an older Seam ignores it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub custom: Option<String>,
+    /// The template or library layout this one was cut from, kept through changes to its
+    /// tree, for Reset sizes. Cleared by picking a layout. An older Seam drops it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub from: Option<String>,
     pub tree: Node,
 }
 
 impl ZoneLayout {
     /// The layout a template stands for. `None` and `Custom` have no tree of their own.
     pub fn of(template: Template) -> Option<ZoneLayout> {
-        template_tree(template).map(|tree| ZoneLayout { template, custom: None, tree })
+        template_tree(template).map(|tree| ZoneLayout { template, custom: None, from: None, tree })
     }
 }
 
@@ -372,6 +376,31 @@ pub fn snap_ratio(ratio: f32) -> f32 {
     near.unwrap_or(ratio).clamp(0.1, 0.9)
 }
 
+/// Whether two trees cut the screen the same way, whatever their ratios.
+pub fn same_shape(a: &Node, b: &Node) -> bool {
+    match (a, b) {
+        (Node::Leaf(_), Node::Leaf(_)) => true,
+        (Node::Split { split: d, a: a1, b: b1, .. }, Node::Split { split: e, a: a2, b: b2, .. }) => {
+            d == e && same_shape(a1, a2) && same_shape(b1, b2)
+        }
+        _ => false,
+    }
+}
+
+/// How far apart the ratios of two trees of the same shape are: the squares of their
+/// differences, added. Infinite when the shapes differ.
+pub fn ratio_gap(a: &Node, b: &Node) -> f32 {
+    match (a, b) {
+        (Node::Leaf(_), Node::Leaf(_)) => 0.0,
+        (Node::Split { split: d, ratio: r, a: a1, b: b1 }, Node::Split { split: e, ratio: s, a: a2, b: b2 })
+            if d == e =>
+        {
+            (r - s).powi(2) + ratio_gap(a1, a2) + ratio_gap(b1, b2)
+        }
+        _ => f32::INFINITY,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -410,6 +439,17 @@ mod tests {
         let visible = Rect { x: 100, y: 100, w: 800, h: 600 }; // 7 px left/right/bottom, 0 top
         let got = frame_adjust(Rect { x: 0, y: 0, w: 960, h: 1040 }, window, visible);
         assert_eq!(got, Rect { x: -7, y: 0, w: 974, h: 1047 });
+    }
+
+    #[test]
+    fn trees_are_told_by_their_cut_and_then_by_their_ratios() {
+        let (columns, rows) = (template_tree(Template::Columns).unwrap(), template_tree(Template::Rows).unwrap());
+        let priority = template_tree(Template::Priority).unwrap();
+        assert!(same_shape(&columns, &priority) && !same_shape(&columns, &rows));
+        assert!(!same_shape(&columns, &Node::Leaf(LeafTag::Leaf)));
+        assert_eq!(ratio_gap(&columns, &columns), 0.0);
+        assert!(ratio_gap(&columns, &priority) > 0.0);
+        assert!(ratio_gap(&columns, &rows).is_infinite());
     }
 
     #[test]

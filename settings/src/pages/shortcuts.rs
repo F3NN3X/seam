@@ -101,6 +101,12 @@ fn caption(action: &str) -> Option<&'static str> {
         "free_tiling" => Some("Stop smart tiling on the screen under the pointer, and put its windows back"),
         "stack_prev" => Some("Put the previous window of the focused window's stack on top"),
         "overview" => Some("Every window on every screen and desktop, to search and go to"),
+        "rotate" => {
+            Some("Move every snapped window on the screen under the pointer to the next zone. Shift added goes back")
+        }
+        "reset_sizes" => {
+            Some("Put the screen under the pointer back to the layout it came from, or even out its tiles")
+        }
         _ => None,
     }
 }
@@ -192,6 +198,8 @@ pub fn render(panel: &mut Panel, _: &mut Window, cx: &mut Context<Panel>) -> imp
         row("Float or tile this window", "float_tile", keys.float_tile.as_ref(), 980),
         row("Free all windows", "free_tiling", keys.free_tiling.as_ref(), 981),
         row("Show overview", "overview", keys.overview.as_ref(), 990),
+        row("Rotate windows", "rotate", keys.rotate.as_ref(), 991),
+        row("Reset sizes", "reset_sizes", keys.reset_sizes.as_ref(), 992),
     ]);
     window_rows.extend([
         row("Pin window on top", "pin_top", keys.pin_top.as_ref(), 17),

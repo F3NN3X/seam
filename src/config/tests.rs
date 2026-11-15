@@ -244,3 +244,24 @@ fn open_with_is_dropped_on_import_and_hidden_from_other_clients() {
     // The saved config, which the panel reads whole, still has it.
     assert_eq!(config["desks"]["a"]["workspaces"][0]["windows"][0]["open_with"], r"C:\x");
 }
+
+#[test]
+fn an_older_file_has_no_rotate_or_reset_key() {
+    let c: Config = serde_json::from_str(r#"{"hotkeys": {"overview": "Ctrl+Alt+O"}}"#).unwrap();
+    assert_eq!((c.hotkeys.rotate, c.hotkeys.reset_sizes), (None, None));
+    let set: Config = serde_json::from_str(r#"{"hotkeys": {"rotate": "Ctrl+Alt+R"}}"#).unwrap();
+    assert_eq!(set.hotkeys.rotate.as_deref(), Some("Ctrl+Alt+R"));
+}
+
+#[test]
+fn quitting_clears_tiling_for_every_freed_desktop_and_an_old_config_has_the_switch_off() {
+    let on = |ids: &[&str]| TileScreen { desktops: ids.iter().map(|d| d.to_string()).collect(), ..Default::default() };
+    let mut tiling = BTreeMap::from([("a".to_string(), on(&["d1", "d2"])), ("b".to_string(), on(&["d1"]))]);
+    clear_tiling(&mut tiling, &[("a".into(), "d1".into()), ("b".into(), "d1".into()), ("c".into(), "d1".into())]);
+    assert_eq!(tiling.get("a"), Some(&on(&["d2"])));
+    assert!(!tiling.contains_key("b"));
+    clear_tiling(&mut tiling, &[("a".into(), "d2".into())]);
+    assert!(tiling.is_empty());
+    let old: Config = serde_json::from_value(json!({ "zones": { "gap": 4 } })).unwrap();
+    assert!(!old.zones.tiling_free_on_quit);
+}

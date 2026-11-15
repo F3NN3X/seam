@@ -17,6 +17,7 @@ pub mod palette;
 pub mod stack;
 pub mod state;
 pub mod tiling;
+pub mod turn;
 pub mod updates;
 pub mod workspace;
 pub mod zones;

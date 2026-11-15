@@ -425,6 +425,12 @@ unsafe fn on_hotkey(id: i32) {
             HOTKEY_FREE_TILING => {
                 with_app(|a| tiling::free_tiling(a, None, None));
             }
+            id @ (HOTKEY_ROTATE | HOTKEY_ROTATE_BACK) => {
+                with_app(|a| turn::start_turn(a, Verb::Rotate, None, id == HOTKEY_ROTATE, None));
+            }
+            HOTKEY_RESET_SIZES => {
+                with_app(|a| turn::start_turn(a, Verb::Reset, None, true, None));
+            }
             HOTKEY_DIVIDER_MENU => {
                 if let Err(why) = snap::size_menu(GetForegroundWindow()) {
                     log::info!("size menu hotkey: {why}");
@@ -486,10 +492,19 @@ unsafe fn on_destroy() {
     unsafe {
         hook::enable(false);
         if with_app(|a| a.release_on_exit).unwrap_or(false) {
+            // One second for the whole quit: the pins and the tiled windows share it.
+            let until = Instant::now() + Duration::from_secs(1);
             wm::release_before_exit();
             // A quit the user asked for, the same signal as pins: not an update, a crash or a sign-out.
             if with_app(|a| a.cfg.zones.tiling_free_on_quit).unwrap_or(false) {
-                snap::tiling_free_for_quit(Duration::from_secs(1));
+                let freed = snap::tiling_free_for_quit(until);
+                // As Free all windows does: tiling is off there when Seam starts again.
+                with_app(|a| {
+                    if let Some(desk) = a.cfg.desks.get_mut(&a.sig) {
+                        seam::config::clear_tiling(&mut desk.tiling, &freed);
+                    }
+                    persist(a);
+                });
             }
         }
         snap::shutdown();

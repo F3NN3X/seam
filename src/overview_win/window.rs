@@ -188,8 +188,16 @@ fn on_wheel(wparam: WPARAM, lparam: LPARAM) -> LRESULT {
     let at = (lparam.0 as i16 as i32, (lparam.0 >> 16) as i16 as i32);
     with_state(|s| {
         if delta != 0 && s.drag.is_none() && s.label_at(at) {
-            s.jump(if delta < 0 { 1 } else { -1 });
-            redraw(s);
+            // A touchpad sends many small turns: one jump per full notch.
+            s.wheel += i32::from(delta);
+            let notches = s.wheel / 120;
+            s.wheel -= notches * 120;
+            if notches != 0 {
+                s.jump(if notches < 0 { 1 } else { -1 });
+                redraw(s);
+            }
+        } else {
+            s.wheel = 0;
         }
     });
     LRESULT(0)
@@ -532,6 +540,7 @@ fn run(spec: Spec, ready: std::sync::mpsc::Sender<()>) {
             names: HashMap::new(),
             details_next: 0,
             surrogate: None,
+            wheel: 0,
         };
         draw::register_thumbs(&mut state);
         state.search();

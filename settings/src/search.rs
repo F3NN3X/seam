@@ -385,6 +385,18 @@ const ENTRIES: &[Entry] = &[
         "Every window on every screen and desktop, to search and go to",
         "hotkey keyboard overview expose mission control all windows virtual desktop search switch preview",
     ),
+    entry(
+        Page::Shortcuts,
+        "Rotate windows",
+        "Move every snapped window on the screen under the pointer to the next zone. Shift added goes back",
+        "hotkey keyboard rotate cycle shift swap zones windows next previous tiling",
+    ),
+    entry(
+        Page::Shortcuts,
+        "Reset sizes",
+        "Put the screen under the pointer back to the layout it came from, or even out its tiles",
+        "hotkey keyboard reset sizes proportions changed layout template restore even tiling",
+    ),
     entry(Page::Shortcuts, "Pin window on top", "Global shortcut", "hotkey keyboard topmost always"),
     entry(Page::Shortcuts, "Keep window out of workspace switches", "Global shortcut", "hotkey keyboard sticky pin"),
     entry(Page::Shortcuts, "Release pinned windows", "Global shortcut", "hotkey keyboard unpin reset border"),

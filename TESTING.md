@@ -397,6 +397,27 @@ Columns on screen 1 with Notepad snapped in the middle zone, **Swap with the win
 - [ ] **No stacks beside.** On a screen with no zones, a snap-beside group: S during a drag changes nothing there and the drop groups as before.
 - [ ] **While paused.** Pause Seam: the bars go, and the keys are given back to the app. Resume: they come back.
 
+### Smart tiling desk gate
+
+Run this before a release that touches tiling. The debug log on, zones on, two virtual desktops, screen 1 with Columns as its own layout. Note `wm stats` and `tiling stats` lines as you go.
+
+- [ ] **Off by default.** On a fresh config, open and close ten windows: nothing moves, the log has no `tiling` line and no `wm: smart tiling` line, and `state.get` shows every screen in `tiling` with `on: false`. `config.json` has no `tiling` key.
+- [ ] **Turn it on.** On Zones, screen 1, turn on **Arrange new windows automatically**: `wm: smart tiling true` in the log, the row shows **How windows are arranged** with Smart chosen, and the screen's own Columns layout is still in `config.json`. Windows already open don't move.
+- [ ] **Smart.** Open Notepad on screen 1: it fills the work area. Open a second: they sit side by side. A third: it takes the lower half of the left one. A fourth: the lower half of the right one. Each line says `tiling: <app> takes zone n of m`, and each window moves once.
+- [ ] **Families.** Pick Columns, Main + stack and Grid in turn: the windows are laid out again in that shape, in the same order. Back to Smart.
+- [ ] **Close and minimize.** Close the third window: the left one grows back to full height, and nothing else moves. Minimize one: its neighbour fills its space. Restore it: it takes a share again.
+- [ ] **Floats.** Open a Save As dialog, the Run box, a fixed-size app such as Calculator's settings or an About box, an app under Left alone, an app with a rule that places it, and an app whose rule has **Leave out of smart tiling**: none is tiled, and each logs `tiling: ... floats (<why>)`.
+- [ ] **Too big.** Shrink the screen's share until an app with a large minimum width can't fit (Smart with six windows): it joins a stack in the largest space instead, the bars show, and closing two windows gives it a share of its own again.
+- [ ] **Hand edits are never undone.** Drag a tiled window loose and let go: it stays where you dropped it, its space stays empty, and `tiling: a tiled window was dragged out of its tile, so it floats` is in the log. Open a new window: it takes that space, and the dragged one doesn't move. Move another tiled window with Win+Left, then open a window: the moved one stays, and the log has `tiling desk gate: a tiled window moved since it was placed, so it floats where it is`. Maximize a tiled window, open another: the maximized one stays maximized.
+- [ ] **Dragging on a tiled screen.** Shift-drag a tiled window to the middle of another: they swap, both stay tiled. Press S during the drag: it stacks. Drop on another window's edge: its space splits. Drag the handle in a gap: both sides resize and stay tiled. `config.json`'s own layout for the screen doesn't change.
+- [ ] **Float or tile.** Record a key for **Float or tile this window**. Press it on a tiled window: it floats where it is, and the others close up. Press it again: it takes a share again.
+- [ ] **Free all.** Click **Free all windows** in the tray menu: every tiled window goes back to where it was when it opened, the switch on Zones is off, and a notice says how many went back. With a key recorded for it, the same from the key on the screen under the pointer.
+- [ ] **Per desktop.** Turn tiling on for screen 1 on desktop 1 only. Switch to desktop 2 and open windows there: they aren't tiled. Turn it on there too, open two: they tile, and desktop 1's windows didn't move (switch back and look). Close a window on desktop 1 while on desktop 2 via the taskbar's preview: on returning to desktop 1, the gap closes then.
+- [ ] **Restart.** With four tiled windows, quit and start Seam: they are tiled again in the same order, and windows on the other desktop are tiled again once you switch to it.
+- [ ] **Workspaces and layouts.** **Save from windows** on a tiled screen saves the arrangement as a layout. Capture a workspace: its rows hold the tiled windows' zones. A workspace switch's windows aren't tiled while it runs.
+- [ ] **Timings.** Open and close twenty windows quickly, and switch desktops a few times. Every `tiling stats` line has `max` under 2000 us, and no window is placed twice: no `placed twice refused` line, and each window has one `takes zone` line per open or restore.
+- [ ] **API.** `tiling.set` with `{"number":1,"family":"grid"}` answers `{"on":true,"family":"grid"}`; `{"number":9,"on":true}` answers `1`; with zones off, `{"on":true}` answers `3`. `tiling.free` on a screen with tiling off answers `3`. An assistant over MCP gets `Assistants can't do that` for both.
+
 ### Pull a window out of its zone
 
 Columns on screen 1 with three windows snapped, one to a zone (A, B, C from the left), the debug log on.

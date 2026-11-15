@@ -4,6 +4,10 @@ All notable changes to Seam. The format follows [Keep a Changelog](https://keepa
 
 ## [Unreleased]
 
+### Added
+
+- **Show every window**, a switch on each workspace, off by default. A window saved minimized comes back onto its place, or maximized, and counts as moved while it's minimized, so Snap back and auto-apply restore it.
+
 ### Fixed
 
 - **Undo of Tile or a layout pick maximizes again** the windows that were maximized before. Undo of a split does too.

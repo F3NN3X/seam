@@ -19,7 +19,9 @@ pub(super) fn place_rules(run: &Run, found: &[Option<isize>], which: &[usize], s
             continue;
         }
         // A screen that isn't connected, or a window to keep where it is, isn't moved.
-        let Some((geo, kind, note)) = destination(rule, &run.geos, h, run.size_mode, true) else { continue };
+        let Some((geo, kind, note)) = destination(rule, &run.geos, h, run.size_mode, true, ws.show_all) else {
+            continue;
+        };
         let app = app_name(rule);
         let pin = winutil::pin_bits(h);
         if stays(pin, run.pins_stay) {

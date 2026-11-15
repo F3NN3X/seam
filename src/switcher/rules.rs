@@ -147,7 +147,7 @@ pub fn place_by_rule(set: &AppRules, owner: Option<&Workspace>, hwnd: isize) -> 
     let geos = geometry(&set.screens, set.gap);
     let mut done = Vec::new();
     if rule.moves() && geos.iter().any(|g| g.id == rule.monitor) {
-        let moved = move_opened(h, rule, &geos, set.size_mode);
+        let moved = move_opened(h, rule, &geos, set.size_mode, false);
         // Stamped either way, so it's never placed again. No workspace has this key.
         winutil::set_ws_stamp(h, workspace::stamp_key("app_rule"), hit);
         done.push(if moved { "placed" } else { "already in place" });

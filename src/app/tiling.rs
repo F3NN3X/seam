@@ -63,6 +63,9 @@ pub(super) fn tiling_events(app: &mut App) -> bool {
     if !snap::tiling_events() {
         return false;
     }
+    if let Some(why) = snap::take_tiling_refused() {
+        notify(app, "Float or tile this window", &format!("That window can't be tiled: {why}"), BalloonAction::None);
+    }
     if !app.tiling_wait.is_empty() {
         let looked = crate::tiler::take_looked();
         match snap::tiling_desktop() {

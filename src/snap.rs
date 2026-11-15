@@ -46,7 +46,10 @@ pub use stacks::{
     stacks, stacks_found, take_joined,
 };
 pub use swap::{WM_APP_SWAP_LOOK, look_ready};
-pub use tiled::{is_tiled, tiled, tiled_dragged, tiling_desktop, tiling_events, tiling_float, tiling_free};
+pub use tiled::{
+    is_tiled, take_tiling_refused, tiled, tiled_dragged, tiling_desktop, tiling_events, tiling_float, tiling_free,
+    tiling_switch_ended,
+};
 
 /// A window the tray couldn't move, probably because it runs as administrator.
 pub const WM_APP_SNAP_BLOCKED: u32 = WM_APP + 14;
@@ -332,7 +335,8 @@ pub fn update(owner: HWND, cfg: &Config, sig: &str, mons: &[Mon], aside: Option<
     // Closes and minimizes are heard while zones are off too, so no tile outlives its
     // window; nothing moves until tiling is active again.
     let tiles = tiling.values().any(|t| !t.desktops.is_empty());
-    crate::tiler::configure(owner.0 as isize, exclude.to_vec(), tiles);
+    // The worker reads opens and restores only while they can be tiled.
+    crate::tiler::configure(owner.0 as isize, exclude.to_vec(), tiles && cfg.zones.enabled);
     crate::wm::tiling(tiles);
     with_engine(|e| {
         // A tiled screen's zones are its tree, in place of its own layout.

@@ -6,6 +6,7 @@
 
 use crate::zones::{self, Dir, LeafTag, Node, Rect};
 use serde::{Deserialize, Serialize};
+use std::time::{Duration, Instant};
 
 /// How a tiled screen lays its windows out.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -125,6 +126,75 @@ fn fixed(family: Family, n: usize, before: Option<&Node>) -> Node {
         Family::MainStack => leaf(),
         Family::Grid => grid(n),
     }
+}
+
+/// What tiling knows of a tiled window just before it would move it.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Seen {
+    /// Floated by hand: the Float key or a drag out.
+    pub floated: bool,
+    /// Off its tile since tiling put it there, without a drag: Win+arrow, the keyboard or its app (`moved`).
+    pub moved: bool,
+    /// A workspace switch placed it since tiling took it.
+    pub by_switch: bool,
+    /// Maximized, minimized or on another desktop: left as it is, still tiled.
+    pub away: bool,
+}
+
+/// The one rule before any move (D562, D564): tiling moves a window only when nobody
+/// else placed it since. A float, a window moved off its tile and one a switch placed
+/// never move; one away is left as it is.
+pub fn may_move(s: &Seen) -> bool {
+    !(s.floated || s.moved || s.by_switch || s.away)
+}
+
+/// A window that may not move because someone else placed it leaves the tree and
+/// floats, and its neighbours fill the gap. One only away stays.
+pub fn floats(s: &Seen) -> bool {
+    s.floated || s.moved || s.by_switch
+}
+
+/// The windows of `tree` tiling may move now, in zone order.
+pub fn to_move(tree: &Tree, seen: impl Fn(isize) -> Seen) -> Vec<isize> {
+    tree.windows().filter(|h| may_move(&seen(*h))).collect()
+}
+
+/// Minimized windows this close together came as one minimize all, such as Win+D.
+pub const BURST: Duration = Duration::from_millis(250);
+/// A minimized window's tile waits this long, from its minimize or the tree's last
+/// restore, whichever is later, before the others fill it (D567).
+pub const GAP_AFTER: Duration = Duration::from_millis(600);
+
+/// Which tiles of minimized windows close now, from each one's (zone, minimized at).
+/// One that came in a burst with another keeps its tile until it is restored or closed,
+/// so Win+D then a restore is exact however long the restores take. Another closes
+/// once `GAP_AFTER` has passed since its minimize and since the last restore (`back`),
+/// so a run of restores is never cut short. Highest zone first, for `remove_zone`.
+pub fn gaps_due(resting: &[(usize, Instant)], back: Option<Instant>, now: Instant) -> Vec<usize> {
+    let near = |a: Instant, b: Instant| a.max(b).duration_since(a.min(b)) <= BURST;
+    let mut due: Vec<usize> = resting
+        .iter()
+        .enumerate()
+        .filter(|(i, (_, at))| !resting.iter().enumerate().any(|(j, (_, other))| j != *i && near(*at, *other)))
+        .filter(|(_, (_, at))| now.duration_since(back.map_or(*at, |b| b.max(*at))) >= GAP_AFTER)
+        .map(|(_, (zone, _))| *zone)
+        .collect();
+    due.sort_unstable_by(|a, b| b.cmp(a));
+    due.dedup();
+    due
+}
+
+/// The arrivals kept during a pause (a workspace switch) to take once it ends, by
+/// window: the latest of each, in the order they came, without the windows the switch
+/// itself placed or moved.
+pub fn after_pause<T>(pending: Vec<(isize, T)>, by_switch: impl Fn(isize) -> bool) -> Vec<(isize, T)> {
+    let mut kept: Vec<(isize, T)> = Vec::new();
+    for (h, item) in pending {
+        kept.retain(|(k, _)| *k != h);
+        kept.push((h, item));
+    }
+    kept.retain(|(h, _)| !by_switch(*h));
+    kept
 }
 
 /// Who holds each of `n` zones after a drag, from the windows the snapping recorded
@@ -634,6 +704,68 @@ mod tests {
         assert!(moved(Rect { x: 5, ..at }, at, true));
         assert!(moved(Rect { w: 965, ..at }, at, true));
         assert!(!moved(Rect { x: 4, w: 964, ..at }, at, true));
+    }
+
+    #[test]
+    fn only_a_window_nobody_else_placed_moves() {
+        assert!(may_move(&Seen::default()));
+        for s in [
+            Seen { floated: true, ..Seen::default() },
+            Seen { moved: true, ..Seen::default() },
+            Seen { by_switch: true, ..Seen::default() },
+            Seen { away: true, ..Seen::default() },
+        ] {
+            assert!(!may_move(&s), "{s:?}");
+        }
+        assert!(!floats(&Seen { away: true, ..Seen::default() }));
+        assert!(floats(&Seen { by_switch: true, away: true, ..Seen::default() }));
+    }
+
+    #[test]
+    fn closing_a_minimized_tile_never_moves_a_hand_moved_window() {
+        // Three windows; 2 was minimized, and 1 was moved by Win+Left since.
+        let three = grow(Family::Smart, 3);
+        let at = Instant::now();
+        let rested = three.vacate(2).unwrap();
+        let due = gaps_due(&[(three.zone_of(2).unwrap(), at)], None, at + GAP_AFTER);
+        assert_eq!(due, vec![three.zone_of(2).unwrap()]);
+        let mut tree = rested;
+        for z in due {
+            tree = tree.remove_zone(z).unwrap();
+        }
+        let seen = |h: isize| Seen { moved: h == 1, ..Seen::default() };
+        // The hand-moved window floats and leaves, and only the others move.
+        let floated: Vec<isize> = tree.windows().filter(|h| floats(&seen(*h))).collect();
+        assert_eq!(floated, vec![1]);
+        for h in floated {
+            tree = tree.remove(h).unwrap();
+        }
+        assert_eq!(to_move(&tree, seen), vec![3]);
+        assert!(!to_move(&three, seen).contains(&1));
+    }
+
+    #[test]
+    fn win_d_keeps_every_tile_and_a_lone_minimize_closes() {
+        let t0 = Instant::now();
+        let ms = |n: u64| t0 + Duration::from_millis(n);
+        // Win+D: three minimized within a burst keep their tiles, however late the restores.
+        let burst = [(0, t0), (1, ms(40)), (2, ms(90))];
+        assert!(gaps_due(&burst, None, ms(60_000)).is_empty());
+        assert!(gaps_due(&burst[1..], Some(ms(5000)), ms(60_000)).is_empty());
+        // One minimize alone closes after the wait, not before.
+        assert!(gaps_due(&[(1, t0)], None, ms(599)).is_empty());
+        assert_eq!(gaps_due(&[(1, t0)], None, ms(600)), vec![1]);
+        // A restore just now holds the others a moment longer.
+        assert!(gaps_due(&[(1, t0)], Some(ms(900)), ms(1000)).is_empty());
+        assert_eq!(gaps_due(&[(3, t0), (1, ms(2000))], None, ms(3000)), vec![3, 1]);
+    }
+
+    #[test]
+    fn after_a_pause_the_latest_of_each_arrival_is_taken_but_not_the_switchs() {
+        let pending = vec![(1, "open"), (2, "restore"), (1, "again"), (3, "open")];
+        let taken = after_pause(pending, |h| h == 3);
+        assert_eq!(taken, vec![(2, "restore"), (1, "again")]);
+        assert!(after_pause(Vec::<(isize, ())>::new(), |_| false).is_empty());
     }
 
     #[test]

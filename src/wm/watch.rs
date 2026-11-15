@@ -282,9 +282,12 @@ impl Wm {
                 // A tiled window leaves its tile as it minimizes, and takes a share again once
                 // restored and settled. Not during a workspace switch, which minimizes and
                 // restores windows of its own (D564).
-                if self.tiling && crate::tiler::is_tiled(key) && !crate::switcher::switching() {
+                if self.tiling && crate::tiler::is_tiled(key) {
+                    // A switch's minimizes, and its late ones, never reflow; a restore is kept for after it.
                     if event == EVENT_SYSTEM_MINIMIZESTART {
-                        crate::tiler::left(key, true);
+                        if !crate::tiler::switch_settling() {
+                            crate::tiler::left(key, true);
+                        }
                     } else {
                         self.restoring.retain(|(k, _)| *k != key);
                         self.restoring.push((key, Instant::now() + SETTLE));

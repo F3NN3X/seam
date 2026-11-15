@@ -142,6 +142,7 @@ impl Engine {
                 winutil::set_floated(h, false);
                 self.tiling.seq += 1;
                 winutil::set_tile_stamp(h, self.tiling.seq);
+                self.tiling.trees[i].stamps.insert(k, winutil::ws_stamp(h));
                 if let Some(r) = winutil::visible_rect(h) {
                     self.tiling.trees[i].before.entry(k).or_insert(r);
                 }

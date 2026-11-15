@@ -5,24 +5,21 @@
 //! (`seam::tiling`) on what the worker read (`tiler`), and the windows land through
 //! the placement queue.
 //!
-//! It never fights a hand edit: a window that isn't where tiling put it floats before
-//! anything would move it back, and a window dragged out of its tile floats and its
-//! neighbours fill the gap (D562). While Seam stands by, is paused or zones are off,
+//! It never fights a hand edit: one rule (`tiling::may_move`) runs before every move,
+//! so a float, a window moved off its tile without a drag and one a workspace switch
+//! placed never move; they float where they are and their neighbours fill the gap, as
+//! after a drag out (D562, D564). While Seam stands by, is paused or zones are off,
 //! nothing moves; the gaps close once it is back (D566).
 
 use super::*;
 use crate::tiler::{Arrival, Event};
 use seam::config::TileScreen;
-use seam::tiling::{self, Family, Put, Tree};
+use seam::tiling::{self, Family, GAP_AFTER, Put, Seen, Tree};
 use seam::zones::{LeafTag, Node, Template};
 use std::collections::BTreeMap;
 use std::time::Duration;
 
 mod hand;
-
-/// A minimized window's tile waits this long for it, so Win+D or minimize all keeps
-/// the shape for the windows to come back to (D567).
-const GAP_AFTER: Duration = Duration::from_millis(600);
 
 /// One screen's tree on one virtual desktop.
 pub(super) struct Tiled {
@@ -42,6 +39,11 @@ pub(super) struct Tiled {
     /// A window left while its desktop wasn't in front, or while tiling stood down:
     /// the gap closes once it can.
     dirty: bool,
+    /// Each window's `Seam_ws` stamp when tiling took it, so a workspace switch that
+    /// placed it since is seen (`Seen::by_switch`).
+    stamps: HashMap<isize, Option<(u32, usize)>>,
+    /// When a minimized window last came back, which holds the other tiles (D567).
+    back: Option<Instant>,
 }
 
 #[derive(Default)]
@@ -64,6 +66,10 @@ pub(super) struct Tiling {
     looked: bool,
     /// Wakes to close the tiles minimized windows left (`GAP_AFTER`).
     gap_timer: usize,
+    /// Arrivals and restores that came during a workspace switch, taken once it ends.
+    paused: Vec<Arrival>,
+    /// Why the Float or tile key's window wasn't tiled, for the tray's notice.
+    refused: Option<String>,
     /// Handler timings while logging: batches, total and longest, in microseconds.
     stats: (u64, u128, u128),
 }
@@ -88,6 +94,7 @@ pub fn tiling_events() -> bool {
                 Event::Arrived(a) => e.tile_arrived(a),
                 Event::Left { hwnd, minimized } => e.tile_left(hwnd, minimized),
                 Event::Desktop(id) => e.tiled_desktop(id),
+                Event::Refused(why) => e.tiling.refused = Some(why.to_string()),
             }
         }
         if log::enabled() {
@@ -125,6 +132,24 @@ pub fn tiling_free(screen: &str) -> usize {
 /// window on a tiled screen is asked for again. Returns whether it floats now.
 pub fn tiling_float(hwnd: HWND) -> Result<bool, String> {
     with_engine(|e| e.tiling_float(hwnd.0 as isize)).unwrap_or_else(|| Err("Seam is busy, try again".into()))
+}
+
+/// A workspace switch ended: the arrivals kept meanwhile are taken, except the windows
+/// the switch placed (D564).
+pub fn tiling_switch_ended() {
+    crate::tiler::switch_ended();
+    with_engine(|e| {
+        let kept = std::mem::take(&mut e.tiling.paused).into_iter().map(|a| (a.hwnd, a)).collect();
+        let placed = |h: isize| winutil::ws_stamp(hwnd_of(h)).is_some();
+        for (_, a) in tiling::after_pause(kept, placed) {
+            e.tile_arrived(a);
+        }
+    });
+}
+
+/// Why the Float or tile key's window wasn't tiled, once.
+pub fn take_tiling_refused() -> Option<String> {
+    with_engine(|e| e.tiling.refused.take()).flatten()
 }
 
 /// Whether a screen is tiled on the desktop in front.
@@ -340,6 +365,8 @@ impl Engine {
             before: HashMap::new(),
             parked: Vec::new(),
             dirty: false,
+            stamps: HashMap::new(),
+            back: None,
         });
         self.tiling.trees.len() - 1
     }
@@ -362,7 +389,12 @@ impl Engine {
     /// minimizing, or a share of the largest tile, or a stack in it when it can't shrink
     /// to that. Waits for a drag to end; never during a workspace switch (D564).
     fn tile_arrived(&mut self, a: Arrival) {
-        if !self.active() || crate::switcher::switching() {
+        if !self.active() {
+            return;
+        }
+        // Kept for the end of the switch, as for a drag.
+        if crate::switcher::switching() {
+            self.tiling.paused.push(a);
             return;
         }
         if self.drag.is_some() {
@@ -418,7 +450,12 @@ impl Engine {
         self.tiling.seq = self.tiling.seq.max(order);
         winutil::set_tile_stamp(h, order);
         winutil::set_floated(h, false);
-        self.tiling.trees[i].before.entry(a.hwnd).or_insert(a.frame);
+        let t = &mut self.tiling.trees[i];
+        t.before.entry(a.hwnd).or_insert(a.frame);
+        t.stamps.insert(a.hwnd, winutil::ws_stamp(h));
+        if a.restored {
+            t.back = Some(Instant::now());
+        }
         let app = if log::enabled() { winutil::exe_name(h).unwrap_or_default() } else { String::new() };
         match put {
             Put::Tile(zone) => {
@@ -497,36 +534,37 @@ impl Engine {
         true
     }
 
-    /// Wake once a minimized window's tile has waited `GAP_AFTER`.
+    /// The tiles of tree `i`'s minimized windows that are still empty, by (zone, minimized at).
+    fn resting_tiles(&self, i: usize) -> Vec<(usize, Instant)> {
+        let t = &self.tiling.trees[i];
+        let empty = |z: usize| t.tree.tiles.get(z).is_some_and(|x| x.hwnd.is_none());
+        t.resting.iter().filter(|(_, z, _)| *z != usize::MAX && empty(*z)).map(|(_, z, at)| (*z, *at)).collect()
+    }
+
+    /// Wake once a minimized window's tile may close: never for a burst, which keeps its tiles.
     fn tiled_arm_gaps(&mut self) {
-        let waiting = self.tiling.trees.iter().any(|t| t.resting.iter().any(|(_, z, _)| *z != usize::MAX));
+        let later = Instant::now() + Duration::from_secs(3600);
+        let waiting = (0..self.tiling.trees.len())
+            .any(|i| !tiling::gaps_due(&self.resting_tiles(i), self.tiling.trees[i].back, later).is_empty());
         if waiting && self.tiling.gap_timer == 0 {
             let ms = GAP_AFTER.as_millis() as u32;
             self.tiling.gap_timer = unsafe { SetTimer(None, 0, ms, Some(on_gaps)) };
         }
     }
 
-    /// The tiles minimized windows left close once they have waited, so the others
-    /// fill the gap, except where every window of the tree is minimized, as after
-    /// Win+D: there the shape waits for them to come back.
+    /// The tiles minimized windows left close once `tiling::gaps_due` says, so the
+    /// others fill the gap; a burst such as Win+D keeps them for the windows to come
+    /// back to (D567). The move goes through `tiled_apply`, so its rule holds.
     fn tiled_gaps(&mut self) {
         let now = Instant::now();
         for i in 0..self.tiling.trees.len() {
-            let t = &self.tiling.trees[i];
-            if t.tree.windows().next().is_none() {
+            if self.tiling.trees[i].tree.windows().next().is_none() {
                 continue;
             }
-            let mut due: Vec<usize> = t
-                .resting
-                .iter()
-                .filter(|(_, z, at)| *z != usize::MAX && now.duration_since(*at) >= GAP_AFTER)
-                .map(|(_, z, _)| *z)
-                .filter(|z| t.tree.tiles.get(*z).is_some_and(|x| x.hwnd.is_none()))
-                .collect();
+            let due = tiling::gaps_due(&self.resting_tiles(i), self.tiling.trees[i].back, now);
             if due.is_empty() {
                 continue;
             }
-            due.sort_unstable_by(|a, b| b.cmp(a));
             let t = &mut self.tiling.trees[i];
             for zone in due {
                 let Some(tree) = t.tree.remove_zone(zone) else { continue };
@@ -554,11 +592,23 @@ impl Engine {
         }
     }
 
+    /// What tiling knows of a window of tree `i` before it would move it.
+    fn tile_seen(&self, i: usize, key: isize) -> Seen {
+        let h = hwnd_of(key);
+        let taken = self.tiling.trees[i].stamps.get(&key).copied().flatten();
+        Seen {
+            floated: winutil::is_floated(h),
+            moved: !self.moving(key) && self.tiled_moved(key),
+            by_switch: winutil::ws_stamp(h).is_some_and(|now| Some(now) != taken),
+            away: winutil::is_minimized(h) || winutil::is_maximized(h) || winutil::is_cloaked(h),
+        }
+    }
+
     /// Before anything moves on the desktop in front: a window that closed or went to
-    /// another desktop leaves tree `i` and the others close up; one that isn't where
-    /// tiling put it, as the desk gate's "moved after hand placement" says, by hand, by
-    /// its app or by a workspace switch, floats where it is, and its tile stays empty so
-    /// nothing moves it back. Only moves within the tree follow, done by the caller.
+    /// another desktop leaves tree `i`; one `tiling::floats` says someone else placed,
+    /// by hand, by its app or by a workspace switch (the desk gate's "moved after hand
+    /// placement"), floats where it is. Either way the others close up. The moves
+    /// follow in `tiled_apply`, which runs this first.
     fn tiled_check(&mut self, i: usize) {
         if !self.here(i) {
             return;
@@ -574,14 +624,14 @@ impl Engine {
             winutil::set_tile_stamp(hwnd_of(k), 0);
             self.snapped.remove(&k);
         }
-        let moved: Vec<isize> = self.tiling.trees[i]
-            .tree
-            .windows()
-            .filter(|k| !hidden.contains(k) && !self.moving(*k) && self.tiled_moved(*k))
-            .collect();
-        for k in moved {
-            log::info!("tiling desk gate: a tiled window moved since it was placed, so it floats where it is");
-            self.tiled_float(i, k);
+        let windows: Vec<isize> = self.tiling.trees[i].tree.windows().filter(|k| !hidden.contains(k)).collect();
+        let floats: Vec<isize> = windows.into_iter().filter(|k| tiling::floats(&self.tile_seen(i, *k))).collect();
+        for k in &floats {
+            log::info!("tiling desk gate: a tiled window was placed by someone else since, so it floats where it is");
+            self.tiled_float(i, *k);
+        }
+        if !floats.is_empty() {
+            self.tiled_unstack(i);
         }
     }
 
@@ -596,18 +646,16 @@ impl Engine {
         tiling::moved(now, s.at, winutil::is_resizable(h))
     }
 
-    /// A window leaves its tile, which stays empty or goes to a window stacked in it, and
-    /// floats where it is.
+    /// A window leaves its tile, which goes to a window stacked in it or closes so the
+    /// neighbours fill the gap, and floats where it is (D562).
     fn tiled_float(&mut self, i: usize, key: isize) {
         if !self.tiled_heir(i, key) {
-            let t = &mut self.tiling.trees[i];
-            if let Some(tree) = t.tree.vacate(key) {
-                t.tree = tree;
-            }
+            self.tiling.trees[i].remove(key);
         }
         let t = &mut self.tiling.trees[i];
         t.overflow.retain(|(k, _)| *k != key);
         t.before.remove(&key);
+        t.stamps.remove(&key);
         let h = hwnd_of(key);
         winutil::set_tile_stamp(h, 0);
         winutil::set_floated(h, true);
@@ -626,20 +674,25 @@ impl Engine {
             self.tiled_sync();
             return;
         }
+        // The one rule before any move: whoever else placed a window since, it floats.
+        self.tiled_check(i);
         self.tiling.trees[i].dirty = false;
         self.tiled_sync();
         let t = &self.tiling.trees[i];
         let Some((work, dpi, gap)) = self.tile_area(&t.screen) else { return };
         let (screen, rects) = (t.screen.clone(), t.tree.rects(work, gap));
-        let tiles: Vec<(usize, isize)> =
-            t.tree.tiles.iter().enumerate().filter_map(|(z, x)| Some((z, x.hwnd?))).collect();
+        let movable = tiling::to_move(&t.tree, |k| self.tile_seen(i, k));
+        let tiles: Vec<(usize, isize)> = t
+            .tree
+            .tiles
+            .iter()
+            .enumerate()
+            .filter_map(|(z, x)| Some((z, x.hwnd?)))
+            .filter(|(_, k)| movable.contains(k))
+            .collect();
         let mut moves = Vec::new();
         for (zone, key) in tiles {
             let (target, h) = (rects[zone], hwnd_of(key));
-            // Maximized by hand, or on another desktop now: it is left as it is.
-            if winutil::is_maximized(h) || winutil::is_cloaked(h) {
-                continue;
-            }
             let there = self
                 .snapped
                 .get(&key)

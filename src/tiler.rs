@@ -48,6 +48,8 @@ pub enum Event {
         hwnd: isize,
         minimized: bool,
     },
+    /// The window "Float or tile this window" asked for can't be tiled, and why.
+    Refused(&'static str),
     /// The virtual desktop in front, by id, or None when the shell can't tell, as on a
     /// desktop with no windows. An empty id is a Windows with no desktop manager.
     Desktop(Option<String>),
@@ -80,6 +82,10 @@ static TILED: Mutex<Option<HashSet<isize>>> = Mutex::new(None);
 static EVENTS: Mutex<Vec<Event>> = Mutex::new(Vec::new());
 /// The shell's virtual desktop manager was there when the worker started.
 static DESKTOPS: AtomicBool = AtomicBool::new(false);
+/// When the last workspace switch ended, so a late minimize of its own isn't taken for mine.
+static SWITCH_END: Mutex<Option<Instant>> = Mutex::new(None);
+/// How long after a switch its minimizes still count as its own.
+const SWITCH_GRACE: std::time::Duration = std::time::Duration::from_millis(500);
 /// A `look` was answered since the last `take_looked`.
 static LOOKED: AtomicBool = AtomicBool::new(false);
 static WORKER: OnceLock<Option<Sender<Job>>> = OnceLock::new();
@@ -110,6 +116,9 @@ pub fn opened(hwnd: isize) {
 
 /// A window came back from minimized and settled.
 pub fn restored(hwnd: isize) {
+    if !ON.load(Ordering::SeqCst) {
+        return;
+    }
     let _ = send(Job::Arrived { hwnd, restored: true, asked: false });
 }
 
@@ -131,6 +140,17 @@ pub fn foreground(hwnd: isize) {
 /// Tiling turned on: tile again what a tray that ran before had tiled, and learn the desktop in front.
 pub fn retile() {
     let _ = send(Job::Retile);
+}
+
+/// A workspace switch ended. From the tray thread.
+pub fn switch_ended() {
+    *SWITCH_END.lock().unwrap_or_else(|e| e.into_inner()) = Some(Instant::now());
+}
+
+/// A switch runs, or ended a moment ago: its minimizes are its own (D564).
+pub fn switch_settling() -> bool {
+    let ended = *SWITCH_END.lock().unwrap_or_else(|e| e.into_inner());
+    crate::switcher::switching() || ended.is_some_and(|at| at.elapsed() < SWITCH_GRACE)
 }
 
 /// A setting waits to know which desktop is in front. False when the worker couldn't start.
@@ -244,6 +264,7 @@ fn work(jobs: Receiver<Job>) {
             match job {
                 Job::Arrived { hwnd, restored, asked } => match arrival(&mut desktops, hwnd, restored, asked) {
                     Ok(a) => events.push(Event::Arrived(a)),
+                    Err(why) if asked => events.push(Event::Refused(why)),
                     Err(why) if log::enabled() => {
                         log::info!("tiling: {} floats ({why})", winutil::exe_name(hwnd_of(hwnd)).unwrap_or_default())
                     }

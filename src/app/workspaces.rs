@@ -249,6 +249,7 @@ pub(super) fn switched(app: &mut App) {
     }
     // Apps opened by hand during the switch go to their places now.
     live::switch_ended();
+    snap::tiling_switch_ended();
     snap::rebuild_stacks(done.stacks);
     focus_only::forget();
     windows_changed(app);

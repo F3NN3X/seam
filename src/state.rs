@@ -146,6 +146,21 @@ pub struct SessionRef {
     pub windows: usize,
 }
 
+/// Windows that share one zone, one of them on top.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct StackRef {
+    /// Line Up number of its screen, from 1.
+    pub screen: u32,
+    /// Its zone, from 1, and the last one when it spans several.
+    pub zone: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub span_to: Option<u32>,
+    /// Window handles, in the order Next steps through them.
+    pub windows: Vec<isize>,
+    /// The window on top.
+    pub top: isize,
+}
+
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(default)]
 pub struct State {
@@ -174,6 +189,8 @@ pub struct State {
     pub last_align: Option<AlignResult>,
     pub update: Option<UpdateState>,
     pub clients: Vec<String>,
+    /// Every stack of windows in zones on this desk.
+    pub stacks: Vec<StackRef>,
 }
 
 /// What API reads are served from. The tray replaces it whole, so a reader

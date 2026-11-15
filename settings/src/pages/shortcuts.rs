@@ -96,6 +96,8 @@ fn caption(action: &str) -> Option<&'static str> {
         "divider_menu" => Some("Share or take out the focused snapped window"),
         "pause_seam" => Some("Pause or resume everything Seam does"),
         "fit_group" => Some("Stretch the focused window's group to fill its screen"),
+        "stack_next" => Some("Put the next window of the focused window's stack on top"),
+        "stack_prev" => Some("Put the previous window of the focused window's stack on top"),
         _ => None,
     }
 }
@@ -182,6 +184,8 @@ pub fn render(panel: &mut Panel, _: &mut Window, cx: &mut Context<Panel>) -> imp
         row("Quick layout", "quick_layout", keys.quick_layout.as_ref(), 930),
         row("Size menu", "divider_menu", keys.divider_menu.as_ref(), 940),
         row("Fit group to screen", "fit_group", keys.fit_group.as_ref(), 960),
+        row("Next window in stack", "stack_next", keys.stack_next.as_ref(), 970),
+        row("Previous window in stack", "stack_prev", keys.stack_prev.as_ref(), 971),
     ]);
     window_rows.extend([
         row("Pin window on top", "pin_top", keys.pin_top.as_ref(), 17),

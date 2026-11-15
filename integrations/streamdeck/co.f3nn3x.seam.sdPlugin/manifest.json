@@ -1,7 +1,7 @@
 {
 	"UUID": "co.f3nn3x.seam",
 	"Name": "Seam",
-	"Version": "0.8.2.0",
+	"Version": "0.8.3.0",
 	"Author": "F3NN3X",
 	"Description": "Switch workspaces, line up screens, and pause the pointer remap or the zones from a Stream Deck key. Needs Seam running.",
 	"URL": "https://github.com/F3NN3X/seam",
@@ -320,6 +320,22 @@
 				{
 					"Image": "imgs/actions/release/key",
 					"Title": "Release pins",
+					"TitleAlignment": "bottom"
+				}
+			]
+		},
+		{
+			"UUID": "co.f3nn3x.seam.stack-cycle",
+			"Name": "Cycle stack",
+			"Tooltip": "Put the next window of the focused window's stack on top.",
+			"Icon": "imgs/actions/stack-cycle/icon",
+			"Controllers": [
+				"Keypad"
+			],
+			"States": [
+				{
+					"Image": "imgs/actions/stack-cycle/key",
+					"Title": "Cycle stack",
 					"TitleAlignment": "bottom"
 				}
 			]

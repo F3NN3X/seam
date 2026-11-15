@@ -169,6 +169,18 @@ fn capture_rules(job: &CaptureJob, session: bool) -> Captured {
             ..Rule::default()
         });
     }
+    // A window in a stack in its zone keeps its place in it, from the top.
+    let ids: Vec<Option<(u32, usize)>> = rules
+        .iter()
+        .zip(&hwnds)
+        .map(|(rule, h)| match rule.target {
+            Target::Zone { .. } => stack::unstamp(winutil::stack_stamp(hwnd_of(*h))),
+            _ => None,
+        })
+        .collect();
+    for (rule, rank) in rules.iter_mut().zip(stack::ranks(&ids)) {
+        rule.stack = rank;
+    }
     if job.places && !session {
         let places = places::read(&rules, &hwnds);
         for (rule, place) in rules.iter_mut().zip(places) {

@@ -140,6 +140,15 @@ const ENTRIES: &[Entry] = &[
         "Off lets windows overlap in a zone",
         "swap exchange trade overlap drop occupied",
     ),
+    // A drag key, not a row: it opens the swap row, which S turns into a stack.
+    Entry {
+        page: Page::Zones,
+        title: "Stacks",
+        about: "Press S in a drag to stack a window on the one in the zone",
+        keywords: "stack tabs several windows one zone cycle behind top overlap",
+        within: Some("Swap with the window already in a zone"),
+        topic: None,
+    },
     entry(
         Page::Zones,
         "Snap beside a window",
@@ -319,6 +328,18 @@ const ENTRIES: &[Entry] = &[
         "Fit group to screen",
         "Stretch the focused window's group to fill its screen",
         "hotkey keyboard fit fill stretch group beside work area full screen",
+    ),
+    entry(
+        Page::Shortcuts,
+        "Next window in stack",
+        "Put the next window of the focused window's stack on top",
+        "hotkey keyboard stack cycle tab next zone behind",
+    ),
+    entry(
+        Page::Shortcuts,
+        "Previous window in stack",
+        "Put the previous window of the focused window's stack on top",
+        "hotkey keyboard stack cycle tab previous back zone behind",
     ),
     entry(Page::Shortcuts, "Pin window on top", "Global shortcut", "hotkey keyboard topmost always"),
     entry(Page::Shortcuts, "Keep window out of workspace switches", "Global shortcut", "hotkey keyboard sticky pin"),

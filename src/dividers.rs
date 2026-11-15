@@ -89,6 +89,9 @@ pub struct Scene {
     pub known: Vec<Zoned>,
     /// Lower-case exe names the zones leave alone.
     pub exclude: Vec<String>,
+    /// The windows behind a stack's top: no handle is theirs, and they follow their top
+    /// once a drag is over rather than during it.
+    pub hidden: Vec<isize>,
 }
 
 /// What a menu choice asks the tray's main thread to do.
@@ -530,8 +533,10 @@ impl State {
         let spot = &handle.spot;
         let Some(s) = scene.screens.get(spot.screen) else { return };
         let placed = zones::rects(&s.layout.tree, s.work, s.gap);
-        let list = wincontrol::screen_members(&s.id, s.bounds, &placed, &scene.known, &scene.exclude);
+        let mut list = wincontrol::screen_members(&s.id, s.bounds, &placed, &scene.known, &scene.exclude);
+        // A stack's hidden windows count for the smallest sizes, but follow only at the end.
         let mins = wincontrol::group_mins(&s.layout.tree, s.work, s.gap, s.dpi, &list);
+        list.retain(|(h, ..)| !scene.hidden.contains(&(h.0 as isize)));
         let member = |(h, from, to): (HWND, usize, usize)| {
             Member::of(h, from, to, zones::span(*placed.get(from)?, *placed.get(to)?))
         };

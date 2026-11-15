@@ -1,5 +1,6 @@
 //! Keys and the mouse wheel while a snap drag is moving: the wheel, Tab, 1, 2, 3, 0
-//! and the arrows steer where the window lands, and Esc or the other mouse button
+//! and the arrows steer where the window lands, S stacks it on the window in the
+//! zone rather than swapping with it, and Esc or the other mouse button
 //! drops it without a zone. Low-level keyboard and mouse hooks on a thread of their
 //! own, put in when a drag first shows zones and taken out a moment after it ends, or
 //! after a minute whatever happens (the D204 pattern). They swallow only those keys,
@@ -119,6 +120,8 @@ pub enum Key {
     Scroll(bool),
     /// The other mouse button: this drop doesn't snap.
     Button,
+    /// S: the drop stacks the window on the one in the zone, or swaps again.
+    Stack,
 }
 
 /// The keys a drag takes, by virtual-key code, and what the mouse hook posts.
@@ -142,6 +145,7 @@ pub fn key_of(vk: u32) -> Option<Key> {
         VK_RIGHT => Key::Side(Side::Right),
         VK_UP => Key::Side(Side::Top),
         VK_DOWN => Key::Side(Side::Bottom),
+        VK_S => Key::Stack,
         _ => return None,
     })
 }
@@ -159,6 +163,7 @@ pub fn name(key: Key) -> &'static str {
         Key::Cancel => "Esc",
         Key::Scroll(_) => "Wheel",
         Key::Button => "Right-click",
+        Key::Stack => "S",
     }
 }
 
@@ -184,6 +189,8 @@ pub struct Steer {
     pub side_at: Option<(usize, usize)>,
     /// The keys pressed, each once, for the log.
     pub used: Vec<&'static str>,
+    /// S: the drop stacks the window on the one in the zone instead of swapping.
+    pub stack: bool,
 }
 
 /// The spans Tab steps through under the pointer: the zone, the zone with a
@@ -237,7 +244,9 @@ pub fn nearest_side(r: Rect, (x, y): (i32, i32)) -> Side {
 }
 
 /// The strip's text.
-pub const HINT: &str = "Scroll to change  Right-click don't snap  Tab/1/2/3/0/Esc";
+pub const HINT: &str = "Scroll to change  Right-click don't snap  S stack  Tab/1/2/3/0/Esc";
+/// The strip's text while S has the drop stack the window.
+pub const STACK_HINT: &str = "Stacks on the window here  S swap instead  Right-click don't snap  Esc";
 
 /// Swallow the drag's keys while zones show, and post each press to the tray.
 /// A release is swallowed only when its press was, and so is a repeat of that press,

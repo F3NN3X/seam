@@ -60,6 +60,11 @@ pub(super) fn snapshot(app: &App) -> Snapshot {
         workspace::list(&saved.workspaces).into_iter().find(|w| w.id == *id)
     });
     let session = saved_session(app).map(|s| SessionRef { saved_at: s.saved_at, windows: s.windows.len() });
+    let stack = |s: snap::StackInfo| {
+        let screen = app.mons.iter().position(|m| m.id == s.screen)? as u32 + 1;
+        let span_to = (s.to != s.from).then_some(s.to as u32 + 1);
+        Some(StackRef { screen, zone: s.from as u32 + 1, span_to, windows: s.windows, top: s.top })
+    };
     let state = State {
         workspace: workspace.map(|w| WorkspaceRef { id: w.id, name: w.name, drifted: app.drifted }),
         session,
@@ -86,6 +91,7 @@ pub(super) fn snapshot(app: &App) -> Snapshot {
         clients: app.clients.clone(),
         restart_apps: app.restart_apps,
         windows_cursor_easing: app.cursor_easing,
+        stacks: snap::stacks().into_iter().filter_map(stack).collect(),
     };
     Snapshot { state, config: serde_json::to_value(&app.cfg).unwrap_or_default() }
 }

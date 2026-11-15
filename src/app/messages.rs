@@ -125,6 +125,14 @@ pub(super) unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARA
                 }
                 LRESULT(0)
             }
+            snap::WM_APP_STACKS => {
+                with_app(stacks_changed);
+                LRESULT(0)
+            }
+            snap::WM_APP_STACKS_FOUND => {
+                snap::stacks_found();
+                LRESULT(0)
+            }
             crate::dragkeys::WM_APP_DRAG_KEY => {
                 snap::drag_key(wparam.0 as u32, lparam.0 as u64);
                 LRESULT(0)
@@ -379,6 +387,11 @@ unsafe fn on_hotkey(id: i32) {
             }
             HOTKEY_FIT_GROUP => {
                 with_app(|a| fit_group(a, None, None));
+            }
+            id @ (HOTKEY_STACK_NEXT | HOTKEY_STACK_PREV) => {
+                if let Err(why) = snap::stack_cycle(GetForegroundWindow(), id == HOTKEY_STACK_NEXT, false) {
+                    log::info!("stack hotkey: {why}");
+                }
             }
             HOTKEY_DIVIDER_MENU => {
                 if let Err(why) = snap::size_menu(GetForegroundWindow()) {

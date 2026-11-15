@@ -223,6 +223,8 @@ struct Ask {
     exclude: Vec<String>,
     /// The members when they are known already, the dragged window first: an ad-hoc group's.
     given: Option<Vec<(isize, usize, usize)>>,
+    /// The windows behind a stack's top, which follow it once the drag is over instead.
+    hidden: Vec<isize>,
 }
 
 impl Ask {
@@ -236,7 +238,10 @@ impl Ask {
                 wincontrol::group_members(first, &self.screen, self.bounds, &self.placed, &self.known, &self.exclude)
             }
         };
+        // A stack's hidden windows count for the smallest sizes, but follow only at the end.
         let mins = wincontrol::group_mins(&self.tree, self.work, self.gap, self.dpi, &list);
+        let mut list = list;
+        list.retain(|(h, ..)| !self.hidden.contains(&(h.0 as isize)));
         let member = |(h, from, to): (HWND, usize, usize)| {
             Member::of(h, from, to, zones::span(self.placed[from], self.placed[to]))
         };
@@ -298,6 +303,7 @@ impl Engine {
             known: self.zoned(),
             exclude: self.exclude.to_vec(),
             given: None,
+            hidden: self.stack_hidden(),
         };
         self.follow(ask, layout.template, None)
     }
@@ -329,6 +335,7 @@ impl Engine {
             known: Vec::new(),
             exclude: self.exclude.to_vec(),
             given: Some(given),
+            hidden: Vec::new(),
         };
         self.follow(ask, Template::Custom, Some(a.id))
     }

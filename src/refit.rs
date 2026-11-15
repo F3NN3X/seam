@@ -208,6 +208,8 @@ impl Engine {
         if self.pending.is_none() && self.drag.is_none() && self.refit.queue.is_empty() {
             if let Some(run) = self.refit.run.take() {
                 log::info!("zone refit: {} found, {} moved, {} skipped", run.found, run.moved, run.skipped);
+                // Every window of a stack was fitted on its own, so its top goes back over the rest.
+                self.stack_raise_tops();
             }
             self.refit_resume();
         }

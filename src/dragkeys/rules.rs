@@ -155,6 +155,10 @@ mod tests {
         assert!(!ours(Some(Key::Scroll(true)), true));
         assert!(ours(Some(Key::Next), false));
         assert!(!ours(None, false));
+        // S stacks a zone drop, and is never a divider drag's.
+        assert_eq!(super::super::key_of(0x53), Some(Key::Stack));
+        assert!(!ours(Some(Key::Stack), true));
+        assert!(ours(Some(Key::Stack), false));
     }
 
     #[test]

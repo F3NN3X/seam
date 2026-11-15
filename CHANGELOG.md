@@ -6,6 +6,7 @@ All notable changes to Seam. The format follows [Keep a Changelog](https://keepa
 
 ### Added
 
+- **Stacks.** Several windows can share one zone, one on top. S during a drag stacks the window on the one in the zone instead of swapping, with Undo, and a slim mark at the bottom of the zone shows how many it holds. **Next window in stack** and **Previous window in stack** (no key by default), `window.stack`, `window.stack_cycle`, `stacks` in the state, and a Cycle stack key in the Stream Deck plugin 0.8.3. The others stay behind the top one in the zone, so Alt+Tab and the taskbar still reach them. Workspaces keep stacks, and a restart finds them again.
 - **Assistants (MCP).** `seam-mcp.exe` lets an AI assistant such as Claude read Seam's status, switch workspaces (never closing windows), Snap back and Switch back. **Let assistants use Seam (MCP)** on General turns it on, and it is off by default. **Let assistants change workspaces**, also off by default, adds Quick save, renaming, creating, editing a row's place or how it shows, removing a row and Show every window, each with an Undo notice, and never a program, a shortcut or a launch turned on. General shows whether an assistant is connected and the path to copy. The zip and the installer include `seam-mcp.exe`.
 - **Show every window**, a switch on each workspace, off by default. A window saved minimized comes back onto its place, or maximized, and counts as moved while it's minimized, so Snap back and auto-apply restore it.
 

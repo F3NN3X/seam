@@ -43,8 +43,8 @@ use seam::api::{self, Client, Command, FocusScope, GroupVerb, PinKind, Reply, Rp
 use seam::config::{RestoreApps, TrayClick};
 use seam::direction::Dir;
 use seam::state::{
-    self, AlignResult, DeskRef, HotkeyError, Remap, Screen, ScreenRect, SessionRef, Snapshot, State, UpdateState,
-    WmState, WorkspaceRef,
+    self, AlignResult, DeskRef, HotkeyError, Remap, Screen, ScreenRect, SessionRef, Snapshot, StackRef, State,
+    UpdateState, WmState, WorkspaceRef,
 };
 use seam::workspace::{self, Rule, SESSION_ID, Session, Workspace};
 use seam::zones;
@@ -62,7 +62,7 @@ use std::sync::Mutex;
 use std::sync::mpsc::{Sender, channel};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
-use tile::{fit_group, start_tile, tile_finished, undo_tile};
+use tile::{fit_group, stacks_changed, start_tile, tile_finished, undo_tile};
 use tray_icon::{add_icon, make_icon, notify, show_menu, tray_data, update_tip};
 use update::{
     arm_auto_install, auto_install, check_for_updates, clean_up_after_update, read_update_state, update_read,
@@ -168,6 +168,9 @@ const HOTKEY_DIVIDER_MENU: i32 = 60;
 const HOTKEY_PAUSE_SEAM: i32 = 65;
 /// Stretch the focused window's group to fill its screen.
 const HOTKEY_FIT_GROUP: i32 = 66;
+/// The next or previous window of the focused window's stack goes on top.
+const HOTKEY_STACK_NEXT: i32 = 70;
+const HOTKEY_STACK_PREV: i32 = 71;
 /// One hotkey id per workspace on the desk, from here up.
 const HOTKEY_WORKSPACE: i32 = 100;
 const NIN_KEYSELECT: u32 = NIN_SELECT | NINF_KEY;

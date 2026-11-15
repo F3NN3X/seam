@@ -120,6 +120,15 @@ const windowFocus = (p) => {
   return { ...base, h: 28, svg: base.svg + from + to + arrowBelow(p) };
 };
 
+/** Two windows in one zone of the right screen, the filled one on top of an outlined one, and the step to the next. */
+const stackCycle = (p) => {
+  const base = mark(p);
+  const thin = Math.min(p.width, 1);
+  const behind = `<rect x="22.5" y="4.5" width="6" height="8" rx="1" fill="none" stroke="${p.line}" stroke-width="${thin}"/>`;
+  const top = `<rect x="20.5" y="7" width="6" height="8" rx="1" fill="${p.line}"/>`;
+  return { ...base, h: 28, svg: base.svg + behind + top + arrowBelow(p) };
+};
+
 /** A window on the right screen with a pin above it, the way it stays above the others. */
 const pinTop = (p) => {
   const base = mark(p);
@@ -233,6 +242,7 @@ const actions = {
   desk: { draw: mark, states: ["lit"] },
   "window-move": { draw: windowMove, states: ["lit"] },
   "window-focus": { draw: windowFocus, states: ["lit"] },
+  "stack-cycle": { draw: stackCycle, states: ["lit"] },
   "pin-top": { draw: pinTop, states: ["lit"] },
   release: { draw: release, states: ["lit"] },
   "snap-back": { draw: snapBack, states: ["lit"] },

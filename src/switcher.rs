@@ -12,6 +12,7 @@ use seam::api::PinKind;
 use seam::classify::{Verdict, WindowFacts, classify};
 use seam::config::WindowSize;
 use seam::desk;
+use seam::stack;
 use seam::winutil;
 use seam::workspace::{
     self, Bound, Candidate, OpenWith, OtherWindows, Pin, Place, RowState, RowStatus, Rule, SESSION_ID, Shown, Target,

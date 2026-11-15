@@ -315,6 +315,26 @@ pub fn clear_zone_stamp(h: HWND) {
     }
 }
 
+/// Which stack a window is in and its place there, beside the zone stamp, so a restart
+/// of the tray finds its stacks again. The bits are `stack::stamp`'s.
+const STACK: PCWSTR = w!("Seam_stack");
+
+/// The window's `Seam_stack` bits, or 0 for none.
+pub fn stack_stamp(h: HWND) -> u64 {
+    unsafe { GetPropW(h, STACK).0 as usize as u64 }
+}
+
+/// Replace the stack stamp. 0 removes it.
+pub fn set_stack_stamp(h: HWND, bits: u64) {
+    unsafe {
+        if bits == 0 {
+            let _ = RemovePropW(h, STACK);
+        } else {
+            let _ = SetPropW(h, STACK, Some(HANDLE(bits as usize as *mut _)));
+        }
+    }
+}
+
 /// Pins and the focus border, kept on the window like the zone stamp, so a
 /// tray that starts again finds them (§3.5).
 const PIN: PCWSTR = w!("Seam_pin");
@@ -697,6 +717,29 @@ pub fn set_rect(h: HWND, r: Rect) {
 }
 
 /// Raise the window to the top of the others that aren't topmost, without activating it.
+/// Put `h` directly below `above` in the stacking order, without activating it. Below a
+/// topmost window it goes to the top of the others instead, so it never turns topmost.
+pub fn place_below(h: HWND, above: HWND) {
+    let flags = SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_ASYNCWINDOWPOS;
+    let topmost = unsafe { GetWindowLongPtrW(above, GWL_EXSTYLE) } as u32 & WS_EX_TOPMOST.0 != 0;
+    let after = if topmost { HWND_TOP } else { above };
+    unsafe {
+        let _ = SetWindowPos(h, Some(after), 0, 0, 0, 0, flags);
+    }
+}
+
+/// The highest of `among` in the stacking order, read from the top down until one is found.
+pub fn topmost_of(among: &[isize]) -> Option<isize> {
+    let mut h = unsafe { GetTopWindow(None) }.ok()?;
+    for _ in 0..10_000 {
+        if among.contains(&(h.0 as isize)) {
+            return Some(h.0 as isize);
+        }
+        h = unsafe { GetWindow(h, GW_HWNDNEXT) }.ok()?;
+    }
+    None
+}
+
 pub fn raise(h: HWND) {
     let flags = SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_ASYNCWINDOWPOS;
     unsafe {

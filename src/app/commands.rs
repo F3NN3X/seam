@@ -238,6 +238,17 @@ fn command_result(app: &mut App, command: Command, panel: bool) -> Reply {
         }
         Command::SeamPause(on) => Ok(json!({ "paused": set_paused(app, on) })),
         Command::WindowUngroup { hwnd } => share::take_out(hwnd),
+        Command::WindowStack { hwnd, on } => {
+            let h = hwnd.map_or_else(|| unsafe { GetForegroundWindow() }, |h| HWND(h as *mut _));
+            match snap::stack_set(h, on) {
+                Ok(windows) => Ok(json!({ "on": on, "windows": windows })),
+                Err(why) => refused(why),
+            }
+        }
+        Command::WindowStackCycle(next) => match snap::stack_cycle(unsafe { GetForegroundWindow() }, next, true) {
+            Ok((hwnd, position, windows)) => Ok(json!({ "hwnd": hwnd, "position": position, "windows": windows })),
+            Err(why) => refused(why),
+        },
         Command::SessionRestore => match saved_session(app) {
             Some(session) => restore_session(app, session.workspace()),
             None => Err(RpcError::new(api::NOT_FOUND, "No last session is saved for this desk")),

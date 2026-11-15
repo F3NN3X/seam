@@ -30,7 +30,13 @@ pub struct Switched {
     pub placed: usize,
     /// App and reason.
     pub skipped: Vec<(String, String)>,
+    /// The windows the rows put in one zone as a stack: the screen and zones, from 0,
+    /// and the windows from the top.
+    pub stacks: Vec<(Zones, Vec<isize>)>,
 }
+
+/// A screen's id and the first and last of its zones, from 0.
+pub type Zones = (String, usize, usize);
 
 /// Bumped by every switch, so a running one can see a newer one has replaced it.
 static SWITCH_GEN: AtomicU64 = AtomicU64::new(0);
@@ -152,7 +158,29 @@ fn run_switch(job: &SwitchJob, mine: u64) -> Option<Switched> {
         tally.in_place
     );
     let launched = starts.launched;
-    Some(Switched { id: ws.id.clone(), name: ws.name.clone(), launched, placed: tally.placed, skipped: tally.skipped })
+    let stacks = stacks_of(ws, &found);
+    let (id, name, placed, skipped) = (ws.id.clone(), ws.name.clone(), tally.placed, tally.skipped);
+    Some(Switched { id, name, launched, placed, skipped, stacks })
+}
+
+/// The rows with a place in a stack, whose windows were found, grouped by screen and zones.
+fn stacks_of(ws: &Workspace, found: &[Option<isize>]) -> Vec<(Zones, Vec<isize>)> {
+    let row = |(rule, hwnd): (&Rule, &Option<isize>)| {
+        let (rank, _) = rule.stack.zip(*hwnd)?;
+        let Target::Zone { zone, span_to } = rule.target else { return None };
+        let from = zone.checked_sub(1)? as usize;
+        let to = span_to.and_then(|t| t.checked_sub(1)).map_or(from, |t| t as usize);
+        Some(((rule.monitor.clone(), from, to.max(from)), rank))
+    };
+    let rows: Vec<Option<(Zones, u32)>> = ws.windows.iter().zip(found).map(row).collect();
+    let groups = stack::groups(&rows);
+    groups
+        .into_iter()
+        .filter_map(|group| {
+            let zone = rows[*group.first()?].as_ref()?.0.clone();
+            Some((zone, group.iter().filter_map(|i| found[*i]).collect()))
+        })
+        .collect()
 }
 
 /// An unbound place row keeps the window it matched by app from now on.

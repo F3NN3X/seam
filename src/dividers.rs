@@ -646,7 +646,7 @@ impl State {
             }
             moved.push(Zoned { hwnd: m.hwnd, zone: (s.id.clone(), m.from, m.to), at, moving: false });
         }
-        let layout = groups::relabel(s.layout.template, tree.clone());
+        let layout = groups::relabel(&s.layout, tree.clone());
         s.layout = layout.clone();
         wincontrol::save_moved(scene.owner, s.id.clone(), layout, moved);
         true

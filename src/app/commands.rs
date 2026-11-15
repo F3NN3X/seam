@@ -108,6 +108,14 @@ pub(super) fn run_command(app: &mut App, queued: Queued) {
             tiling::free_tiling(app, number, Some(reply));
             return;
         }
+        Command::ScreenRotate { number, back } => {
+            turn::start_turn(app, Verb::Rotate, number, !back, Some(reply));
+            return;
+        }
+        Command::ScreenResetSizes(number) => {
+            turn::start_turn(app, Verb::Reset, number, true, Some(reply));
+            return;
+        }
         Command::ScreenTile(number) => {
             let at = number.map_or_else(tile::pointer, |n| At::Screen(n as usize));
             start_tile(app, at, Some(reply));

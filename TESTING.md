@@ -105,6 +105,22 @@ Set a key for **Show overview** on Shortcuts (it has no key until you set one). 
 - [ ] **Scaling.** On a desk with screens at 100% and 150%, the text and tiles are the same physical size on both, and the previews are sharp.
 - [ ] **API.** `overview.show` opens it and answers at once; a second call while it's open changes nothing. From `seam-mcp` it answers error 4.
 
+## Rotate windows and Reset sizes
+
+Set keys for **Rotate windows** and **Reset sizes** on Shortcuts (neither has a key until you set one). Use a screen with the Grid layout and three or four windows snapped in it.
+
+- [ ] **Rotate.** Press the Rotate key with the pointer on that screen. Every snapped window goes to the next zone and the last to the first, and a notification offers Undo. Press the same key with Shift added: they go the other way. If the key already has Shift in it, only the one direction works.
+- [ ] **Undo.** Click the notification within 8 seconds: every window goes back. After 8 seconds a click does nothing.
+- [ ] **Left alone.** Pin one snapped window on top, minimize another and float a third. Rotate. The pinned window stays, its zone is stepped over, the minimized and floating ones don't move, and the notice says how many stayed. A window of an app running as administrator stays too.
+- [ ] **A stack moves as one.** Make a stack of two windows in one zone (**S** while dragging, or `window.stack`). Rotate: both go to the next zone and are still a stack there, with the same one on top. Undo puts the stack back whole.
+- [ ] **A window over two zones.** Snap one window over two zones (Ctrl while dragging). Rotate: it stays, and the zones it covers are stepped over.
+- [ ] **Changed, then reset.** Drag a divider so the layout shows **Changed** on the Zones page, then press the Reset key with the pointer on that screen. The layout goes back to the template it was cut like, say Grid, its windows follow it zone for zone, and a notification offers Undo, which gives back the dragged layout and the windows. Reset again: a notice says the layout hasn't been changed. A layout with a zone added or removed can't be reset, and the notice says Seam can't tell which layout it came from.
+- [ ] **Tiled screen, rotate.** Turn on smart tiling on a screen with four windows and rotate. They step round the tiles, floating ones stay out, and a window you moved by hand with Win+arrow floats first and is not moved back. Undo puts them in their old tiles.
+- [ ] **Tiled screen, reset.** On a tiled screen drag a gap's handle, then press Reset. The splits are even again (Main + stack goes back to its default share), and Undo gives the dragged splits back.
+- [ ] **API.** `screen.rotate` with `{"number":2,"dir":"back"}` rotates screen 2 the other way and answers `{ok, moved, left}`. `screen.reset_sizes` answers the same, and `3` with the reason for a layout that hasn't changed. `{"number":9}` answers `1`, and a `dir` that isn't `next` or `back` answers -32602.
+- [ ] **Assistants.** With **Let assistants use Seam (MCP)** on, an assistant's call of either answers that assistants can't do that.
+- [ ] **Stand-by.** With Seam paused, or another window manager running, both keys say why in a notice and nothing moves.
+
 ## Tray and shortcuts
 
 - [ ] **Menu.** Right-click the tray icon: status line, **Open Seam…**, **Line Up Screens…**, the **Workspaces** menu when there are workspaces, **Tile windows**, **Remap pointer at borders**, **Release pinned windows**, **Quit Seam**.
@@ -1117,7 +1133,7 @@ Set **Switch back to the previous workspace** on Shortcuts (it has no key until 
 
 Build the plugin with `pnpm install`, `pnpm build` and `pnpm run pack` in `integrations/streamdeck`. Run these with Seam running and **Let other apps control Seam** on, and the Stream Deck app open.
 
-- [ ] **Install the packed file.** Double-click `dist\co.f3nn3x.seam.streamDeckPlugin`. Stream Deck installs it, and a Seam group with twenty-one actions appears in the action list. General in Seam lists "streamdeck" among the connected apps.
+- [ ] **Install the packed file.** Double-click `dist\co.f3nn3x.seam.streamDeckPlugin`. Stream Deck installs it, and a Seam group with twenty-two actions appears in the action list. General in Seam lists "streamdeck" among the connected apps.
 - [ ] **Switch workspace.** Drag the action to a key and pick a workspace in the dropdown, which lists the current desk's workspaces. The key shows its name. Press it: the workspace is applied, and the key lights once it's in use. Switch to another workspace by hotkey. The key goes dark.
 - [ ] **Drift dot.** With the key's workspace in use, drag one of its windows away. Within a second a small amber dot shows in the key's top-right corner. Press the key: the window goes back and the dot goes. Switch to another workspace: the key goes dark with no dot. Quit Seam while the dot shows: the key says "Seam isn't running" with no dot.
 - [ ] **Snap back.** Drag the action to a key. Move a window of the workspace in use and press it: the window goes back. With no workspace in use the key shows an alert.
@@ -1126,7 +1142,8 @@ Build the plugin with `pnpm install`, `pnpm build` and `pnpm run pack` in `integ
 - [ ] **Pause or resume remap.** The key reads "Remap on" and is lit. Press it. Crossings stop remapping, and the key reads "Remap paused". Press it again to resume. Pause from the tray menu instead. The key follows. With no borders lined up, the key shows paused.
 - [ ] **Zones on or off.** The key follows the Zones page. Press it to turn zones off and on. Change the setting on the Zones page. The key follows.
 - [ ] **Next and previous zone.** Focus a window and press each key. The window moves one zone forward or back. Press one with the desktop focused. The key shows an alert.
-- [ ] **Cycle stack.** Make a stack of two windows in a zone and focus one. Press the key: the other comes on top with the focus. Press it on a window in no stack: the key shows an alert. The plugin shows version 0.8.3.
+- [ ] **Cycle stack.** Make a stack of two windows in a zone and focus one. Press the key: the other comes on top with the focus. Press it on a window in no stack: the key shows an alert. The plugin shows version 0.8.4.
+- [ ] **Rotate windows.** Put windows in two zones of the screen under the pointer and press the key: each goes to the next zone, as the **Rotate windows** shortcut does. Press it on a screen with no zones: the key shows an alert.
 - [ ] **Move window.** Drag the action to a key and pick each direction in its settings. The key's title names the direction. Press it: the focused window moves that way as Shift+Win+Alt+arrows does. With nothing that way the key shows an alert.
 - [ ] **Focus window.** Drag the action to a key, pick a direction and press it while an app is focused. The window that way takes focus, even though the press came from the Stream Deck. With no window that way the key shows an alert.
 - [ ] **Apply layout by name.** Drag the action to a key. In its settings pick screen 1 and a layout, say Grid. The key shows "Grid". Press it: screen 1 takes the layout, as picking its tile on the Zones page does, and the key lights. With `zones.layouts` and `{"number":1}`, `current` is `grid`. The API's `zones.apply` with `{"number":1,"layout":"main + STACK"}` works too, and `{"number":1,"layout":"nope"}` answers `3`, `{}` answers `-32602`.

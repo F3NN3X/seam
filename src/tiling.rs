@@ -475,6 +475,24 @@ impl Tree {
         }
         tree
     }
+
+    /// The same windows in the same tiles with every split even again, as Reset sizes
+    /// asks. Smart goes back to halves; a fixed family is laid out as it is for a new
+    /// window, Main + stack at its default main share.
+    pub fn evened(&self) -> Tree {
+        let Some(node) = &self.node else { return self.clone() };
+        fn halved(node: &Node) -> Node {
+            match node {
+                Node::Split { split: dir, a, b, .. } => split(*dir, 0.5, halved(a), halved(b)),
+                Node::Leaf(_) => leaf(),
+            }
+        }
+        let node = match self.family {
+            Family::Smart => halved(node),
+            family => fixed(family, self.tiles.len(), None),
+        };
+        Tree { node: Some(node), ..self.clone() }
+    }
 }
 
 #[cfg(test)]
@@ -889,5 +907,40 @@ mod tests {
         covers(&back);
         assert_eq!(Family::parse("main_stack"), Some(Family::MainStack));
         assert_eq!(Family::parse("dwindle"), None);
+    }
+
+    #[test]
+    fn evening_out_gives_every_family_its_proportions_back() {
+        let ratio_of = |tree: &Tree| match tree.layout() {
+            Node::Split { ratio, .. } => ratio,
+            Node::Leaf(_) => panic!("no split"),
+        };
+        for family in Family::ALL {
+            let tree = grow(family, 4);
+            // Fresh from tiling a family is even already.
+            assert_eq!(tree.evened(), tree, "{family:?}");
+            let dragged = Tree { node: Some(zones::set_ratio(&tree.layout(), &[], 0.8)), ..tree.clone() };
+            let even = dragged.evened();
+            assert_eq!(even.tiles, tree.tiles, "{family:?} keeps the windows in their tiles");
+            assert_eq!(even.layout(), tree.layout(), "{family:?}");
+            covers(&even);
+        }
+        // Main + stack goes back to its default main share, whatever a handle gave it.
+        let main = grow(Family::MainStack, 3);
+        let dragged = Tree { node: Some(zones::set_ratio(&main.layout(), &[], 0.8)), ..main.clone() };
+        assert_eq!(ratio_of(&dragged), 0.8);
+        assert_eq!(ratio_of(&dragged.evened()), MAIN_SHARE);
+        // Smart: every split back to halves, deep ones too, with the same shape.
+        let smart = grow(Family::Smart, 4);
+        let deep = Tree { node: Some(zones::set_ratio(&smart.layout(), &[true], 0.3)), ..smart.clone() };
+        assert_ne!(deep.layout(), smart.layout());
+        assert_eq!(deep.evened().layout(), smart.layout());
+        // An empty tile keeps its place, and the splits even out around it.
+        let gap = Tree { node: Some(zones::set_ratio(&smart.layout(), &[], 0.7)), ..smart.vacate(2).unwrap() };
+        let even = gap.evened();
+        assert_eq!(even.tiles, gap.tiles);
+        assert_eq!(even.layout(), smart.layout());
+        // Nothing tiled, nothing to even.
+        assert_eq!(Tree::new(Family::Grid).evened(), Tree::new(Family::Grid));
     }
 }

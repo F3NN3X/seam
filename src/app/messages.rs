@@ -425,6 +425,12 @@ unsafe fn on_hotkey(id: i32) {
             HOTKEY_FREE_TILING => {
                 with_app(|a| tiling::free_tiling(a, None, None));
             }
+            id @ (HOTKEY_ROTATE | HOTKEY_ROTATE_BACK) => {
+                with_app(|a| turn::start_turn(a, Verb::Rotate, None, id == HOTKEY_ROTATE, None));
+            }
+            HOTKEY_RESET_SIZES => {
+                with_app(|a| turn::start_turn(a, Verb::Reset, None, true, None));
+            }
             HOTKEY_DIVIDER_MENU => {
                 if let Err(why) = snap::size_menu(GetForegroundWindow()) {
                     log::info!("size menu hotkey: {why}");

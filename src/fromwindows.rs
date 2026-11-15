@@ -39,6 +39,6 @@ pub(super) fn run(job: &Job, at: At) -> Result<Outcome, String> {
         })
         .collect();
     // The id is new to the library: the tray adds the layout under it when it saves.
-    let layout = ZoneLayout { template: Template::Custom, custom: Some(library::new_id(&[])), tree };
+    let layout = ZoneLayout { template: Template::Custom, custom: Some(library::new_id(&[])), from: None, tree };
     Ok(Outcome::Saved(list, g.id.clone(), layout))
 }

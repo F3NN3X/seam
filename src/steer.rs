@@ -115,7 +115,7 @@ impl Engine {
         }
         let gap = (self.settings.gap.min(MAX_GAP) as f32 * g.dpi as f32 / 96.0).round() as i32;
         Some(Split {
-            layout: groups::relabel(before.template, tree.clone()),
+            layout: groups::relabel(&before, tree.clone()),
             zones: zones::rects(&tree, g.work, gap),
             before,
             cells,
@@ -209,6 +209,7 @@ impl Engine {
             pick: false,
             split: true,
             pulled: false,
+            turn: None,
         };
         wincontrol::save_split(self.owner, id, split.layout, done);
     }
@@ -237,7 +238,7 @@ impl Engine {
             log::info!("pull out: screen {}, zone {}, another window holds it, so a plain drop", number + 1, k + 1);
             return;
         }
-        let layout = groups::relabel(before.template, tree.clone());
+        let layout = groups::relabel(&before, tree.clone());
         let gap = (self.settings.gap.min(MAX_GAP) as f32 * g.dpi as f32 / 96.0).round() as i32;
         let (cells, zone_rects) = (zones::rects(&tree, g.work, 0), zones::rects(&tree, g.work, gap));
         self.screens[number].layout = Some(layout.clone());
@@ -306,6 +307,7 @@ impl Engine {
             pick: false,
             split: false,
             pulled: true,
+            turn: None,
         };
         wincontrol::save_split(self.owner, id, layout, done);
     }

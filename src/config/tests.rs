@@ -244,3 +244,11 @@ fn open_with_is_dropped_on_import_and_hidden_from_other_clients() {
     // The saved config, which the panel reads whole, still has it.
     assert_eq!(config["desks"]["a"]["workspaces"][0]["windows"][0]["open_with"], r"C:\x");
 }
+
+#[test]
+fn an_older_file_has_no_rotate_or_reset_key() {
+    let c: Config = serde_json::from_str(r#"{"hotkeys": {"overview": "Ctrl+Alt+O"}}"#).unwrap();
+    assert_eq!((c.hotkeys.rotate, c.hotkeys.reset_sizes), (None, None));
+    let set: Config = serde_json::from_str(r#"{"hotkeys": {"rotate": "Ctrl+Alt+R"}}"#).unwrap();
+    assert_eq!(set.hotkeys.rotate.as_deref(), Some("Ctrl+Alt+R"));
+}

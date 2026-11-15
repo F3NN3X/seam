@@ -9,6 +9,7 @@ import {
 	PinOnTop,
 	QuickLayout,
 	ReleasePinned,
+	RotateWindows,
 	Remap,
 	Desk,
 	FocusOnThisWindow,
@@ -41,6 +42,7 @@ streamDeck.actions.registerAction(new PreviousZone());
 streamDeck.actions.registerAction(new MoveWindow());
 streamDeck.actions.registerAction(new FocusWindow());
 streamDeck.actions.registerAction(new CycleStack());
+streamDeck.actions.registerAction(new RotateWindows());
 streamDeck.actions.registerAction(new PinOnTop());
 streamDeck.actions.registerAction(new ReleasePinned());
 streamDeck.actions.registerAction(new FocusOnThisWindow());

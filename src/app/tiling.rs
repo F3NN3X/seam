@@ -15,7 +15,7 @@ pub(super) struct TilingWait {
 }
 
 /// The screen a key, the tray or the API means: its Line Up number, or the one under the pointer.
-fn screen_of(app: &App, number: Option<u32>) -> Option<String> {
+pub(super) fn screen_of(app: &App, number: Option<u32>) -> Option<String> {
     let at = match number {
         Some(n) => n.checked_sub(1)? as usize,
         None => {

@@ -460,7 +460,7 @@ impl Engine {
             else {
                 continue;
             };
-            let layout = ZoneLayout { template: Template::Custom, custom: None, tree: a.tree.clone() };
+            let layout = ZoneLayout { template: Template::Custom, custom: None, from: None, tree: a.tree.clone() };
             screens.push(dividers::Screen { id: a.key(), bounds: a.area, work: a.area, dpi, gap: a.gap, layout });
             let cells = a.cells();
             for &(k, leaf) in &a.members {

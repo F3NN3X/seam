@@ -84,6 +84,12 @@ pub fn rebuild(list: Vec<((String, usize, usize), Vec<isize>)>) {
 
 const BUSY: &str = "Seam is busy, try again";
 
+/// Whether every window of a stack is sent to the same zones, which a move may keep it in.
+fn goes_whole<T: PartialEq>(members: &[isize], to: impl Fn(&isize) -> Option<T>) -> bool {
+    let first = members.first().and_then(&to);
+    first.is_some() && members.iter().all(|m| to(m) == first)
+}
+
 unsafe extern "system" fn on_focus(_: HWINEVENTHOOK, _: u32, hwnd: HWND, object: i32, _: i32, _: u32, _: u32) {
     if object == OBJID_WINDOW.0 {
         with_engine(|e| e.stack_focus(hwnd.0 as isize));
@@ -400,6 +406,20 @@ impl Engine {
         more
     }
 
+    /// Moves are about to send every window of a stack to the same zones, as a rotation, a
+    /// reset or the Undo of either does: the stack stays one there, and its top shows once
+    /// its windows have landed. A stack only some of whose windows are in the list leaves
+    /// for other zones as it always did.
+    pub(super) fn stack_keep(&mut self, list: &[Placement]) {
+        let to = |m: &isize| list.iter().find(|p| p.hwnd == *m).and_then(|p| p.zone.clone());
+        let whole: Vec<(Vec<isize>, isize)> =
+            self.stacks.iter().filter(|s| goes_whole(&s.members, to)).map(|s| (s.members.clone(), s.top())).collect();
+        for (members, top) in whole {
+            self.carried.extend(members);
+            self.restack.push(top);
+        }
+    }
+
     /// A re-fit is over: each stack's others go back below its top.
     pub(super) fn stack_raise_tops(&self) {
         for s in self.stacks.iter() {
@@ -590,4 +610,20 @@ impl Engine {
 fn owner_of(m: isize) -> (u32, u64) {
     let pid = winutil::process_id(hwnd_of(m));
     (pid, seam::process::started(pid).unwrap_or(0))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_stack_stays_one_only_when_every_window_goes_to_the_same_zones() {
+        let zone = |a: usize| Some(("M", a, a));
+        let all = |m: &isize| zone(if *m < 10 { 1 } else { 2 });
+        assert!(goes_whole(&[1, 2, 3], all));
+        assert!(!goes_whole(&[1, 2, 11], all), "one goes elsewhere");
+        assert!(!goes_whole(&[1, 2], |m| (*m == 1).then_some(("M", 1, 1))), "one isn't moved at all");
+        assert!(!goes_whole(&[1, 2], |_| None::<(&str, usize, usize)>));
+        assert!(!goes_whole::<u8>(&[], |_| Some(1)));
+    }
 }

@@ -5,9 +5,9 @@ use super::*;
 /// How long a desk can go unseen before "Forget desks not seen in 30 days" takes it.
 const STALE_DAYS: u64 = 30;
 
-/// A short local date, such as "9 Nov".
+/// A short local date in the user's format, such as "9 Nov".
 pub(super) fn short_date(unix: u64) -> Option<String> {
-    winutil::local_date(unix).map(month_day)
+    winutil::local_date(unix).map(seam::locale::month_day_local)
 }
 
 fn now() -> u64 {

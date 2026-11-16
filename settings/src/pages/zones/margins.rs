@@ -61,7 +61,7 @@ pub fn row(panel: &Panel, p: Palette, window: &mut Window, cx: &mut Context<Pane
     let sliders = |range: std::ops::Range<usize>| {
         let mut column = div().flex().flex_col().gap(px(4.));
         for i in range {
-            let label = div().w(px(48.)).text_size(px(12.)).text_color(p.muted).child(SIDES[i]);
+            let label = div().w(px(48.)).text_size(px(12.)).text_color(p.text_muted).child(SIDES[i]);
             column = column.child(
                 div()
                     .flex()

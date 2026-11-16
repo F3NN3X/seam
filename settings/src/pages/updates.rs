@@ -155,7 +155,15 @@ fn ago(unix: u64) -> String {
 }
 
 fn shell(p: Palette) -> Div {
-    div().flex().flex_col().gap(px(12.)).p(px(16.)).bg(p.card).border_1().border_color(p.hairline).rounded(px(12.))
+    div()
+        .flex()
+        .flex_col()
+        .gap(px(12.))
+        .p(px(16.))
+        .bg(p.surface_card)
+        .border_1()
+        .border_color(p.hairline)
+        .rounded(px(12.))
 }
 
 fn title(text: impl Into<SharedString>) -> Div {
@@ -167,24 +175,24 @@ fn busy_card(label: String, p: Palette) -> Div {
         .flex_row()
         .items_center()
         .gap(px(12.))
-        .child(Spinner::new().color(p.muted))
+        .child(Spinner::new().color(p.text_muted))
         .child(div().text_size(px(14.)).child(label))
 }
 
 fn progress_card(version: &str, done: u64, total: u64, p: Palette) -> Div {
     let percent = if total == 0 { 0. } else { (done as f32 / total as f32) * 100. };
-    let range = |text: String| div().text_size(px(12.)).text_color(p.muted).child(text);
+    let range = |text: String| div().text_size(px(12.)).text_color(p.text_muted).child(text);
     let spread = |left: Div, right: Div| div().flex().justify_between().child(left).child(right);
     shell(p)
         .child(spread(
             title(format!("Downloading Seam {version}")),
-            ui::tabular(div().text_size(px(16.)).text_color(p.secondary)).child(format!(
+            ui::tabular(div().text_size(px(16.)).text_color(p.text_secondary)).child(format!(
                 "{:.1} of {}",
                 done as f64 / 1_048_576.,
                 megabytes(total)
             )),
         ))
-        .child(Bar::new("download").value(percent).color(p.text).h(px(4.)))
+        .child(Bar::new("download").value(percent).color(p.text_primary).h(px(4.)))
         .child(ui::tabular(spread(range("0 MB".into()), range(megabytes(total)))))
 }
 
@@ -266,7 +274,7 @@ fn ready_card(panel: &Panel, version: String, cx: &mut Context<Panel>) -> Div {
         div()
             .pl(px(20.))
             .text_size(px(13.))
-            .text_color(p.muted)
+            .text_color(p.text_muted)
             .child("Seam closes for a moment while it swaps files, then starts again with your layouts"),
     )
 }

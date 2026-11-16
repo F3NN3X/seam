@@ -192,7 +192,7 @@ pub fn render(panel: &mut Panel, window: &mut Window, cx: &mut Context<Panel>) -
         ))
         .child(assistants)
         .child(files)
-        .child(div().text_size(px(12.)).text_color(p.muted).child("Seam follows your Windows light or dark mode"))
+        .child(div().text_size(px(12.)).text_color(p.text_muted).child("Seam follows your Windows light or dark mode"))
 }
 
 /// A switch's change handler that patches one boolean setting.
@@ -443,7 +443,7 @@ fn files_section(debug_log: Stateful<Div>, p: Palette, cx: &mut Context<Panel>) 
         .font_family(cx.theme().mono_font_family.clone())
         .font_weight(FontWeight::NORMAL)
         .text_size(px(13.))
-        .text_color(p.secondary)
+        .text_color(p.text_secondary)
         .child(folder_label());
     section(
         "Files and troubleshooting",

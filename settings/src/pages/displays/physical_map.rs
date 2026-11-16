@@ -54,14 +54,14 @@ fn screen_tile(
         .items_center()
         .justify_center()
         .overflow_hidden()
-        .bg(p.card)
+        .bg(p.surface_card)
         .border_1()
         .border_color(p.hairline_strong)
         .when(!sized, |d| d.border_dashed())
         .rounded(px(4.))
         .cursor_pointer()
         .child(div().text_size(px(16.)).child(number.to_string()))
-        .child(div().text_size(px(11.)).text_color(p.secondary).truncate().child(label))
+        .child(div().text_size(px(11.)).text_color(p.text_secondary).truncate().child(label))
         .on_click(cx.listener(move |panel, _, window, cx| {
             panel.command("screen.identify", json!({ "number": number }), window, cx);
         }))
@@ -160,17 +160,19 @@ fn note_at(x: f64, y: f64, text: String, p: Palette) -> Div {
         .flex()
         .items_center()
         .justify_center()
-        .child(div().px(px(4.)).bg(p.page).rounded(px(4.)).text_size(px(11.)).text_color(p.muted).child(text))
+        .child(
+            div().px(px(4.)).bg(p.surface_page).rounded(px(4.)).text_size(px(11.)).text_color(p.text_muted).child(text),
+        )
 }
 
 /// The line, and its note if it fits, for one border on the Seam view.
 fn seam_border(panel: &Panel, a: &Placed, other: &Placed, b: &Border, view: &View, p: Palette) -> Vec<Div> {
     let lined_up = b.state == BorderState::LinedUp;
     let (style, color) = match (b.not_on_desk, b.glued, lined_up) {
-        (true, ..) => (Line::Dotted, p.muted),
+        (true, ..) => (Line::Dotted, p.text_muted),
         (_, true, _) => (Line::Dashed, p.accent),
         (_, _, true) => (Line::Solid, p.accent),
-        _ => (Line::Dashed, p.muted),
+        _ => (Line::Dashed, p.text_muted),
     };
     let run = if b.not_on_desk { windows_run(panel, a, other, b.side, view) } else { seam_run(a, other, b.side, view) };
     let Some(run) = run else { return vec![] };
@@ -187,7 +189,7 @@ fn seam_border(panel: &Panel, a: &Placed, other: &Placed, b: &Border, view: &Vie
 fn seam_map(panel: &Panel, state: &State, width: f64, p: Palette, cx: &mut Context<Panel>) -> Div {
     let frames: Vec<Frame> = panel.layout.iter().map(|s| (s.x, s.y, s.w, s.h)).collect();
     let view = fit(&frames, width);
-    let mut surface = div().relative().w_full().h(px(MAP_HEIGHT)).bg(p.page).rounded(px(8.));
+    let mut surface = div().relative().w_full().h(px(MAP_HEIGHT)).bg(p.surface_page).rounded(px(8.));
     for (s, frame) in panel.layout.iter().zip(&frames) {
         surface = surface.child(screen_tile(panel, s.index, *frame, s.sized, &view, p, cx));
     }
@@ -206,8 +208,8 @@ fn seam_map(panel: &Panel, state: &State, width: f64, p: Palette, cx: &mut Conte
             .flex_col()
             .gap(px(2.))
             .text_size(px(11.))
-            .text_color(p.muted)
-            .child(div().w(px((SCALE_BAR_MM * view.scale) as f32)).h(px(1.)).bg(p.muted))
+            .text_color(p.text_muted)
+            .child(div().w(px((SCALE_BAR_MM * view.scale) as f32)).h(px(1.)).bg(p.text_muted))
             .child("20 cm"),
     )
 }
@@ -264,7 +266,7 @@ fn windows_map(panel: &Panel, state: &State, width: f64, p: Palette, cx: &mut Co
     let rects: Vec<Rect> = state.screens.iter().map(|s| Rect::new(s.rect.x, s.rect.y, s.rect.w, s.rect.h)).collect();
     let view = fit(&frames, width);
     let (x_at, y_at) = (|v: i32| f64::from(v) * view.scale + view.left, |v: i32| f64::from(v) * view.scale + view.top);
-    let mut surface = div().relative().w_full().h(px(MAP_HEIGHT)).bg(p.page).rounded(px(8.));
+    let mut surface = div().relative().w_full().h(px(MAP_HEIGHT)).bg(p.surface_page).rounded(px(8.));
     for (s, frame) in state.screens.iter().zip(&frames) {
         surface = surface.child(screen_tile(panel, (s.number as usize).saturating_sub(1), *frame, true, &view, p, cx));
     }
@@ -277,7 +279,7 @@ fn windows_map(panel: &Panel, state: &State, width: f64, p: Palette, cx: &mut Co
                 } else {
                     Run { along_y, start: x_at(from), end: x_at(to), across: y_at(edge) }
                 };
-                surface = surface.children(stroke(&run, 2., Line::Solid, p.secondary));
+                surface = surface.children(stroke(&run, 2., Line::Solid, p.text_secondary));
             }
             Between::Note { x, y, text } => surface = surface.child(note_at(x_at(x), y_at(y), text, p)),
         }

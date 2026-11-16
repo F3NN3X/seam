@@ -79,7 +79,7 @@ fn header(
             .flex_none()
             .items_center()
             .gap(px(12.))
-            .child(div().text_size(px(14.)).text_color(p.secondary).child(if zones_cfg.enabled {
+            .child(div().text_size(px(14.)).text_color(p.text_secondary).child(if zones_cfg.enabled {
                 "Zones on"
             } else {
                 "Zones off"
@@ -141,7 +141,7 @@ fn snapping_keys_card(
             view.update(cx, |panel, cx| panel.patch(json!({ "zones": { "span_key": key } }), window, cx));
         }
     });
-    let ends = |text: &'static str| div().text_size(px(12.)).text_color(p.muted).child(text);
+    let ends = |text: &'static str| div().text_size(px(12.)).text_color(p.text_muted).child(text);
     let slider = div()
         .flex()
         .items_center()
@@ -159,7 +159,7 @@ fn snapping_keys_card(
     div()
         .flex()
         .flex_col()
-        .bg(p.card)
+        .bg(p.surface_card)
         .border_1()
         .border_color(p.hairline)
         .rounded(px(12.))
@@ -680,7 +680,7 @@ fn layout_picker(
             cx.notify();
         }))
     });
-    let label = |text: &'static str| div().text_size(px(13.)).text_color(p.secondary).child(text);
+    let label = |text: &'static str| div().text_size(px(13.)).text_color(p.text_secondary).child(text);
     let picker = div()
         .flex()
         .flex_col()

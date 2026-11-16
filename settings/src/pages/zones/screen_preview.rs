@@ -18,7 +18,7 @@ pub(super) fn preview(mon: &Mon, layout: Option<&ZoneLayout>, gap: u32, room: f6
         .min_w_0()
         .h(px(height))
         .p(px(16.))
-        .bg(p.card)
+        .bg(p.surface_card)
         .border_1()
         .border_color(p.hairline)
         .rounded(px(12.));
@@ -55,13 +55,15 @@ pub(super) fn preview(mon: &Mon, layout: Option<&ZoneLayout>, gap: u32, room: f6
                 .items_center()
                 .justify_center()
                 .overflow_hidden()
-                .bg(p.raised)
+                .bg(p.surface_raised)
                 .border_1()
                 .border_color(p.hairline_strong)
                 .rounded(px(6.))
                 .hover(|d| d.bg(p.accent.opacity(0.1)).border_color(p.accent))
                 .child(div().text_size(px(24.)).child((i + 1).to_string()))
-                .child(ui::tabular(div().text_size(px(13.)).text_color(p.secondary).child(format!("{} px", cell.w)))),
+                .child(ui::tabular(
+                    div().text_size(px(13.)).text_color(p.text_secondary).child(format!("{} px", cell.w)),
+                )),
         );
     }
     card.child(surface)

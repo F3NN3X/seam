@@ -52,12 +52,12 @@ fn zones_thumb(saved: Option<&Value>, p: Palette) -> Div {
     let frame = div().relative().flex_none().w(px(THUMB.0)).h(px(THUMB.1)).rounded(px(4.));
     match saved.and_then(workspace::screen_layout) {
         None => frame.border_1().border_dashed().border_color(p.hairline_strong),
-        Some(None) => frame.bg(p.page),
+        Some(None) => frame.bg(p.surface_page),
         Some(Some(layout)) => {
             let area = zones::Rect { x: 0, y: 0, w: THUMB.0 as i32, h: THUMB.1 as i32 };
             frame.children(zones::rects(&layout.tree, area, 2).into_iter().map(|r| {
                 let at = |v: i32| px(v as f32);
-                div().absolute().left(at(r.x)).top(at(r.y)).w(at(r.w)).h(at(r.h)).rounded(px(2.)).bg(p.segment)
+                div().absolute().left(at(r.x)).top(at(r.y)).w(at(r.w)).h(at(r.h)).rounded(px(2.)).bg(p.surface_segment)
             }))
         }
     }
@@ -163,8 +163,8 @@ pub fn zones_section(
         .role(Role::Button)
         .aria_label(format!("Zones, {about}"))
         .cursor_pointer()
-        .when(ui::focused(&focus, window), |d| d.focus_ring_style(window, cx))
-        .child(row("Zones", Some(about.clone().into()), Icon::new(chevron).size(px(16.)).text_color(p.muted), p))
+        .when(ui::focused(&focus, window), |d| ui::focus_ring(d, 0., 0., p))
+        .child(row("Zones", Some(about.clone().into()), Icon::new(chevron).size(px(16.)).text_color(p.text_muted), p))
         .on_click(cx.listener(move |panel, _, _, cx| toggle(panel, &click, cx)))
         .on_key_down(cx.listener(move |panel, e: &KeyDownEvent, _, cx| {
             if matches!(e.keystroke.key.as_str(), "space" | "enter") {
@@ -179,8 +179,14 @@ pub fn zones_section(
     for (i, (screen, name)) in mons.iter().enumerate() {
         let saved = ws.zones.get(screen);
         let moved = screen_moved(panel, ws, screen).then(|| {
-            let word = div().text_size(px(12.)).text_color(p.secondary).child("Moved");
-            div().flex().items_center().gap(px(8.)).child(ui::dot(p.secondary, false)).child(word).into_any_element()
+            let word = div().text_size(px(12.)).text_color(p.text_secondary).child("Moved");
+            div()
+                .flex()
+                .items_center()
+                .gap(px(8.))
+                .child(ui::dot(p.text_secondary, false))
+                .child(word)
+                .into_any_element()
         });
         let menu = zones_menu(panel, i + 1, screen, ws, cx);
         let control = div().flex().items_center().gap(px(8.)).child(zones_thumb(saved, p)).child(menu);
@@ -195,10 +201,10 @@ pub fn zones_section(
             .on_click(cx.listener(move |panel, _, window, cx| {
                 set_zones(panel, &id, &screen, None, note.clone(), window, cx);
             }));
-        let about = div().text_size(px(13.)).text_color(p.muted).child("Not connected").into_any_element();
+        let about = div().text_size(px(13.)).text_color(p.text_muted).child("Not connected").into_any_element();
         let control =
             div().flex().items_center().gap(px(8.)).child(zones_thumb(Some(saved), p).opacity(0.5)).child(remove);
-        rows.push(div().text_color(p.muted).child(ui::row_with(model, Some(about), control)).into_any_element());
+        rows.push(div().text_color(p.text_muted).child(ui::row_with(model, Some(about), control)).into_any_element());
     }
     rows
 }

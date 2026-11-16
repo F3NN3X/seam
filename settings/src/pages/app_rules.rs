@@ -221,7 +221,7 @@ fn rule_row(
         .flex_1()
         .min_w_0()
         .child(div().text_size(px(14.)).truncate().child(title.clone()))
-        .child(div().text_size(px(12.)).text_color(p.muted).truncate().child(meta));
+        .child(div().text_size(px(12.)).text_color(p.text_muted).truncate().child(meta));
     div()
         .flex()
         .items_center()
@@ -243,7 +243,7 @@ fn rule_row(
 }
 
 fn group_head(text: &'static str, p: Palette) -> AnyElement {
-    div().px(px(16.)).py(px(8.)).text_size(px(12.)).text_color(p.muted).child(text).into_any_element()
+    div().px(px(16.)).py(px(8.)).text_size(px(12.)).text_color(p.text_muted).child(text).into_any_element()
 }
 
 /// An app Seam leaves alone, with Remove. Undo puts the list back.

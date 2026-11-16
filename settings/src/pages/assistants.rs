@@ -69,7 +69,7 @@ pub fn render(panel: &Panel, view: &Entity<Panel>, window: &mut Window, cx: &mut
         .font_family(cx.theme().mono_font_family.clone())
         .font_weight(FontWeight::NORMAL)
         .text_size(px(13.))
-        .text_color(p.secondary)
+        .text_color(p.text_secondary)
         .child(path.clone().unwrap_or_else(|| "Not included in this build".into()));
     let copy = path.map(|path| {
         ui::secondary("copy-mcp-path", "Copy", cx).on_click(cx.listener(move |_, _, window, cx| {

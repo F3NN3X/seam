@@ -9,17 +9,17 @@ use gpui_kit::component::tooltip::Tooltip;
 fn status_cell(i: usize, state: Option<RowState>, p: Palette) -> AnyElement {
     let (dot, word) = match state {
         Some(RowState::InPlace) => (ui::dot(p.positive, true), "In place"),
-        Some(RowState::Moved) => (ui::dot(p.secondary, false), "Moved"),
-        Some(RowState::Minimized) => (ui::dot(p.secondary, false), "Minimized"),
-        Some(RowState::NotRunning) => (ui::dot(p.muted, true), "Not running"),
-        Some(RowState::Background) => (ui::dot(p.muted, false), "Running in background"),
+        Some(RowState::Moved) => (ui::dot(p.text_secondary, false), "Moved"),
+        Some(RowState::Minimized) => (ui::dot(p.text_secondary, false), "Minimized"),
+        Some(RowState::NotRunning) => (ui::dot(p.text_muted, true), "Not running"),
+        Some(RowState::Background) => (ui::dot(p.text_muted, false), "Running in background"),
         Some(RowState::CantMove) => (ui::dot(p.negative, false), "Can't move: runs as administrator"),
         None => return div().into_any_element(),
     };
     let cell = div().id(("status", i)).flex().items_center().gap(px(8.)).min_w_0();
     cell.tooltip(move |window, cx| Tooltip::new(word).build(window, cx))
         .child(dot.flex_none())
-        .child(div().min_w_0().text_size(px(12.)).text_color(p.secondary).truncate().child(word))
+        .child(div().min_w_0().text_size(px(12.)).text_color(p.text_secondary).truncate().child(word))
         .into_any_element()
 }
 
@@ -38,11 +38,11 @@ impl Render for DragRow {
             .px(px(12.))
             .py(px(4.))
             .rounded(px(8.))
-            .bg(p.raised)
+            .bg(p.surface_raised)
             .border_1()
             .border_color(p.hairline_strong)
             .text_size(px(13.))
-            .text_color(p.text)
+            .text_color(p.text_primary)
             .child(self.title.clone())
     }
 }
@@ -64,7 +64,7 @@ fn stage_line(p: Palette) -> Div {
         .gap(px(8.))
         .px(px(16.))
         .pb(px(8.))
-        .child(div().flex_none().text_size(px(12.)).text_color(p.muted).child("then wait"))
+        .child(div().flex_none().text_size(px(12.)).text_color(p.text_muted).child("then wait"))
         .child(div().flex_1().h(px(1.)).bg(p.hairline_strong))
 }
 
@@ -165,7 +165,7 @@ fn details(panel: &mut Panel, i: usize, ws: &Workspace, window: &mut Window, cx:
         panel.editing.delay.update(cx, |slider, cx| slider.set_value(saved, window, cx));
     }
     let value = (panel.editing.delay.read(cx).value().end() * 1000.).round() as u32;
-    let ends = |text: &'static str| div().text_size(px(12.)).text_color(p.muted).child(text);
+    let ends = |text: &'static str| div().text_size(px(12.)).text_color(p.text_muted).child(text);
     let slider = div()
         .flex()
         .items_center()
@@ -234,7 +234,7 @@ fn row_grip(ws: &Workspace, i: usize, title: &str, p: Palette) -> Stateful<Div> 
         .flex_none()
         .w(px(GRIP_WIDTH))
         .cursor_grab()
-        .child(Icon::new(assets::IconName::GripVertical).size(px(16.)).text_color(p.muted))
+        .child(Icon::new(assets::IconName::GripVertical).size(px(16.)).text_color(p.text_muted))
         .tooltip(|window, cx| Tooltip::new("Drag to change the start order, or Alt+Up and Alt+Down").build(window, cx))
         .on_drag(drag, |drag, _, _, cx| {
             cx.stop_propagation();
@@ -268,9 +268,9 @@ fn name_cell(ws: &Workspace, i: usize, title: &str, open: bool, cols: Cols, cx: 
                 .flex_col()
                 .min_w_0()
                 .child(div().text_size(px(14.)).truncate().child(title.to_string()))
-                .child(div().text_size(px(12.)).text_color(p.muted).truncate().child(exe_line(rule))),
+                .child(div().text_size(px(12.)).text_color(p.text_muted).truncate().child(exe_line(rule))),
         )
-        .child(Icon::new(chevron).flex_none().size(px(16.)).text_color(p.muted))
+        .child(Icon::new(chevron).flex_none().size(px(16.)).text_color(p.text_muted))
         .on_click(cx.listener(move |panel, _, _, cx| {
             let this = Some((toggle.clone(), i));
             panel.editing.expanded = if panel.editing.expanded == this { None } else { this };
@@ -323,7 +323,7 @@ fn window_row(
         .flex_col()
         .gap(px(2.))
         .child(goes_menu(panel, i, ws, screens, &title, cx))
-        .when(opens, |d| d.child(div().text_size(px(12.)).text_color(p.muted).truncate().child("Will open")));
+        .when(opens, |d| d.child(div().text_size(px(12.)).text_color(p.text_muted).truncate().child("Will open")));
     let main = div()
         .flex()
         .items_center()
@@ -345,7 +345,7 @@ fn window_row(
         .tab_index(0)
         .flex()
         .flex_col()
-        .when(ui::focused(&focus, window), |d| d.focus_ring_style(window, cx))
+        .when(ui::focused(&focus, window), |d| ui::focus_ring(d, 0., 0., p))
         .on_key_down(cx.listener(move |panel, e: &KeyDownEvent, window, cx| {
             if !e.keystroke.modifiers.alt {
                 return;
@@ -360,7 +360,7 @@ fn window_row(
                 move_row(panel, &keys, i, to, window, cx);
             }
         }))
-        .drag_over::<DragRow>(move |d, _, _, _| d.bg(p.raised))
+        .drag_over::<DragRow>(move |d, _, _, _| d.bg(p.surface_raised))
         .on_drop(cx.listener(move |panel, drag: &DragRow, window, cx| {
             if drag.workspace == dropped {
                 move_row(panel, &dropped, drag.from, i, window, cx);
@@ -377,7 +377,7 @@ fn window_row(
 }
 
 fn table_head(cols: Cols, p: Palette) -> AnyElement {
-    let head = |text: &'static str| div().text_size(px(13.)).text_color(p.muted).truncate().child(text);
+    let head = |text: &'static str| div().text_size(px(13.)).text_color(p.text_muted).truncate().child(text);
     div()
         .flex()
         .items_center()

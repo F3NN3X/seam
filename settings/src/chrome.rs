@@ -1,6 +1,6 @@
 //! The window's backdrop: Mica when Windows offers it, solid otherwise.
 
-use crate::theme::MicaOn;
+use crate::theme::{MicaOn, MotionOn};
 use gpui_kit::component::Theme;
 use gpui_kit::*;
 use seam::winver;
@@ -26,8 +26,14 @@ fn set(on: bool, cx: &mut App) {
     }
 }
 
+/// Animation effects has no event of its own, so it's read here and kept, not on every frame.
+fn read_motion(cx: &mut App) {
+    cx.set_global(MotionOn(winver::animation_effects()));
+}
+
 /// Before the window opens: what it should open with.
 pub fn init(cx: &mut App) -> WindowBackgroundAppearance {
+    read_motion(cx);
     let on = wanted();
     set(on, cx);
     appearance(on)
@@ -36,6 +42,7 @@ pub fn init(cx: &mut App) -> WindowBackgroundAppearance {
 /// The system's light or dark changed: the theme reloads, and the backdrop is looked at again.
 pub fn follow_system(window: &mut Window, cx: &mut App) {
     Theme::sync_system_appearance(Some(window), cx);
+    read_motion(cx);
     let on = wanted();
     set(on, cx);
     window.set_background_appearance(appearance(on));
@@ -45,6 +52,7 @@ pub fn follow_system(window: &mut Window, cx: &mut App) {
 
 /// Transparency effects and contrast themes have no event of their own, so look again on coming back.
 pub fn recheck(window: &mut Window, cx: &mut App) {
+    read_motion(cx);
     if wanted() != cx.try_global::<MicaOn>().is_some_and(|m| m.0) {
         follow_system(window, cx);
     }

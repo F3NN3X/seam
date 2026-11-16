@@ -10,6 +10,7 @@ use gpui_kit::component::progress::Progress as Bar;
 use gpui_kit::component::spinner::Spinner;
 use gpui_kit::component::text::TextView;
 use gpui_kit::component::{Disableable, WindowExt};
+use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 use seam::package;
 use seam::updates;
@@ -313,6 +314,7 @@ pub fn group(panel: &Panel, window: &mut Window, cx: &mut Context<Panel>) -> Any
     };
     let check = ui::secondary("check-now", "Check now", cx)
         .disabled(panel.update_ui.busy())
+        .when(panel.update_ui.busy(), |b| b.tooltip("Seam is already working on an update"))
         .on_click(cx.listener(|panel, _, window, cx| check_now(panel, window, cx)));
     let daily = switch(
         "update-daily",

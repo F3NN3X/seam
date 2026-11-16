@@ -144,12 +144,15 @@ fn stage(
         .accessibility_label("More for this layout")
         .dropdown_menu(move |menu, _, _| {
             let (saving, windows) = (view.clone(), view.clone());
-            let tree = own.clone();
-            menu.item(PopupMenuItem::new("Save as layout").disabled(tree.is_none()).on_click(move |_, window, cx| {
-                let Some(tree) = tree.clone() else { return };
-                let _ = saving.update(cx, |panel, cx| save_as_layout(panel, tree, window, cx));
-            }))
-            .item(PopupMenuItem::new("Save from windows").on_click(move |_, window, cx| {
+            // Menu items have no tooltip to say why, so one that can't be used isn't shown.
+            let menu = match own.clone() {
+                Some(tree) => menu.item(PopupMenuItem::new("Save as layout").on_click(move |_, window, cx| {
+                    let tree = tree.clone();
+                    let _ = saving.update(cx, |panel, cx| save_as_layout(panel, tree, window, cx));
+                })),
+                None => menu,
+            };
+            menu.item(PopupMenuItem::new("Save from windows").on_click(move |_, window, cx| {
                 let _ = windows.update(cx, |panel, cx| {
                     panel.command("zones.from_windows", json!({ "number": number }), window, cx)
                 });

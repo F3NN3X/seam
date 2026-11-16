@@ -213,7 +213,16 @@ pub struct Palette {
 /// Whether the window shows Mica, which `chrome` keeps up to date.
 pub struct MicaOn(pub bool);
 
+/// Whether Windows' Animation effects is on, which `chrome` keeps up to date.
+pub struct MotionOn(pub bool);
+
+/// Fades and countdowns may move: Windows' Animation effects is on.
+pub fn motion(cx: &App) -> bool {
+    cx.try_global::<MotionOn>().is_none_or(|m| m.0)
+}
+
 impl Global for MicaOn {}
+impl Global for MotionOn {}
 
 impl Palette {
     /// The window's ground behind the sidebar.

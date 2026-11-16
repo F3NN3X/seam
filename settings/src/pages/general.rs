@@ -10,6 +10,7 @@ use gpui_kit::component::notification::Notification;
 use gpui_kit::component::{ActiveTheme, WindowExt};
 use gpui_kit::*;
 use seam::autostart;
+use seam::config::diff_patch;
 use seam::config::{Config, RestoreApps, SignInMode, TrayClick};
 use seam::package::{self, Startup};
 use seam::workspace;
@@ -84,10 +85,22 @@ fn confirm_import(panel: &Panel, next: Config, window: &mut Window, cx: &mut Con
                     return true;
                 }
                 let next = next.clone();
-                let _ = view.update(cx, |panel, cx| panel.replace_config(&next, window, cx));
-                window.push_notification(Notification::new().message("Imported your settings"), cx);
+                let _ = view.update(cx, |panel, cx| apply_import(panel, &next, window, cx));
                 true
             })
+    });
+}
+
+/// Replace every setting with the file's, and say so once the tray has taken them.
+fn apply_import(panel: &mut Panel, next: &Config, window: &mut Window, cx: &mut Context<Panel>) {
+    let (Ok(old), Ok(new)) = (serde_json::to_value(&panel.config), serde_json::to_value(next)) else { return };
+    let patch = diff_patch(&old, &new);
+    panel.call("config.patch", json!({ "patch": patch }), window, cx, |panel, result, window, cx| {
+        match result {
+            Ok(_) => window.push_notification(Notification::new().message("Imported your settings"), cx),
+            Err(e) => window.push_notification(refusal("Nothing imported", &error_text(&e)), cx),
+        }
+        panel.reload_config(window, cx);
     });
 }
 

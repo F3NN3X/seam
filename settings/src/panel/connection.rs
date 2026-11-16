@@ -271,18 +271,18 @@ impl Panel {
     ) {
         struct Undo;
         let view = cx.entity().downgrade();
-        let undo = std::rc::Rc::new(undo);
-        let note = Notification::new().id::<Undo>().message(message).action(move |_, _, cx| {
-            let (view, undo) = (view.clone(), undo.clone());
-            ui::primary("undo", "Undo").on_click(cx.listener(move |note: &mut Notification, _, window, cx| {
-                let undo = undo.clone();
-                let _ = view.update(cx, |panel, cx| undo(panel, window, cx));
-                note.dismiss(window, cx);
-            }))
-        });
-        window.push_notification(note, cx);
         self.toast_generation += 1;
         let generation = self.toast_generation;
+        let note = ui::undo_notice::<Undo>(
+            message,
+            generation,
+            UNDO_FOR,
+            move |window, cx| {
+                let _ = view.update(cx, |panel, cx| undo(panel, window, cx));
+            },
+            cx,
+        );
+        window.push_notification(note, cx);
         cx.spawn_in(window, async move |this, cx| {
             cx.background_executor().timer(UNDO_FOR).await;
             let _ = this.update_in(cx, |panel, window, cx| {

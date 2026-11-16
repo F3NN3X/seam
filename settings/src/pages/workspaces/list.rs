@@ -135,7 +135,12 @@ pub(super) fn item(
         .border_1()
         .cursor_pointer()
         .when(picked, |d| d.bg(p.surface_raised).border_color(p.hairline_strong))
-        .when(!picked, |d| d.bg(p.surface_card).border_color(p.hairline).hover(|d| d.bg(p.surface_raised)))
+        .when(!picked, |d| {
+            d.bg(p.surface_card)
+                .border_color(p.hairline)
+                .hover(|d| d.bg(p.surface_raised))
+                .active(|d| d.bg(p.surface_sidebar))
+        })
         .child(name)
         .children(meta)
         .child(icon_strip(i, ws, icons, p))

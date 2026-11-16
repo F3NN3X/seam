@@ -320,3 +320,15 @@ fn an_older_file_has_the_corner_overview_off() {
     let set: Config = serde_json::from_value(json!({ "windows": { "corner_overview": { "on": true } } })).unwrap();
     assert!(set.windows.corner_overview.on);
 }
+
+#[test]
+fn setup_is_done_for_a_file_from_before_it_and_not_for_a_new_install() {
+    let old: Config = serde_json::from_str(r#"{"version": 2, "enabled": false}"#).unwrap();
+    assert!(old.setup_done);
+    assert!(!Config::default().setup_done);
+    let kept = Config::default().patched(&json!({ "setup_done": true })).unwrap();
+    assert!(kept.setup_done);
+    // A new install's file says so, so it reads back as not done.
+    let back: Config = serde_json::from_str(&serde_json::to_string(&Config::default()).unwrap()).unwrap();
+    assert!(!back.setup_done);
+}

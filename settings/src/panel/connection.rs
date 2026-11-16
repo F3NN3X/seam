@@ -54,6 +54,7 @@ impl Panel {
                     let linked = this.update(cx, |this, cx| {
                         this.client = None;
                         this.set_state(None);
+                        this.setup_unlinked(cx);
                         cx.notify();
                     });
                     if linked.is_err() {
@@ -63,7 +64,7 @@ impl Panel {
                     continue;
                 };
                 let client = Arc::new(Mutex::new(client));
-                let accepted = this.update(cx, |this, cx| {
+                let accepted = this.update_in(cx, |this, window, cx| {
                     // A new tray has a new token, so this panel can't change settings.
                     // Ask for a fresh one.
                     if this.was_linked {
@@ -72,7 +73,9 @@ impl Panel {
                     }
                     this.was_linked = true;
                     this.client = Some(client.clone());
-                    this.apply(state, config);
+                    if this.apply(state, config) {
+                        this.open_setup(window, cx);
+                    }
                     cx.notify();
                     true
                 });
@@ -108,6 +111,9 @@ impl Panel {
                         {
                             this.apply(state, config);
                         }
+                        if event.kind == "lineup.finished" {
+                            this.setup_lineup_finished(window, cx);
+                        }
                         if restatus {
                             this.ask_status(cx);
                         }
@@ -121,11 +127,10 @@ impl Panel {
         })
     }
 
-    fn apply(&mut self, state: State, config: Value) {
+    /// Take the tray's state and config. False when the config couldn't be read, and was left as it was.
+    fn apply(&mut self, state: State, config: Value) -> bool {
         let screens_changed = self.state.as_ref().map(|s| &s.desk.sig) != Some(&state.desk.sig);
-        if let Ok(config) = serde_json::from_value(config) {
-            self.set_config(config);
-        }
+        let parsed = serde_json::from_value(config).map(|config| self.set_config(config)).is_ok();
         // The tray reads the updater's file and says so in the state.
         if self.state.as_ref().map(|s| &s.update) != Some(&state.update) {
             self.update_file = updates::read();
@@ -153,6 +158,7 @@ impl Panel {
         }
         pages::zone_editor::reload(self);
         self.relink();
+        parsed
     }
 
     pub(super) fn read_screens(&mut self) {

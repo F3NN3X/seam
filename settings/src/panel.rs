@@ -30,6 +30,7 @@ use std::time::Duration;
 mod command_bar;
 mod connection;
 mod new_screen;
+mod setup;
 mod view;
 
 actions!(seam_panel, [FocusSearch, ClearSearch, GoBack]);
@@ -196,6 +197,8 @@ pub struct Panel {
     pub import_offer: Option<Config>,
     /// The tray was reachable earlier, so a reconnect means a new tray.
     was_linked: bool,
+    /// First-run setup, while its dialog is the one the window opened.
+    setup: Option<Rc<setup::Setup>>,
     _link: Task<()>,
     _subscriptions: Vec<Subscription>,
 }
@@ -321,6 +324,7 @@ impl Panel {
             dual_install: package::is_packaged() && package::unpackaged_copy_installed(),
             import_offer: package::take_import_offer(),
             was_linked: false,
+            setup: None,
             _link: Task::ready(()),
             _subscriptions: subscriptions,
         };

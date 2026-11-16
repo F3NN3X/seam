@@ -8,6 +8,7 @@ pub mod help;
 pub mod screen_editor;
 pub mod shortcuts;
 pub mod updates;
+pub mod windows;
 pub mod workspace_editor;
 pub mod workspaces;
 pub mod zone_editor;

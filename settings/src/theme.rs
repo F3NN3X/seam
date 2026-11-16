@@ -58,7 +58,6 @@ pub mod tokens {
     pub const SPACE_12: f32 = 12.;
     pub const SPACE_16: f32 = 16.;
     pub const SPACE_24: f32 = 24.;
-    #[allow(dead_code)]
     pub const SPACE_32: f32 = 32.;
 
     #[allow(dead_code)]
@@ -70,9 +69,7 @@ pub mod tokens {
     pub const SIZE_ROW_2: f32 = 56.;
     #[allow(dead_code)]
     pub const SIZE_MENU_ITEM: f32 = 32.;
-    #[allow(dead_code)]
     pub const SIZE_SIDEBAR: f32 = 240.;
-    #[allow(dead_code)]
     pub const SIZE_ICON: f32 = 16.;
     pub const SIZE_NOTIFICATION: f32 = 360.;
     #[allow(dead_code)]
@@ -80,12 +77,10 @@ pub mod tokens {
     // For 0.8 (`modern-shell`): defined, not yet used.
     #[allow(dead_code)]
     pub const SIZE_MENU_ITEM_2: f32 = 48.;
-    #[allow(dead_code)]
     pub const SIZE_TITLE_BAR: f32 = 48.;
     /// gpui-kit's fixed window control width, for reference only.
     #[allow(dead_code)]
     pub const SIZE_WINDOW_CONTROL: f32 = 35.;
-    #[allow(dead_code)]
     pub const SIZE_COMMAND_BAR: f32 = 400.;
     #[allow(dead_code)]
     pub const SIZE_DIALOG_WIDE: f32 = 600.;
@@ -161,14 +156,14 @@ pub struct Palette {
     #[allow(dead_code)] // Used by the `modern-shell` follow-up.
     pub surface_zone: Hsla,
     /// surface-card-mica: cards while Mica shows through.
-    #[allow(dead_code)] // For 0.8, `modern-shell`.
     pub surface_card_mica: Hsla,
     /// surface-input-mica: inputs and the command bar over Mica.
-    #[allow(dead_code)] // For 0.8, `modern-shell`.
     pub surface_input_mica: Hsla,
     /// surface-track-mica: segmented track and map well over Mica.
-    #[allow(dead_code)] // For 0.8, `modern-shell`.
     pub surface_track_mica: Hsla,
+    /// Mica shows through, so `surface_card`, `surface_input` and `surface_sidebar` (the
+    /// track) already hold their Mica grounds and the window's grounds are clear.
+    pub mica: bool,
     /// hairline: card borders, row dividers (decorative).
     pub hairline: Hsla,
     /// hairline-strong: dashed notes, keycaps (decorative).
@@ -210,7 +205,43 @@ pub struct Palette {
     pub negative: Hsla,
 }
 
+/// Whether the window shows Mica, which `chrome` keeps up to date.
+pub struct MicaOn(pub bool);
+
+impl Global for MicaOn {}
+
+impl Palette {
+    /// The window's ground behind the sidebar.
+    pub fn sidebar_ground(&self) -> Hsla {
+        if self.mica { transparent_black() } else { self.surface_sidebar }
+    }
+
+    /// The window's ground behind the page.
+    pub fn page_ground(&self) -> Hsla {
+        if self.mica { transparent_black() } else { self.surface_page }
+    }
+
+    /// The sunk ground of the map well.
+    pub fn well(&self) -> Hsla {
+        if self.mica { self.surface_track_mica } else { self.surface_page }
+    }
+}
+
 pub fn palette(cx: &App) -> Palette {
+    let base = base_palette(cx);
+    if !cx.try_global::<MicaOn>().is_some_and(|m| m.0) {
+        return base;
+    }
+    Palette {
+        surface_card: base.surface_card_mica,
+        surface_input: base.surface_input_mica,
+        surface_sidebar: base.surface_track_mica,
+        mica: true,
+        ..base
+    }
+}
+
+fn base_palette(cx: &App) -> Palette {
     let c = |hex: u32| -> Hsla { rgb(hex).into() };
     let a = |hex: u32| -> Hsla { rgba(hex).into() };
     if cx.theme().is_dark() {
@@ -225,6 +256,7 @@ pub fn palette(cx: &App) -> Palette {
             surface_card_mica: a(0xFFFFFF0D),
             surface_input_mica: a(0xFFFFFF0F),
             surface_track_mica: a(0x0000004D),
+            mica: false,
             hairline: a(0xF3F3F314),
             hairline_strong: a(0xF3F3F329),
             control_stroke: c(0x8A8A8A),
@@ -255,6 +287,7 @@ pub fn palette(cx: &App) -> Palette {
             surface_card_mica: a(0xFFFFFFB3),
             surface_input_mica: a(0xFFFFFFCC),
             surface_track_mica: a(0x0000000F),
+            mica: false,
             hairline: a(0x1A1A1A14),
             hairline_strong: a(0x1A1A1A29),
             control_stroke: c(0x868686),

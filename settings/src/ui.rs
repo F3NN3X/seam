@@ -111,6 +111,23 @@ pub fn tabular<E: Styled>(element: E) -> E {
     element.font_features(FontFeatures(Arc::new(vec![("tnum".to_string(), 1)])))
 }
 
+/// The mark: two screen outlines with the amber seam between, drawn on a 24 unit grid.
+pub fn mark(size: f32, p: Palette) -> Div {
+    let k = size / 24.;
+    let at = |x: f32, y: f32, w: f32, h: f32| {
+        div().absolute().left(px(x * k)).top(px(y * k)).w(px(w * k)).h(px(h * k)).rounded(px(k))
+    };
+    let outline =
+        |x: f32, y: f32, w: f32, h: f32| at(x - 1., y - 1., w + 2., h + 2.).border_1().border_color(p.text_primary);
+    div()
+        .relative()
+        .flex_none()
+        .size(px(size))
+        .child(outline(2.5, 7.5, 6., 9.))
+        .child(at(11., 5., 2., 14.).bg(p.accent))
+        .child(outline(15.5, 4.5, 6., 15.))
+}
+
 pub fn page_title(title: impl Into<SharedString>, subtitle: impl Into<SharedString>, p: Palette) -> Div {
     div()
         .flex()

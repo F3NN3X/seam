@@ -189,7 +189,7 @@ fn seam_border(panel: &Panel, a: &Placed, other: &Placed, b: &Border, view: &Vie
 fn seam_map(panel: &Panel, state: &State, width: f64, p: Palette, cx: &mut Context<Panel>) -> Div {
     let frames: Vec<Frame> = panel.layout.iter().map(|s| (s.x, s.y, s.w, s.h)).collect();
     let view = fit(&frames, width);
-    let mut surface = div().relative().w_full().h(px(MAP_HEIGHT)).bg(p.surface_page).rounded(px(8.));
+    let mut surface = div().relative().w_full().h(px(MAP_HEIGHT)).bg(p.well()).rounded(px(8.));
     for (s, frame) in panel.layout.iter().zip(&frames) {
         surface = surface.child(screen_tile(panel, s.index, *frame, s.sized, &view, p, cx));
     }
@@ -266,7 +266,7 @@ fn windows_map(panel: &Panel, state: &State, width: f64, p: Palette, cx: &mut Co
     let rects: Vec<Rect> = state.screens.iter().map(|s| Rect::new(s.rect.x, s.rect.y, s.rect.w, s.rect.h)).collect();
     let view = fit(&frames, width);
     let (x_at, y_at) = (|v: i32| f64::from(v) * view.scale + view.left, |v: i32| f64::from(v) * view.scale + view.top);
-    let mut surface = div().relative().w_full().h(px(MAP_HEIGHT)).bg(p.surface_page).rounded(px(8.));
+    let mut surface = div().relative().w_full().h(px(MAP_HEIGHT)).bg(p.well()).rounded(px(8.));
     for (s, frame) in state.screens.iter().zip(&frames) {
         surface = surface.child(screen_tile(panel, (s.number as usize).saturating_sub(1), *frame, true, &view, p, cx));
     }

@@ -3,6 +3,7 @@
 
 #![cfg_attr(windows, windows_subsystem = "windows")]
 
+mod chrome;
 mod help;
 mod icons;
 mod pages;
@@ -124,12 +125,15 @@ fn main() {
         // window couldn't shrink to fit (64 is room for the title bar and frame).
         let room =
             |work: Option<Pixels>, least: f32| work.map_or(px(least), |v| px(least).min(v - px(64.)).max(px(300.)));
+        // The title bar is drawn by the app, so the options are the kit's with ours on top.
+        let kit = component::TitleBar::window_options();
         let options = WindowOptions {
-            titlebar: Some(TitlebarOptions { title: Some(tray::PANEL_TITLE.into()), ..Default::default() }),
+            titlebar: kit.titlebar.map(|t| TitlebarOptions { title: Some(tray::PANEL_TITLE.into()), ..t }),
             window_bounds: Some(WindowBounds::Windowed(bounds)),
             display_id,
             window_min_size: Some(size(room(work.map(|s| s.width), 900.), room(work.map(|s| s.height), 640.))),
-            ..Default::default()
+            window_background: chrome::init(cx),
+            ..kit
         };
         let page = page.as_deref().and_then(Page::from_arg);
         open_window(options, cx, move |window, cx| cx.new(|cx| Panel::new(page, token, window, cx)))

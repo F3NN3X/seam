@@ -242,6 +242,10 @@ pub(super) unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARA
                     snap::work_area_changed();
                     snap::display_changed();
                 }
+                // The colours changed, which is what switching the taskbar light or dark sends.
+                if lparam.0 != 0 && PCWSTR(lparam.0 as *const u16).to_string().is_ok_and(|s| s == "ImmersiveColorSet") {
+                    with_app(theme_changed);
+                }
                 DefWindowProcW(hwnd, msg, wparam, lparam)
             }
             WM_APP_SNAP_BLOCKED => {

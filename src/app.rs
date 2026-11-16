@@ -66,7 +66,7 @@ use std::sync::mpsc::{Sender, channel};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tile::{fit_group, stacks_changed, start_tile, tile_finished, undo_tile};
-use tray_icon::{add_icon, make_icon, notify, show_menu, tray_data, update_tip};
+use tray_icon::{TrayIcons, add_icon, notify, show_menu, theme_changed, tray_data, update_tip};
 use update::{
     arm_auto_install, auto_install, check_for_updates, clean_up_after_update, read_update_state, update_read,
 };
@@ -207,6 +207,8 @@ const ID_RELEASE: usize = 3;
 /// The overview of every window.
 const ID_OVERVIEW: usize = 4;
 const ID_OPEN: usize = 6;
+/// Snap back to the workspace in use.
+const ID_PUT_BACK: usize = 5;
 const ID_QUIT: usize = 9;
 const ID_SWITCH_BACK: usize = 10;
 /// Pause or resume everything Seam does.
@@ -333,9 +335,8 @@ struct Aligning {
 
 struct App {
     hwnd: HWND,
-    icon: HICON,
-    /// The icon while Seam stands by.
-    quiet_icon: HICON,
+    /// The tray icons built so far, and the one showing.
+    tray: TrayIcons,
     cfg: Config,
     mons: Vec<Mon>,
     sig: String,

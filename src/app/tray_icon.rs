@@ -46,6 +46,10 @@ pub(super) struct TrayIcons {
     shown: Option<(Look, bool)>,
     current: HICON,
     built: Vec<((Look, bool), HICON)>,
+    /// The taskbar's theme as last read, so the state changing doesn't read it again.
+    light: bool,
+    /// The tooltip last sent to the shell.
+    tip: String,
 }
 
 /// Seam's state now, for the icon and for the words.
@@ -78,6 +82,7 @@ fn taskbar_is_light() -> bool {
 
 /// Windows says the colours changed: the ring of the dot may need the other taskbar colour.
 pub(super) fn theme_changed(app: &mut App) {
+    app.tray.light = taskbar_is_light();
     if app.tray.shown.is_some_and(|(look, _)| look == Look::NeedsYou) {
         update_tip(app);
     }
@@ -164,7 +169,7 @@ fn make_icon(look: Look, light: bool) -> HICON {
 fn sync_icon(app: &mut App) -> bool {
     let (look, _) = state_now(app);
     // The taskbar's colour only matters to the dot's ring.
-    let key = (look, look == Look::NeedsYou && taskbar_is_light());
+    let key = (look, look == Look::NeedsYou && app.tray.light);
     if app.tray.shown == Some(key) {
         return false;
     }
@@ -181,6 +186,10 @@ fn sync_icon(app: &mut App) -> bool {
     true
 }
 
+fn tip_now(app: &App) -> String {
+    format!("Seam — {}", state_now(app).1)
+}
+
 pub(super) fn tray_data(app: &App) -> NOTIFYICONDATAW {
     let mut nid = NOTIFYICONDATAW {
         cbSize: std::mem::size_of::<NOTIFYICONDATAW>() as u32,
@@ -191,12 +200,15 @@ pub(super) fn tray_data(app: &App) -> NOTIFYICONDATAW {
         hIcon: app.tray.current,
         ..Default::default()
     };
-    nid.szTip = wide(&format!("Seam — {}", state_now(app).1));
+    nid.szTip = wide(&tip_now(app));
     nid
 }
 
 pub(super) fn add_icon(app: &mut App) {
+    app.tray.light = taskbar_is_light();
+    app.tray.shown = None;
     sync_icon(app);
+    app.tray.tip = tip_now(app);
     unsafe {
         let mut nid = tray_data(app);
         let _ = Shell_NotifyIconW(NIM_ADD, &nid);
@@ -208,6 +220,11 @@ pub(super) fn add_icon(app: &mut App) {
 /// The state may have changed: say it in the tooltip, and swap the icon only if it differs.
 pub(super) fn update_tip(app: &mut App) {
     let changed = sync_icon(app);
+    let tip = tip_now(app);
+    if !changed && tip == app.tray.tip {
+        return;
+    }
+    app.tray.tip = tip;
     unsafe {
         let mut nid = tray_data(app);
         if !changed {

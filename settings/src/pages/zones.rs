@@ -2,7 +2,7 @@
 
 use crate::pages::zone_editor::{self, Opened};
 use crate::panel::{Panel, error_text, refusal};
-use crate::theme::palette;
+use crate::theme::{palette, tokens};
 use crate::ui::{self, card, row};
 use gpui_kit::component::button::ButtonVariants;
 use gpui_kit::component::menu::{DropdownMenu, PopupMenuItem};

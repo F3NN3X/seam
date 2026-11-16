@@ -129,7 +129,7 @@ pub(super) fn swatches(
                 .track_focus(&focus)
                 .tab_index(0)
                 .cursor_pointer()
-                .when(selected || ui::focused(&focus, window), |d| ui::focus_ring(d, 12., 0., p))
+                .when(selected || ui::focused(&focus, window), |d| ui::focus_ring(d, tokens::RADIUS_12, 0., p))
                 .when(!custom, |d| d.on_click(cx.listener(move |panel, _, window, cx| click(panel, window, cx))))
                 .on_key_down(cx.listener(move |panel, e: &KeyDownEvent, window, cx| {
                     if matches!(e.keystroke.key.as_str(), "space" | "enter") {
@@ -137,7 +137,7 @@ pub(super) fn swatches(
                     }
                 }));
         } else {
-            face = face.when(selected, |d| ui::focus_ring(d, 12., 0., p));
+            face = face.when(selected, |d| ui::focus_ring(d, tokens::RADIUS_12, 0., p));
         }
         // The picker's own button is laid over the swatch, unseen, so the popover opens
         // from the swatch and the swatch keeps its ring, check and tooltip.

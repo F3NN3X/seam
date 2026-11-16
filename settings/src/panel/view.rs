@@ -1,7 +1,7 @@
 //! Drawing the panel: the sidebar, the status, banners and search results.
 
 use super::*;
-use crate::theme::palette;
+use crate::theme::{palette, tokens};
 use gpui_kit::component::Icon;
 use gpui_kit::component::button::Button;
 use gpui_kit::component::input::Input;
@@ -68,7 +68,7 @@ impl Panel {
             .cursor_pointer()
             .when(active, |d| d.bg(p.surface_raised).text_color(p.text_primary))
             .when(!active, |d| d.text_color(p.text_secondary).hover(|d| d.bg(p.surface_card)))
-            .when(ui::focused(&focus, window), |d| ui::focus_ring(d, 6., 0., p))
+            .when(ui::focused(&focus, window), |d| ui::focus_ring(d, tokens::RADIUS_6, 0., p))
             .child(Icon::new(page.icon()).size(px(16.)).text_color(if active { p.text_primary } else { p.text_muted }))
             .child(div().flex_1().child(page.title()))
             .when(update_ready, |d| d.child(ui::dot(p.accent, true)))

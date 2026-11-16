@@ -80,7 +80,7 @@ pub(super) fn tile(
         .bg(p.surface_card)
         .border_1()
         .border_color(if selected { p.accent } else { p.hairline })
-        .when(ui::focused(&focus, window), |d| ui::focus_ring(d, 10., 1., p))
+        .when(ui::focused(&focus, window), |d| ui::focus_ring(d, tokens::RADIUS_10, 1., p))
         .child(art)
         .child(
             div()

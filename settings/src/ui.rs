@@ -679,12 +679,10 @@ pub fn choice(
             .py(px(tokens::SPACE_4))
             .rounded(px(tokens::RADIUS_6))
             .when(i == selected, |d| {
-                d.bg(p.surface_segment).text_color(p.text_primary).active(|d| d.bg(p.surface_card))
+                d.bg(p.surface_segment).text_color(p.text_primary).active(|d| d.bg(p.surface_sidebar))
             })
             .when(i != selected, |d| {
-                d.text_color(p.text_secondary)
-                    .hover(|d| d.bg(p.surface_card))
-                    .active(|d| d.bg(p.surface_card.opacity(0.6)))
+                d.text_color(p.text_secondary).hover(|d| d.bg(p.surface_card)).active(|d| d.bg(p.hairline_strong))
             })
             .child(label);
         let segment = text_style(segment, tokens::LABEL);

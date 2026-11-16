@@ -167,7 +167,7 @@ pub fn app_icon(rule: &Rule, icons: &Icons, p: Palette) -> Div {
         .justify_center()
         .size(px(ICON_WIDTH))
         .rounded(px(tokens::RADIUS_4))
-        .bg(p.surface_raised);
+        .bg(p.surface_zone);
     match icons.get(rule) {
         Some(image) => tile.child(img(image).size(px(16.))),
         None => {

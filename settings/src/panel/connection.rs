@@ -108,10 +108,17 @@ impl Panel {
                             && this.status.as_ref().is_some_and(|(id, _)| event.data["id"].as_str() == Some(id));
                         let restatus =
                             moved_here || matches!(event.kind.as_str(), "state.changed" | "workspace.switched");
+                        // A state that comes back as it was redraws nothing.
+                        let mut redraw = event.kind != "state.changed";
                         if event.kind == "state.changed"
-                            && let (Ok(state), Some(config)) = (serde_json::from_value(event.data), fresh)
+                            && let (Ok(state), Some(config)) = (serde_json::from_value::<State>(event.data), fresh)
                         {
-                            this.apply(state, config);
+                            let same = this.state.as_ref() == Some(&state)
+                                && serde_json::to_value(&this.config).is_ok_and(|now| now == config);
+                            if !same {
+                                redraw = true;
+                                this.apply(state, config);
+                            }
                         }
                         if event.kind == "lineup.finished" {
                             this.setup_lineup_finished(window, cx);
@@ -119,7 +126,9 @@ impl Panel {
                         if restatus {
                             this.ask_status(cx);
                         }
-                        cx.notify();
+                        if redraw {
+                            cx.notify();
+                        }
                     });
                     if updated.is_err() {
                         return;
@@ -259,11 +268,16 @@ impl Panel {
             let rows: Option<Vec<RowStatus>> = answer.await;
             let _ = this.update(cx, |this, cx| {
                 this.asking_status = None;
-                this.status = Some((id, rows.unwrap_or_default()));
+                let next = Some((id, rows.unwrap_or_default()));
+                // Only an answer that differs redraws the page.
+                let changed = this.status != next;
+                this.status = next;
                 if std::mem::take(&mut this.status_again) {
                     this.ask_status(cx);
                 }
-                cx.notify();
+                if changed {
+                    cx.notify();
+                }
             });
         })
         .detach();

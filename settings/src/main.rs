@@ -19,9 +19,17 @@ use seam::api::Client;
 use seam::panelwin;
 use seam::tray;
 use serde_json::json;
+use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 
 const TRAY_START_TIMEOUT: Duration = Duration::from_secs(3);
+
+static STARTED: OnceLock<Instant> = OnceLock::new();
+
+/// Milliseconds since `main` began, for the debug log's open-time lines.
+pub fn since_start_ms() -> u128 {
+    STARTED.get().map_or(0, |at| at.elapsed().as_millis())
+}
 
 fn arg_after(flag: &str) -> Option<String> {
     let args: Vec<String> = std::env::args().collect();
@@ -86,6 +94,7 @@ impl Target {
 }
 
 fn main() {
+    let _ = STARTED.set(Instant::now());
     // The updater's headless modes, and the installer's. None opens a window.
     if std::env::args().any(|a| a == "--check-updates") {
         std::process::exit(update::check_main());
@@ -104,7 +113,10 @@ fn main() {
     if tray::raise_open_panel() {
         return;
     }
+    // On only with `--log` or SEAM_LOG=1.
+    seam::log::apply(false);
     application().with_assets(assets::AllAssets).run(move |cx| {
+        seam::log::info!("panel: app running at {} ms", since_start_ms());
         init(cx);
         theme::install(cx);
         Panel::bind_keys(cx);

@@ -385,6 +385,8 @@ impl Panel {
 
 impl Render for Panel {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        static FIRST_FRAME: std::sync::Once = std::sync::Once::new();
+        FIRST_FRAME.call_once(|| seam::log::info!("panel: first frame built at {} ms", crate::since_start_ms()));
         let p = palette(cx);
         let changed = self.changed_only.then(|| self.changed_titles());
         ui::show_only(changed);

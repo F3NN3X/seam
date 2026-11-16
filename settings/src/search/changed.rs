@@ -4,6 +4,7 @@ use crate::panel::Page;
 use seam::config::Config;
 use serde_json::Value;
 use std::collections::HashSet;
+use std::sync::LazyLock;
 
 /// A row by page and title, and the config values it shows, as JSON pointers into the config.
 /// A row with no line here (layouts, app rules, a workspace's own rows) can't say it changed.
@@ -96,11 +97,12 @@ const ROWS: &[(Page, &str, &[&str])] = &[
     (Page::About, "Include pre-releases", &["/updates/prerelease"]),
 ];
 
+static DEFAULT: LazyLock<Value> = LazyLock::new(|| serde_json::to_value(Config::default()).unwrap_or_default());
+
 /// The titles of `page`'s rows whose value in `config` isn't the default.
 pub fn titles(page: Page, config: &Config) -> HashSet<&'static str> {
-    let (now, default) = (serde_json::to_value(config), serde_json::to_value(Config::default()));
-    let (Ok(now), Ok(default)) = (now, default) else { return HashSet::new() };
-    differing(page, &now, &default)
+    let Ok(now) = serde_json::to_value(config) else { return HashSet::new() };
+    differing(page, &now, &DEFAULT)
 }
 
 fn differing(page: Page, now: &Value, default: &Value) -> HashSet<&'static str> {
@@ -113,6 +115,7 @@ fn differing(page: Page, now: &Value, default: &Value) -> HashSet<&'static str> 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::search::ENTRIES;
 
     #[test]
     fn a_default_config_has_nothing_changed() {
@@ -129,6 +132,14 @@ mod tests {
         assert_eq!(titles(Page::Zones, &config), HashSet::from(["Gap"]));
         assert_eq!(titles(Page::Shortcuts, &config), HashSet::from(["Line up screens"]));
         assert!(titles(Page::Displays, &config).is_empty());
+    }
+
+    #[test]
+    fn every_row_is_a_search_entry_of_its_page() {
+        for (page, title, _) in ROWS {
+            let found = ENTRIES.iter().any(|e| e.page == *page && e.title == *title);
+            assert!(found, "{} {title} isn't a search entry", page.title());
+        }
     }
 
     #[test]

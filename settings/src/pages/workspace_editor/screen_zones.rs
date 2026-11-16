@@ -190,7 +190,7 @@ pub fn zones_section(
         });
         let menu = zones_menu(panel, i + 1, screen, ws, cx);
         let control = div().flex().items_center().gap(px(8.)).child(zones_thumb(saved, p)).child(menu);
-        rows.push(ui::row_with(format!("{}  {name}", i + 1), moved, control));
+        rows.push(ui::row_with(format!("{}  {name}", i + 1), moved, control).into_any_element());
     }
     let gone = ws.zones.iter().filter(|(screen, _)| !mons.iter().any(|(id, _)| id == *screen));
     for (k, (screen, saved)) in gone.enumerate() {

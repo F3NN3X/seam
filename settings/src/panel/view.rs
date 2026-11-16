@@ -45,6 +45,19 @@ impl Panel {
         self.search.update(cx, |input, cx| input.set_value("", window, cx));
     }
 
+    /// The rows of the page that differ from their default, worked out again only when the
+    /// page or the settings change.
+    fn changed_titles(&mut self) -> Rc<HashSet<&'static str>> {
+        match &self.changed {
+            Some((page, revision, titles)) if *page == self.page && *revision == self.revision => titles.clone(),
+            _ => {
+                let titles = Rc::new(search::changed::titles(self.page, &self.config));
+                self.changed = Some((self.page, self.revision, titles.clone()));
+                titles
+            }
+        }
+    }
+
     fn nav_row(&self, page: Page, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let p = palette(cx);
         let active = self.page == page;
@@ -275,12 +288,17 @@ impl Panel {
             banners.push(ui::note(text, None, p).child(buttons));
         }
         if self.changed_only {
+            let text = if ui::nothing_shown() {
+                "Nothing on this page differs from its default"
+            } else {
+                "Showing settings you've changed"
+            };
             let show_all =
                 ui::secondary("show-all-settings", "Show all", cx).on_click(cx.listener(|panel, _, _, cx| {
                     panel.changed_only = false;
                     cx.notify();
                 }));
-            banners.push(ui::note("Showing settings you've changed", Some(show_all), p));
+            banners.push(ui::note(text, Some(show_all), p));
         }
         banners
     }
@@ -289,7 +307,11 @@ impl Panel {
 impl Render for Panel {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let p = palette(cx);
-        ui::show_only(self.changed_only.then(|| search::changed::titles(self.page, &self.config)));
+        let changed = self.changed_only.then(|| self.changed_titles());
+        ui::show_only(changed);
+        if !self.query.trim().is_empty() {
+            self.found();
+        }
         let body = match self.page {
             Page::Displays => pages::displays::render(self, window, cx).into_any_element(),
             Page::Zones => pages::zones::render(self, window, cx).into_any_element(),

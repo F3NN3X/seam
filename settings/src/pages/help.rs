@@ -75,7 +75,7 @@ fn detail(topic: &Topic, p: Palette, cx: &mut Context<Panel>) -> Div {
             Block::List(items) => text = text.child(bullets(items, p)),
             Block::Step { title, text: about, page } => {
                 let open = open_button(("help-step", i), *page, cx);
-                steps.push(ui::row(*title, Some(help::plain(about).into()), open, p));
+                steps.push(ui::row(*title, Some(help::plain(about).into()), open, p).into_any_element());
             }
         }
     }

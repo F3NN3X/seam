@@ -212,7 +212,10 @@ pub fn render(panel: &mut Panel, window: &mut Window, cx: &mut Context<Panel>) -
     let pointer = pointer_card(panel, p, window, cx);
     let mut rows = desk_rows(panel, window, cx);
     if rows.is_empty() {
-        rows.push(ui::row("No saved desks yet", Some("Line up your screens to save this one".into()), div(), p));
+        rows.push(
+            ui::row("No saved desks yet", Some("Line up your screens to save this one".into()), div(), p)
+                .into_any_element(),
+        );
     }
     let desks = card(rows, p);
 

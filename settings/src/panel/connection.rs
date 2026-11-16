@@ -125,6 +125,7 @@ impl Panel {
         if let Ok(config) = serde_json::from_value(config) {
             self.config = config;
         }
+        self.revision += 1;
         // The tray reads the updater's file and says so in the state.
         if self.state.as_ref().map(|s| &s.update) != Some(&state.update) {
             self.update_file = updates::read();
@@ -204,6 +205,7 @@ impl Panel {
         if let Ok(config) = self.config.patched(&patch) {
             self.config = config;
         }
+        self.revision += 1;
         self.relink();
         cx.notify();
         self.call("config.patch", json!({ "patch": patch }), window, cx, |this, result, window, cx| {
@@ -218,6 +220,7 @@ impl Panel {
         self.call("config.get", json!({}), window, cx, |this, result, _, cx| {
             if let Some(config) = result.ok().and_then(|c| serde_json::from_value(c).ok()) {
                 this.config = config;
+                this.revision += 1;
                 this.relink();
                 cx.notify();
             }

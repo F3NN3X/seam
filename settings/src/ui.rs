@@ -11,7 +11,7 @@ use std::rc::Rc;
 use std::sync::Arc;
 
 mod only;
-pub use only::show_only;
+pub use only::{nothing_shown, show_only};
 
 pub const SECTION_GAP: f32 = tokens::SPACE_24;
 /// Room left above a row a search result scrolled to.
@@ -163,39 +163,62 @@ pub fn section(title: impl Into<SharedString>, body: impl IntoElement, p: Palett
     anchored(&title, section)
 }
 
+/// A row of a card, known by its title so "Show changed settings" can leave it out.
+pub struct Row {
+    title: Option<SharedString>,
+    element: AnyElement,
+}
+
+impl Row {
+    /// The same row, drawn inside something else.
+    pub fn map(self, wrap: impl FnOnce(AnyElement) -> AnyElement) -> Row {
+        Row { title: self.title, element: wrap(self.element) }
+    }
+}
+
+/// Anything else in a card has no title, so it isn't known to have changed.
+impl From<AnyElement> for Row {
+    fn from(element: AnyElement) -> Row {
+        Row { title: None, element }
+    }
+}
+
+impl IntoElement for Row {
+    type Element = AnyElement;
+
+    fn into_element(self) -> AnyElement {
+        if !only::row_shows(self.title.as_deref()) {
+            return div().hidden().into_any_element();
+        }
+        only::drawn(1);
+        self.element
+    }
+}
+
 /// Rows in a group, with a hairline between them.
-pub fn card(rows: Vec<AnyElement>, p: Palette) -> Div {
-    let shown = only::card_shows(rows.len());
-    if shown.as_ref().is_some_and(|shown| !shown.contains(&true)) {
-        return div().hidden();
+pub fn card<R: Into<Row>>(rows: Vec<R>, p: Palette) -> Div {
+    let rows: Vec<Row> = rows.into_iter().map(Into::into).filter(|r| only::row_shows(r.title.as_deref())).collect();
+    if only::active() {
+        if rows.is_empty() {
+            return div().hidden();
+        }
+        only::drawn(rows.len());
     }
     let mut group =
         div().flex().flex_col().bg(p.surface_card).border_1().border_color(p.hairline).rounded(px(tokens::RADIUS_12));
-    let mut first = true;
     for (i, row) in rows.into_iter().enumerate() {
-        // A row left out takes its hairline with it.
-        let shows = shown.as_ref().is_none_or(|shown| shown[i]);
-        group = group.child(div().when(shows && !first, |d| d.border_t_1().border_color(p.hairline)).child(row));
-        first &= !shows;
+        group = group.child(div().when(i > 0, |d| d.border_t_1().border_color(p.hairline)).child(row.element));
     }
     group
 }
 
-pub fn row(
-    title: impl Into<SharedString>,
-    about: Option<SharedString>,
-    control: impl IntoElement,
-    p: Palette,
-) -> AnyElement {
+pub fn row(title: impl Into<SharedString>, about: Option<SharedString>, control: impl IntoElement, p: Palette) -> Row {
     row_with(title, about.map(|a| description(a, p).into_any_element()), control)
 }
 
-pub fn row_with(title: impl Into<SharedString>, about: Option<AnyElement>, control: impl IntoElement) -> AnyElement {
+pub fn row_with(title: impl Into<SharedString>, about: Option<AnyElement>, control: impl IntoElement) -> Row {
     let height = if about.is_some() { px(tokens::SIZE_ROW_2) } else { px(tokens::SIZE_ROW) };
     let title = title.into();
-    if !only::row_shows(&title) {
-        return div().hidden().into_any_element();
-    }
     let name = text_style(div(), tokens::BODY).child(title.clone());
     let mut text = div().flex().flex_col().gap(px(tokens::SPACE_2)).flex_1().min_w_0().child(name);
     if let Some(about) = about {
@@ -211,7 +234,7 @@ pub fn row_with(title: impl Into<SharedString>, about: Option<AnyElement>, contr
         .py(px(tokens::SPACE_8))
         .child(text)
         .child(div().flex().flex_none().items_center().gap(px(tokens::SPACE_8)).child(control));
-    anchored(&title, row)
+    Row { element: anchored(&title, row), title: Some(title) }
 }
 
 pub fn secondary(id: impl Into<ElementId>, label: impl Into<SharedString>, cx: &App) -> Button {

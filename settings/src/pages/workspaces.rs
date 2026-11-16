@@ -4,7 +4,7 @@ use crate::icons::{self, Icons};
 use crate::pages::{app_picker, workspace_editor};
 use crate::panel::{Panel, error_text, refusal};
 use crate::theme::{Palette, palette};
-use crate::ui::{self, card, keycaps, row, segmented, switch};
+use crate::ui::{self, Row, card, keycaps, row, segmented, switch};
 use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::input::Input;
 use gpui_kit::component::menu::{DropdownMenu, PopupMenuItem};
@@ -416,7 +416,7 @@ fn snap_back_button(panel: &Panel, ws: &Workspace, cx: &mut Context<Panel>) -> B
 }
 
 /// The one switch for every workspace: put apps in place when they open (§11.1).
-fn auto_apply_row(panel: &Panel, window: &mut Window, cx: &mut Context<Panel>) -> AnyElement {
+fn auto_apply_row(panel: &Panel, window: &mut Window, cx: &mut Context<Panel>) -> Row {
     let p = palette(cx);
     let view = cx.entity();
     let on = panel.config.auto_apply;
@@ -438,7 +438,7 @@ fn auto_apply_row(panel: &Panel, window: &mut Window, cx: &mut Context<Panel>) -
 
 /// "Remember folders and pages" (D330), and while it's off with some still saved, the
 /// button that forgets them on every desk.
-fn places_rows(panel: &Panel, window: &mut Window, cx: &mut Context<Panel>) -> Vec<AnyElement> {
+fn places_rows(panel: &Panel, window: &mut Window, cx: &mut Context<Panel>) -> Vec<Row> {
     let p = palette(cx);
     let view = cx.entity();
     let on = panel.config.workspaces_remember_places;
@@ -466,7 +466,7 @@ fn places_rows(panel: &Panel, window: &mut Window, cx: &mut Context<Panel>) -> V
 }
 
 /// "Update from screen removes apps that aren't open": off keeps the rows of closed apps.
-fn removes_row(panel: &Panel, window: &mut Window, cx: &mut Context<Panel>) -> AnyElement {
+fn removes_row(panel: &Panel, window: &mut Window, cx: &mut Context<Panel>) -> Row {
     let p = palette(cx);
     let view = cx.entity();
     let title = "Update from screen removes apps that aren't open";
@@ -500,7 +500,7 @@ fn detail(panel: &mut Panel, ws: Workspace, window: &mut Window, cx: &mut Contex
     let add = app_picker::button(panel, &ws.windows, "In this workspace", add_app, cx);
     rows.push(div().flex().px(px(16.)).py(px(12.)).child(add).into_any_element());
     rows.extend(workspace_editor::zones_section(panel, &ws, window, cx));
-    rows.extend(switch_rows(&ws, p, window, cx));
+    rows.extend(switch_rows(&ws, p, window, cx).map(IntoElement::into_any_element));
     div().flex_1().min_w_0().child(card(rows, p))
 }
 
@@ -594,7 +594,7 @@ fn more_button(panel: &Panel, ws: &Workspace, cx: &mut Context<Panel>) -> impl I
 }
 
 /// Start missing apps, showing every window, and what happens to the other windows.
-fn switch_rows(ws: &Workspace, p: Palette, window: &mut Window, cx: &mut Context<Panel>) -> [AnyElement; 3] {
+fn switch_rows(ws: &Workspace, p: Palette, window: &mut Window, cx: &mut Context<Panel>) -> [Row; 3] {
     let view = cx.entity();
     let id = ws.id.clone();
     let start_missing = switch("start-missing", "Start missing apps", ws.launch_missing, window, cx, {

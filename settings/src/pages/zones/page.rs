@@ -3,7 +3,7 @@
 use super::*;
 use crate::pages::app_rules;
 use crate::theme::Palette;
-use crate::ui::{section, switch};
+use crate::ui::{Row, section, switch};
 use gpui_kit::component::slider::Slider;
 use seam::config::{WindowSettings, ZoneSettings};
 use seam::tiling::Family;
@@ -164,25 +164,33 @@ fn snapping_keys_card(
         .border_color(p.hairline)
         .rounded(px(12.))
         .child(
-            div().flex().child(cell(row("Show zones", Some("Hold while dragging".into()), show, p))).child(
-                cell(row("Span zones", Some("Add this key to cover more".into()), span, p))
-                    .border_l_1()
-                    .border_color(p.hairline),
-            ),
+            div()
+                .flex()
+                .child(cell(row("Show zones", Some("Hold while dragging".into()), show, p).into_any_element()))
+                .child(
+                    cell(row("Span zones", Some("Add this key to cover more".into()), span, p).into_any_element())
+                        .border_l_1()
+                        .border_color(p.hairline),
+                ),
         )
         .child(
             div()
                 .flex()
                 .border_t_1()
                 .border_color(p.hairline)
-                .child(cell(row("Gap", Some(format!("{} px", zones_cfg.gap.min(32)).into()), slider, p)))
+                .child(cell(
+                    row("Gap", Some(format!("{} px", zones_cfg.gap.min(32)).into()), slider, p).into_any_element(),
+                ))
                 .child(
-                    cell(row(
-                        "Restore size when dragged out",
-                        Some("The window gets its old size back".into()),
-                        restore,
-                        p,
-                    ))
+                    cell(
+                        row(
+                            "Restore size when dragged out",
+                            Some("The window gets its old size back".into()),
+                            restore,
+                            p,
+                        )
+                        .into_any_element(),
+                    )
                     .border_l_1()
                     .border_color(p.hairline),
                 ),
@@ -197,7 +205,7 @@ fn snapping_switches(
     p: Palette,
     window: &mut Window,
     cx: &mut Context<Panel>,
-) -> Vec<AnyElement> {
+) -> Vec<Row> {
     let refit = switch("zone-refit", "Keep windows in their zones", zones_cfg.refit, window, cx, {
         let view = view.clone();
         move |on, window, cx| view.update(cx, |panel, cx| panel.patch(json!({ "zones": { "refit": on } }), window, cx))
@@ -390,7 +398,8 @@ fn windows_section(
     let windows_card = card(
         vec![
             row("Focus border", Some("Colour the border of the window that has focus".into()), border, p),
-            div().when(border_off.is_some(), |d| d.opacity(0.4)).child(focus_colour_row).into_any_element(),
+            focus_colour_row
+                .map(|el| div().when(border_off.is_some(), |d| d.opacity(0.4)).child(el).into_any_element()),
             pin_colour_row,
             row(
                 "Tell me when a pinned window closes",
@@ -422,7 +431,7 @@ fn alt_drag_row(
     p: Palette,
     window: &mut Window,
     cx: &mut Context<Panel>,
-) -> AnyElement {
+) -> Row {
     let alt_drag = windows_cfg.alt_drag.clone();
     let drag_key = DRAG_KEYS.iter().find(|(k, _)| *k == alt_drag.key).map_or("Alt", |(_, label)| label);
     let drag_switch = switch("alt-drag", "Move and resize from anywhere in a window", alt_drag.on, window, cx, {
@@ -464,7 +473,7 @@ fn corner_overview_row(
     p: Palette,
     window: &mut Window,
     cx: &mut Context<Panel>,
-) -> AnyElement {
+) -> Row {
     let corner = windows_cfg.corner_overview.clone();
     let title = "Open the overview when the pointer rests in a corner";
     let label = CORNERS.iter().find(|(k, _)| *k == corner.corner).map_or("Top left", |(_, label)| label);
@@ -507,7 +516,7 @@ fn size_rows(
     p: Palette,
     window: &mut Window,
     cx: &mut Context<Panel>,
-) -> (AnyElement, AnyElement) {
+) -> (Row, Row) {
     let size_at = SIZE_MODES.iter().position(|m| *m == size_mode).unwrap_or(0);
     let size_choice = ui::segmented(
         "window-size-on-move",
@@ -543,10 +552,8 @@ fn size_rows(
     );
     (
         row("When a window moves to another screen", size_caption(panel, size_mode), size_choice, p),
-        div()
-            .when(scaled, |d| d.opacity(0.4))
-            .child(row("Also when I drag a window to another screen", None, on_drag, p))
-            .into_any_element(),
+        row("Also when I drag a window to another screen", None, on_drag, p)
+            .map(|el| div().when(scaled, |d| d.opacity(0.4)).child(el).into_any_element()),
     )
 }
 

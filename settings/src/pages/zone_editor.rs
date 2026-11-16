@@ -294,6 +294,7 @@ pub fn with_latest(
             return;
         };
         panel.config = config;
+        panel.revision += 1;
         then(panel, window, cx);
     });
 }

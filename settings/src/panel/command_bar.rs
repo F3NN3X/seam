@@ -20,7 +20,8 @@ enum Hint {
     Keys(String),
 }
 
-enum Kind {
+#[derive(Clone, PartialEq)]
+pub(super) enum Kind {
     Switch(String),
     PutBack,
     Capture,
@@ -106,15 +107,28 @@ fn matches(query: &str, name: &str, page: &str) -> bool {
     name.to_lowercase().contains(&query) || page.to_lowercase().contains(&query)
 }
 
+/// A result, for finding it again after the list has changed under it.
+#[derive(Clone, PartialEq)]
+pub(super) enum Key {
+    Action(Kind),
+    Setting(Page, &'static str),
+}
+
 /// What a query found: the actions, then the settings, each group capped.
-struct Results {
+pub(super) struct Results {
+    /// What it was found for.
+    query: SharedString,
+    revision: u64,
     actions: Vec<Action>,
     settings: Vec<&'static Entry>,
 }
 
 impl Results {
-    fn of(panel: &Panel, query: &str) -> Results {
+    fn of(panel: &Panel) -> Results {
+        let query = &panel.query;
         Results {
+            query: query.clone(),
+            revision: panel.revision,
             actions: actions(panel).into_iter().filter(|a| matches(query, &a.name, a.page)).take(MAX_ACTIONS).collect(),
             settings: search::find(query).into_iter().take(MAX_SETTINGS).collect(),
         }
@@ -122,6 +136,17 @@ impl Results {
 
     fn len(&self) -> usize {
         self.actions.len() + self.settings.len()
+    }
+
+    fn key_at(&self, index: usize) -> Option<Key> {
+        match self.actions.get(index) {
+            Some(action) => Some(Key::Action(action.kind.clone())),
+            None => self.settings.get(index - self.actions.len()).map(|e| Key::Setting(e.page, e.title)),
+        }
+    }
+
+    fn position(&self, key: &Key) -> Option<usize> {
+        (0..self.len()).find(|i| self.key_at(*i).as_ref() == Some(key))
     }
 }
 
@@ -209,13 +234,16 @@ impl Panel {
                 }
             }))
             .child(field)
-            .when(!self.query.trim().is_empty(), |d| d.child(self.results(p, cx)))
+            .when_some(
+                self.found.clone().filter(|f| f.query == self.query && !f.query.trim().is_empty()),
+                |d, found| d.child(self.results(&found, p, cx)),
+            )
     }
 
     /// The results, under the field and as wide as it.
-    fn results(&self, p: Palette, cx: &mut Context<Self>) -> impl IntoElement + use<> {
-        let found = Results::of(self, &self.query);
+    fn results(&self, found: &Rc<Results>, p: Palette, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let actions = found.actions.len();
+        let (selecting, confirming) = (found.clone(), found.clone());
         let at = self.field_bounds.get();
         let mut list = Command::new(&self.command_list).searchable(false).filterable(false).bordered(false);
         if !found.actions.is_empty() {
@@ -230,12 +258,14 @@ impl Panel {
         let list = list
             .on_select(move |at, _, cx| {
                 let _ = select.update(cx, |panel, cx| {
-                    panel.selected = index_of(actions, at);
+                    panel.selected = selecting.key_at(index_of(actions, at));
                     cx.notify();
                 });
             })
             .on_confirm(move |at, window, cx| {
-                let _ = confirm.update(cx, |panel, cx| panel.run(index_of(actions, at), window, cx));
+                if let Some(key) = confirming.key_at(index_of(actions, at)) {
+                    let _ = confirm.update(cx, |panel, cx| panel.run(&key, window, cx));
+                }
             })
             .max_h(px(360.))
             .bg(p.surface_raised)
@@ -278,15 +308,30 @@ impl Panel {
         .with_priority(gpui_kit::base::POPUP_PRIORITY)
     }
 
+    /// What the query found, worked out again only when the query, the config or the state changed.
+    pub(super) fn found(&mut self) -> Rc<Results> {
+        if let Some(found) = self.found.as_ref().filter(|f| f.query == self.query && f.revision == self.revision) {
+            return found.clone();
+        }
+        let found = Rc::new(Results::of(self));
+        self.found = Some(found.clone());
+        found
+    }
+
+    /// The highlighted result's place: the one chosen if the list still has it, else the first.
+    fn highlighted(&self, found: &Results) -> usize {
+        self.selected.as_ref().and_then(|key| found.position(key)).unwrap_or(0)
+    }
+
     /// Move the highlight, round the ends.
     fn step(&mut self, by: isize, window: &mut Window, cx: &mut Context<Self>) {
-        let found = Results::of(self, &self.query);
-        let len = found.len() as isize;
-        if len == 0 {
+        let found = self.found();
+        if found.len() == 0 {
             return;
         }
-        self.selected = (self.selected as isize + by).rem_euclid(len) as usize;
-        let at = path(found.actions.len(), self.selected);
+        let to = (self.highlighted(&found) as isize + by).rem_euclid(found.len() as isize) as usize;
+        self.selected = found.key_at(to);
+        let at = path(found.actions.len(), to);
         self.command_list.update(cx, |list, cx| list.set_selected_index(Some(at), window, cx));
         cx.notify();
     }
@@ -309,31 +354,44 @@ impl Panel {
         }
     }
 
+    /// Focus goes back to what had it, or to the panel when that has gone.
     fn give_back_focus(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let back = self.return_focus.take().unwrap_or_else(|| self.focus.clone());
-        back.focus(window, cx);
+        let back = self.return_focus.take().filter(|back| self.focus.contains(back, window));
+        back.unwrap_or_else(|| self.focus.clone()).focus(window, cx);
     }
 
     /// Enter in the field.
     pub(super) fn run_selected(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if !self.query.trim().is_empty() {
-            self.run(self.selected, window, cx);
+        if self.query.trim().is_empty() {
+            return;
+        }
+        let found = self.found();
+        if let Some(key) = found.key_at(self.highlighted(&found)) {
+            self.run(&key, window, cx);
         }
     }
 
-    /// Do result number `index`: an action at once, a setting by opening its page and row.
-    fn run(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
-        let found = Results::of(self, &self.query);
+    /// Do a result: an action at once, a setting by opening its page and row.
+    fn run(&mut self, key: &Key, window: &mut Window, cx: &mut Context<Self>) {
+        let found = self.found();
+        let Some(at) = found.position(key) else { return };
         self.clear_search(window, cx);
-        if index < found.actions.len() {
-            self.act(&found.actions[index].kind, window, cx);
-        } else if let Some(entry) = found.settings.get(index - found.actions.len()) {
-            if let Some(topic) = entry.topic {
-                self.help_topic = topic;
+        match key {
+            Key::Action(kind) => {
+                self.act(kind, window, cx);
+                self.give_back_focus(window, cx);
             }
-            self.show(entry.page, Some(entry.anchor()), window, cx);
+            Key::Setting(..) => {
+                let entry = found.settings[at - found.actions.len()];
+                if let Some(topic) = entry.topic {
+                    self.help_topic = topic;
+                }
+                self.show(entry.page, Some(entry.anchor()), window, cx);
+                // The page it opened keeps focus, not what had it before.
+                self.return_focus = None;
+                self.focus.focus(window, cx);
+            }
         }
-        self.give_back_focus(window, cx);
     }
 
     /// An action, through what the pages and the sidebar already call.
@@ -351,7 +409,7 @@ impl Panel {
                 self.command("remap.set", json!({ "on": on }), window, cx);
             }
             Kind::PauseSeam => {
-                let on = self.state.as_ref().is_some_and(|s| s.paused);
+                let on = !self.state.as_ref().is_some_and(|s| s.paused);
                 self.command("seam.pause", json!({ "on": on }), window, cx);
             }
             Kind::ShowChanged => {

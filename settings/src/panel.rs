@@ -21,6 +21,7 @@ use seam::updates::{self, UpdateFile};
 use seam::workspace::RowStatus;
 use serde_json::json;
 use std::cell::Cell;
+use std::collections::HashSet;
 use std::path::PathBuf;
 use std::rc::Rc;
 use std::sync::{Arc, Mutex};
@@ -146,8 +147,14 @@ pub struct Panel {
     pub search: Entity<InputState>,
     /// The command bar's results list, driven from the search field.
     command_list: Entity<CommandState>,
-    /// The result Enter would run, by position in the actions then the settings.
-    selected: usize,
+    /// The result Enter would run. `None`, or one a newer query dropped, is the first.
+    selected: Option<command_bar::Key>,
+    /// What the query found, kept until the query, the config or the state changes.
+    found: Option<Rc<command_bar::Results>>,
+    /// Counts changes to the config and the state, for what is worked out from them.
+    pub revision: u64,
+    /// The rows "Show changed settings" keeps, for the page and revision they were worked out for.
+    changed: Option<(Page, u64, Rc<HashSet<&'static str>>)>,
     /// Where focus was when Ctrl+F took it, so Esc can give it back.
     return_focus: Option<FocusHandle>,
     /// Where the search field was last drawn, for the results to sit under.
@@ -250,7 +257,10 @@ impl Panel {
             glue_push,
             search,
             command_list,
-            selected: 0,
+            selected: None,
+            found: None,
+            revision: 0,
+            changed: None,
             return_focus: None,
             field_bounds: Rc::default(),
             changed_only: false,
@@ -291,6 +301,7 @@ fn slider_subscriptions(
         cx.subscribe_in(edge_resistance, window, |this, _, event: &SliderEvent, window, cx| match event {
             SliderEvent::Change(value) => {
                 this.config.pointer.edge_resistance_px = value.end() as u32;
+                this.revision += 1;
                 cx.notify();
             }
             SliderEvent::Release(value) => {
@@ -300,6 +311,7 @@ fn slider_subscriptions(
         cx.subscribe_in(glue_push, window, |this, _, event: &SliderEvent, window, cx| match event {
             SliderEvent::Change(value) => {
                 this.config.pointer.glue_push_px = value.end() as u32;
+                this.revision += 1;
                 cx.notify();
             }
             SliderEvent::Release(value) => {
@@ -309,6 +321,7 @@ fn slider_subscriptions(
         cx.subscribe_in(gap, window, |this, _, event: &SliderEvent, window, cx| match event {
             SliderEvent::Change(value) => {
                 this.config.zones.gap = value.end() as u32;
+                this.revision += 1;
                 cx.notify();
             }
             SliderEvent::Release(value) => {
@@ -344,7 +357,7 @@ fn field_subscriptions(
         cx.subscribe_in(search, window, |this, input, event: &InputEvent, window, cx| match event {
             InputEvent::Change => {
                 this.query = input.read(cx).value();
-                this.selected = 0;
+                this.selected = None;
                 // A new query hands the highlight back to the first result.
                 let query = this.query.clone();
                 this.command_list.update(cx, |list, cx| list.set_query(query, window, cx));

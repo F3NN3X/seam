@@ -64,7 +64,8 @@ fn stale(panel: &Panel) -> Vec<(String, Desk)> {
 
 /// "Home", "Home and Office" or "Home, Office and Den".
 fn named(desks: &[(String, Desk)]) -> String {
-    let names: Vec<&str> = desks.iter().map(|(_, d)| d.name.as_str()).collect();
+    let names: Vec<&str> =
+        desks.iter().map(|(_, d)| if d.name.is_empty() { "Unnamed desk" } else { d.name.as_str() }).collect();
     match names.as_slice() {
         [] => String::new(),
         [only] => (*only).to_string(),
@@ -96,9 +97,15 @@ fn forget_old(panel: &Panel, window: &mut Window, cx: &mut Context<Panel>) {
                     panel.patch(json!({ "desks": gone }), window, cx);
                     let message = format!("Forgot {}", named(&old));
                     let undo = move |panel: &mut Panel, window: &mut Window, cx: &mut Context<Panel>| {
-                        let back: serde_json::Map<String, serde_json::Value> =
-                            old.iter().map(|(sig, desk)| (sig.clone(), json!(desk))).collect();
-                        panel.patch(json!({ "desks": back }), window, cx);
+                        // A desk that reconnected since keeps its new data.
+                        let back: serde_json::Map<String, serde_json::Value> = old
+                            .iter()
+                            .filter(|(sig, _)| !panel.config.desks.contains_key(sig))
+                            .map(|(sig, desk)| (sig.clone(), json!(desk)))
+                            .collect();
+                        if !back.is_empty() {
+                            panel.patch(json!({ "desks": back }), window, cx);
+                        }
                     };
                     panel.offer_undo(message, undo, window, cx);
                 });

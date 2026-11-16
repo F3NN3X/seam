@@ -5,6 +5,8 @@ use crate::theme::Palette;
 
 /// The widest the drawn screen gets.
 const PREVIEW_WIDTH: f64 = 480.;
+/// How far each zone block is drawn inside its zone, so the card shows between neighbours.
+const INSET: f32 = 1.;
 
 /// How tall the editor's card is for a screen in `room`: the screen's shape, up to the most.
 pub(super) fn preview_height(mon: &Mon, room: f64) -> f32 {
@@ -28,15 +30,19 @@ pub(super) fn preview(mon: &Mon, layout: Option<&ZoneLayout>, gap: u32, footer: 
         let area = Rect { x: 0, y: 0, w: w as i32, h: h as i32 };
         let (cells, drawn) = (zones::rects(&layout.tree, area, 0), zones::rects(&layout.tree, area, gap as i32));
         for (i, (cell, r)) in cells.iter().zip(&drawn).enumerate() {
-            let at = |v: i32| px((v as f64 * scale) as f32);
+            // Each block is inset a little, so neighbours read as separate shapes.
+            let (from, size) = (
+                |v: i32| px((v as f64 * scale) as f32 + INSET),
+                |v: i32| px(((v as f64 * scale) as f32 - 2. * INSET).max(1.)),
+            );
             surface = surface.child(
                 div()
                     .id(("zone", i))
                     .absolute()
-                    .left(at(r.x))
-                    .top(at(r.y))
-                    .w(at(r.w))
-                    .h(at(r.h))
+                    .left(from(r.x))
+                    .top(from(r.y))
+                    .w(size(r.w))
+                    .h(size(r.h))
                     .flex()
                     .flex_col()
                     .items_center()

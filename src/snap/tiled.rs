@@ -15,7 +15,7 @@ use super::*;
 use crate::tiler::{Arrival, Event};
 use seam::config::TileScreen;
 use seam::strip::{Strip, Width};
-use seam::tiling::{self, Family, GAP_AFTER, Put, Seen, Tree};
+use seam::tiling::{self, Family, Put, Seen, Tree};
 use seam::zones::{LeafTag, Node, Template};
 use std::collections::BTreeMap;
 use std::time::Duration;
@@ -74,6 +74,8 @@ pub(super) struct Tiling {
     looked: bool,
     /// Wakes to close the tiles minimized windows left (`GAP_AFTER`).
     gap_timer: usize,
+    /// Wakes once a switch's grace is over, for its late minimizes (D564).
+    grace_timer: usize,
     /// Arrivals and restores that came during a workspace switch, taken once it ends.
     paused: Vec<Arrival>,
     /// Why the Float or tile key's window wasn't tiled, for the tray's notice.
@@ -206,7 +208,34 @@ pub fn tiling_switch_ended() {
             e.tile_arrived(a);
         }
         e.scroll_focus_waited();
+        // A slow app's minimize may land inside the grace, which ignores it: look again once it ends.
+        if e.tiling.grace_timer != 0 {
+            unsafe {
+                let _ = KillTimer(None, e.tiling.grace_timer);
+            }
+        }
+        let ms = (crate::tiler::SWITCH_GRACE + Duration::from_millis(50)).as_millis() as u32;
+        e.tiling.grace_timer = unsafe { SetTimer(None, 0, ms, Some(on_grace)) };
     });
+}
+
+/// The grace after a switch ended: a tiled window it left minimized since rests too.
+/// Repeats until the engine is free to take it, as `on_gaps` does.
+unsafe extern "system" fn on_grace(_: HWND, _: u32, id: usize, _: u32) {
+    let taken = with_engine(|e| {
+        if e.tiling.grace_timer == id {
+            e.tiling.grace_timer = 0;
+            // A switch started since ends with a look of its own.
+            if !crate::switcher::switching() {
+                e.tiled_rest_after_switch();
+            }
+        }
+    });
+    if taken.is_some() {
+        unsafe {
+            let _ = KillTimer(None, id);
+        }
+    }
 }
 
 /// Why the Float or tile key's window wasn't tiled, once.
@@ -330,11 +359,9 @@ impl Engine {
             self.sync_overlay();
         }
         self.sync_dividers();
-        let tiled = |t: &Tiled| {
-            let resting = t.resting.iter().map(|(h, ..)| *h);
-            t.all().into_iter().chain(resting).collect::<Vec<_>>()
-        };
-        crate::tiler::set_tiled(self.tiling.trees.iter().flat_map(tiled).collect());
+        let resting: HashSet<isize> = self.tiling.trees.iter().flat_map(|t| t.resting.iter().map(|(h, ..)| *h)).collect();
+        let tiled = self.tiling.trees.iter().flat_map(Tiled::all).chain(resting.iter().copied()).collect();
+        crate::tiler::set_tiled(tiled, resting);
     }
 
     /// This desk's tiling settings, from `update`. Trees whose screen is off on their
@@ -433,6 +460,8 @@ impl Engine {
                 winutil::clear_zone_stamp(hwnd_of(k));
             }
         }
+        // The unpark dropped moves for its windows; the rest go on.
+        self.window_pump();
     }
 
     /// The tree of a screen on a desktop, made when there is none.
@@ -535,6 +564,10 @@ impl Engine {
             Some((t, *zone))
         });
         if a.restored && rested.is_none() {
+            return;
+        }
+        if self.tiling.trees[i].strip.as_ref().is_some_and(Strip::is_full) {
+            log::info!("scrolling: the strip holds {} columns already, so a window floats", seam::strip::MAX_COLUMNS);
             return;
         }
         for t in &mut self.tiling.trees {
@@ -694,13 +727,22 @@ impl Engine {
         t.resting.iter().filter(|(_, z, ..)| *z != usize::MAX && empty(*z)).map(|(_, z, at, b)| (*z, *at, *b)).collect()
     }
 
-    /// Wake once a minimized window's tile may close; a burst's wait is longer (`BURST_KEEPS`).
+    /// Wake once, when the next minimized window's tile may close (`tiling::next_gap`); a
+    /// burst's wait is longer (`BURST_KEEPS`). A tree with no window, as after Win+D, waits
+    /// for one to come back, and with nothing due no timer runs.
     fn tiled_arm_gaps(&mut self) {
-        let later = Instant::now() + Duration::from_secs(3600);
-        let waiting = (0..self.tiling.trees.len())
-            .any(|i| !tiling::gaps_due(&self.resting_tiles(i), self.tiling.trees[i].back, later).is_empty());
-        if waiting && self.tiling.gap_timer == 0 {
-            let ms = GAP_AFTER.as_millis() as u32;
+        let next = (0..self.tiling.trees.len())
+            .filter(|&i| self.tiling.trees[i].tree.windows().next().is_some())
+            .filter_map(|i| tiling::next_gap(&self.resting_tiles(i), self.tiling.trees[i].back))
+            .min();
+        if self.tiling.gap_timer != 0 {
+            unsafe {
+                let _ = KillTimer(None, self.tiling.gap_timer);
+            }
+            self.tiling.gap_timer = 0;
+        }
+        if let Some(at) = next {
+            let ms = at.saturating_duration_since(Instant::now()).as_millis() as u32 + 1;
             self.tiling.gap_timer = unsafe { SetTimer(None, 0, ms, Some(on_gaps)) };
         }
     }

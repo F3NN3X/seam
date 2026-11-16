@@ -244,22 +244,32 @@ pub type Resting = (usize, Instant, bool);
 /// restore (`back`), so a run of restores is never cut short. Highest zone first, for
 /// `remove_zone`.
 pub fn gaps_due(resting: &[Resting], back: Option<Instant>, now: Instant) -> Vec<usize> {
+    let due_at = due_times(resting, back);
+    let mut due: Vec<usize> =
+        resting.iter().zip(due_at).filter(|(_, at)| now >= *at).map(|((zone, ..), _)| *zone).collect();
+    due.sort_unstable_by(|a, b| b.cmp(a));
+    due.dedup();
+    due
+}
+
+/// When the next of these tiles closes by `gaps_due`, so the timer wakes once, then.
+/// None with no tile waiting.
+pub fn next_gap(resting: &[Resting], back: Option<Instant>) -> Option<Instant> {
+    due_times(resting, back).into_iter().min()
+}
+
+/// When each tile of `resting` closes: `BURST_KEEPS` after the later of its minimize and
+/// the last restore for one in a burst, else `GAP_AFTER`.
+fn due_times(resting: &[Resting], back: Option<Instant>) -> Vec<Instant> {
     let near = |a: Instant, b: Instant| a.max(b).duration_since(a.min(b)) <= BURST;
     let burst = |i: usize, at: Instant, may: bool| {
         may && resting.iter().enumerate().any(|(j, (_, other, counts))| j != i && *counts && near(at, *other))
     };
-    let mut due: Vec<usize> = resting
-        .iter()
-        .enumerate()
-        .filter(|(i, (_, at, may))| {
-            let wait = if burst(*i, *at, *may) { BURST_KEEPS } else { GAP_AFTER };
-            now.duration_since(back.map_or(*at, |b| b.max(*at))) >= wait
-        })
-        .map(|(_, (zone, ..))| *zone)
-        .collect();
-    due.sort_unstable_by(|a, b| b.cmp(a));
-    due.dedup();
-    due
+    let due = |(i, (_, at, may)): (usize, &Resting)| {
+        let wait = if burst(i, *at, *may) { BURST_KEEPS } else { GAP_AFTER };
+        back.map_or(*at, |b| b.max(*at)) + wait
+    };
+    resting.iter().enumerate().map(due).collect()
 }
 
 /// The arrivals kept during a pause (a workspace switch) to take once it ends, by
@@ -273,6 +283,23 @@ pub fn after_pause<T>(pending: Vec<(isize, T)>, by_switch: impl Fn(isize) -> boo
     }
     kept.retain(|(h, _)| !by_switch(*h));
     kept
+}
+
+/// Whether the worker may tile a window that has a workspace stamp: a capture, Update,
+/// Quick save or a switch put it there. Only when the Float or tile key asks for it, or
+/// when it was tiled and comes back from minimized (`resting`): the switch's pause and
+/// `moved` already keep a window a switch placed out of its tile (D564).
+pub fn stamped_may_tile(asked: bool, restored: bool, resting: bool) -> bool {
+    asked || (restored && resting)
+}
+
+/// Whether the trees of a virtual desktop are stale, the desktop deleted: Windows moved
+/// its windows to a neighbour. `found` is each of their windows' desktop now, None for
+/// one closed. Stale once a window reports another desktop and none reports this one.
+/// Trees whose windows all closed can't tell, so they stay.
+pub fn stale(desktop: &str, found: &[Option<String>]) -> bool {
+    let live = || found.iter().flatten();
+    live().any(|d| d != desktop) && !live().any(|d| d == desktop)
 }
 
 /// Who holds each of `n` zones after a drag, from the windows the snapping recorded
@@ -874,6 +901,62 @@ mod tests {
         assert_eq!(gaps_due(&[(3, t0, true), (1, ms(2000), true)], None, ms(3000)), vec![3, 1]);
         // Windows a switch minimized together are no burst: they close at the normal wait.
         assert_eq!(gaps_due(&[(0, t0, false), (1, t0, false)], None, ms(600)), vec![1, 0]);
+    }
+
+    #[test]
+    fn the_gap_timer_wakes_when_the_next_tile_is_due_and_never_without_one() {
+        let t0 = Instant::now();
+        let ms = |n: u64| t0 + Duration::from_millis(n);
+        assert_eq!(next_gap(&[], None), None);
+        // A lone minimize wakes it at the normal wait, a later restore pushes that back.
+        assert_eq!(next_gap(&[(1, t0, true)], None), Some(ms(600)));
+        assert_eq!(next_gap(&[(1, t0, true)], Some(ms(900))), Some(ms(1500)));
+        // Win+D: a burst wakes it only once its tiles may close, not every 600 ms.
+        let burst = [(0, t0, true), (1, ms(40), true)];
+        assert_eq!(next_gap(&burst, None), Some(t0 + BURST_KEEPS));
+        // The soonest of several, and it matches what `gaps_due` closes then.
+        let mixed = [(0, t0, true), (1, ms(40), true), (2, ms(5000), false)];
+        let next = next_gap(&mixed, None).unwrap();
+        assert_eq!(next, ms(5600));
+        assert_eq!(gaps_due(&mixed, None, next), vec![2]);
+        assert!(gaps_due(&mixed, None, next - Duration::from_millis(1)).is_empty());
+    }
+
+    #[test]
+    fn a_stamped_window_is_tiled_only_when_asked_or_back_from_its_rest() {
+        assert!(stamped_may_tile(true, false, false));
+        // A captured window, tiled, minimized and restored, takes a tile again.
+        assert!(stamped_may_tile(false, true, true));
+        // A window a workspace placed: a new one, or a restore of one tiling never held.
+        assert!(!stamped_may_tile(false, false, false));
+        assert!(!stamped_may_tile(false, true, false));
+        assert!(!stamped_may_tile(false, false, true));
+    }
+
+    #[test]
+    fn a_tree_is_stale_once_its_windows_report_only_another_desktop() {
+        let (a, b) = (Some("A".to_string()), Some("B".to_string()));
+        // Its desktop deleted: every window went to the neighbour, or closed.
+        assert!(stale("A", &[b.clone(), b.clone()]));
+        assert!(stale("A", &[b.clone(), None]));
+        // One still there keeps it.
+        assert!(!stale("A", &[b.clone(), a.clone()]));
+        assert!(!stale("A", &[a.clone()]));
+        // All closed, or none: it can't tell, so it stays.
+        assert!(!stale("A", &[None, None]));
+        assert!(!stale("A", &[]));
+    }
+
+    #[test]
+    fn undo_of_free_all_tiles_again_only_the_windows_left_where_it_put_them() {
+        let three = grow(Family::Smart, 3);
+        // 2 was moved by hand since the free, 3 closed: 1 takes the whole screen back.
+        let seen = |h: isize| Seen { moved: h == 2, gone: h == 3, ..Seen::default() };
+        let plan = plan_apply(&three, seen, |_| None);
+        assert_eq!((plan.left, plan.floated, plan.moves.clone()), (vec![3], vec![2], vec![1]));
+        assert_eq!(plan.tree.rects(AREA, 0), vec![AREA]);
+        // None moved: the tree comes back as it was.
+        assert_eq!(plan_apply(&three, |_| Seen::default(), |_| None).tree, three);
     }
 
     #[test]

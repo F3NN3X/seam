@@ -81,13 +81,15 @@ static ON: AtomicBool = AtomicBool::new(false);
 static EXCLUDE: Mutex<Vec<String>> = Mutex::new(Vec::new());
 /// Windows in a tree, so the seam-wm thread passes over every other close and minimize.
 static TILED: Mutex<Option<HashSet<isize>>> = Mutex::new(None);
+/// Of those, the windows resting minimized, which a restore tiles again whatever their stamp.
+static RESTING: Mutex<Option<HashSet<isize>>> = Mutex::new(None);
 static EVENTS: Mutex<Vec<Event>> = Mutex::new(Vec::new());
 /// The shell's virtual desktop manager was there when the worker started.
 static DESKTOPS: AtomicBool = AtomicBool::new(false);
 /// When the last workspace switch ended, so a late minimize of its own isn't taken for mine.
 static SWITCH_END: Mutex<Option<Instant>> = Mutex::new(None);
 /// How long after a switch its minimizes still count as its own.
-const SWITCH_GRACE: std::time::Duration = std::time::Duration::from_millis(500);
+pub const SWITCH_GRACE: std::time::Duration = std::time::Duration::from_millis(500);
 /// A `look` was answered since the last `take_looked`.
 static LOOKED: AtomicBool = AtomicBool::new(false);
 static WORKER: OnceLock<Option<Sender<Job>>> = OnceLock::new();
@@ -100,8 +102,13 @@ pub fn configure(owner: isize, exclude: Vec<String>, on: bool) {
 }
 
 /// The windows in a tree now, and those resting minimized. Called by the snapping on the tray thread.
-pub fn set_tiled(list: HashSet<isize>) {
+pub fn set_tiled(list: HashSet<isize>, resting: HashSet<isize>) {
     *TILED.lock().unwrap_or_else(|e| e.into_inner()) = Some(list);
+    *RESTING.lock().unwrap_or_else(|e| e.into_inner()) = Some(resting);
+}
+
+fn is_resting(hwnd: isize) -> bool {
+    RESTING.lock().unwrap_or_else(|e| e.into_inner()).as_ref().is_some_and(|set| set.contains(&hwnd))
 }
 
 /// Whether a window is tiled. Cheap, for the seam-wm thread's every close and minimize.
@@ -322,8 +329,9 @@ fn arrival(desktops: &mut Desktops, hwnd: isize, restored: bool, asked: bool) ->
     if winutil::is_floated(h) && !asked {
         return Err("floated by hand");
     }
-    // A restore too: a window a workspace switch placed is the workspace's (D564).
-    if winutil::ws_stamp(h).is_some() && !asked {
+    // A restore too: a window a workspace switch placed is the workspace's (D564). One
+    // tiling held before it was minimized is tiling's still, captured or not.
+    if winutil::ws_stamp(h).is_some() && !seam::tiling::stamped_may_tile(asked, restored, is_resting(hwnd)) {
         return Err("placed by a workspace or an app rule");
     }
     if winutil::is_maximized(h) || winutil::is_minimized(h) {

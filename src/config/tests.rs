@@ -332,3 +332,48 @@ fn setup_is_done_for_a_file_from_before_it_and_not_for_a_new_install() {
     let back: Config = serde_json::from_str(&serde_json::to_string(&Config::default()).unwrap()).unwrap();
     assert!(!back.setup_done);
 }
+
+#[test]
+fn a_0_7_0_config_loads_with_its_values_and_counts_as_set_up() {
+    // The shape 0.7.0 wrote: a desk with borders, zones and a workspace, a hotkey, an app
+    // rule and no `setup_done`. Only fields `v0.7.0:src/config.rs` has.
+    let file = json!({
+        "version": 2,
+        "enabled": false,
+        "tray_click": "line_up",
+        "hotkeys": { "line_up": "Ctrl+Shift+Alt+L", "pause": null, "move_left": "Shift+Win+Alt+Left" },
+        "zones": { "gap": 8, "show_key": "ctrl" },
+        "app_rules": [{ "exe": "C:\\Apps\\notes.exe", "class": "Notes", "monitor": "mon-a" }],
+        "pointer": { "edge_resistance_px": 30, "glue_push_px": 60 },
+        "seen": ["mon-a|mon-b"],
+        "desks": {
+            "mon-a|mon-b": {
+                "name": "Desk",
+                "last_seen": 1_730_000_000u64,
+                "lined_up_at": 1_730_000_000u64,
+                "borders": [{ "a": "mon-a", "b": "mon-b", "side": "Right", "map": { "s": 1.0, "o": 12.5 } }],
+                "zones": { "mon-a": { "id": "two", "name": "Two" } },
+                "workspaces": [{ "id": "w1", "name": "Work", "windows": [] }]
+            }
+        }
+    });
+    let p = scratch("v0_7_0", file.to_string().as_bytes());
+    let c = Config::load_from(&p);
+    let _ = std::fs::remove_dir_all(p.parent().unwrap());
+    assert_eq!(c.version, CURRENT_VERSION);
+    assert!(c.setup_done);
+    assert!(!c.enabled);
+    assert_eq!(c.tray_click, TrayClick::LineUp);
+    assert_eq!(c.hotkeys.pause, None);
+    assert_eq!(c.hotkeys.move_left.as_deref(), Some("Shift+Win+Alt+Left"));
+    assert_eq!((c.zones.gap, c.zones.show_key.as_str()), (8, "ctrl"));
+    assert_eq!(c.app_rules.len(), 1);
+    assert_eq!((c.pointer.edge_resistance_px, c.pointer.glue_push_px), (30, 60));
+    assert_eq!(c.seen, ["mon-a|mon-b"]);
+    let desk = &c.desks["mon-a|mon-b"];
+    assert_eq!((desk.name.as_str(), desk.last_seen, desk.lined_up_at), ("Desk", 1_730_000_000, Some(1_730_000_000)));
+    assert_eq!(desk.borders.len(), 1);
+    assert_eq!((desk.borders[0].side, desk.borders[0].map.o), (Side::Right, 12.5));
+    assert!(desk.zones.contains_key("mon-a"));
+    assert_eq!(desk.workspaces.len(), 1);
+}

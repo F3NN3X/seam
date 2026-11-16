@@ -14,7 +14,7 @@ use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 use seam::api::LayoutView;
 use seam::config::{Desk, MAX_EDGE_RESISTANCE_PX, MAX_GLUE_PUSH_PX, SavedBorder};
-use seam::desk::{Placed, month_day};
+use seam::desk::Placed;
 use seam::geom::{EdgeMap, Rect, Side, corridor, facing_gap, touching};
 use seam::state::{Border, BorderState, State};
 use seam::winutil;

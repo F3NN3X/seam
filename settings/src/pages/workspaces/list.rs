@@ -32,7 +32,7 @@ fn icon_strip(i: usize, ws: &Workspace, icons: &Icons, p: Palette) -> Div {
         let name = SharedString::from(app_title(rule));
         let slot = match icons.get(rule) {
             Some(image) => slot.child(img(image).size(px(tokens::SIZE_ICON))),
-            None => slot.child(div().size(px(tokens::SIZE_ICON)).rounded(px(tokens::RADIUS_4)).bg(p.text_muted)),
+            None => slot.child(div().size(px(tokens::SIZE_ICON)).rounded(px(tokens::RADIUS_4)).bg(p.surface_zone)),
         };
         slot.tooltip(move |window, cx| Tooltip::new(name.clone()).build(window, cx))
     });

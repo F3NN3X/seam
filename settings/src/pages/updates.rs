@@ -12,6 +12,7 @@ use gpui_kit::component::text::TextView;
 use gpui_kit::component::{Disableable, WindowExt};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
+use seam::desk::Date;
 use seam::package;
 use seam::updates;
 use serde_json::json;
@@ -130,14 +131,14 @@ fn megabytes(bytes: u64) -> String {
     format!("{:.1} MB", bytes as f64 / 1_048_576.)
 }
 
-/// "2026-11-04" as "4 Nov".
+/// "2026-11-04" as "4 Nov", in the user's date format.
 fn short_date(iso: &str) -> String {
     let parts: Vec<&str> = iso.split('-').collect();
-    let month = parts.get(1).and_then(|m| m.parse::<usize>().ok()).filter(|m| (1..=12).contains(m));
-    let day = parts.get(2).and_then(|d| d.parse::<u32>().ok());
-    let names = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
-    match (day, month) {
-        (Some(day), Some(month)) => format!("{day} {}", names[month - 1]),
+    let year = parts.first().and_then(|y| y.parse::<i32>().ok());
+    let month = parts.get(1).and_then(|m| m.parse::<u32>().ok()).filter(|m| (1..=12).contains(m));
+    let day = parts.get(2).and_then(|d| d.parse::<u32>().ok()).filter(|d| (1..=31).contains(d));
+    match (year, month, day) {
+        (Some(year), Some(month), Some(day)) => seam::locale::month_day_local(Date { year, month, day }),
         _ => iso.to_string(),
     }
 }

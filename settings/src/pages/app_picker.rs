@@ -5,7 +5,7 @@
 use crate::icons;
 use crate::pages::workspaces::app_title;
 use crate::panel::Panel;
-use crate::theme::palette;
+use crate::theme::{palette, tokens};
 use crate::ui;
 use gpui_kit::component::input::{Input, InputEvent, InputState};
 use gpui_kit::component::popover::Popover;
@@ -185,7 +185,7 @@ pub fn button(panel: &mut Panel, taken: &[Rule], there: &'static str, add: Add, 
                     };
                     let icon = match icon {
                         Some(image) => div().flex_none().size(px(16.)).child(img(image.clone()).size(px(16.))),
-                        None => div().flex_none().size(px(16.)).rounded(px(4.)).bg(p.text_muted),
+                        None => div().flex_none().size(px(16.)).rounded(px(tokens::RADIUS_4)).bg(p.surface_zone),
                     };
                     let row = ui::selectable_ringed(("pick", n), name.clone(), false, (6., 0.), window, cx, pick);
                     ui::arrow_keys(row, before, after)

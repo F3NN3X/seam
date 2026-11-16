@@ -108,10 +108,22 @@ impl Panel {
                             && this.status.as_ref().is_some_and(|(id, _)| event.data["id"].as_str() == Some(id));
                         let restatus =
                             moved_here || matches!(event.kind.as_str(), "state.changed" | "workspace.switched");
+                        // A state that comes back as it was redraws nothing.
+                        let mut redraw = event.kind != "state.changed";
                         if event.kind == "state.changed"
-                            && let (Ok(state), Some(config)) = (serde_json::from_value(event.data), fresh)
+                            && let (Ok(state), Some(config)) = (serde_json::from_value::<State>(event.data), fresh)
                         {
-                            this.apply(state, config);
+                            let same = this.state.as_ref() == Some(&state)
+                                && serde_json::to_value(&this.config).is_ok_and(|now| now == config);
+                            if same {
+                                if this.editor.is_some() {
+                                    this.close_editor_if_screens_moved();
+                                    redraw = this.editor.is_none();
+                                }
+                            } else {
+                                redraw = true;
+                                this.apply(state, config);
+                            }
                         }
                         if event.kind == "lineup.finished" {
                             this.setup_lineup_finished(window, cx);
@@ -119,7 +131,9 @@ impl Panel {
                         if restatus {
                             this.ask_status(cx);
                         }
-                        cx.notify();
+                        if redraw {
+                            cx.notify();
+                        }
                     });
                     if updated.is_err() {
                         return;
@@ -146,13 +160,8 @@ impl Panel {
         self.border_pick = picked;
         // A screen that came, went or changed size leaves the editor's tree meaning
         // something else, so it closes and nothing is saved.
-        if self.editor.is_some() && !screens_changed {
-            let now = monitors::enumerate();
-            let same = now.len() == self.mons.len()
-                && now.iter().zip(&self.mons).all(|(a, b)| a.id == b.id && a.rect == b.rect);
-            if !same {
-                self.editor = None;
-            }
+        if !screens_changed {
+            self.close_editor_if_screens_moved();
         }
         if screens_changed {
             self.editor = None;
@@ -161,6 +170,20 @@ impl Panel {
         pages::zone_editor::reload(self);
         self.relink();
         parsed
+    }
+
+    /// The editor's tree belongs to the screens it was opened on. State carries each screen's
+    /// rect but not its DPI, so this asks Windows on every `state.changed`, changed or not.
+    fn close_editor_if_screens_moved(&mut self) {
+        if self.editor.is_none() {
+            return;
+        }
+        let now = monitors::enumerate();
+        let same =
+            now.len() == self.mons.len() && now.iter().zip(&self.mons).all(|(a, b)| a.id == b.id && a.rect == b.rect);
+        if !same {
+            self.editor = None;
+        }
     }
 
     pub(super) fn read_screens(&mut self) {
@@ -259,11 +282,16 @@ impl Panel {
             let rows: Option<Vec<RowStatus>> = answer.await;
             let _ = this.update(cx, |this, cx| {
                 this.asking_status = None;
-                this.status = Some((id, rows.unwrap_or_default()));
+                let next = Some((id, rows.unwrap_or_default()));
+                // Only an answer that differs redraws the page.
+                let changed = this.status != next;
+                this.status = next;
                 if std::mem::take(&mut this.status_again) {
                     this.ask_status(cx);
                 }
-                cx.notify();
+                if changed {
+                    cx.notify();
+                }
             });
         })
         .detach();

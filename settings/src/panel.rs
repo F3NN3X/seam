@@ -227,6 +227,7 @@ impl Panel {
     }
 
     pub fn new(page: Option<Page>, token: String, window: &mut Window, cx: &mut Context<Self>) -> Panel {
+        let began = std::time::Instant::now();
         let saved = std::fs::read_to_string(last_page_file()).ok();
         let page = page.or(saved.and_then(|s| Page::from_arg(s.trim()))).unwrap_or(Page::Displays);
         let search = cx.new(|cx| InputState::new(window, cx).placeholder("Search settings and actions"));
@@ -344,6 +345,11 @@ impl Panel {
         if package::is_packaged() {
             panel.refresh_startup(cx);
         }
+        seam::log::info!(
+            "panel: Panel::new took {} ms, done at {} ms",
+            began.elapsed().as_millis(),
+            crate::since_start_ms()
+        );
         panel
     }
 }

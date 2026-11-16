@@ -370,7 +370,11 @@ fn border_row(
         let after = (!last).then(|| ui::item_focus(("border-row", i + 1), window, cx));
         ui::arrow_keys(ui::selectable(("border-row", i), heading, selected, window, cx, pick), before, after)
             .when(selected, |d| d.bg(p.accent_tint))
-            .when(!selected, |d| d.hover(|d| d.bg(p.surface_raised)).active(|d| d.bg(p.surface_sidebar)))
+            // A contrast theme marks the chosen one with a bar, since its tint is the ground.
+            .when(selected && p.contrast, |d| d.border_l_4().border_color(p.text_primary))
+            .when(!selected, |d| {
+                d.hover(|d| ui::lit(d, p.surface_raised, p)).active(|d| ui::lit(d, p.surface_sidebar, p))
+            })
             .when(last, |d| d.rounded_b(px(tokens::RADIUS_12 - 1.)))
             .child(row)
             .into_any_element()

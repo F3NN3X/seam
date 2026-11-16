@@ -42,7 +42,9 @@ pub(super) fn details(
         .items_center()
         .gap(px(12.))
         .child(ends("0 s"))
-        .child(Slider::new(&panel.editing.delay).horizontal().w(px(160.)))
+        .child(
+            Slider::new(&panel.editing.delay).horizontal().w(px(160.)).accessibility_label("Delay before the next app"),
+        )
         .child(ends("30 s"));
     let wait = switch(
         ("wait-for-window", i),

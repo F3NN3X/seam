@@ -196,7 +196,7 @@ pub fn button(panel: &mut Panel, taken: &[Rule], there: &'static str, add: Add, 
                         .py(px(4.))
                         .rounded(px(6.))
                         .cursor_pointer()
-                        .hover(|d| d.bg(p.surface_raised))
+                        .hover(|d| ui::lit(d, p.surface_raised, p))
                         .child(icon)
                         .child(
                             div()

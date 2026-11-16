@@ -44,6 +44,11 @@ impl Panel {
 
     /// F6 moves to the next region, Shift+F6 to the one before.
     pub(super) fn cycle_region(&mut self, back: bool, window: &mut Window, cx: &mut Context<Self>) {
+        // A dialog, the setup or a menu holds focus until it closes, so F6 doesn't take it away.
+        let modal = self.setup.is_some() || window.has_active_dialog(cx) || window.has_active_sheet(cx);
+        if modal || !self.focus.contains_focused(window, cx) {
+            return;
+        }
         match self.region(window, cx).step(back) {
             Region::TitleBar => self.focus_search(window, cx),
             Region::Sidebar => self.nav_handle(self.page).focus(window, cx),

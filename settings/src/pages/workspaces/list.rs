@@ -152,11 +152,13 @@ pub(super) fn item(
         .border_1()
         .cursor_pointer()
         .when(picked, |d| d.bg(p.surface_raised).border_color(p.hairline_strong))
+        // A contrast theme marks the chosen one with a thick edge, whatever its fill.
+        .when(picked && p.contrast, |d| d.border_2().border_color(p.text_primary))
         .when(!picked, |d| {
             d.bg(p.surface_card)
                 .border_color(p.hairline)
-                .hover(|d| d.bg(p.surface_raised))
-                .active(|d| d.bg(p.surface_sidebar))
+                .hover(|d| ui::outlined(d, p.surface_raised, p))
+                .active(|d| ui::outlined(d, p.surface_sidebar, p))
         })
         .child(name)
         .children(meta)
@@ -193,7 +195,7 @@ pub(super) fn new_empty(
         .border_dashed()
         .border_color(p.hairline_strong)
         .rounded(px(tokens::RADIUS_10))
-        .hover(|d| d.bg(p.surface_card))
-        .active(|d| d.bg(p.surface_sidebar))
+        .hover(|d| ui::lit(d, p.surface_card, p))
+        .active(|d| ui::lit(d, p.surface_sidebar, p))
         .child(text_style(div(), tokens::BODY).text_color(p.text_secondary).child("New empty workspace"))
 }

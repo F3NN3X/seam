@@ -53,6 +53,12 @@ impl Width {
         Width::ALL.into_iter().min_by_key(off).unwrap_or_default()
     }
 
+    /// Whether a window `min_w` wide fits a column this wide on a screen `area_w` wide. The
+    /// full width always does: the screen can't give more.
+    pub fn holds(self, min_w: i32, area_w: i32) -> bool {
+        self == Width::Full || i64::from(area_w) * i64::from(self.units()) / i64::from(SCREEN) >= i64::from(min_w)
+    }
+
     /// The narrowest width from a half up that holds `min_w` on a screen `area_w` wide,
     /// or the full width when none does.
     pub fn fitting(min_w: i32, area_w: i32) -> Width {
@@ -360,20 +366,28 @@ impl Strip {
         Some(next.show(to))
     }
 
-    /// A window's column at the next width, in view.
-    pub fn widened(&self, hwnd: isize) -> Option<Strip> {
+    /// A window's column at the next width its window fits on a screen `area_w` wide, in view.
+    pub fn widened(&self, hwnd: isize, area_w: i32) -> Option<Strip> {
         let at = self.index(hwnd)?;
         let mut next = self.clone();
-        next.cols[at].width = next.cols[at].width.next();
+        let c = &mut next.cols[at];
+        c.width = c.width.next();
+        while !c.width.holds(c.min.0, area_w) {
+            c.width = c.width.next();
+        }
         Some(next.show(at))
     }
 
-    /// Each column in view at the width nearest its share of the screen, from a handle drag.
-    pub fn with_shares(&self, shares: &[f32]) -> Strip {
+    /// Each column in view at the width nearest its share of the screen, from a handle drag,
+    /// or the next one up that its window fits.
+    pub fn with_shares(&self, shares: &[f32], area_w: i32) -> Strip {
         let shown = self.shown();
         let mut next = self.clone();
         for (c, share) in next.cols[shown].iter_mut().zip(shares) {
             c.width = Width::nearest(*share);
+            while !c.width.holds(c.min.0, area_w) {
+                c.width = c.width.next();
+            }
         }
         next.settled()
     }
@@ -444,6 +458,48 @@ fn chain_even(n: usize) -> Node {
     })
 }
 
+/// Whether a window's frame is on no screen at all, so nobody can see or reach it.
+pub fn stranded(screens: &[Rect], frame: Rect) -> bool {
+    !screens
+        .iter()
+        .any(|s| frame.x < s.x + s.w && s.x < frame.x + frame.w && frame.y < s.y + s.h && s.y < frame.y + frame.h)
+}
+
+/// Where a window leaving a strip parked goes back to: the first of `choices` that is
+/// on some screen (the place it had before tiling took it, then the one its park stamp
+/// kept), else the middle of `area`, the work area of its screen or the nearest one, at
+/// `size` up to the area's. A parked place is never chosen, so it can't strand it again.
+pub fn way_back(choices: &[Option<Rect>], screens: &[Rect], area: Rect, size: (i32, i32)) -> Rect {
+    if let Some(r) = choices.iter().flatten().find(|r| r.w > 0 && r.h > 0 && !stranded(screens, **r)) {
+        return *r;
+    }
+    let (w, h) = (size.0.clamp(1, area.w.max(1)), size.1.clamp(1, area.h.max(1)));
+    Rect { x: area.x + (area.w - w) / 2, y: area.y + (area.h - h) / 2, w, h }
+}
+
+/// Two numbers in one window property, as the park stamp keeps a rect in two.
+pub fn pack(a: i32, b: i32) -> u64 {
+    (u64::from(a as u32) << 32) | u64::from(b as u32)
+}
+
+pub fn unpack(v: u64) -> (i32, i32) {
+    ((v >> 32) as u32 as i32, v as u32 as i32)
+}
+
+/// Which way a Win+wheel turn scrolls, and what is left of a notch, from what was left
+/// (`turned`) and this event's `delta`: up on a wheel and left on a tilt are left. A turn
+/// the other way starts again. Returns the columns to scroll, left ones as negative.
+pub fn notches(turned: i32, delta: i32, vertical: bool, notch: i32) -> (i32, i32) {
+    let delta = if vertical { delta } else { -delta };
+    let mut turned = if turned.signum() == delta.signum() { turned + delta } else { delta };
+    let mut steps = 0;
+    while turned.abs() >= notch {
+        steps -= turned.signum();
+        turned -= notch * turned.signum();
+    }
+    (steps, turned)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -482,7 +538,7 @@ mod tests {
         assert_eq!(tree.tiles[1].hwnd, None);
         assert_eq!(tree.rects(AREA, 0)[0].w, 960);
         // A half and a two-thirds don't both fit: the view shows the half and an empty zone.
-        let mixed = grow(2).widened(2).unwrap().focused(1);
+        let mixed = grow(2).widened(2, 1920).unwrap().focused(1);
         assert_eq!(shown(&mixed), vec![1]);
         assert_eq!(mixed.tree().tiles.len(), 2);
         // A full column takes the screen alone.
@@ -596,13 +652,13 @@ mod tests {
     #[test]
     fn handle_drags_take_the_nearest_widths() {
         let two = grow(2);
-        let wider = two.with_shares(&[0.66, 0.34]);
+        let wider = two.with_shares(&[0.66, 0.34], 1920);
         assert_eq!(wider.cols.iter().map(|c| c.width).collect::<Vec<_>>(), vec![Width::TwoThirds, Width::Third]);
     }
 
     #[test]
     fn the_one_rule_keeps_widths_and_hands_a_column_to_an_heir() {
-        let three = grow(3).widened(1).unwrap();
+        let three = grow(3).widened(1, 1920).unwrap();
         let mut whole = three.whole();
         assert_eq!(whole.tiles.len(), 3);
         whole.tiles.remove(1);
@@ -624,6 +680,116 @@ mod tests {
         assert!(matches!(places[1].1, Place::View(r) if r.x == 0));
         assert!(matches!(places[2].1, Place::View(r) if r.x == 960));
         assert_eq!(places[3], (4, Place::Parked { size: (960, 1080), left: false }));
+    }
+
+    #[test]
+    fn a_column_never_gets_narrower_than_its_window() {
+        // A window 1000 px wide on a 1920 px screen: a third and a half are too narrow.
+        let s = Strip::default().insert(1, (1000, 0), Width::TwoThirds);
+        let widths: Vec<Width> = (0..4)
+            .scan(s.clone(), |s, _| {
+                *s = s.widened(1, 1920).unwrap();
+                Some(s.cols[0].width)
+            })
+            .collect();
+        assert_eq!(widths, vec![Width::Full, Width::TwoThirds, Width::Full, Width::TwoThirds]);
+        // A handle drag to a third gives it the narrowest width that holds it.
+        let dragged = s.with_shares(&[0.33], 1920);
+        assert_eq!(dragged.cols[0].width, Width::TwoThirds);
+        assert!(Width::Full.holds(5000, 1920));
+        assert!(!Width::Half.holds(961, 1920) && Width::Half.holds(960, 1920));
+    }
+
+    #[test]
+    fn the_focused_column_is_in_view_after_every_key() {
+        let four = grow(4).focused(1);
+        let (walked, h) = four.walked(false).unwrap();
+        assert!(walked.in_view(h) && walked.focus == Some(h));
+        let moved = four.moved(1, false).unwrap();
+        assert!(moved.in_view(1));
+        let wide = four.widened(1, 1920).unwrap();
+        assert!(wide.in_view(1));
+        // Widths go with their columns when they move, and the rule's own tiles change nothing.
+        let mixed = grow(3).widened(2, 1920).unwrap();
+        let swapped = mixed.moved(2, true).unwrap();
+        assert_eq!(swapped.cols[0], Column { hwnd: 2, min: (0, 0), width: Width::TwoThirds });
+        assert_eq!(mixed.keep(&mixed.whole().tiles, &[]), mixed);
+        assert_eq!(mixed.absorb(&mixed.tree()), mixed);
+    }
+
+    #[test]
+    fn every_column_out_of_view_is_parked_on_its_side() {
+        for strip in [grow(1), grow(5), grow(6).focused(3), grow(7).widened(4, 1920).unwrap()] {
+            let shown = strip.shown();
+            for (i, (_, place)) in strip.places(AREA, 8).into_iter().enumerate() {
+                match place {
+                    Place::View(_) => assert!(shown.contains(&i)),
+                    Place::Parked { left, .. } => {
+                        assert!(!shown.contains(&i));
+                        assert_eq!(left, i < shown.start);
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn a_window_goes_back_to_a_place_on_a_screen_never_a_parked_one() {
+        let desk = [LEFT, MAIN, RIGHT];
+        let work = Rect { x: 0, y: 0, w: 2560, h: 1400 };
+        let before = Rect { x: 100, y: 100, w: 800, h: 600 };
+        let parked = park(MAIN, &desk, (800, 600), true);
+        assert!(stranded(&desk, parked));
+        // Its place before tiling, when that is on a screen.
+        assert_eq!(way_back(&[Some(before), Some(parked)], &desk, work, (800, 600)), before);
+        // A `before` taken from a parked window after a crash is passed over for the stamp's.
+        assert_eq!(way_back(&[Some(parked), Some(before)], &desk, work, (800, 600)), before);
+        // Nothing on a screen: the middle of the work area, at its size up to the area's.
+        assert_eq!(way_back(&[Some(parked), None], &desk, work, (800, 600)), Rect { x: 880, y: 400, w: 800, h: 600 });
+        assert_eq!(way_back(&[], &desk, work, (9000, 9000)), work);
+        // A screen that went: its windows' places are off the desk now.
+        assert!(stranded(&[MAIN], Rect { x: -1500, y: 10, w: 800, h: 600 }));
+        assert!(!stranded(&desk, Rect { x: -10, y: 10, w: 800, h: 600 }));
+        assert!(stranded(&desk, Rect { x: 3640, y: 0, w: 10, h: 10 }), "touching an edge isn't on it");
+    }
+
+    #[test]
+    fn a_rect_survives_its_stamp() {
+        for (a, b) in [(0, 0), (-1920, 1080), (i32::MIN, i32::MAX), (-1, -1)] {
+            assert_eq!(unpack(pack(a, b)), (a, b));
+        }
+    }
+
+    #[test]
+    fn the_wheel_scrolls_a_column_a_notch() {
+        // A wheel notch up is one column left; a touchpad's small steps add up to one.
+        assert_eq!(notches(0, 120, true, 120), (-1, 0));
+        assert_eq!(notches(0, -240, true, 120), (2, 0));
+        assert_eq!(notches(0, 40, true, 120), (0, 40));
+        assert_eq!(notches(80, 40, true, 120), (-1, 0));
+        // The other way starts again; a tilt right is right.
+        assert_eq!(notches(80, -40, true, 120), (0, -40));
+        assert_eq!(notches(0, 120, false, 120), (1, 0));
+    }
+
+    #[test]
+    fn a_tie_still_parks_off_every_screen() {
+        // A full-width column on the middle of three level screens is as near its
+        // neighbours above and below, and falls back to the side it is on.
+        let middle = Rect { x: 0, y: 0, w: 1920, h: 1080 };
+        let desk = [Rect { x: -1920, y: 0, w: 1920, h: 1080 }, middle, Rect { x: 1920, y: 0, w: 1920, h: 1080 }];
+        for left in [true, false] {
+            let spot = park(middle, &desk, (1920, 1040), left);
+            assert!(stranded(&desk, spot));
+            assert_eq!(spot.x < 0, left);
+        }
+        // Stacked screens, one above the other, with negative y.
+        let stacked = [Rect { x: 0, y: -1080, w: 1920, h: 1080 }, Rect { x: 0, y: 0, w: 1920, h: 1080 }];
+        for own in stacked {
+            let spot = park(own, &stacked, (960, 1000), true);
+            assert!(stranded(&stacked, spot));
+            assert_eq!(stacked[nearest(&stacked, spot).unwrap()], own);
+        }
     }
 
     const LEFT: Rect = Rect { x: -1920, y: 0, w: 1920, h: 1080 };
@@ -748,7 +914,7 @@ mod tests {
                     }
                     5 if !known.is_empty() => {
                         let h = pick(&mut rng, &known);
-                        strip.widened(h).unwrap()
+                        strip.widened(h, area.w).unwrap()
                     }
                     6 => strip.scrolled(rng.next(2) == 0).unwrap_or(strip),
                     7 => strip.walked(rng.next(2) == 0).map_or(strip, |(s, _)| s),

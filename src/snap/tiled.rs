@@ -24,7 +24,7 @@ mod hand;
 mod scroll;
 mod turn;
 
-pub use scroll::{tiling_column, tiling_scroll, tiling_unpark_for_quit};
+pub use scroll::{tiling_column, tiling_scroll, tiling_unpark_for_quit, tiling_unstrand};
 pub use turn::Turned;
 
 /// One screen's tree on one virtual desktop.
@@ -422,7 +422,7 @@ impl Engine {
     /// A tree ends: its windows stay where they are, out of tiling and out of zones, except
     /// parked ones, which come back onto the screen.
     fn tiled_release(&mut self, t: Tiled) {
-        self.unpark(&t);
+        self.unpark(&t, false, &[]);
         for k in t.all() {
             winutil::set_tile_stamp(hwnd_of(k), 0);
             if t.desktop == self.tiling.desktop {
@@ -560,8 +560,14 @@ impl Engine {
         self.tiling.seq = self.tiling.seq.max(order);
         winutil::set_tile_stamp(h, order);
         winutil::set_floated(h, false);
+        // Its place before tiling: a parked window's stamp keeps it, and a frame off every
+        // screen (a window a crash left parked) is never one.
+        let screens: Vec<Rect> = self.screens.iter().map(|s| s.bounds).collect();
+        let before = winutil::park_stamp(h).or(Some(a.frame).filter(|f| !seam::strip::stranded(&screens, *f)));
         let t = &mut self.tiling.trees[i];
-        t.before.entry(a.hwnd).or_insert(a.frame);
+        if let Some(before) = before {
+            t.before.entry(a.hwnd).or_insert(before);
+        }
         if a.restored {
             t.back = Some(Instant::now());
         }
@@ -772,6 +778,7 @@ impl Engine {
         };
         for &k in &plan.left {
             log::info!("tiling: a tiled window closed or went to another desktop unseen, so it leaves");
+            self.scroll_let_go(i, k);
             self.tiling.trees[i].before.remove(&k);
             self.tiling.trees[i].offscreen.remove(&k);
             winutil::set_tile_stamp(hwnd_of(k), 0);
@@ -820,6 +827,8 @@ impl Engine {
     /// A window out of tree `i`, its tile gone to a window stacked in it or closed so the
     /// neighbours fill the gap, floats where it is (D562).
     fn floated_out(&mut self, i: usize, key: isize) {
+        // A parked one that floats off every screen comes back onto one first.
+        self.scroll_let_go(i, key);
         let t = &mut self.tiling.trees[i];
         t.overflow.retain(|(k, _)| *k != key);
         t.before.remove(&key);

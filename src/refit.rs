@@ -46,6 +46,9 @@ pub fn display_changed() {
     with_engine(|e| {
         e.adhoc_screens_changed();
         e.refit_schedule();
+        // A parked place may be on a screen that just came: every parked window comes back
+        // now, and parks again once the screens are read.
+        e.scroll_unpark_all();
     });
 }
 

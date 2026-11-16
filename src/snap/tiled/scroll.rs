@@ -27,16 +27,53 @@ pub fn tiling_column(focused: isize, left: Option<bool>) -> Result<(), String> {
     with_engine(|e| e.tiled_column(focused, left)).unwrap_or_else(|| Err("Seam is busy, try again".into()))
 }
 
-/// Seam is quitting: every parked window comes back onto its screen, so none is left
-/// outside every monitor. Free all for quit has put them back already when it ran.
+/// Seam is quitting: every parked window comes back onto its screen, a minimized one
+/// given that place to restore to, so none is left outside every monitor. Free all for
+/// quit has put them back already when it ran.
 pub fn tiling_unpark_for_quit() {
     with_engine(|e| {
         let trees = std::mem::take(&mut e.tiling.trees);
         for t in &trees {
-            e.unpark(t);
+            e.unpark(t, true, &[]);
         }
         e.tiling.trees = trees;
     });
+}
+
+/// Seam starts: a window a Seam that crashed left parked, by its park stamp, or a tiled
+/// window wholly off every screen, comes back to where it was before tiling took it, or
+/// else the middle of the nearest screen. A minimized one is given that place to restore
+/// to. Smart tiling then tiles it again from there. Before the tray's services start, so
+/// the windows are back before anything looks at them; a hung window is left alone.
+pub fn tiling_unstrand(mons: &[Mon]) {
+    let screens: Vec<Rect> = mons.iter().map(|m| rect_of(&m.rect)).collect();
+    let mut back = 0;
+    for h in winutil::top_level_windows() {
+        let stamp = winutil::park_stamp(h);
+        let minimized = winutil::is_minimized(h);
+        let frame = if minimized { winutil::normal_rect(h) } else { winutil::visible_rect(h) };
+        let Some(frame) = frame else { continue };
+        let lost = strip::stranded(&screens, frame);
+        if !(stamp.is_some() || winutil::tile_stamp(h) != 0 && lost) {
+            continue;
+        }
+        winutil::set_park_stamp(h, None);
+        if !lost || winutil::is_hung(h) {
+            continue;
+        }
+        let Some(near) = strip::nearest(&screens, frame) else { continue };
+        let Some((work, dpi)) = work_area(screens[near]) else { continue };
+        let target = strip::way_back(&[stamp], &screens, work, (frame.w, frame.h));
+        if minimized {
+            winutil::place_minimized(h, target, dpi);
+        } else {
+            winutil::fit(h, target);
+        }
+        back += 1;
+    }
+    if back > 0 {
+        log::info!("scrolling: {back} windows a Seam before left off every screen came back");
+    }
 }
 
 impl Engine {
@@ -87,9 +124,10 @@ impl Engine {
     pub(in crate::snap) fn tiled_column(&mut self, focused: isize, left: Option<bool>) -> Result<(), String> {
         let i = self.scroll_tree(focused, None)?;
         let Some(strip) = &self.tiling.trees[i].strip else { return Err("Scrolling is off on this screen".into()) };
+        let area_w = self.tile_area(&self.tiling.trees[i].screen).map_or(0, |(work, ..)| work.w);
         let next = match left {
             Some(left) => strip.moved(focused, left).ok_or("The column is at the end of the strip")?,
-            None => strip.widened(focused).ok_or("The focused window isn't a column")?,
+            None => strip.widened(focused, area_w).ok_or("The focused window isn't a column")?,
         };
         self.scroll_set(i, next);
         Ok(())
@@ -99,8 +137,13 @@ impl Engine {
     /// and a parked one is scrolled into view: Alt+Tab, the taskbar, the overview's Enter.
     /// While nothing may move, it waits for tiling to be active again (D566).
     pub(in crate::snap) fn tiled_focused(&mut self, key: isize) {
-        let Some(i) = self.tree_of(key).filter(|i| self.here(*i)) else { return };
+        let Some(i) = self.tree_of(key) else { return };
         let Some(strip) = &self.tiling.trees[i].strip else { return };
+        // Gone to on another desktop: the worker says the desktop changed next, then it scrolls.
+        if !self.here(i) {
+            self.tiling.focus_wait = Some(key);
+            return;
+        }
         let next = strip.focused(key);
         if next.tree() == self.tiling.trees[i].tree {
             self.tiling.trees[i].strip = Some(next);
@@ -185,7 +228,8 @@ impl Engine {
         let Some(strip) = &self.tiling.trees[i].strip else { return };
         let unit = Rect { x: 0, y: 0, w: 6000, h: 100 };
         let shares: Vec<f32> = zones::rects(node, unit, 0).iter().map(|r| r.w as f32 / 6000.0).collect();
-        let next = strip.with_shares(&shares);
+        let area_w = self.tile_area(&self.tiling.trees[i].screen).map_or(0, |(work, ..)| work.w);
+        let next = strip.with_shares(&shares, area_w);
         self.scroll_set(i, next);
     }
 
@@ -215,7 +259,8 @@ impl Engine {
         whole.tiles.truncate(tiling::MAX_TILES);
         for k in extra {
             log::info!("scrolling: more columns than another family holds, so one floats");
-            let target = self.unpark_target(&self.tiling.trees[i], k);
+            let target = self.home_of(&self.tiling.trees[i], k);
+            winutil::set_park_stamp(hwnd_of(k), None);
             let t = &mut self.tiling.trees[i];
             t.before.remove(&k);
             if t.offscreen.remove(&k).is_some()
@@ -229,7 +274,9 @@ impl Engine {
         let t = &mut self.tiling.trees[i];
         t.strip = None;
         // The parked windows are tiles now, and move into them.
-        t.offscreen.clear();
+        for k in std::mem::take(&mut t.offscreen).into_keys() {
+            winutil::set_park_stamp(hwnd_of(k), None);
+        }
         t.tree = whole.with_family(family, work, gap);
         self.tiled_apply(i);
     }
@@ -263,6 +310,11 @@ impl Engine {
             let there = t.offscreen.get(&key) == Some(&target)
                 && winutil::visible_rect(h).is_some_and(|r| close(r, target, winutil::is_resizable(h)));
             if movable.contains(&key) && !there {
+                // Where it goes back to, kept on the window before it leaves, so a crash can't strand it.
+                let now = winutil::visible_rect(h);
+                let choices = [t.before.get(&key).copied(), winutil::park_stamp(h), now];
+                let size = now.map_or((work.w / 2, work.h), |r| (r.w, r.h));
+                winutil::set_park_stamp(h, Some(strip::way_back(&choices, &screens, work, size)));
                 parks.push(Placement { hwnd: key, target, zone: None, dpi, maximize: false });
             }
             // One that may not move now keeps the record it had, if any, so the rule sees where it went.
@@ -273,6 +325,10 @@ impl Engine {
         }
         for p in &parks {
             self.snapped.remove(&p.hwnd);
+        }
+        // Back in view: no longer parked.
+        for k in self.tiling.trees[i].offscreen.keys().filter(|k| !parked.contains_key(*k)) {
+            winutil::set_park_stamp(hwnd_of(*k), None);
         }
         if log::enabled() && !parks.is_empty() {
             log::info!("scrolling: {} columns park off every screen", parks.len());
@@ -287,21 +343,116 @@ impl Engine {
         strip::nearest(&screens, frame).map(|i| self.screens[i].id.clone())
     }
 
-    /// Where a window comes back to on `t`'s screen when it leaves the strip parked: the
-    /// middle of the work area, at its size up to the work area's.
-    pub(super) fn unpark_target(&self, t: &Tiled, key: isize) -> Option<Rect> {
-        let (work, ..) = self.tile_area(&t.screen)?;
-        let now = winutil::visible_rect(hwnd_of(key))?;
-        let (w, h) = (now.w.min(work.w), now.h.min(work.h));
-        Some(Rect { x: work.x + (work.w - w) / 2, y: work.y + (work.h - h) / 2, w, h })
+    /// Where a window of `t` comes back to when it leaves the strip parked, by
+    /// `strip::way_back`: its place before tiling, then its park stamp's, when on a
+    /// screen; else the middle of its screen's work area, or the nearest screen's when
+    /// its own is gone. None with no screen at all.
+    pub(super) fn home_of(&self, t: &Tiled, key: isize) -> Option<Rect> {
+        let h = hwnd_of(key);
+        let screens: Vec<Rect> = self.screens.iter().map(|s| s.bounds).collect();
+        let now = if winutil::is_minimized(h) { winutil::normal_rect(h) } else { winutil::visible_rect(h) };
+        let before = t.before.get(&key).copied();
+        let stamp = winutil::park_stamp(h);
+        let size = now.or(before).map_or((800, 600), |r| (r.w, r.h));
+        let area = match self.tile_area(&t.screen) {
+            Some((work, ..)) => work,
+            None => {
+                let near = strip::nearest(&screens, now.or(before)?)?;
+                work_area(screens[near])?.0
+            }
+        };
+        Some(strip::way_back(&[before, stamp], &screens, area, size))
+    }
+
+    /// Moves queued or under way for these windows are dropped, so a park posted a moment
+    /// ago can't send a window back off the screen after it came back.
+    fn cancel_moves(&mut self, keys: &[isize]) {
+        self.queued.retain(|p| !keys.contains(&p.hwnd));
+        if let Some(p) = self.pending.take_if(|p| keys.contains(&p.hwnd)) {
+            unsafe {
+                let _ = KillTimer(None, p.timer);
+            }
+        }
+    }
+
+    /// A parked window of tree `i` leaves the strip (it floats, or went to another
+    /// desktop): wherever it is off every screen, it comes back onto one.
+    pub(super) fn scroll_let_go(&mut self, i: usize, key: isize) {
+        let t = &self.tiling.trees[i];
+        if !t.offscreen.contains_key(&key) && winutil::park_stamp(hwnd_of(key)).is_none() {
+            return;
+        }
+        let h = hwnd_of(key);
+        let screens: Vec<Rect> = self.screens.iter().map(|s| s.bounds).collect();
+        let lost = winutil::visible_rect(h).is_some_and(|r| strip::stranded(&screens, r));
+        let home = self.home_of(t, key);
+        let dpi = self.tile_area(&t.screen).map_or(96, |(_, dpi, _)| dpi);
+        winutil::set_park_stamp(h, None);
+        self.tiling.trees[i].offscreen.remove(&key);
+        if let (true, Some(target)) = (lost && unsafe { IsWindow(Some(h)) }.as_bool(), home) {
+            log::info!("scrolling: a parked window left the strip off every screen, so it comes back onto one");
+            self.cancel_moves(&[key]);
+            self.land_now(Placement { hwnd: key, target, zone: None, dpi, maximize: false });
+        }
+    }
+
+    /// The screens changed (one went, came, moved or rescaled): every parked window comes
+    /// back first, a strip whose screen is gone ends, and the rest park again for the
+    /// screens there are now. A window of a strip left off every screen is brought back too.
+    pub(in crate::snap) fn scroll_screens_changed(&mut self) {
+        self.scroll_unpark_all();
+        // A moment with no screen at all, mid-change, ends nothing.
+        if self.screens.is_empty() {
+            return;
+        }
+        let gone: Vec<usize> = (0..self.tiling.trees.len())
+            .filter(|&i| !self.screens.iter().any(|s| s.id == self.tiling.trees[i].screen))
+            .collect();
+        for i in gone.into_iter().rev() {
+            let t = self.tiling.trees.remove(i);
+            log::info!("scrolling: a tiled screen went, so its tiling ends there");
+            self.tiled_release(t);
+        }
+        let screens: Vec<Rect> = self.screens.iter().map(|s| s.bounds).collect();
+        for i in 0..self.tiling.trees.len() {
+            if self.tiling.trees[i].strip.is_none() {
+                continue;
+            }
+            for key in self.tiling.trees[i].all() {
+                let lost = winutil::visible_rect(hwnd_of(key)).is_some_and(|r| strip::stranded(&screens, r));
+                let dpi = self.tile_area(&self.tiling.trees[i].screen).map_or(96, |(_, dpi, _)| dpi);
+                if let (true, Some(target)) = (lost, self.home_of(&self.tiling.trees[i], key)) {
+                    self.land_now(Placement { hwnd: key, target, zone: None, dpi, maximize: false });
+                }
+            }
+        }
+        self.tiled_sync();
+    }
+
+    /// Every parked window on every strip comes back onto its screen at once, as a display
+    /// change starts, and the strips park them again once the screens are known.
+    pub(in crate::snap) fn scroll_unpark_all(&mut self) {
+        let trees = std::mem::take(&mut self.tiling.trees);
+        for t in &trees {
+            self.unpark(t, false, &[]);
+        }
+        self.tiling.trees = trees;
+        for t in &mut self.tiling.trees {
+            if !t.offscreen.is_empty() {
+                t.offscreen.clear();
+                t.dirty = true;
+            }
+        }
     }
 
     /// A window off every screen that tiling knows, which nothing tiles now: it comes
     /// back onto `screen`.
     pub(super) fn rescue(&mut self, key: isize, screen: &str, frame: Rect) {
-        if self.screens.iter().any(|s| touches(s.bounds, frame)) {
+        let screens: Vec<Rect> = self.screens.iter().map(|s| s.bounds).collect();
+        if !strip::stranded(&screens, frame) {
             return;
         }
+        winutil::set_park_stamp(hwnd_of(key), None);
         let Some((work, dpi, _)) = self.tile_area(screen) else { return };
         let (w, h) = (frame.w.min(work.w), frame.h.min(work.h));
         let target = Rect { x: work.x + (work.w - w) / 2, y: work.y + (work.h - h) / 2, w, h };
@@ -312,29 +463,39 @@ impl Engine {
         self.land_now(Placement { hwnd: key, target, zone: None, dpi, maximize: false });
     }
 
-    /// Every parked window of `t` comes back onto its screen, to where it was before
-    /// tiling took it, or else the middle of the work area. A minimized one is given that
-    /// place to restore to, on a thread of its own, since that waits on its app.
-    pub(super) fn unpark(&mut self, t: &Tiled) {
-        if t.offscreen.is_empty() {
+    /// Every parked window of `t` but `skip` comes back onto its screen, by `home_of`, and
+    /// any move still queued for it is dropped. A minimized one is given that place to
+    /// restore to without showing it: at once when Seam quits (`now`), else on a thread of
+    /// its own, since that waits on its app.
+    pub(super) fn unpark(&mut self, t: &Tiled, now: bool, skip: &[isize]) {
+        let keys: Vec<isize> = t.offscreen.keys().copied().filter(|k| !skip.contains(k)).collect();
+        if keys.is_empty() {
             return;
         }
+        self.cancel_moves(&keys);
         let dpi = self.tile_area(&t.screen).map_or(96, |(_, dpi, _)| dpi);
         let mut minimized = Vec::new();
-        for &key in t.offscreen.keys() {
+        for &key in &keys {
             let h = hwnd_of(key);
             if !unsafe { IsWindow(Some(h)) }.as_bool() {
                 continue;
             }
-            let Some(target) = t.before.get(&key).copied().or_else(|| self.unpark_target(t, key)) else { continue };
+            let Some(target) = self.home_of(t, key) else { continue };
+            winutil::set_park_stamp(h, None);
             if winutil::is_minimized(h) {
                 minimized.push((key, target));
             } else {
                 self.land_now(Placement { hwnd: key, target, zone: None, dpi, maximize: false });
             }
         }
-        log::info!("scrolling: {} parked windows come back onto the screen", t.offscreen.len());
-        if !minimized.is_empty() {
+        log::info!("scrolling: {} parked windows come back onto the screen", keys.len());
+        if now {
+            for (key, target) in minimized {
+                if !winutil::is_hung(hwnd_of(key)) {
+                    winutil::place_minimized(hwnd_of(key), target, dpi);
+                }
+            }
+        } else if !minimized.is_empty() {
             let spawned = std::thread::Builder::new().name("seam-unpark".into()).spawn(move || {
                 for (key, target) in minimized {
                     let h = hwnd_of(key);
@@ -362,21 +523,6 @@ impl Engine {
     /// every parked window comes onto its screen, and the strips park them again once
     /// tiling is back.
     fn scroll_stand_down(&mut self) {
-        let trees = std::mem::take(&mut self.tiling.trees);
-        for t in &trees {
-            self.unpark(t);
-        }
-        self.tiling.trees = trees;
-        for t in &mut self.tiling.trees {
-            if !t.offscreen.is_empty() {
-                t.offscreen.clear();
-                t.dirty = true;
-            }
-        }
+        self.scroll_unpark_all();
     }
-}
-
-/// Whether a rect is on a screen, in part.
-fn touches(screen: Rect, r: Rect) -> bool {
-    r.x < screen.x + screen.w && screen.x < r.x + r.w && r.y < screen.y + screen.h && screen.y < r.y + r.h
 }

@@ -63,6 +63,8 @@ pub(super) fn tiling_events(app: &mut App) -> bool {
     if !snap::tiling_events() {
         return false;
     }
+    // The desktop in front may have changed: Win+wheel follows it.
+    mousewatch::set_wheel(&wheel_screens(app));
     if let Some(why) = snap::take_tiling_refused() {
         notify(app, "Float or tile this window", &format!("That window can't be tiled: {why}"), BalloonAction::None);
     }
@@ -189,15 +191,15 @@ pub(super) fn column(left: Option<bool>) {
     }
 }
 
-/// The screens a Win+wheel scrolls: those with Scrolling on for some virtual desktop, while
-/// zones are on and Seam isn't paused or stepping aside. The tray side checks the desktop.
+/// The screens a Win+wheel scrolls: those with Scrolling on for the virtual desktop in
+/// front, while zones are on and Seam isn't paused or stepping aside. None while the
+/// desktop in front isn't known, so a wheel is never swallowed for nothing.
 pub(super) fn wheel_screens(app: &App) -> Vec<seam::geom::Rect> {
     if !app.cfg.zones.enabled || standby::reason().is_some() || aside(app).is_some() {
         return Vec::new();
     }
-    let Some(desk) = app.cfg.desks.get(&app.sig) else { return Vec::new() };
-    let scrolls =
-        |id: &str| desk.tiling.get(id).is_some_and(|t| t.family == Family::Scrolling && !t.desktops.is_empty());
+    let (Some(desk), Some(desktop)) = (app.cfg.desks.get(&app.sig), snap::tiling_desktop()) else { return Vec::new() };
+    let scrolls = |id: &str| desk.tiling.get(id).is_some_and(|t| t.family == Family::Scrolling && t.on(&desktop));
     app.mons.iter().filter(|m| scrolls(&m.id)).map(|m| m.rect).collect()
 }
 

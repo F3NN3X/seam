@@ -52,7 +52,7 @@ pub use swap::{WM_APP_SWAP_LOOK, look_ready};
 pub use tiled::{
     Turned, is_tiled, take_tiling_refused, tiled, tiled_dragged, tiling_column, tiling_desktop, tiling_events,
     tiling_float, tiling_free, tiling_free_for_quit, tiling_reset, tiling_restore, tiling_rotate, tiling_scroll,
-    tiling_switch_ended, tiling_unpark_for_quit,
+    tiling_switch_ended, tiling_unpark_for_quit, tiling_unstrand,
 };
 
 /// A window the tray couldn't move, probably because it runs as administrator.
@@ -371,6 +371,7 @@ pub fn update(owner: HWND, cfg: &Config, sig: &str, mons: &[Mon], aside: Option<
         }
         e.cancel_drag();
         let margins_changed = e.screens.iter().map(|s| s.margins).ne(screens.iter().map(|s| s.margins));
+        let moved = e.screens.iter().map(|s| (&s.id, s.bounds)).ne(screens.iter().map(|s| (&s.id, s.bounds)));
         e.owner = owner.0 as isize;
         e.enabled = cfg.zones.enabled;
         e.aside = aside.map(String::from);
@@ -380,6 +381,10 @@ pub fn update(owner: HWND, cfg: &Config, sig: &str, mons: &[Mon], aside: Option<
         e.drag_size = drag_size;
         e.alt_keys = alt_keys;
         e.screens = screens;
+        // A screen went, came or moved: parked windows come back first, then park again below.
+        if moved {
+            e.scroll_screens_changed();
+        }
         // An ad-hoc group is for a screen with no zones, as it was when it was made.
         e.adhoc_screens_changed();
         if !e.settings.refit || e.aside.is_some() || e.standing_by {

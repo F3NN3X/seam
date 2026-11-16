@@ -42,6 +42,8 @@ const MSG_CHECK: u32 = WM_APP + 3;
 const MSG_TAP: u32 = WM_APP + 4;
 /// One notch of a wheel. A touchpad's smaller steps add up to one.
 const NOTCH: i32 = 120;
+/// At most one tap this often, so a Win pressed again gets its own.
+const TAP_EVERY_MS: u32 = 300;
 /// How often the hook's thread looks, while it is in.
 const CHECK_MS: u32 = 60_000;
 /// Corners kept for the hook, one per screen at most. Past this many screens, the rest are left out.
@@ -72,6 +74,8 @@ thread_local! {
     static CALLS: Cell<u64> = const { Cell::new(0) };
     /// The wheel turned with Win held and not yet a notch, so a touchpad scrolls a column a notch.
     static TURNED: Cell<i32> = const { Cell::new(0) };
+    /// When the last Start-suppressing tap was asked for, by the hook's clock.
+    static TAPPED: Cell<u32> = const { Cell::new(0) };
 }
 
 /// The spots of the chosen corner on this desk: the screens' outer corners only, each
@@ -101,6 +105,13 @@ pub fn configure(owner: isize, corner: &[Spot], wheel: &[Rect]) {
         }
     }
     COUNT.store(corner.len().min(MAX_SPOTS), Ordering::SeqCst);
+    set_wheel(wheel);
+}
+
+/// The screens Win+wheel scrolls now, those scrolling on the virtual desktop in front, kept
+/// apart from the corner so a desktop switch changes only these. Puts the hook in or takes
+/// it out when that changes what is wanted. Cheap when nothing changed.
+pub fn set_wheel(wheel: &[Rect]) {
     WHEEL_COUNT.store(0, Ordering::SeqCst);
     for (slot, r) in WHEEL.iter().zip(wheel) {
         for (cell, value) in slot.iter().zip([r.left, r.top, r.right, r.bottom]) {
@@ -108,7 +119,11 @@ pub fn configure(owner: isize, corner: &[Spot], wheel: &[Rect]) {
         }
     }
     WHEEL_COUNT.store(wheel.len().min(MAX_SPOTS), Ordering::SeqCst);
-    let on = !corner.is_empty() || !wheel.is_empty();
+    want(COUNT.load(Ordering::SeqCst) > 0 || !wheel.is_empty());
+}
+
+/// The hook in or out, as `on` says.
+fn want(on: bool) {
     if ON.swap(on, Ordering::SeqCst) == on {
         // Still on: the hook's thread looks whether Windows took the hook out.
         let open = OPEN.load(Ordering::SeqCst);
@@ -281,21 +296,21 @@ fn wheel(msg: u32, info: &MSLLHOOKSTRUCT) -> bool {
         return false;
     }
     let delta = i32::from((info.mouseData >> 16) as u16 as i16);
-    // Up on a wheel and left on a tilt are the same way.
-    let delta = if vertical { delta } else { -delta };
-    let mut turned = if TURNED.get().signum() == delta.signum() { TURNED.get() + delta } else { delta };
-    while turned.abs() >= NOTCH {
-        let left = turned > 0;
-        turned -= NOTCH * turned.signum();
-        let owner = HWND(OWNER.load(Ordering::SeqCst) as *mut _);
-        let point = (info.pt.x as u16 as isize) | ((info.pt.y as u16 as isize) << 16);
+    let (steps, turned) = seam::strip::notches(TURNED.get(), delta, vertical, NOTCH);
+    TURNED.set(turned);
+    let owner = HWND(OWNER.load(Ordering::SeqCst) as *mut _);
+    let point = (info.pt.x as u16 as isize) | ((info.pt.y as u16 as isize) << 16);
+    for _ in 0..steps.unsigned_abs() {
         unsafe {
-            let _ = PostMessageW(Some(owner), WM_APP_WHEEL, WPARAM(wheel_param(left, info.time)), LPARAM(point));
+            let _ = PostMessageW(Some(owner), WM_APP_WHEEL, WPARAM(wheel_param(steps < 0, info.time)), LPARAM(point));
         }
     }
-    TURNED.set(turned);
-    unsafe {
-        let _ = PostThreadMessageW(GetCurrentThreadId(), MSG_TAP, WPARAM(0), LPARAM(0));
+    // One tap is enough while Win is held; a touchpad's swipe sends dozens of events.
+    if info.time.wrapping_sub(TAPPED.get()) >= TAP_EVERY_MS {
+        TAPPED.set(info.time);
+        unsafe {
+            let _ = PostThreadMessageW(GetCurrentThreadId(), MSG_TAP, WPARAM(0), LPARAM(0));
+        }
     }
     true
 }

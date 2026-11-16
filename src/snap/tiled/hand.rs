@@ -60,6 +60,8 @@ impl Engine {
                 self.tiled_apply(i);
             }
         }
+        // A parked window gone to on this desktop, by Alt+Tab or the taskbar, scrolls into view now.
+        self.scroll_focus_waited();
     }
 
     /// After a drag, and once moves are over: who holds each zone of a tiled screen is
@@ -217,6 +219,13 @@ impl Engine {
         let t = self.tiling.trees.remove(i);
         let dpi = self.tile_area(screen).map_or(96, |(_, dpi, _)| dpi);
         let windows = t.all();
+        let parked = |k: &isize| t.offscreen.contains_key(k);
+        // Parked windows that aren't columns now (minimized ones) come back here, given their
+        // place to restore to; the columns come back with the others below.
+        let columns: Vec<isize> =
+            windows.iter().copied().filter(|k| parked(k) && !winutil::is_minimized(hwnd_of(*k))).collect();
+        self.unpark(&t, now, &columns);
+        let screens: Vec<Rect> = self.screens.iter().map(|s| s.bounds).collect();
         let mut moves = Vec::new();
         for k in &windows {
             let h = hwnd_of(*k);
@@ -229,9 +238,17 @@ impl Engine {
             let away = if front { gone(*k) } else { !unsafe { IsWindow(Some(h)) }.as_bool() }
                 || winutil::is_minimized(h)
                 || winutil::is_maximized(h);
-            // A parked window always comes back, to where it was before or onto its screen.
-            let back = t.before.get(k).copied().or_else(|| self.unpark_target(&t, *k));
-            if let Some(r) = back.filter(|_| !away || t.offscreen.contains_key(k)) {
+            // A parked window always comes back, to where it was before or onto its screen. A
+            // place before off every screen (a window a crash left parked) is never gone back to.
+            let back = if columns.contains(k) {
+                winutil::set_park_stamp(h, None);
+                self.home_of(&t, *k)
+            } else if parked(k) {
+                None
+            } else {
+                t.before.get(k).copied().filter(|r| !seam::strip::stranded(&screens, *r))
+            };
+            if let Some(r) = back.filter(|_| !away || columns.contains(k)) {
                 moves.push(Placement { hwnd: *k, target: r, zone: None, dpi, maximize: false });
             } else if self.snapped.contains_key(k) {
                 self.unsnap(h, true);

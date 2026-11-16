@@ -372,6 +372,39 @@ pub fn set_floated(h: HWND, on: bool) {
     }
 }
 
+/// The park stamp: a Scrolling column's window waits off every screen, and this is where
+/// it goes back to, in two properties (place, then size). Written before it parks, so a
+/// Seam that crashed finds it and brings it back on start.
+const PARK_AT: PCWSTR = w!("Seam_park_at");
+const PARK_SIZE: PCWSTR = w!("Seam_park_size");
+
+/// Where a parked window goes back to, or None when it isn't parked.
+pub fn park_stamp(h: HWND) -> Option<Rect> {
+    let read = |name| unsafe { GetPropW(h, name).0 as usize as u64 };
+    let (w, hh) = crate::strip::unpack(read(PARK_SIZE));
+    if w <= 0 || hh <= 0 {
+        return None;
+    }
+    let (x, y) = crate::strip::unpack(read(PARK_AT));
+    Some(Rect { x, y, w, h: hh })
+}
+
+/// Stamp a window parked, with where it goes back to, or None once it is back.
+pub fn set_park_stamp(h: HWND, back: Option<Rect>) {
+    unsafe {
+        match back {
+            Some(r) => {
+                let _ = SetPropW(h, PARK_AT, Some(HANDLE(crate::strip::pack(r.x, r.y) as usize as *mut _)));
+                let _ = SetPropW(h, PARK_SIZE, Some(HANDLE(crate::strip::pack(r.w, r.h) as usize as *mut _)));
+            }
+            None => {
+                let _ = RemovePropW(h, PARK_SIZE);
+                let _ = RemovePropW(h, PARK_AT);
+            }
+        }
+    }
+}
+
 /// Pins and the focus border, kept on the window like the zone stamp, so a
 /// tray that starts again finds them (§3.5).
 const PIN: PCWSTR = w!("Seam_pin");

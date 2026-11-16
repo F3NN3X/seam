@@ -4,10 +4,10 @@ use super::*;
 use crate::pages::workspaces::app_title;
 use crate::theme::palette;
 use crate::theme::tokens::{self, text_style};
-use gpui_kit::component::WindowExt;
 use gpui_kit::component::button::ButtonVariants;
 use gpui_kit::component::dialog::{Dialog, DialogAction, DialogClose, DialogFooter};
 use gpui_kit::component::stepper::{Stepper, StepperItem};
+use gpui_kit::component::{Disableable, WindowExt};
 use seam::apps;
 use seam::zones::{self, Template, ZoneLayout};
 use serde_json::Value;
@@ -20,8 +20,12 @@ const DONE: usize = STEPS.len();
 const APPS_NAMED: usize = 4;
 
 /// Where the dialog is and what it has been told, shared by each draw of it.
-struct Setup {
+pub(super) struct Setup {
     step: Cell<usize>,
+    /// A step's action is under way, so it can't be started again.
+    busy: Cell<bool>,
+    /// Layout changes still waiting for the tray's answer.
+    pending: Cell<usize>,
     /// The layout picked for each screen, by index into `mons`. `None` leaves the screen as it is.
     picked: RefCell<Vec<Option<Template>>>,
     /// The title of each window open when the last step was reached. `None` while they're read.
@@ -30,16 +34,19 @@ struct Setup {
 
 impl Panel {
     /// Offer first-run setup, once, when the first config says it hasn't been done.
-    pub(super) fn open_setup(&self, window: &mut Window, cx: &mut Context<Self>) {
+    pub(super) fn open_setup(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.config.setup_done {
             return;
         }
         let setup = Rc::new(Setup {
             step: Cell::new(0),
+            busy: Cell::new(false),
+            pending: Cell::new(0),
             picked: RefCell::new(vec![None; self.mons.len()]),
             windows: RefCell::new(None),
         });
         let view = cx.entity().downgrade();
+        self.setup = Some(setup.clone());
         window.open_dialog(cx, move |dialog, window, cx| draw(dialog, &setup, &view, window, cx));
     }
 }
@@ -79,6 +86,7 @@ fn read_windows(setup: &Rc<Setup>, exclude: Vec<String>, cx: &mut App) {
 /// Move to a step. The last one reads the windows it will capture.
 fn go(setup: &Rc<Setup>, view: &WeakEntity<Panel>, step: usize, window: &mut Window, cx: &mut App) {
     setup.step.set(step);
+    setup.busy.set(false);
     if step == 2 {
         let exclude = view
             .upgrade()
@@ -89,55 +97,94 @@ fn go(setup: &Rc<Setup>, view: &WeakEntity<Panel>, step: usize, window: &mut Win
     window.refresh();
 }
 
-/// The step's own action, which Enter runs too. Returns whether the dialog closes.
+/// The step's own action, which Enter runs too. Returns whether the dialog closes. While an
+/// action is under way, running it again does nothing.
 fn act(setup: &Rc<Setup>, view: &WeakEntity<Panel>, window: &mut Window, cx: &mut App) -> bool {
-    match setup.step.get() {
-        0 => {
-            let _ = view.update(cx, |panel, cx| panel.command("lineup.start", json!({}), window, cx));
-            go(setup, view, 1, window, cx);
-        }
-        1 => {
-            let picked = setup.picked.borrow().clone();
-            let _ = view.update(cx, |panel, cx| use_layouts(panel, &picked, window, cx));
-            go(setup, view, 2, window, cx);
-        }
-        2 => {
-            let (next, again) = (setup.clone(), view.clone());
-            let _ = view.update(cx, |panel, cx| {
-                panel.call("workspace.capture", json!({}), window, cx, move |panel, result, window, cx| match result {
-                    Ok(done) => {
-                        panel.workspace = done["id"].as_str().map(String::from);
-                        panel.reload_config(window, cx);
-                        go(&next, &again, DONE, window, cx);
-                    }
-                    Err(e) => window.push_notification(refusal("Nothing captured", &error_text(&e)), cx),
-                })
-            });
-        }
-        _ => return true,
+    let step = setup.step.get();
+    if step >= DONE {
+        return true;
     }
+    if setup.busy.replace(true) {
+        return false;
+    }
+    window.refresh();
+    let (next, again) = (setup.clone(), view.clone());
+    let _ = view.update(cx, |panel, cx| match step {
+        0 => panel.call("lineup.start", json!({}), window, cx, move |_, result, window, cx| {
+            // Line Up runs on its own; `lineup.finished` brings the dialog on to step 2.
+            if let Err(e) = result {
+                next.busy.set(false);
+                window.refresh();
+                window.push_notification(refusal("Seam can't do that", &error_text(&e)), cx);
+            }
+        }),
+        1 => use_layouts(panel, &next, &again, window, cx),
+        _ => panel.call("workspace.capture", json!({}), window, cx, move |panel, result, window, cx| match result {
+            Ok(done) => {
+                panel.workspace = done["id"].as_str().map(String::from);
+                panel.reload_config(window, cx);
+                go(&next, &again, DONE, window, cx);
+            }
+            Err(e) => {
+                next.busy.set(false);
+                window.refresh();
+                window.push_notification(refusal("Nothing captured", &error_text(&e)), cx);
+            }
+        }),
+    });
     false
 }
 
-/// Give each screen the layout picked for it, where that is a change.
-fn use_layouts(panel: &mut Panel, picked: &[Option<Template>], window: &mut Window, cx: &mut Context<Panel>) {
-    let sig = panel.state.as_ref().map(|s| s.desk.sig.clone()).unwrap_or_default();
-    for (i, (mon, template)) in panel.mons.clone().iter().zip(picked).enumerate() {
-        let Some(template) = *template else { continue };
-        if template == current(panel, &sig, &mon.id) {
-            continue;
+impl Panel {
+    /// Line Up ended, saved or not: setup carries on with the zones.
+    pub(super) fn setup_lineup_finished(&self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(setup) = self.setup.clone() else { return };
+        if setup.step.get() == 0 && setup.busy.get() {
+            go(&setup, &cx.entity().downgrade(), 1, window, cx);
         }
+    }
+}
+
+/// Give each screen the layout picked for it, where that is a change, then go on to the
+/// workspace once every answer is in.
+fn use_layouts(
+    panel: &mut Panel,
+    setup: &Rc<Setup>,
+    view: &WeakEntity<Panel>,
+    window: &mut Window,
+    cx: &mut Context<Panel>,
+) {
+    let sig = panel.state.as_ref().map(|s| s.desk.sig.clone()).unwrap_or_default();
+    let picked = setup.picked.borrow().clone();
+    let changes: Vec<(usize, Template)> = panel
+        .mons
+        .iter()
+        .zip(&picked)
+        .enumerate()
+        .filter_map(|(i, (mon, template))| template.filter(|t| *t != current(panel, &sig, &mon.id)).map(|t| (i, t)))
+        .collect();
+    if changes.is_empty() {
+        go(setup, view, 2, window, cx);
+        return;
+    }
+    setup.pending.set(changes.len());
+    for (i, template) in changes {
         let layout = ZoneLayout::of(template).and_then(|l| serde_json::to_value(l).ok()).unwrap_or(Value::Null);
+        let (setup, view) = (setup.clone(), view.clone());
         panel.call(
             "zones.pick",
             json!({ "number": i + 1, "layout": layout }),
             window,
             cx,
-            |panel, result, window, cx| {
+            move |panel, result, window, cx| {
                 if let Err(e) = result {
                     window.push_notification(refusal("Layout left as it was", &error_text(&e)), cx);
                 }
                 panel.reload_config(window, cx);
+                setup.pending.set(setup.pending.get() - 1);
+                if setup.pending.get() == 0 {
+                    go(&setup, &view, 2, window, cx);
+                }
             },
         );
     }
@@ -271,6 +318,7 @@ fn draw(dialog: Dialog, setup: &Rc<Setup>, view: &WeakEntity<Panel>, _: &mut Win
     } else {
         let (setup, view) = (setup.clone(), view.clone());
         ui::primary("setup-primary", primary)
+            .disabled(setup.busy.get())
             .on_click(move |_, window, cx| {
                 act(&setup, &view, window, cx);
             })

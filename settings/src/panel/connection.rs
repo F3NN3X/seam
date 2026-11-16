@@ -72,8 +72,9 @@ impl Panel {
                     }
                     this.was_linked = true;
                     this.client = Some(client.clone());
-                    this.apply(state, config);
-                    this.open_setup(window, cx);
+                    if this.apply(state, config) {
+                        this.open_setup(window, cx);
+                    }
                     cx.notify();
                     true
                 });
@@ -109,6 +110,9 @@ impl Panel {
                         {
                             this.apply(state, config);
                         }
+                        if event.kind == "lineup.finished" {
+                            this.setup_lineup_finished(window, cx);
+                        }
                         if restatus {
                             this.ask_status(cx);
                         }
@@ -122,11 +126,10 @@ impl Panel {
         })
     }
 
-    fn apply(&mut self, state: State, config: Value) {
+    /// Take the tray's state and config. False when the config couldn't be read, and was left as it was.
+    fn apply(&mut self, state: State, config: Value) -> bool {
         let screens_changed = self.state.as_ref().map(|s| &s.desk.sig) != Some(&state.desk.sig);
-        if let Ok(config) = serde_json::from_value(config) {
-            self.set_config(config);
-        }
+        let parsed = serde_json::from_value(config).map(|config| self.set_config(config)).is_ok();
         // The tray reads the updater's file and says so in the state.
         if self.state.as_ref().map(|s| &s.update) != Some(&state.update) {
             self.update_file = updates::read();
@@ -154,6 +157,7 @@ impl Panel {
         }
         pages::zone_editor::reload(self);
         self.relink();
+        parsed
     }
 
     pub(super) fn read_screens(&mut self) {

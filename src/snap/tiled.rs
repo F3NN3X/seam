@@ -24,6 +24,7 @@ mod hand;
 mod scroll;
 mod turn;
 
+pub use hand::FreeUndo;
 pub use scroll::{tiling_column, tiling_display_changed, tiling_scroll, tiling_unpark_for_quit, tiling_unstrand};
 pub use turn::Turned;
 
@@ -148,9 +149,16 @@ pub fn tiled_dragged(screen: &str, tree: &Node) -> bool {
 }
 
 /// Free all windows: tiling ends on the screen for the desktop in front, and every
-/// window it tiled goes back to where it was before. Returns how many.
-pub fn tiling_free(screen: &str) -> usize {
-    with_engine(|e| e.tiling_free(screen)).unwrap_or(0)
+/// window it tiled goes back to where it was before. Returns how many, and what its Undo
+/// needs.
+pub fn tiling_free(screen: &str) -> (usize, Option<FreeUndo>) {
+    with_engine(|e| e.tiling_free(screen)).unwrap_or((0, None))
+}
+
+/// Undo of Free all, once tiling is on again for its screen and desktop: the windows still
+/// where it left them take their tiles back. Returns how many.
+pub fn tiling_unfree(undo: FreeUndo) -> usize {
+    with_engine(|e| e.tiling_unfree(undo)).unwrap_or(0)
 }
 
 /// Rotate windows on a tiled screen: its tiles' windows step to the next tile in zone

@@ -6,6 +6,27 @@ use super::*;
 /// A screen and the virtual desktop whose tree was freed.
 pub type Freed = (String, String);
 
+/// What Free all took apart, for its Undo: the tree, and where it left each window.
+pub struct FreeUndo {
+    screen: String,
+    desktop: String,
+    tree: Tree,
+    strip: Option<Strip>,
+    before: HashMap<isize, Rect>,
+    /// The place each window went back to, or where it stayed.
+    left: HashMap<isize, Rect>,
+}
+
+impl FreeUndo {
+    pub fn screen(&self) -> &str {
+        &self.screen
+    }
+
+    pub fn desktop(&self) -> &str {
+        &self.desktop
+    }
+}
+
 impl Engine {
     /// The worker said which desktop is in front, or `None` when it can't tell, as on a
     /// desktop with no windows. The snapping keeps only the records of the windows on
@@ -230,9 +251,59 @@ impl Engine {
         self.scroll_focus_waited();
     }
 
-    pub(in crate::snap) fn tiling_free(&mut self, screen: &str) -> usize {
+    pub(in crate::snap) fn tiling_free(&mut self, screen: &str) -> (usize, Option<FreeUndo>) {
         let desktop = self.tiling.desktop.clone();
-        self.free_screen(screen, &desktop, None).0
+        let (n, _, undo) = self.free_screen(screen, &desktop, None);
+        (n, undo)
+    }
+
+    /// Undo of Free all, with tiling on again for its screen and desktop: the tree it freed
+    /// takes back the windows still where Free all left them, by `tiling::plan_apply`, and
+    /// they move into their tiles. A window moved by hand since, minimized, maximized,
+    /// floated, tiled elsewhere or closed stays as it is. Returns how many were tiled again.
+    pub(in crate::snap) fn tiling_unfree(&mut self, undo: FreeUndo) -> usize {
+        let family = self.tiling.config.get(&undo.screen).map(|c| c.family).unwrap_or_default();
+        let tiled = |t: &Tiled| t.screen == undo.screen && t.desktop == undo.desktop && !t.all().is_empty();
+        let ready = self.tiling_on(&undo.screen) && undo.desktop == self.tiling.desktop && family == undo.tree.family;
+        if !ready || self.tiling.trees.iter().any(tiled) {
+            return 0;
+        }
+        let looked = undo.strip.as_ref().map_or_else(|| undo.tree.clone(), Strip::whole);
+        let seen = |k: isize| {
+            let h = hwnd_of(k);
+            let now = winutil::visible_rect(h);
+            let left =
+                undo.left.get(&k).zip(now).is_some_and(|(at, now)| !tiling::moved(now, *at, winutil::is_resizable(h)));
+            let away = winutil::is_minimized(h) || winutil::is_maximized(h);
+            Seen {
+                floated: !left || away || winutil::is_floated(h) || self.tree_of(k).is_some(),
+                gone: gone(k),
+                ..Seen::default()
+            }
+        };
+        let plan = tiling::plan_apply(&looked, seen, |_| None);
+        let i = self.tree_index(&undo.screen, &undo.desktop);
+        let t = &mut self.tiling.trees[i];
+        match &undo.strip {
+            Some(strip) => {
+                let strip = strip.keep(&plan.tree.tiles, &plan.heirs);
+                t.tree = strip.tree();
+                t.strip = Some(strip);
+            }
+            None => t.tree = plan.tree,
+        }
+        let back = t.all();
+        for &k in &back {
+            if let Some(r) = undo.before.get(&k) {
+                t.before.insert(k, *r);
+            }
+            self.tiling.seq += 1;
+            winutil::set_tile_stamp(hwnd_of(k), self.tiling.seq);
+            winutil::set_floated(hwnd_of(k), false);
+        }
+        log::info!("tiling: Free all undone, {} windows tiled again", back.len());
+        self.tiled_apply(i);
+        back.len()
     }
 
     /// Seam quits and was asked to put windows back: every tiled screen on every desktop is
@@ -245,11 +316,17 @@ impl Engine {
     }
 
     /// Free one screen. When Seam quits (`until`) the moves are posted here rather than queued.
-    fn free_screen(&mut self, screen: &str, desktop: &str, until: Option<Instant>) -> (usize, Vec<(isize, Rect)>) {
+    /// Returns how many windows, where they are landing when Seam quits, and what Undo needs.
+    fn free_screen(
+        &mut self,
+        screen: &str,
+        desktop: &str,
+        until: Option<Instant>,
+    ) -> (usize, Vec<(isize, Rect)>, Option<FreeUndo>) {
         let now = until.is_some();
         let front = desktop == self.tiling.desktop;
         let Some(i) = self.tiling.trees.iter().position(|t| t.screen == screen && t.desktop == desktop) else {
-            return (0, Vec::new());
+            return (0, Vec::new(), None);
         };
         let t = self.tiling.trees.remove(i);
         let dpi = self.tile_area(screen).map_or(96, |(_, dpi, _)| dpi);
@@ -293,11 +370,15 @@ impl Engine {
         log::info!("tiling: freed {} windows", windows.len());
         self.tiled_sync();
         if now {
-            return (windows.len(), moves.into_iter().filter_map(|p| self.land_now(p)).collect());
+            return (windows.len(), moves.into_iter().filter_map(|p| self.land_now(p)).collect(), None);
         }
+        let stayed = windows.iter().filter_map(|k| Some((*k, winutil::visible_rect(hwnd_of(*k))?)));
+        let left = stayed.chain(moves.iter().map(|p| (p.hwnd, p.target))).collect();
+        let undo =
+            FreeUndo { screen: t.screen, desktop: t.desktop, tree: t.tree, strip: t.strip, before: t.before, left };
         self.queued.extend(moves);
         self.window_pump();
-        (windows.len(), Vec::new())
+        (windows.len(), Vec::new(), Some(undo))
     }
 
     pub(in crate::snap) fn tiling_float(&mut self, key: isize) -> Result<bool, String> {

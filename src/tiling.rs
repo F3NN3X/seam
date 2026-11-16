@@ -941,7 +941,7 @@ mod tests {
         assert!(stale("A", &[b.clone(), None]));
         // One still there keeps it.
         assert!(!stale("A", &[b.clone(), a.clone()]));
-        assert!(!stale("A", &[a.clone()]));
+        assert!(!stale("A", &[a]));
         // All closed, or none: it can't tell, so it stays.
         assert!(!stale("A", &[None, None]));
         assert!(!stale("A", &[]));

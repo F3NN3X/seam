@@ -237,6 +237,8 @@ enum BalloonAction {
     UndoQuickSave,
     /// Put back the windows and layout of the last tile.
     UndoTile,
+    /// Tile again the windows the last Free all let go.
+    UndoFree,
 }
 
 /// Writes config.json on its own thread, so the main thread never does file I/O.
@@ -367,6 +369,8 @@ struct App {
     tile_undo: Option<TileUndo>,
     /// Smart tiling settings waiting to know which virtual desktop is in front.
     tiling_wait: Vec<tiling::TilingWait>,
+    /// Free all's Undo, for 8 s.
+    free_undo: Option<tiling::FreeNote>,
     clients: Vec<String>,
     last_state_event: Option<Instant>,
     /// The Store copy: Windows updates it, so the updater stays off.

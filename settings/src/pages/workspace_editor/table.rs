@@ -1,47 +1,101 @@
-//! The window table: rows, drag handle, menus and details.
+//! The apps of a workspace: a group for each screen, and a row for each app in it.
 
+use super::details::details;
+use super::groups::{self, AppRow, Group};
+use super::screen_zones::model_of;
 use super::*;
-use gpui_kit::component::checkbox::Checkbox;
-use gpui_kit::component::slider::Slider;
+use crate::pages::workspaces::all;
+use crate::theme::tokens::text_style;
 use gpui_kit::component::tooltip::Tooltip;
+use seam::workspace::Pin;
+
+/// `Pin::bits`: on top, and out of workspace switches.
+const TOP: usize = 1;
+const STICKY: usize = 2;
+/// What a row shows as its place while its windows are in different ones.
+const SEVERAL: &str = "Several places";
+
+/// How a row's windows are doing, which sets the dot.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Kind {
+    Good,
+    Waiting,
+    Off,
+    Problem,
+}
+
+/// A row's windows now, as a kind and words: one word for one window, a count of each for more.
+fn status_of(states: &[Option<RowState>]) -> Option<(Kind, String)> {
+    let states: Vec<RowState> = states.iter().flatten().copied().collect();
+    if states.is_empty() {
+        return None;
+    }
+    let count = |wanted: RowState| states.iter().filter(|s| **s == wanted).count();
+    let words = [
+        (RowState::InPlace, "in place", "In place"),
+        (RowState::Moved, "moved", "Moved"),
+        (RowState::Minimized, "minimized", "Minimized"),
+        (RowState::Background, "hidden", "Hidden"),
+        (RowState::NotRunning, "not running", "Not running"),
+        (RowState::CantMove, "can't move", "Can't move: runs as administrator"),
+    ];
+    let word = match states.as_slice() {
+        [one] => words.iter().find(|(s, ..)| s == one).map(|(.., word)| word.to_string())?,
+        _ => {
+            let parts =
+                words.iter().filter(|(s, ..)| count(*s) > 0).map(|(s, word, _)| format!("{} {word}", count(*s)));
+            parts.collect::<Vec<_>>().join(", ")
+        }
+    };
+    let kind = match () {
+        _ if count(RowState::CantMove) > 0 => Kind::Problem,
+        _ if count(RowState::InPlace) == states.len() => Kind::Good,
+        _ if count(RowState::NotRunning) == states.len() => Kind::Off,
+        _ => Kind::Waiting,
+    };
+    Some((kind, word))
+}
 
 /// The status cell: a dot and a word, in full on hover when it's cut short.
-fn status_cell(i: usize, state: Option<RowState>, p: Palette) -> AnyElement {
-    let (dot, word) = match state {
-        Some(RowState::InPlace) => (ui::dot(p.positive, true), "In place"),
-        Some(RowState::Moved) => (ui::dot(p.text_secondary, false), "Moved"),
-        Some(RowState::Minimized) => (ui::dot(p.text_secondary, false), "Minimized"),
-        Some(RowState::NotRunning) => (ui::dot(p.text_muted, true), "Not running"),
-        Some(RowState::Background) => (ui::dot(p.text_muted, false), "Running in background"),
-        Some(RowState::CantMove) => (ui::dot(p.negative, false), "Can't move: runs as administrator"),
-        None => return div().into_any_element(),
+fn status_cell(i: usize, states: &[Option<RowState>], p: Palette) -> AnyElement {
+    let Some((kind, word)) = status_of(states) else { return div().into_any_element() };
+    let dot = match kind {
+        Kind::Good => ui::dot(p.positive, true),
+        Kind::Waiting => ui::dot(p.text_muted, false),
+        Kind::Off => ui::dot(p.text_muted, true),
+        Kind::Problem => ui::dot(p.negative, false),
     };
-    let cell = div().id(("status", i)).flex().items_center().gap(px(8.)).min_w_0();
-    cell.tooltip(move |window, cx| Tooltip::new(word).build(window, cx))
+    let tip = SharedString::from(word.clone());
+    div()
+        .id(("status", i))
+        .flex()
+        .items_center()
+        .gap(px(tokens::SPACE_8))
+        .min_w_0()
+        .tooltip(move |window, cx| Tooltip::new(tip.clone()).build(window, cx))
         .child(dot.flex_none())
-        .child(div().min_w_0().text_size(px(12.)).text_color(p.text_secondary).truncate().child(word))
+        .child(ui::description(word, p).min_w_0().truncate())
         .into_any_element()
 }
 
-/// A row being dragged to another place in the start order.
+/// A row being dragged to another place in the start order, or another screen.
 #[derive(Clone)]
 struct DragRow {
     workspace: String,
-    from: usize,
+    windows: Vec<usize>,
     title: SharedString,
 }
 
 impl Render for DragRow {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let p = palette(cx);
-        div()
-            .px(px(12.))
-            .py(px(4.))
-            .rounded(px(8.))
+        text_style(div(), tokens::LABEL)
+            .px(px(tokens::SPACE_12))
+            .py(px(tokens::SPACE_4))
+            .rounded(px(tokens::RADIUS_8))
             .bg(p.surface_raised)
             .border_1()
             .border_color(p.hairline_strong)
-            .text_size(px(13.))
             .text_color(p.text_primary)
             .child(self.title.clone())
     }
@@ -61,286 +115,322 @@ fn stage_line(p: Palette) -> Div {
     div()
         .flex()
         .items_center()
-        .gap(px(8.))
-        .px(px(16.))
-        .pb(px(8.))
-        .child(div().flex_none().text_size(px(12.)).text_color(p.text_muted).child("then wait"))
+        .gap(px(tokens::SPACE_8))
+        .px(px(tokens::SPACE_16))
+        .pb(px(tokens::SPACE_8))
+        .child(text_style(div().flex_none(), tokens::CAPTION).text_color(p.text_muted).child("then wait"))
         .child(div().flex_1().h(px(1.)).bg(p.hairline_strong))
 }
 
-fn goes_menu(
+/// A place in the words of its own screen's group: "Zone 2", "Full screen".
+fn short(place: &Place, same_screen: bool) -> String {
+    match (&place.target, same_screen) {
+        (Target::Zone { zone, .. }, true) => format!("Zone {zone}"),
+        (Target::State { state: WinState::Max }, true) => "Full screen".into(),
+        _ => place.label.clone(),
+    }
+}
+
+/// What a rule's place is called under its screen's header: "Zones 3 and 2", "Own size".
+fn short_goes(rule: &Rule, screens: &[Screen]) -> String {
+    match (&rule.target, screens.iter().any(|s| s.id == rule.monitor)) {
+        (_, false) => "Screen not connected".into(),
+        (Target::Zone { zone, span_to: None }, _) => format!("Zone {zone}"),
+        (Target::Zone { zone, span_to: Some(to) }, _) => format!("Zones {zone} and {to}"),
+        (Target::State { state: WinState::Keep }, _) => "Keep where it is".into(),
+        (Target::State { .. }, _) => "Full screen".into(),
+        (Target::Rect { .. }, _) => "Own size".into(),
+    }
+}
+
+/// The Select of where the row's windows go. Picking sets every window of the row.
+fn goes_select(
     panel: &Panel,
-    i: usize,
     ws: &Workspace,
+    row: &AppRow,
     screens: &[Screen],
     title: &str,
     cx: &mut Context<Panel>,
 ) -> AnyElement {
-    let rule = &ws.windows[i];
-    let current = goes_to(rule, screens);
-    let weak = cx.entity().downgrade();
-    let (options, shown, id, here) = (places(panel), current.clone(), ws.id.clone(), ws.clone());
-    let menu = move |mut menu: gpui_kit::component::menu::PopupMenu, _: &mut Window, _: &mut Context<_>| {
-        for (n, place) in options.iter().enumerate() {
-            let (weak, place, id) = (weak.clone(), place.clone(), id.clone());
-            let checked = place.label == shown;
-            let item = PopupMenuItem::new(place.label.clone()).checked(checked).on_click(move |_, window, cx| {
-                let (place, id) = (place.clone(), id.clone());
-                let _ = weak.update(cx, |panel, cx| {
-                    let note = |title: &str| format!("{title} goes to {}", place.label);
-                    let (target, monitor) = (place.target.clone(), place.monitor.clone());
-                    update_row(panel, &id, i, note, window, cx, |rule| {
-                        rule.set_target(target);
-                        if let Some(monitor) = monitor {
-                            rule.monitor = monitor;
-                        }
-                    });
-                });
+    let first = row.windows[0];
+    let rule = &ws.windows[first];
+    let here: Vec<String> = row.windows.iter().map(|i| goes_to(&ws.windows[*i], screens)).collect();
+    let several = here.iter().any(|g| *g != here[0]);
+    let current = if several { SEVERAL.to_string() } else { here[0].clone() };
+    let options = places(panel);
+    let mut choices: Vec<ui::Choice> = options
+        .iter()
+        .map(|place| ui::Choice::new(place.label.clone(), short(place, place.monitor.as_ref() == Some(&rule.monitor))))
+        .collect();
+    // What the rule says, when the menu doesn't offer it: its own size, a span, a screen that's gone.
+    if !options.iter().any(|place| place.label == current) {
+        let label = if several { SEVERAL.to_string() } else { short_goes(rule, screens) };
+        choices.insert(0, ui::Choice::new(current.clone(), label));
+    }
+    let (view, id, windows) = (cx.entity(), ws.id.clone(), row.windows.clone());
+    let pick = move |key: &str, window: &mut Window, cx: &mut App| {
+        let Some(place) = options.iter().find(|place| place.label == key).cloned() else { return };
+        view.update(cx, |panel, cx| {
+            let note = |title: &str| format!("{title} goes to {}", place.label);
+            update_rows(panel, &id, &windows, note, window, cx, |rule| {
+                rule.set_target(place.target.clone());
+                if let Some(monitor) = place.monitor.clone() {
+                    rule.monitor = monitor;
+                }
             });
-            menu = menu.item(item);
-            if n == 0 {
-                menu = menu.separator();
-            }
-        }
-        let (weak, here) = (weak.clone(), here.clone());
-        menu.separator().item(PopupMenuItem::new("Where it is now").on_click(move |_, window, cx| {
-            let here = here.clone();
-            let _ = weak.update(cx, |panel, cx| where_it_is(panel, &here, i, window, cx));
-        }))
+        });
     };
-    ui::secondary(("goes-to", i), current.clone(), cx)
-        .dropdown_caret(true)
-        .accessibility_label(format!("Where {title} goes: {current}"))
-        .w_full()
-        .tooltip(current)
-        .dropdown_menu(menu)
-        .into_any_element()
+    ui::select(("goes-to", first), format!("Where {title} goes"), choices, &current, GOES_TO_WIDTH, cx, pick)
 }
 
-fn more_menu(i: usize, ws: &Workspace, title: &str, cx: &mut Context<Panel>) -> AnyElement {
+/// Whether every window of the row has `bit` of the pin.
+fn pinned(ws: &Workspace, row: &AppRow, bit: usize) -> bool {
+    row.windows.iter().all(|i| ws.windows[*i].pin.is_some_and(|pin| pin.bits() & bit != 0))
+}
+
+/// The `…` of a row.
+fn more_menu(ws: &Workspace, row: &AppRow, merged: Merge, title: &str, cx: &mut Context<Panel>) -> AnyElement {
+    let first = row.windows[0];
     let weak = cx.entity().downgrade();
-    let (id, excludable) = (ws.id.clone(), exe_name(&ws.windows[i]).is_some());
-    ui::secondary(("row-more", i), "", cx)
+    let (id, windows, excludable) = (ws.id.clone(), row.windows.clone(), exe_name(&ws.windows[first]).is_some());
+    let (starts, top, sticky) =
+        (row.windows.iter().all(|i| ws.windows[*i].launch), pinned(ws, row, TOP), pinned(ws, row, STICKY));
+    let (here, key) = (ws.clone(), groups::split_key(&ws.id, &ws.windows[first]));
+    ui::secondary(("row-more", first), "", cx)
         .ghost()
         .icon(Icon::new(assets::IconName::Ellipsis))
         .accessibility_label(format!("More for {title}"))
         .dropdown_menu(move |menu, _, _| {
-            let (removing, never, id_r, id_n) = (weak.clone(), weak.clone(), id.clone(), id.clone());
-            let menu = menu.item(PopupMenuItem::new("Remove").on_click(move |_, window, cx| {
-                let _ = removing.update(cx, |panel, cx| remove_row(panel, &id_r, i, window, cx));
-            }));
-            if !excludable {
-                return menu;
+            let toggle_pin = |bit: usize, label: &'static str, on: bool| {
+                let (weak, id, windows) = (weak.clone(), id.clone(), windows.clone());
+                PopupMenuItem::new(label).checked(on).on_click(move |_, window, cx| {
+                    let (id, windows) = (id.clone(), windows.clone());
+                    let note = |title: &str| match on {
+                        true => format!("{title} no longer stays {}", pin_words(bit)),
+                        false => format!("{title} stays {}", pin_words(bit)),
+                    };
+                    let _ = weak.update(cx, |panel, cx| {
+                        update_rows(panel, &id, &windows, note, window, cx, |rule| {
+                            let bits = rule.pin.map_or(0, Pin::bits);
+                            rule.pin = Pin::of_bits(if on { bits & !bit } else { bits | bit });
+                        });
+                    });
+                })
+            };
+            let (start, details, split) = (weak.clone(), weak.clone(), weak.clone());
+            let (start_id, start_windows, details_id, split_key) =
+                (id.clone(), windows.clone(), id.clone(), key.clone());
+            let mut menu = menu
+                .item(PopupMenuItem::new("Start if it's closed").checked(starts).on_click(move |_, window, cx| {
+                    let (id, windows) = (start_id.clone(), start_windows.clone());
+                    let note = |title: &str| match starts {
+                        true => format!("{title} doesn't start with the workspace"),
+                        false => format!("{title} starts with the workspace"),
+                    };
+                    let _ = start.update(cx, |panel, cx| {
+                        update_rows(panel, &id, &windows, note, window, cx, |rule| rule.launch = !starts);
+                    });
+                }))
+                .item(PopupMenuItem::new("Start order details…").on_click(move |_, _, cx| {
+                    let this = Some((details_id.clone(), first));
+                    let _ = details.update(cx, |panel, cx| {
+                        panel.editing.expanded = if panel.editing.expanded == this { None } else { this };
+                        cx.notify();
+                    });
+                }));
+            // Several windows can be shown one by one, and shown as one again.
+            let label = match merged {
+                Merge::Merged => Some("Edit each window"),
+                Merge::Split => Some("Merge windows"),
+                Merge::Single => None,
+            };
+            if let Some(label) = label {
+                menu = menu.item(PopupMenuItem::new(label).on_click(move |_, _, cx| {
+                    let key = split_key.clone();
+                    let _ = split.update(cx, |panel, cx| {
+                        if !panel.editing.split.remove(&key) {
+                            panel.editing.split.insert(key);
+                        }
+                        panel.editing.expanded = None;
+                        cx.notify();
+                    });
+                }));
             }
-            menu.item(PopupMenuItem::new("Never include this app").on_click(move |_, window, cx| {
-                let _ = never.update(cx, |panel, cx| never_include(panel, &id_n, i, window, cx));
+            menu = menu.item(toggle_pin(TOP, "Keep on top", top)).item(toggle_pin(
+                STICKY,
+                "Keep out of workspace switches",
+                sticky,
+            ));
+            let (now, now_here) = (weak.clone(), here.clone());
+            menu = menu.item(PopupMenuItem::new("Use where it is now").on_click(move |_, window, cx| {
+                let ws = now_here.clone();
+                let _ = now.update(cx, |panel, cx| where_it_is(panel, &ws, first, window, cx));
+            }));
+            if excludable {
+                let (never, id, windows) = (weak.clone(), id.clone(), windows.clone());
+                menu = menu.item(PopupMenuItem::new("Never include this app").on_click(move |_, window, cx| {
+                    let (id, windows) = (id.clone(), windows.clone());
+                    let _ = never.update(cx, |panel, cx| never_include(panel, &id, &windows, window, cx));
+                }));
+            }
+            let (removing, id, windows) = (weak.clone(), id.clone(), windows.clone());
+            menu.item(PopupMenuItem::new("Remove").on_click(move |_, window, cx| {
+                let (id, windows) = (id.clone(), windows.clone());
+                let _ = removing.update(cx, |panel, cx| remove_rows(panel, &id, &windows, window, cx));
             }))
         })
         .into_any_element()
 }
 
-/// Show as, the delay and the wait, under an app's row.
-fn details(panel: &mut Panel, i: usize, ws: &Workspace, window: &mut Window, cx: &mut Context<Panel>) -> Div {
-    let p = palette(cx);
-    let rule = &ws.windows[i];
-    let view = cx.entity();
-    let id = ws.id.clone();
-    let at = SHOW_AS.iter().position(|(_, s)| *s == rule.shown).unwrap_or(0);
-    let labels: Vec<&'static str> = SHOW_AS.iter().map(|(label, _)| *label).collect();
-    let show = ui::segmented(("show-as", i), "Show as", &labels, at, window, cx, {
-        let (view, id) = (view.clone(), id.clone());
-        move |k, window, cx| {
-            let (label, shown) = SHOW_AS[k.min(SHOW_AS.len() - 1)];
-            let id = id.clone();
-            view.update(cx, |panel, cx| {
-                let note = |title: &str| format!("{title} shows {}", label.to_lowercase());
-                update_row(panel, &id, i, note, window, cx, |rule| rule.set_shown(shown));
-            });
-        }
-    });
+fn pin_words(bit: usize) -> &'static str {
+    if bit == TOP { "on top" } else { "out of workspace switches" }
+}
 
-    // The slider follows the saved delay unless it's being held.
-    let saved = workspace::tame_delay(rule.delay_ms) as f32 / 1000.;
-    if !panel.editing.holding_delay && panel.editing.delay.read(cx).value().end() != saved {
-        panel.editing.delay.update(cx, |slider, cx| slider.set_value(saved, window, cx));
-    }
-    let value = (panel.editing.delay.read(cx).value().end() * 1000.).round() as u32;
-    let ends = |text: &'static str| div().text_size(px(12.)).text_color(p.text_muted).child(text);
-    let slider = div()
-        .flex()
-        .items_center()
-        .gap(px(12.))
-        .child(ends("0 s"))
-        .child(Slider::new(&panel.editing.delay).horizontal().w(px(160.)))
-        .child(ends("30 s"));
-    let wait = switch(
-        ("wait-for-window", i),
-        "Wait for this app's window before opening the next",
-        rule.wait_for_window,
-        window,
-        cx,
-        move |on, window, cx| {
-            let id = id.clone();
-            view.update(cx, |panel, cx| {
-                let note = |title: &str| match on {
-                    true => format!("The next app waits for {title}"),
-                    false => format!("The next app doesn't wait for {title}"),
-                };
-                update_row(panel, &id, i, note, window, cx, |rule| rule.wait_for_window = on);
-            });
-        },
-    );
-    // The field follows the open row, and starts from what is saved for it.
-    let shown_for = Some((ws.id.clone(), i));
-    if panel.editing.open_with_for != shown_for {
-        panel.editing.open_with_for = shown_for;
-        panel.editing.open_with_error = None;
-        let saved = rule.open_with.clone().unwrap_or_default();
-        panel.editing.open_with.update(cx, |input, cx| input.set_value(saved, window, cx));
-    }
-    let open_with =
-        div().w(px(320.)).font_family(cx.theme().mono_font_family.clone()).child(Input::new(&panel.editing.open_with));
-    let open_with_about = match &panel.editing.open_with_error {
-        Some(why) => ui::description(why.clone(), p).text_color(p.negative).into_any_element(),
-        None => ui::description("A full path on this PC for the app to open, or a link, when a switch starts it", p)
-            .into_any_element(),
-    };
-    let delay_about = match value {
-        0 => "Opens as soon as its stage starts".to_string(),
-        ms => format!("{} after its stage starts", seconds(ms)),
-    };
-    div()
-        .flex()
-        .flex_col()
-        .pl(px(DETAILS_INDENT))
-        .pb(px(8.))
-        .child(row("Show as", None, show, p))
-        .child(row("Delay before opening", Some(delay_about.into()), slider, p))
-        .child(ui::row_with("Open with", Some(open_with_about), open_with))
-        .child(row(
-            "Wait for this app's window before opening the next",
-            Some("The apps below start once it's open, or after 15 s".into()),
-            wait,
-            p,
-        ))
+/// Whether a row stands for one window, several, or several shown one by one.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Merge {
+    Single,
+    Merged,
+    Split,
 }
 
 /// The handle a row is dragged by.
-fn row_grip(ws: &Workspace, i: usize, title: &str, p: Palette) -> Stateful<Div> {
-    let drag = DragRow { workspace: ws.id.clone(), from: i, title: title.to_string().into() };
+fn row_grip(ws: &Workspace, row: &AppRow, title: &str, p: Palette) -> Stateful<Div> {
+    let drag = DragRow { workspace: ws.id.clone(), windows: row.windows.clone(), title: title.to_string().into() };
     div()
-        .id(("row-grip", i))
+        .id(("row-grip", row.windows[0]))
         .flex()
         .flex_none()
         .w(px(GRIP_WIDTH))
         .cursor_grab()
-        .child(Icon::new(assets::IconName::GripVertical).size(px(16.)).text_color(p.text_muted))
-        .tooltip(|window, cx| Tooltip::new("Drag to change the start order, or Alt+Up and Alt+Down").build(window, cx))
+        .child(Icon::new(assets::IconName::GripVertical).size(px(tokens::SIZE_ICON)).text_color(p.text_muted))
+        .tooltip(|window, cx| {
+            Tooltip::new("Drag to change the start order or the screen, or Alt+Up and Alt+Down").build(window, cx)
+        })
         .on_drag(drag, |drag, _, _, cx| {
             cx.stop_propagation();
             cx.new(|_| drag.clone())
         })
 }
 
-/// The app's name and where it runs from. A click opens or closes the launch details.
-fn name_cell(ws: &Workspace, i: usize, title: &str, open: bool, cols: Cols, cx: &mut Context<Panel>) -> Stateful<Div> {
-    let p = palette(cx);
-    let rule = &ws.windows[i];
-    // What will run is shown in full on hover. A click opens the launch details.
+/// The app's name, and under it where it runs from, how many windows, and whether a switch starts it.
+fn name_cell(ws: &Workspace, row: &AppRow, title: &str, state: Option<RowState>, p: Palette) -> Stateful<Div> {
+    let first = row.windows[0];
+    let rule = &ws.windows[first];
+    // What will run is shown in full on hover.
     let path = if rule.exe.is_empty() { exe_line(rule) } else { rule.exe.clone() };
     let full_path = SharedString::from(format!("{title}: {path}"));
-    let chevron = if open { assets::IconName::ChevronDown } else { assets::IconName::ChevronRight };
-    let toggle = ws.id.clone();
+    let mut meta = exe_line(rule);
+    if row.windows.len() > 1 {
+        meta = format!("{meta}, {} windows", row.windows.len());
+    }
+    // A closed app that starts with the workspace says so.
+    if state == Some(RowState::NotRunning) && rule.launch && ws.launch_missing {
+        meta = format!("{meta}, starts when you switch");
+    }
     div()
-        .id(("app-name", i))
+        .id(("app-name", first))
         .flex()
-        .flex_grow(NAME_GROW)
-        .flex_shrink(1.)
-        .flex_basis(px(cols.name))
-        .min_w(px(NAME_LEAST))
-        .items_center()
-        .gap(px(4.))
-        .cursor_pointer()
+        .flex_col()
+        .flex_1()
+        .min_w_0()
         .tooltip(move |window, cx| Tooltip::new(full_path.clone()).build(window, cx))
-        .child(
-            div()
-                .flex()
-                .flex_col()
-                .min_w_0()
-                .child(div().text_size(px(14.)).truncate().child(title.to_string()))
-                .child(div().text_size(px(12.)).text_color(p.text_muted).truncate().child(exe_line(rule))),
-        )
-        .child(Icon::new(chevron).flex_none().size(px(16.)).text_color(p.text_muted))
-        .on_click(cx.listener(move |panel, _, _, cx| {
-            let this = Some((toggle.clone(), i));
-            panel.editing.expanded = if panel.editing.expanded == this { None } else { this };
-            cx.notify();
+        .child(text_style(div(), tokens::BODY).truncate().child(title.to_string()))
+        .child(text_style(div(), tokens::CAPTION).text_color(p.text_muted).truncate().child(meta))
+}
+
+/// What dropping a row on another row, or a group's header, does: reorder within a screen, or
+/// send the app to another.
+fn dropped(panel: &mut Panel, drag: &DragRow, target: (usize, &str), window: &mut Window, cx: &mut Context<Panel>) {
+    let Some(ws) = all(panel).into_iter().find(|w| w.id == drag.workspace) else { return };
+    let Some(moving) = drag.windows.first().and_then(|i| ws.windows.get(*i)) else { return };
+    let (at, screen) = target;
+    if moving.monitor == screen {
+        let after = drag.windows.first().is_some_and(|i| *i < at);
+        move_rows(panel, &drag.workspace, &drag.windows, (at, after), window, cx);
+        return;
+    }
+    let Some(to) = panel.state.as_ref().and_then(|s| s.screens.iter().find(|s| s.id == screen).cloned()) else {
+        return;
+    };
+    send_to_screen(panel, &drag.workspace, &drag.windows, &to, window, cx);
+}
+
+/// A group's header: "Screen 1" and its model. Dropping an app on it sends the app there.
+fn group_head(group: &Group, screens: &[Screen], ws: &Workspace, p: Palette, cx: &mut Context<Panel>) -> AnyElement {
+    let (name, model) = match screens.iter().find(|s| s.id == group.monitor) {
+        Some(s) => (format!("Screen {}", s.number), s.name.clone()),
+        None => ("Screen not connected".to_string(), model_of(&group.monitor)),
+    };
+    let (monitor, dropping) = (group.monitor.clone(), ws.id.clone());
+    let at = group.rows.first().and_then(|r| r.windows.first()).copied().unwrap_or_default();
+    div()
+        .id(ElementId::Name(format!("group-{}", group.monitor).into()))
+        .flex()
+        .items_baseline()
+        .gap(px(tokens::SPACE_8))
+        .px(px(tokens::SPACE_16))
+        .pt(px(tokens::SPACE_12))
+        .pb(px(tokens::SPACE_4))
+        .child(text_style(div(), tokens::BODY).font_weight(FontWeight::MEDIUM).child(name))
+        .child(ui::description(model, p))
+        .drag_over::<DragRow>(move |d, _, _, _| d.bg(p.surface_raised))
+        .on_drop(cx.listener(move |panel, drag: &DragRow, window, cx| {
+            if drag.workspace == dropping {
+                dropped(panel, drag, (at, monitor.as_str()), window, cx);
+            }
         }))
+        .into_any_element()
 }
 
-/// Whether the app starts with the workspace.
-fn launch_checkbox(ws: &Workspace, i: usize, title: &str, cx: &mut Context<Panel>) -> Checkbox {
-    let view = cx.entity();
-    let launch_id = ws.id.clone();
-    Checkbox::new(("launch", i)).checked(ws.windows[i].launch).accessibility_label(format!("Start {title}")).on_click(
-        move |on, window, cx| {
-            let (on, id) = (*on, launch_id.clone());
-            view.update(cx, |panel, cx| {
-                let note = |title: &str| match on {
-                    true => format!("{title} starts with the workspace"),
-                    false => format!("{title} doesn't start with the workspace"),
-                };
-                update_row(panel, &id, i, note, window, cx, |rule| rule.launch = on);
-            });
-        },
-    )
+/// Where the Alt+arrow keys move a row: next to the row before it or after it in its group.
+struct Neighbours {
+    before: Option<usize>,
+    after: Option<usize>,
 }
 
-fn window_row(
+fn app_row(
     panel: &mut Panel,
-    (i, cols): (usize, Cols),
     ws: &Workspace,
+    (group, at): (&Group, usize),
     screens: &[Screen],
+    merge: Merge,
     window: &mut Window,
     cx: &mut Context<Panel>,
 ) -> AnyElement {
     let p = palette(cx);
-    let rule = &ws.windows[i];
+    let row = &group.rows[at];
+    let first = row.windows[0];
+    let rule = &ws.windows[first];
     let title = app_title(rule);
     let id = ws.id.clone();
-    let open = panel.editing.expanded.as_ref().is_some_and(|(e, row)| *e == id && *row == i);
-    let focus = row_focus(ws, i, window, cx);
+    let open = panel.editing.expanded.as_ref().is_some_and(|(e, i)| *e == id && *i == first);
+    let focus = row_focus(ws, first, window, cx);
+    let states: Vec<Option<RowState>> = row.windows.iter().map(|i| row_state(panel, ws, *i)).collect();
+    let near = Neighbours {
+        before: at.checked_sub(1).map(|n| group.rows[n].windows[0]),
+        after: group.rows.get(at + 1).and_then(|r| r.windows.last().copied()),
+    };
 
-    let grip = row_grip(ws, i, &title, p);
-    let name = name_cell(ws, i, &title, open, cols, cx);
-    let launch = launch_checkbox(ws, i, &title, cx);
-
-    let state = row_state(panel, ws, i);
-    // A closed app that starts with the workspace says so under where it goes.
-    let opens = state == Some(RowState::NotRunning) && rule.launch && ws.launch_missing;
-    let goes = column(cols.goes, GOES_TO_GROW, GOES_TO_LEAST)
-        .flex()
-        .flex_col()
-        .gap(px(2.))
-        .child(goes_menu(panel, i, ws, screens, &title, cx))
-        .when(opens, |d| d.child(div().text_size(px(12.)).text_color(p.text_muted).truncate().child("Will open")));
     let main = div()
         .flex()
         .items_center()
-        .gap(px(8.))
-        .px(px(16.))
-        .py(px(8.))
-        .child(grip)
+        .gap(px(tokens::SPACE_8))
+        .min_h(px(tokens::SIZE_ROW_2))
+        .px(px(tokens::SPACE_16))
+        .py(px(tokens::SPACE_8))
+        .child(row_grip(ws, row, &title, p))
         .child(app_icon(rule, &panel.icons, p))
-        .child(name)
-        .child(column(cols.status, STATUS_GROW, STATUS_LEAST).child(status_cell(i, state, p)))
-        .child(goes)
-        .child(div().flex().flex_none().justify_center().w(px(cols.launch)).child(launch))
-        .child(div().flex().flex_none().justify_end().w(px(MORE_WIDTH)).child(more_menu(i, ws, &title, cx)));
+        .child(name_cell(ws, row, &title, states.first().copied().flatten().filter(|_| states.len() == 1), p))
+        .child(div().flex_none().w(px(GOES_TO_WIDTH)).child(goes_select(panel, ws, row, screens, &title, cx)))
+        .child(div().flex().flex_none().w(px(STATUS_WIDTH)).child(status_cell(first, &states, p)))
+        .child(div().flex().flex_none().justify_end().w(px(MORE_WIDTH)).child(more_menu(ws, row, merge, &title, cx)));
 
-    let (keys, dropped, last) = (id.clone(), id.clone(), ws.windows.len() - 1);
+    let (keys, dropped_on, monitor) = (id.clone(), id, group.monitor.clone());
+    let moving = row.windows.clone();
+    let last = ws.windows.len() - 1;
     let mut body = div()
-        .id(("ws-row", i))
+        .id(("ws-row", first))
         .track_focus(&focus)
         .tab_index(0)
         .flex()
@@ -351,63 +441,57 @@ fn window_row(
                 return;
             }
             let to = match e.keystroke.key.as_str() {
-                "up" => i.checked_sub(1),
-                "down" => (i < last).then_some(i + 1),
+                "up" => near.before.map(|n| (n, false)),
+                "down" => near.after.map(|n| (n, true)),
                 _ => None,
             };
             if let Some(to) = to {
                 cx.stop_propagation();
-                move_row(panel, &keys, i, to, window, cx);
+                move_rows(panel, &keys, &moving, to, window, cx);
             }
         }))
         .drag_over::<DragRow>(move |d, _, _, _| d.bg(p.surface_raised))
         .on_drop(cx.listener(move |panel, drag: &DragRow, window, cx| {
-            if drag.workspace == dropped {
-                move_row(panel, &dropped, drag.from, i, window, cx);
+            if drag.workspace == dropped_on {
+                dropped(panel, drag, (first, monitor.as_str()), window, cx);
             }
         }))
         .child(main);
     if open {
-        body = body.child(details(panel, i, ws, window, cx));
+        body = body.child(details(panel, first, ws, window, cx));
     }
-    if rule.wait_for_window && i < last {
+    let lasts = row.windows.last().copied().unwrap_or(first);
+    if rule.wait_for_window && lasts < last {
         body = body.child(stage_line(p));
     }
     body.into_any_element()
 }
 
-fn table_head(cols: Cols, p: Palette) -> AnyElement {
-    let head = |text: &'static str| div().text_size(px(13.)).text_color(p.text_muted).truncate().child(text);
-    div()
-        .flex()
-        .items_center()
-        .gap(px(8.))
-        .px(px(16.))
-        .py(px(10.))
-        .child(div().flex_none().w(px(GRIP_WIDTH)))
-        // The icon's place, so the columns line up with the rows' as they shrink.
-        .child(div().flex_none().w(px(ICON_WIDTH)))
-        .child(column(cols.name, NAME_GROW, NAME_LEAST).child(head("App, in start order")))
-        .child(column(cols.status, STATUS_GROW, STATUS_LEAST).child(head("Now")))
-        .child(column(cols.goes, GOES_TO_GROW, GOES_TO_LEAST).child(head("Goes to")))
-        .child(div().flex().flex_none().justify_center().w(px(cols.launch)).child(head("Launch")))
-        .child(div().flex_none().w(px(MORE_WIDTH)))
-        .into_any_element()
-}
-
-/// The table: a head, then one row per app in start order.
+/// The groups of a workspace's apps, a header for each screen and a row for each app in it.
 pub fn rows(panel: &mut Panel, ws: &Workspace, window: &mut Window, cx: &mut Context<Panel>) -> Vec<AnyElement> {
     let p = palette(cx);
     let screens = panel.state.as_ref().map(|s| s.screens.clone()).unwrap_or_default();
     icons::request(panel, &ws.windows, cx);
-    let cols = Cols::measure(window, cx);
-    let mut rows = vec![table_head(cols, p)];
+    let split = panel.editing.split.clone();
+    let shown = groups::group(&ws.windows, &screens, |rule| split.contains(&groups::split_key(&ws.id, rule)));
+    let mut rows = Vec::new();
     if ws.windows.is_empty() {
         let text = "No apps yet. Add one, or arrange your windows and choose Update from screen";
-        rows.push(div().px(px(16.)).py(px(16.)).child(ui::description(text, p)).into_any_element());
+        rows.push(
+            div().px(px(tokens::SPACE_16)).py(px(tokens::SPACE_16)).child(ui::description(text, p)).into_any_element(),
+        );
     }
-    for i in 0..ws.windows.len() {
-        rows.push(window_row(panel, (i, cols), ws, &screens, window, cx));
+    for group in &shown {
+        rows.push(group_head(group, &screens, ws, p, cx));
+        for at in 0..group.rows.len() {
+            let first = &ws.windows[group.rows[at].windows[0]];
+            let merge = match (group.rows[at].windows.len(), split.contains(&groups::split_key(&ws.id, first))) {
+                (1, true) => Merge::Split,
+                (1, false) => Merge::Single,
+                _ => Merge::Merged,
+            };
+            rows.push(app_row(panel, ws, (group, at), &screens, merge, window, cx));
+        }
     }
     rows
 }

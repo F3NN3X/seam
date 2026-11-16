@@ -10,16 +10,13 @@ use gpui_kit::component::menu::{DropdownMenu, PopupMenuItem};
 use gpui_kit::component::{Icon, Sizable, WindowExt};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
-use seam::config::WindowSize;
 use seam::desk::Mon;
 use seam::library;
-use seam::palette as colours;
 use seam::state;
 use seam::zones::{self, Node, Rect, Template, ZoneLayout};
 use serde_json::{Value, json};
 use std::rc::Rc;
 
-mod colour_pick;
 mod layouts;
 pub mod margins;
 mod page;
@@ -27,8 +24,6 @@ mod picker;
 mod screen_preview;
 mod snapping;
 
-pub use colour_pick::picked;
-use colour_pick::swatches;
 use layouts::{for_screens, save_as_layout, screen_names, tile};
 pub use page::render;
 use screen_preview::{preview, preview_height};
@@ -37,15 +32,6 @@ use snapping::snapping_section;
 /// Config value and label of each key a drag can use.
 const KEYS: [(&str, &str); 3] = [("shift", "Shift"), ("ctrl", "Ctrl"), ("alt", "Alt")];
 const SPAN_ORDER: [usize; 3] = [1, 0, 2];
-/// The keys "Move and resize from anywhere in a window" can be held with.
-const DRAG_KEYS: [(&str, &str); 3] = [("alt", "Alt"), ("win", "Win"), ("ctrl_alt", "Ctrl+Alt")];
-/// The corners "Open the overview when the pointer rests in a corner" offers.
-const CORNERS: [(&str, &str); 4] = [
-    ("top_left", "Top left"),
-    ("top_right", "Top right"),
-    ("bottom_left", "Bottom left"),
-    ("bottom_right", "Bottom right"),
-];
 /// A tile's width and the size of its drawing: your layouts, and the narrower built-in ones.
 const TILE: (f32, (f32, f32)) = (104., (86., 44.));
 const BUILT_IN_TILE: (f32, (f32, f32)) = (88., (70., 44.));
@@ -54,30 +40,6 @@ const TILE_GAP: f32 = 8.;
 const PREVIEW_MAX_HEIGHT: f32 = 320.;
 /// The preview card's padding and border around the drawn screen.
 const PREVIEW_INSET: f64 = 34.;
-/// "When a window moves to another screen", in the order the control shows them.
-const SIZE_MODES: [WindowSize; 3] = [WindowSize::Windows, WindowSize::Pixels, WindowSize::Real];
-const SIZE_LABELS: [&str; 3] = ["Let Windows scale it", "Keep its pixel size", "Keep its real size"];
-
-/// Under "When a window moves to another screen", only for a real size: the screens
-/// that don't report their size, where Windows scales windows instead.
-fn size_caption(panel: &Panel, mode: WindowSize) -> Option<SharedString> {
-    if mode != WindowSize::Real {
-        return None;
-    }
-    let no_size: Vec<String> =
-        panel.mons.iter().enumerate().filter(|(_, m)| m.raw_dpi <= 0.).map(|(i, _)| (i + 1).to_string()).collect();
-    match no_size.as_slice() {
-        [] => None,
-        [n] => Some(format!("Screen {n} doesn't report its size, so windows there are scaled by Windows").into()),
-        [first @ .., last] => Some(
-            format!(
-                "Screens {} and {last} don't report their size, so windows there are scaled by Windows",
-                first.join(", ")
-            )
-            .into(),
-        ),
-    }
-}
 
 fn key_label(key: &str) -> &'static str {
     KEYS.iter().find(|(k, _)| *k == key).map_or("Shift", |(_, label)| label)

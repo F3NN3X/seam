@@ -119,13 +119,14 @@ fn caption(action: &str) -> Option<&'static str> {
     }
 }
 
-/// One row. `slot` numbers the row, so its buttons get ids of their own.
-fn shortcut_row(
+/// One row. `slot` numbers the row, so its buttons get ids of their own. `about` is the line under
+/// the title for a row whose name doesn't say enough and has no caption of its own.
+pub fn shortcut_row(
     panel: &Panel,
     title: String,
     action: String,
     combo: Option<&String>,
-    slot: usize,
+    (slot, about): (usize, Option<String>),
     cx: &mut Context<Panel>,
 ) -> Row {
     let p = palette(cx);
@@ -149,13 +150,14 @@ fn shortcut_row(
     }
     let conflict = panel.state.as_ref().is_some_and(|s| s.hotkey_errors.iter().any(|e| e.action == action));
     let note =
-        |text: &'static str, color: Hsla| div().text_size(px(13.)).text_color(color).child(text).into_any_element();
+        |text: SharedString, color: Hsla| div().text_size(px(13.)).text_color(color).child(text).into_any_element();
     let about = if conflict {
-        Some(note("Another app already uses this shortcut. Choose a different one", p.negative))
+        Some(note("Another app already uses this shortcut. Choose a different one".into(), p.negative))
     } else if panel.hotkey_warning.as_deref() == Some(action.as_str()) {
-        Some(note("Ctrl+Alt types characters on many keyboards. Add Shift", p.negative))
+        Some(note("Ctrl+Alt types characters on many keyboards. Add Shift".into(), p.negative))
     } else {
-        caption(&action).map(|text| note(text, p.text_secondary))
+        let text = about.map(SharedString::from).or_else(|| caption(&action).map(SharedString::from));
+        text.map(|text| note(text, p.text_secondary))
     };
     let keys = match combo {
         Some(combo) => keycaps(combo, conflict, p).into_any_element(),
@@ -171,7 +173,7 @@ pub fn render(panel: &mut Panel, _: &mut Window, cx: &mut Context<Panel>) -> imp
     let p = palette(cx);
     let keys = panel.config.hotkeys.clone();
     let mut row = |title: &str, action: &str, combo: Option<&String>, slot: usize| {
-        shortcut_row(panel, title.to_string(), action.to_string(), combo, slot, cx)
+        shortcut_row(panel, title.to_string(), action.to_string(), combo, (slot, None), cx)
     };
     let rows = vec![
         row("Line up screens", "line_up", keys.line_up.as_ref(), 0),

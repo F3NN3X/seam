@@ -129,7 +129,7 @@ fn zones_menu(panel: &Panel, number: usize, screen: &str, ws: &Workspace, cx: &m
 }
 
 /// A screen's model from its device path, for an entry whose screen isn't connected.
-fn model_of(screen: &str) -> String {
+pub(super) fn model_of(screen: &str) -> String {
     screen.split('#').nth(1).filter(|m| !m.is_empty()).unwrap_or("Screen").to_string()
 }
 
@@ -145,8 +145,8 @@ pub fn zones_section(
     let open = panel.editing.zones_open.as_deref() == Some(ws.id.as_str());
     let about = match ws.zones.len() {
         0 => "Every screen keeps its layout".to_string(),
-        1 => "Sets the layout of 1 screen".to_string(),
-        n => format!("Sets the layout of {n} screens"),
+        1 => "This workspace sets the layout of 1 screen".to_string(),
+        n => format!("This workspace sets the layout of {n} screens"),
     };
     let chevron = if open { assets::IconName::ChevronDown } else { assets::IconName::ChevronRight };
     let focus = window.use_keyed_state("ws-zones-head", cx, |_, cx| cx.focus_handle()).read(cx).clone();

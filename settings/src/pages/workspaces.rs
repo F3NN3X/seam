@@ -1,25 +1,27 @@
 //! Workspaces: save which apps are where on a desk, and switch between them.
 
-use crate::icons::{self, Icons};
+use crate::icons;
 use crate::pages::{app_picker, workspace_editor};
 use crate::panel::{Panel, error_text, refusal};
+use crate::theme::tokens::{self, text_style};
 use crate::theme::{Palette, palette};
-use crate::ui::{self, Row, card, keycaps, row, segmented, switch};
+use crate::ui::{self, card};
 use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::input::Input;
 use gpui_kit::component::menu::{DropdownMenu, PopupMenuItem};
 use gpui_kit::component::notification::Notification;
-use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::component::{Icon, WindowExt};
-use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
+use list::{Marks, Moved};
 use seam::state::Screen;
-use seam::workspace::{self, Export, OtherWindows, RowState, Rule, ScreenInfo, Target, Workspace};
-use seam::zones;
+use seam::workspace::{self, Export, RowState, Rule, ScreenInfo, Target, Workspace};
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::rc::Rc;
+
+mod list;
+mod sections;
 
 const LIST_WIDTH: f32 = 200.;
 
@@ -119,7 +121,7 @@ pub fn capture(panel: &mut Panel, window: &mut Window, cx: &mut Context<Panel>) 
 }
 
 fn update_from_screen(panel: &Panel, ws: &Workspace, window: &mut Window, cx: &mut Context<Panel>) {
-    let name = ws.name.clone();
+    let before = ws.clone();
     panel.call(
         "workspace.capture",
         json!({ "into": ws.id }),
@@ -127,13 +129,37 @@ fn update_from_screen(panel: &Panel, ws: &Workspace, window: &mut Window, cx: &m
         cx,
         move |panel, result, window, cx| match result {
             Ok(_) => {
-                let note = Notification::new().message(format!("Updated {name} from the screen"));
-                window.push_notification(note, cx);
                 panel.reload_config(window, cx);
+                let undo = {
+                    let before = before.clone();
+                    move |panel: &mut Panel, window: &mut Window, cx: &mut Context<Panel>| {
+                        workspace_editor::update(panel, &before.id, None, window, cx, |ws| *ws = before.clone())
+                    }
+                };
+                panel.offer_undo(format!("Updated {} from the screen", before.name), undo, window, cx);
             }
             Err(e) => window.push_notification(refusal("Workspace left as it was", &error_text(&e)), cx),
         },
     );
+}
+
+/// A copy of the workspace with a name of its own, and no shortcut.
+fn duplicate(panel: &mut Panel, ws: &Workspace, window: &mut Window, cx: &mut Context<Panel>) {
+    let before = saved(panel);
+    let existing = workspace::list(&before);
+    let names: Vec<String> = existing.iter().map(|w| w.name.clone()).collect();
+    let ids: Vec<String> = existing.iter().map(|w| w.id.clone()).collect();
+    let name = workspace::unique_name(&format!("{} copy", ws.name), &names);
+    let copy = Workspace { id: workspace::new_id(&ids), name: name.clone(), hotkey: None, ..ws.clone() };
+    let mut list = before.clone();
+    list.push(workspace::to_value(&copy));
+    panel.workspace = Some(copy.id.clone());
+    save(panel, list, window, cx);
+    let undo = move |panel: &mut Panel, window: &mut Window, cx: &mut Context<Panel>| {
+        panel.workspace = None;
+        save(panel, before.clone(), window, cx)
+    };
+    panel.offer_undo(format!("Duplicated as {name}"), undo, window, cx);
 }
 
 fn create_empty(panel: &mut Panel, window: &mut Window, cx: &mut Context<Panel>) {
@@ -260,227 +286,93 @@ pub fn app_title(rule: &Rule) -> String {
     if title.is_empty() { rule.title_hint.clone() } else { title }
 }
 
-/// The line under the name: which layout the windows use, or how many there are.
+/// How many windows of the workspace aren't where it puts them, as far as the tray last said.
+fn moved_windows(panel: &Panel, ws: &Workspace) -> usize {
+    let moved =
+        |i: &usize| matches!(workspace_editor::row_state(panel, ws, *i), Some(RowState::Moved | RowState::Minimized));
+    (0..ws.windows.len()).filter(moved).count()
+}
+
+/// "1, 2 and 4".
+fn numbers(of: &[u32]) -> String {
+    let words: Vec<String> = of.iter().map(u32::to_string).collect();
+    match words.as_slice() {
+        [] => String::new(),
+        [only] => only.clone(),
+        [first @ .., last] => format!("{} and {last}", first.join(", ")),
+    }
+}
+
+/// The line under the name: which screens have zones, and how many windows have moved.
 fn summary(panel: &Panel, ws: &Workspace) -> String {
     let screens = panel.state.as_ref().map(|s| s.screens.clone()).unwrap_or_default();
-    let mut used: Vec<&Screen> = Vec::new();
-    for rule in ws.windows.iter().filter(|r| matches!(r.target, Target::Zone { .. })) {
-        if let Some(s) = screens.iter().find(|s| s.id == rule.monitor)
-            && !used.iter().any(|u| u.id == s.id)
-        {
-            used.push(s);
-        }
-    }
-    let sig = desk_sig(panel);
-    let template = |s: &Screen| {
-        let saved = panel.config.desks.get(&sig).and_then(|d| d.zones.get(&s.id));
-        saved.and_then(zones::layout_of).map(|l| l.template.title())
-    };
-    match used.as_slice() {
-        [only] => match template(only) {
-            Some(title) => format!("{title} layout on screen {}", only.number),
-            None => format!("Zones on screen {}", only.number),
-        },
-        [] if ws.windows.is_empty() => "No windows yet".into(),
+    let mut used: Vec<u32> = ws
+        .windows
+        .iter()
+        .filter(|r| matches!(r.target, Target::Zone { .. }))
+        .filter_map(|r| screens.iter().find(|s| s.id == r.monitor).map(|s| s.number))
+        .collect();
+    used.sort_unstable();
+    used.dedup();
+    let zones = match used.as_slice() {
+        [] if ws.windows.is_empty() => "No windows yet".to_string(),
         [] => format!("{} window{}", ws.windows.len(), if ws.windows.len() == 1 { "" } else { "s" }),
-        many => {
-            let numbers: Vec<String> = many.iter().map(|s| s.number.to_string()).collect();
-            format!("Zones on screens {}", numbers.join(", "))
-        }
-    }
-}
-
-/// How many icons the list card shows before "+n".
-/// As many as fit in a 200 px card with the "+n" after them.
-const ICONS_SHOWN: usize = 6;
-
-/// The workspace's apps as a row of icons in rule order, each app once.
-fn icon_strip(i: usize, ws: &Workspace, icons: &Icons, p: Palette) -> Div {
-    let mut seen: Vec<String> = Vec::new();
-    let mut apps: Vec<&Rule> = Vec::new();
-    for rule in &ws.windows {
-        let key = icons::identity(rule);
-        if !seen.contains(&key) {
-            seen.push(key);
-            apps.push(rule);
-        }
-    }
-    let more = apps.len().saturating_sub(ICONS_SHOWN);
-    let shown = apps.iter().take(ICONS_SHOWN).enumerate().map(|(n, rule)| {
-        let slot = div().id(("app-icon", i * 100 + n)).flex_none().size(px(16.));
-        let name = SharedString::from(app_title(rule));
-        let slot = match icons.get(rule) {
-            Some(image) => slot.child(img(image).size(px(16.))),
-            None => slot.child(div().size(px(16.)).rounded(px(4.)).bg(p.text_muted)),
-        };
-        slot.tooltip(move |window, cx| Tooltip::new(name.clone()).build(window, cx))
-    });
-    div()
-        .flex()
-        .items_center()
-        .gap(px(4.))
-        .children(shown)
-        .when(apps.is_empty(), |d| d.child(div().text_size(px(12.)).text_color(p.text_muted).child("No windows yet")))
-        .when(more > 0, |d| {
-            d.child(
-                div()
-                    .flex_none()
-                    .whitespace_nowrap()
-                    .text_size(px(12.))
-                    .text_color(p.text_muted)
-                    .child(format!("+{more}")),
-            )
-        })
-}
-
-/// What a workspace card says about itself besides its name.
-struct Marks {
-    picked: bool,
-    /// Some while it's the workspace in use, saying whether its windows drifted.
-    active: Option<bool>,
-    default: bool,
-}
-
-fn list_card(i: usize, ws: &Workspace, icons: &Icons, marks: Marks, p: Palette, cx: &mut Context<Panel>) -> AnyElement {
-    let id = ws.id.clone();
-    let picked = marks.picked;
-    let default = marks.default.then(|| div().text_size(px(12.)).text_color(p.text_secondary).child("Default"));
-    // The marks get a line of their own, so the name keeps the card's full width.
-    let tags = (marks.default || marks.active.is_some()).then(|| {
-        div()
-            .flex()
-            .items_center()
-            .gap(px(8.))
-            .children(default)
-            .children(marks.active.map(|drifted| active_status(drifted, p)))
-    });
-    let mut label = vec![ws.name.clone()];
-    if marks.default {
-        label.push("default".into());
-    }
-    if let Some(drifted) = marks.active {
-        label.push(if drifted { "active, moved" } else { "active" }.into());
-    }
-    let name = div().min_w_0().text_size(px(14.)).font_weight(FontWeight::MEDIUM).truncate().child(ws.name.clone());
-    let detail = div()
-        .flex()
-        .items_center()
-        .justify_between()
-        .gap(px(8.))
-        .child(icon_strip(i, ws, icons, p))
-        .children(ws.hotkey.as_ref().map(|combo| keycaps(combo, false, p)));
-    div()
-        .id(("workspace", i))
-        .role(Role::ListItem)
-        .aria_label(label.join(", "))
-        .aria_selected(picked)
-        .flex()
-        .flex_col()
-        .gap(px(6.))
-        .p(px(12.))
-        .rounded(px(12.))
-        .border_1()
-        .cursor_pointer()
-        .when(picked, |d| d.bg(p.surface_raised).border_color(p.hairline_strong))
-        .when(!picked, |d| d.bg(p.surface_card).border_color(p.hairline).hover(|d| d.bg(p.surface_raised)))
-        .child(name)
-        .children(tags)
-        .child(detail)
-        .on_click(cx.listener(move |panel, _, _, cx| {
-            panel.workspace = Some(id.clone());
-            panel.naming = false;
-            panel.editing.expanded = None;
-            cx.notify();
-        }))
-        .into_any_element()
-}
-
-/// The status on the card of the workspace in use: a dot and a word, as the editor's rows have.
-fn active_status(drifted: bool, p: Palette) -> AnyElement {
-    let word = if drifted { "Active, moved" } else { "Active" };
-    let text = div().text_size(px(12.)).text_color(p.text_secondary).child(word);
-    div().flex().flex_none().items_center().gap(px(8.)).child(ui::dot(p.positive, true)).child(text).into_any_element()
-}
-
-/// "Put windows back": Snap back for the workspace in use, a switch for any other.
-fn snap_back_button(panel: &Panel, ws: &Workspace, cx: &mut Context<Panel>) -> Button {
-    let active = panel.state.as_ref().and_then(|s| s.workspace.as_ref()).is_some_and(|w| w.id == ws.id);
-    let id = ws.id.clone();
-    ui::primary("snap-back", "Put windows back").on_click(cx.listener(move |panel, _, window, cx| {
-        if active {
-            panel.command("workspace.snap_back", json!({}), window, cx);
-        } else {
-            panel.command("workspace.switch", json!({ "id": id }), window, cx);
-        }
-    }))
-}
-
-/// The one switch for every workspace: put apps in place when they open (§11.1).
-fn auto_apply_row(panel: &Panel, window: &mut Window, cx: &mut Context<Panel>) -> Row {
-    let p = palette(cx);
-    let view = cx.entity();
-    let on = panel.config.auto_apply;
-    let toggle = switch("auto-apply", "Put apps in place when they open", on, window, cx, move |on, window, cx| {
-        view.update(cx, |panel, cx| {
-            panel.config_mut().auto_apply = on;
-            cx.notify();
-            panel.call("autoapply.set", json!({ "on": on }), window, cx, |panel, result, window, cx| {
-                if let Err(e) = result {
-                    window.push_notification(refusal("Setting left as it was", &error_text(&e)), cx);
-                }
-                panel.reload_config(window, cx);
-            });
-        });
-    });
-    let about = "A window that opens goes where the workspace in use puts it, once";
-    row("Put apps in place when they open", Some(about.into()), toggle, p)
-}
-
-/// "Remember folders and pages" (D330), and while it's off with some still saved, the
-/// button that forgets them on every desk.
-fn places_rows(panel: &Panel, window: &mut Window, cx: &mut Context<Panel>) -> Vec<Row> {
-    let p = palette(cx);
-    let view = cx.entity();
-    let on = panel.config.workspaces_remember_places;
-    let title = "Remember folders and pages";
-    let toggle = switch("remember-places", title, on, window, cx, move |on, window, cx| {
-        view.update(cx, |panel, cx| panel.patch(json!({ "workspaces_remember_places": on }), window, cx));
-    });
-    let about = "Explorer opens the same folder and browsers the same page when a workspace starts them";
-    let mut rows = vec![row(title, Some(about.into()), toggle, p)];
-    let saved = |panel: &Panel| -> BTreeMap<String, Vec<Value>> {
-        let desks = panel.config.desks.iter().filter(|(_, d)| workspace::has_places(&d.workspaces));
-        desks.map(|(sig, d)| (sig.clone(), workspace::without_places(&d.workspaces))).collect()
+        [only] => format!("Zones on screen {only}"),
+        many => format!("Zones on screens {}", numbers(many)),
     };
-    if !on && !saved(panel).is_empty() {
-        let forget = ui::secondary("forget-places", "Forget saved folders and pages", cx).on_click(cx.listener(
-            move |panel, _, window, cx| {
-                let desks: serde_json::Map<String, Value> =
-                    saved(panel).into_iter().map(|(sig, list)| (sig, json!({ "workspaces": list }))).collect();
-                panel.patch(json!({ "desks": desks }), window, cx);
-            },
-        ));
-        rows.push(row("Saved folders and pages", Some("Kept, but not used while this is off".into()), forget, p));
+    match moved_windows(panel, ws) {
+        0 => zones,
+        1 => format!("{zones}. 1 window isn't where this workspace puts it"),
+        n => format!("{zones}. {n} windows aren't where this workspace puts them"),
     }
-    rows
 }
 
-/// "Update from screen removes apps that aren't open": off keeps the rows of closed apps.
-fn removes_row(panel: &Panel, window: &mut Window, cx: &mut Context<Panel>) -> Row {
-    let p = palette(cx);
-    let view = cx.entity();
-    let title = "Update from screen removes apps that aren't open";
-    let toggle = switch(
-        "update-removes",
-        title,
-        panel.config.workspaces_update_removes_closed,
-        window,
-        cx,
-        move |on, window, cx| {
-            view.update(cx, |panel, cx| panel.patch(json!({ "workspaces_update_removes_closed": on }), window, cx));
-        },
-    );
-    row(title, Some("Off keeps them, so a closed app still starts when you switch".into()), toggle, p)
+/// Whether this is the workspace in use.
+fn in_use(panel: &Panel, ws: &Workspace) -> bool {
+    panel.state.as_ref().and_then(|s| s.workspace.as_ref()).is_some_and(|w| w.id == ws.id)
+}
+
+/// Move the windows of the workspace in use back to where it puts them.
+fn put_back(panel: &Panel, count: usize, window: &mut Window, cx: &mut Context<Panel>) {
+    panel.call("workspace.snap_back", json!({}), window, cx, move |_, result, window, cx| match result {
+        Ok(_) => {
+            let said = match count {
+                0 => "Put windows back".to_string(),
+                1 => "Put 1 window back".to_string(),
+                n => format!("Put {n} windows back"),
+            };
+            window.push_notification(Notification::new().message(said), cx);
+        }
+        Err(e) => window.push_notification(refusal("Windows left as they were", &error_text(&e)), cx),
+    });
+}
+
+/// Switch to the workspace. Undo goes back to the one before.
+fn switch_to(panel: &Panel, ws: &Workspace, window: &mut Window, cx: &mut Context<Panel>) {
+    let name = ws.name.clone();
+    panel.call("workspace.switch", json!({ "id": ws.id }), window, cx, move |panel, result, window, cx| match result {
+        Ok(_) => {
+            let undo = |panel: &mut Panel, window: &mut Window, cx: &mut Context<Panel>| {
+                panel.command("workspace.switch_back", json!({}), window, cx)
+            };
+            panel.offer_undo(format!("Switched to {name}"), undo, window, cx);
+        }
+        Err(e) => window.push_notification(refusal("Seam can't do that", &error_text(&e)), cx),
+    });
+}
+
+/// The one primary button of the card: "Put windows back" while the workspace is in use and its
+/// windows moved, else "Switch now".
+fn primary_action(panel: &Panel, ws: &Workspace, cx: &mut Context<Panel>) -> Button {
+    let moved = moved_windows(panel, ws);
+    let drifted = moved > 0 || workspace_editor::zones_moved(panel, ws);
+    let ws = ws.clone();
+    if in_use(panel, &ws) && drifted {
+        return ui::primary("snap-back", "Put windows back")
+            .on_click(cx.listener(move |panel, _, window, cx| put_back(panel, moved, window, cx)));
+    }
+    ui::primary("switch-workspace", "Switch now")
+        .on_click(cx.listener(move |panel, _, window, cx| switch_to(panel, &ws, window, cx)))
 }
 
 fn detail(panel: &mut Panel, ws: Workspace, window: &mut Window, cx: &mut Context<Panel>) -> Div {
@@ -489,22 +381,27 @@ fn detail(panel: &mut Panel, ws: Workspace, window: &mut Window, cx: &mut Contex
 
     let mut rows = vec![header];
     rows.extend(workspace_editor::rows(panel, &ws, window, cx));
-    let mut states = (0..ws.windows.len()).filter_map(|i| workspace_editor::row_state(panel, &ws, i));
-    let moved = states.any(|s| matches!(s, RowState::Moved | RowState::Minimized));
-    if moved || workspace_editor::zones_moved(panel, &ws) {
-        rows.push(div().flex().px(px(16.)).py(px(12.)).child(snap_back_button(panel, &ws, cx)).into_any_element());
-    }
     let id = ws.id.clone();
     let add_app: app_picker::Add =
         Rc::new(move |panel, rule, hwnd, window, cx| workspace_editor::add_app(panel, &id, rule, hwnd, window, cx));
     let add = app_picker::button(panel, &ws.windows, "In this workspace", add_app, cx);
-    rows.push(div().flex().px(px(16.)).py(px(12.)).child(add).into_any_element());
-    rows.extend(workspace_editor::zones_section(panel, &ws, window, cx));
-    rows.extend(switch_rows(&ws, p, window, cx).map(IntoElement::into_any_element));
-    div().flex_1().min_w_0().child(card(rows, p))
+    let hint = ui::description("Drag an app onto another screen to move it there", p);
+    rows.push(
+        div()
+            .flex()
+            .items_center()
+            .gap(px(tokens::SPACE_12))
+            .px(px(tokens::SPACE_16))
+            .py(px(tokens::SPACE_12))
+            .child(add)
+            .child(hint)
+            .into_any_element(),
+    );
+    let switching = sections::switch_section(panel, &ws, p, window, cx);
+    div().flex().flex_col().gap(px(ui::SECTION_GAP)).flex_1().min_w_0().child(card(rows, p)).child(switching)
 }
 
-/// The name, with Update from screen, Switch now and the more menu.
+/// The name, with Update from screen, the primary action and the more menu.
 fn detail_header(
     panel: &mut Panel,
     ws: &Workspace,
@@ -526,32 +423,37 @@ fn detail_header(
     let title = if panel.naming {
         div().w(px(220.)).child(Input::new(&panel.name_input)).into_any_element()
     } else {
-        div().text_size(px(16.)).font_weight(FontWeight::MEDIUM).truncate().child(ws.name.clone()).into_any_element()
+        text_style(div(), tokens::CARD_TITLE_STRONG).truncate().child(ws.name.clone()).into_any_element()
     };
     let update = ui::secondary("update-workspace", "Update from screen", cx).on_click({
         let ws = ws.clone();
         cx.listener(move |panel, _, window, cx| update_from_screen(panel, &ws, window, cx))
     });
-    let id = ws.id.clone();
-    let switch_now =
-        ui::secondary("switch-workspace", "Switch now", cx).on_click(cx.listener(move |panel, _, window, cx| {
-            panel.command("workspace.switch", json!({ "id": id }), window, cx);
-        }));
+    let primary = primary_action(panel, ws, cx);
     let more = more_button(panel, ws, cx);
     div()
         .flex()
         .items_center()
-        .gap(px(8.))
-        .px(px(16.))
-        .py(px(12.))
-        .child(div().flex().flex_col().gap(px(2.)).flex_1().min_w_0().child(title).child(ui::description(summary, p)))
+        .gap(px(tokens::SPACE_8))
+        .px(px(tokens::SPACE_16))
+        .py(px(tokens::SPACE_12))
+        .child(
+            div()
+                .flex()
+                .flex_col()
+                .gap(px(tokens::SPACE_2))
+                .flex_1()
+                .min_w_0()
+                .child(title)
+                .child(ui::description(summary, p)),
+        )
         .child(div().flex_none().child(update))
-        .child(div().flex_none().child(switch_now))
+        .child(div().flex_none().child(primary))
         .child(div().flex_none().child(more))
         .into_any_element()
 }
 
-/// The menu behind the ellipsis: open alongside, rename, default, export, import, delete.
+/// The menu behind the ellipsis: rename, default, duplicate, open alongside, export, import, delete.
 fn more_button(panel: &Panel, ws: &Workspace, cx: &mut Context<Panel>) -> impl IntoElement + use<> {
     let view = cx.entity().downgrade();
     let more_ws = ws.clone();
@@ -561,23 +463,28 @@ fn more_button(panel: &Panel, ws: &Workspace, cx: &mut Context<Panel>) -> impl I
         .icon(Icon::new(assets::IconName::Ellipsis))
         .accessibility_label(format!("More for {}", ws.name))
         .dropdown_menu(move |menu, _, _| {
-            let (rename, exporting, importing, deleting) = (view.clone(), view.clone(), view.clone(), view.clone());
-            let (to_export, id) = (more_ws.clone(), more_ws.id.clone());
+            let (rename, copying, exporting, importing, deleting) =
+                (view.clone(), view.clone(), view.clone(), view.clone(), view.clone());
+            let (to_copy, to_export, id) = (more_ws.clone(), more_ws.clone(), more_ws.id.clone());
             let (alongside, alongside_id) = (view.clone(), more_ws.id.clone());
             let (defaulting, default_to) = (view.clone(), (!is_default).then(|| more_ws.id.clone()));
             let default_label = if is_default { "Stop being the default" } else { "Set as default" };
-            menu.item(PopupMenuItem::new("Open alongside").on_click(move |_, window, cx| {
-                let id = alongside_id.clone();
-                let _ = alongside.update(cx, |panel, cx| {
-                    panel.command("workspace.switch", json!({ "id": id, "alongside": true }), window, cx);
-                });
-            }))
-            .item(PopupMenuItem::new("Rename").on_click(move |_, _, cx| {
+            menu.item(PopupMenuItem::new("Rename").on_click(move |_, _, cx| {
                 let _ = rename.update(cx, start_naming);
             }))
             .item(PopupMenuItem::new(default_label).on_click(move |_, window, cx| {
                 let id = default_to.clone();
                 let _ = defaulting.update(cx, |panel, cx| set_default(panel, id, window, cx));
+            }))
+            .item(PopupMenuItem::new("Duplicate").on_click(move |_, window, cx| {
+                let ws = to_copy.clone();
+                let _ = copying.update(cx, |panel, cx| duplicate(panel, &ws, window, cx));
+            }))
+            .item(PopupMenuItem::new("Open alongside").on_click(move |_, window, cx| {
+                let id = alongside_id.clone();
+                let _ = alongside.update(cx, |panel, cx| {
+                    panel.command("workspace.switch", json!({ "id": id, "alongside": true }), window, cx);
+                });
             }))
             .item(PopupMenuItem::new("Export…").on_click(move |_, window, cx| {
                 let to_export = to_export.clone();
@@ -593,51 +500,6 @@ fn more_button(panel: &Panel, ws: &Workspace, cx: &mut Context<Panel>) -> impl I
         })
 }
 
-/// Start missing apps, showing every window, and what happens to the other windows.
-fn switch_rows(ws: &Workspace, p: Palette, window: &mut Window, cx: &mut Context<Panel>) -> [Row; 3] {
-    let view = cx.entity();
-    let id = ws.id.clone();
-    let start_missing = switch("start-missing", "Start missing apps", ws.launch_missing, window, cx, {
-        let view = view.clone();
-        move |on, window, cx| {
-            let id = id.clone();
-            view.update(cx, |panel, cx| edit(panel, &id, window, cx, |ws| ws.launch_missing = on));
-        }
-    });
-    let id = ws.id.clone();
-    let show_all = switch("show-all", "Show every window", ws.show_all, window, cx, {
-        let view = view.clone();
-        move |on, window, cx| {
-            let id = id.clone();
-            view.update(cx, |panel, cx| edit(panel, &id, window, cx, |ws| ws.show_all = on));
-        }
-    });
-    let id = ws.id.clone();
-    let selected = match ws.other_windows {
-        OtherWindows::Leave => 0,
-        OtherWindows::Minimize => 1,
-        OtherWindows::Close => 2,
-    };
-    let others = segmented(
-        "other-windows",
-        "Other windows",
-        &["Leave", "Minimize", "Close"],
-        selected,
-        window,
-        cx,
-        move |i, window, cx| {
-            let id = id.clone();
-            let mode = [OtherWindows::Leave, OtherWindows::Minimize, OtherWindows::Close][i.min(2)];
-            view.update(cx, |panel, cx| edit(panel, &id, window, cx, |ws| ws.other_windows = mode));
-        },
-    );
-    [
-        row("Start missing apps", Some("Ticked apps open if they're closed".into()), start_missing, p),
-        row("Show every window", Some("A window saved minimized comes back, in its place".into()), show_all, p),
-        row("Other windows", Some("When you switch. Close asks each app first, so it can save".into()), others, p),
-    ]
-}
-
 fn empty_state(panel: &Panel, p: Palette, cx: &mut Context<Panel>) -> Div {
     let capture = ui::primary("capture-empty", "Capture current windows")
         .on_click(cx.listener(|panel, _, window, cx| capture(panel, window, cx)));
@@ -645,13 +507,13 @@ fn empty_state(panel: &Panel, p: Palette, cx: &mut Context<Panel>) -> Div {
         .flex()
         .flex_col()
         .items_start()
-        .gap(px(12.))
-        .p(px(32.))
+        .gap(px(tokens::SPACE_12))
+        .p(px(tokens::SPACE_32))
         .border_1()
         .border_dashed()
         .border_color(p.hairline_strong)
-        .rounded(px(12.))
-        .child(div().text_size(px(16.)).child(format!("No workspaces for {} yet", panel.desk_name())))
+        .rounded(px(tokens::RADIUS_12))
+        .child(text_style(div(), tokens::CARD_TITLE).child(format!("No workspaces for {} yet", panel.desk_name())))
         .child(ui::description("Arrange your windows the way you like them, then capture them", p))
         .child(capture)
 }
@@ -663,7 +525,7 @@ pub fn render(panel: &mut Panel, window: &mut Window, cx: &mut Context<Panel>) -
     if list.is_empty() {
         return div().flex().flex_col().gap(px(ui::SECTION_GAP)).child(header).child(empty_state(panel, p, cx));
     }
-    let capture = ui::primary("capture", "Capture current windows")
+    let capture = ui::secondary("capture", "Capture current windows", cx)
         .on_click(cx.listener(|panel, _, window, cx| capture(panel, window, cx)));
     let rules: Vec<Rule> = list.iter().flat_map(|ws| ws.windows.iter().cloned()).collect();
     icons::request(panel, &rules, cx);
@@ -680,36 +542,36 @@ pub fn render(panel: &mut Panel, window: &mut Window, cx: &mut Context<Panel>) -
         .enumerate()
         .map(|(i, ws)| {
             let picked = current.as_ref().is_some_and(|c| c.id == ws.id);
-            let in_use = active.as_ref().filter(|(id, _)| *id == ws.id).map(|(_, drifted)| *drifted);
-            let marks = Marks { picked, active: in_use, default: default.as_deref() == Some(ws.id.as_str()) };
-            list_card(i, ws, &panel.icons, marks, p, cx)
+            let moved = active.as_ref().filter(|(id, _)| *id == ws.id).map(|(_, drifted)| match (drifted, picked) {
+                (false, _) => Moved::No,
+                (true, true) => match moved_windows(panel, ws) {
+                    0 => Moved::Some,
+                    n => Moved::Count(n),
+                },
+                (true, false) => Moved::Some,
+            });
+            let marks = Marks { picked, active: moved, default: default.as_deref() == Some(ws.id.as_str()) };
+            list::item(i, ws, &panel.icons, marks, p, cx)
         })
         .collect();
-    // The dashed frame has nothing else on it, so the hover fill sits on the button inside.
-    let button = div()
-        .id("new-workspace")
+    let sidebar = div()
         .flex()
-        .items_center()
-        .justify_center()
-        .size_full()
-        .rounded(px(11.))
-        .text_size(px(14.))
-        .text_color(p.text_secondary)
-        .cursor_pointer()
-        .hover(|d| d.bg(p.surface_card))
-        .child("New empty workspace")
-        .on_click(cx.listener(|panel, _, window, cx| create_empty(panel, window, cx)));
-    let new_empty =
-        div().h(px(48.)).border_1().border_dashed().border_color(p.hairline_strong).rounded(px(12.)).child(button);
-    let sidebar = div().flex().flex_col().flex_none().gap(px(8.)).w(px(LIST_WIDTH)).children(cards).child(new_empty);
-    let body = div().flex().items_start().gap(px(16.)).child(sidebar);
+        .flex_col()
+        .flex_none()
+        .gap(px(tokens::SPACE_8))
+        .w(px(LIST_WIDTH))
+        .children(cards)
+        .child(list::new_empty(p, cx));
+    let body = div().flex().items_start().gap(px(tokens::SPACE_16)).child(sidebar);
     let body = match current {
         Some(ws) => body.child(detail(panel, ws, window, cx)),
         None => body,
     };
-    let mut settings = vec![auto_apply_row(panel, window, cx)];
-    settings.extend(places_rows(panel, window, cx));
-    settings.push(removes_row(panel, window, cx));
-    let auto_apply = card(settings, p);
-    div().flex().flex_col().gap(px(ui::SECTION_GAP)).child(header.child(capture)).child(body).child(auto_apply)
+    div()
+        .flex()
+        .flex_col()
+        .gap(px(ui::SECTION_GAP))
+        .child(header.child(capture))
+        .child(body)
+        .child(sections::all_section(panel, p, window, cx))
 }

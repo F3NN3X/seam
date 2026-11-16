@@ -6,88 +6,42 @@ use crate::icons::{self, Icons};
 use crate::pages::app_picker::Picker;
 use crate::pages::workspaces::{app_title, desk_sig};
 use crate::panel::Panel;
+use crate::theme::tokens;
 use crate::theme::{Palette, palette};
 use crate::ui::{self, row, switch};
 use gpui_kit::component::button::ButtonVariants;
 use gpui_kit::component::input::{Input, InputEvent, InputState};
 use gpui_kit::component::menu::{DropdownMenu, PopupMenuItem};
 use gpui_kit::component::slider::{SliderEvent, SliderState};
-use gpui_kit::component::{ActiveTheme, Icon, WindowExt};
+use gpui_kit::component::{Icon, WindowExt};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 use seam::state::Screen;
 use seam::workspace::{self, RowState, Rule, Shown, Target, WinState, Workspace};
 use seam::zones;
+use std::collections::HashSet;
 
+mod details;
 mod edits;
+mod groups;
 mod screen_zones;
 mod table;
 
 pub use edits::{add_app, update};
 use edits::{
-    exe_name, move_row, never_include, remove_row, seconds, set_delay, set_open_with, update_row, where_it_is,
+    exe_name, move_rows, never_include, remove_rows, seconds, send_to_screen, set_delay, set_open_with, update_row,
+    update_rows, where_it_is,
 };
 pub use screen_zones::{zones_moved, zones_section};
 pub use table::rows;
 
 const GRIP_WIDTH: f32 = 16.;
-const ICON_WIDTH: f32 = 32.;
-/// The name, Now and Goes to columns start at the width their usual text needs (see
-/// `Cols`), and share both the room to spare and the room missing, by these weights,
-/// each down to its least, so the "..." always shows.
-const NAME_GROW: f32 = 2.;
-const NAME_LEAST: f32 = 40.;
-const STATUS_GROW: f32 = 1.;
-const STATUS_LEAST: f32 = 16.;
-const GOES_TO_GROW: f32 = 2.;
-const GOES_TO_LEAST: f32 = 48.;
+const ICON_WIDTH: f32 = 24.;
+const GOES_TO_WIDTH: f32 = 168.;
+const STATUS_WIDTH: f32 = 196.;
 const MORE_WIDTH: f32 = 32.;
-/// What the columns are measured on: a usual app name, the longest Now word that
-/// should show in full, and a usual place.
-const USUAL_NAME: &str = "Visual Studio Code";
-const LONGEST_STATUS: &str = "Running in background";
-const USUAL_PLACE: &str = "Screen 2, zone 1";
-/// Around the text: the name's gap and chevron, the status dot and its gap, and the
-/// Goes to button's border, padding, gap and caret.
-const NAME_CHROME: f32 = 4. + 16.;
-const STATUS_CHROME: f32 = 8. + 8.;
-const GOES_TO_CHROME: f32 = 2. + 20. + 8. + 16.;
-
-/// The table's measured widths: where the flexible columns start, and Launch, as wide as its head.
-#[derive(Clone, Copy)]
-pub struct Cols {
-    name: f32,
-    status: f32,
-    goes: f32,
-    launch: f32,
-}
-
-impl Cols {
-    pub fn measure(window: &Window, cx: &App) -> Cols {
-        let width = |text: &str, size: f32| text_width(text, size, window, cx).ceil();
-        Cols {
-            name: width(USUAL_NAME, 14.) + NAME_CHROME,
-            status: width(LONGEST_STATUS, 12.) + STATUS_CHROME,
-            goes: width(USUAL_PLACE, 14.) + GOES_TO_CHROME,
-            launch: width("Launch", 13.).max(16.),
-        }
-    }
-}
-
-/// How wide `text` is at `size` in the panel's font.
-fn text_width(text: &str, size: f32, window: &Window, cx: &App) -> f32 {
-    let mut style = window.text_style();
-    style.font_family = cx.theme().font_family.clone();
-    let run = style.to_run(text.len());
-    let line = window.text_system().shape_line(SharedString::from(text.to_string()), px(size), &[run], None);
-    f32::from(line.width)
-}
 /// Launch details sit under the app's name: past the grip, the icon and their gaps.
 const DETAILS_INDENT: f32 = GRIP_WIDTH + ICON_WIDTH + 16.;
-/// A column that starts at `width`, grows by `grow` and shrinks down to `least`.
-fn column(width: f32, grow: f32, least: f32) -> Div {
-    div().flex_grow(grow).flex_shrink(1.).flex_basis(px(width)).min_w(px(least))
-}
 
 const SHOW_AS: [(&str, Shown); 4] = [
     ("Normal", Shown::Normal),
@@ -106,6 +60,8 @@ pub struct Editing {
     pub picker: Picker,
     /// The workspace whose Zones section is open. Closed until opened.
     zones_open: Option<String>,
+    /// The apps shown one window to a row, by `groups::split_key`.
+    split: HashSet<String>,
     /// The "Open with" field of the open row, the row it shows, and why it was refused.
     open_with: Entity<InputState>,
     open_with_for: Option<(String, usize)>,
@@ -138,6 +94,7 @@ impl Editing {
             holding_delay: false,
             picker,
             zones_open: None,
+            split: HashSet::new(),
             open_with,
             open_with_for: None,
             open_with_error: None,
@@ -209,13 +166,13 @@ pub fn app_icon(rule: &Rule, icons: &Icons, p: Palette) -> Div {
         .items_center()
         .justify_center()
         .size(px(ICON_WIDTH))
-        .rounded(px(8.))
+        .rounded(px(tokens::RADIUS_4))
         .bg(p.surface_raised);
     match icons.get(rule) {
         Some(image) => tile.child(img(image).size(px(16.))),
         None => {
             let letter = app_title(rule).chars().next().map(|c| c.to_uppercase().to_string()).unwrap_or_default();
-            tile.text_size(px(14.)).text_color(p.text_secondary).child(letter)
+            tile.text_size(px(12.)).text_color(p.text_secondary).child(letter)
         }
     }
 }

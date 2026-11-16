@@ -338,7 +338,7 @@ impl Render for Panel {
         let body = match self.page {
             Page::Displays => pages::displays::render(self, window, cx).into_any_element(),
             Page::Zones => pages::zones::render(self, window, cx).into_any_element(),
-            Page::Windows => pages::windows::render(cx).into_any_element(),
+            Page::Windows => pages::windows::render(self, window, cx).into_any_element(),
             Page::Workspaces => pages::workspaces::render(self, window, cx).into_any_element(),
             Page::Shortcuts => pages::shortcuts::render(self, window, cx).into_any_element(),
             Page::General => pages::general::render(self, window, cx).into_any_element(),

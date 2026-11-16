@@ -75,6 +75,12 @@ fn diagnostics(panel: &Panel) -> String {
     text
 }
 
+/// Put the diagnostics on the clipboard and say so.
+pub fn copy_diagnostics(panel: &Panel, window: &mut Window, cx: &mut Context<Panel>) {
+    cx.write_to_clipboard(ClipboardItem::new_string(diagnostics(panel)));
+    window.push_notification(Notification::new().message("Copied diagnostics"), cx);
+}
+
 pub fn render(panel: &mut Panel, window: &mut Window, cx: &mut Context<Panel>) -> impl IntoElement + use<> {
     let p = palette(cx);
     let header = div().flex().items_center().gap(px(16.)).child(mark(p)).child(ui::page_title(
@@ -82,11 +88,8 @@ pub fn render(panel: &mut Panel, window: &mut Window, cx: &mut Context<Panel>) -
         format!("Build {} on Windows 11 {}", option_env!("SEAM_BUILD").unwrap_or("dev"), winver::display_version()),
         p,
     ));
-    let copy =
-        ui::secondary("copy-diagnostics", "Copy diagnostics", cx).on_click(cx.listener(|panel, _, window, cx| {
-            cx.write_to_clipboard(ClipboardItem::new_string(diagnostics(panel)));
-            window.push_notification(Notification::new().message("Copied diagnostics"), cx);
-        }));
+    let copy = ui::secondary("copy-diagnostics", "Copy diagnostics", cx)
+        .on_click(cx.listener(|panel, _, window, cx| copy_diagnostics(panel, window, cx)));
     let report = ui::secondary("report", "Report a problem", cx).on_click(cx.listener(|panel, _, window, cx| {
         cx.write_to_clipboard(ClipboardItem::new_string(diagnostics(panel)));
         cx.open_url(&format!("{REPO}/issues/new"));

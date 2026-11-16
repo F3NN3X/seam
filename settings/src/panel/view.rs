@@ -1,10 +1,9 @@
-//! Drawing the panel: the title bar, the sidebar, the status, banners and search results.
+//! Drawing the panel: the title bar, the sidebar, the status and banners.
 
 use super::*;
 use crate::theme::tokens::text_style;
 use crate::theme::{palette, tokens};
 use gpui_kit::component::button::{Button, ButtonVariants};
-use gpui_kit::component::input::Input;
 use gpui_kit::component::{Disableable, Icon, TitleBar};
 use seam::state::Remap;
 
@@ -23,6 +22,7 @@ impl Panel {
 
     fn show_now(&mut self, page: Page, reveal: Option<&'static str>, window: &mut Window, cx: &mut Context<Self>) {
         self.page = page;
+        self.changed_only = false;
         if page == Page::Workspaces {
             self.icons.retry_failed();
         }
@@ -40,7 +40,7 @@ impl Panel {
         cx.notify();
     }
 
-    fn clear_search(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    pub(super) fn clear_search(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.query = SharedString::default();
         self.search.update(cx, |input, cx| input.set_value("", window, cx));
     }
@@ -175,25 +175,6 @@ impl Panel {
             .tooltip(if can_go_back { "Back" } else { "Back works inside a help topic or a workspace" })
             .accessibility_label("Back")
             .disabled(!can_go_back);
-        let search = Input::new(&self.search)
-            .appearance(false)
-            .prefix(Icon::new(assets::IconName::Search).size(px(tokens::SIZE_ICON)).text_color(p.text_muted))
-            .suffix(ui::keycaps("Ctrl F", false, p).text_color(p.text_secondary));
-        // The field and Back take the mouse, so only the bar around them drags the window.
-        let field = div()
-            .occlude()
-            .flex()
-            .items_center()
-            .flex_shrink(1.)
-            .w(px(tokens::SIZE_COMMAND_BAR))
-            .min_w(px(200.))
-            .h(px(32.))
-            .px(px(tokens::SPACE_8))
-            .rounded(px(tokens::RADIUS_8))
-            .bg(p.surface_input)
-            .border_1()
-            .border_color(p.hairline)
-            .child(search);
         let left = div()
             .flex()
             .items_center()
@@ -214,7 +195,7 @@ impl Panel {
                     .gap(px(tokens::SPACE_8))
                     .child(left)
                     .child(div().flex_1())
-                    .child(field)
+                    .child(self.command_bar(cx))
                     .child(div().flex_1()),
             )
     }
@@ -293,60 +274,31 @@ impl Panel {
             let buttons = div().flex().flex_none().gap(px(8.)).child(not_now).child(turn_on);
             banners.push(ui::note(text, None, p).child(buttons));
         }
-        banners
-    }
-
-    fn results(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
-        let p = palette(cx);
-        let matches = search::find(&self.query);
-        let mut list = div().flex().flex_col().gap(px(24.)).child(ui::page_title(
-            "Search",
-            match matches.len() {
-                0 => format!("Nothing matches {}", self.query),
-                1 => "1 setting".to_string(),
-                n => format!("{n} settings"),
-            },
-            p,
-        ));
-        let rows = matches.iter().enumerate().map(|(i, hit)| {
-            let (page, anchor, topic) = (hit.page, hit.anchor(), hit.topic);
-            div()
-                .id(i)
-                .cursor_pointer()
-                .hover(|d| d.bg(p.surface_raised))
-                .child(ui::row(hit.title, Some(page.title().into()), div(), p))
-                .on_click(cx.listener(move |this, _, window, cx| {
-                    if let Some(topic) = topic {
-                        this.help_topic = topic;
-                    }
-                    this.show(page, Some(anchor), window, cx);
-                }))
-                .into_any_element()
-        });
-        let rows: Vec<AnyElement> = rows.collect();
-        if !rows.is_empty() {
-            list = list.child(ui::card(rows, p));
+        if self.changed_only {
+            let show_all =
+                ui::secondary("show-all-settings", "Show all", cx).on_click(cx.listener(|panel, _, _, cx| {
+                    panel.changed_only = false;
+                    cx.notify();
+                }));
+            banners.push(ui::note("Showing settings you've changed", Some(show_all), p));
         }
-        list
+        banners
     }
 }
 
 impl Render for Panel {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let p = palette(cx);
-        let body = if !self.query.is_empty() {
-            self.results(cx).into_any_element()
-        } else {
-            match self.page {
-                Page::Displays => pages::displays::render(self, window, cx).into_any_element(),
-                Page::Zones => pages::zones::render(self, window, cx).into_any_element(),
-                Page::Windows => pages::windows::render(cx).into_any_element(),
-                Page::Workspaces => pages::workspaces::render(self, window, cx).into_any_element(),
-                Page::Shortcuts => pages::shortcuts::render(self, window, cx).into_any_element(),
-                Page::General => pages::general::render(self, window, cx).into_any_element(),
-                Page::Help => pages::help::render(self, cx).into_any_element(),
-                Page::About => pages::about::render(self, window, cx).into_any_element(),
-            }
+        ui::show_only(self.changed_only.then(|| search::changed::titles(self.page, &self.config)));
+        let body = match self.page {
+            Page::Displays => pages::displays::render(self, window, cx).into_any_element(),
+            Page::Zones => pages::zones::render(self, window, cx).into_any_element(),
+            Page::Windows => pages::windows::render(cx).into_any_element(),
+            Page::Workspaces => pages::workspaces::render(self, window, cx).into_any_element(),
+            Page::Shortcuts => pages::shortcuts::render(self, window, cx).into_any_element(),
+            Page::General => pages::general::render(self, window, cx).into_any_element(),
+            Page::Help => pages::help::render(self, cx).into_any_element(),
+            Page::About => pages::about::render(self, window, cx).into_any_element(),
         };
         ui::reveal_built();
         let banners = self.banners(cx);
@@ -354,10 +306,8 @@ impl Render for Panel {
         div()
             .track_focus(&self.focus)
             .key_context(CONTEXT)
-            .on_action(cx.listener(|this, _: &FocusSearch, window, cx| {
-                this.search.update(cx, |input, cx| input.focus(window, cx));
-            }))
-            .on_action(cx.listener(|this, _: &ClearSearch, window, cx| this.clear_search(window, cx)))
+            .on_action(cx.listener(|this, _: &FocusSearch, window, cx| this.focus_search(window, cx)))
+            .on_action(cx.listener(|this, _: &ClearSearch, window, cx| this.dismiss(window, cx)))
             .flex()
             .flex_col()
             .size_full()

@@ -10,6 +10,9 @@ use std::cell::RefCell;
 use std::rc::Rc;
 use std::sync::Arc;
 
+mod only;
+pub use only::show_only;
+
 pub const SECTION_GAP: f32 = tokens::SPACE_24;
 /// Room left above a row a search result scrolled to.
 const REVEAL_MARGIN: f32 = 24.;
@@ -148,6 +151,9 @@ pub fn page_header(title: impl Into<SharedString>, subtitle: impl Into<SharedStr
 
 pub fn section(title: impl Into<SharedString>, body: impl IntoElement, p: Palette) -> AnyElement {
     let title = title.into();
+    if !only::section_shows() {
+        return div().hidden().into_any_element();
+    }
     let section = div()
         .flex()
         .flex_col()
@@ -159,10 +165,18 @@ pub fn section(title: impl Into<SharedString>, body: impl IntoElement, p: Palett
 
 /// Rows in a group, with a hairline between them.
 pub fn card(rows: Vec<AnyElement>, p: Palette) -> Div {
+    let shown = only::card_shows(rows.len());
+    if shown.as_ref().is_some_and(|shown| !shown.contains(&true)) {
+        return div().hidden();
+    }
     let mut group =
         div().flex().flex_col().bg(p.surface_card).border_1().border_color(p.hairline).rounded(px(tokens::RADIUS_12));
+    let mut first = true;
     for (i, row) in rows.into_iter().enumerate() {
-        group = group.child(div().when(i > 0, |d| d.border_t_1().border_color(p.hairline)).child(row));
+        // A row left out takes its hairline with it.
+        let shows = shown.as_ref().is_none_or(|shown| shown[i]);
+        group = group.child(div().when(shows && !first, |d| d.border_t_1().border_color(p.hairline)).child(row));
+        first &= !shows;
     }
     group
 }
@@ -179,6 +193,9 @@ pub fn row(
 pub fn row_with(title: impl Into<SharedString>, about: Option<AnyElement>, control: impl IntoElement) -> AnyElement {
     let height = if about.is_some() { px(tokens::SIZE_ROW_2) } else { px(tokens::SIZE_ROW) };
     let title = title.into();
+    if !only::row_shows(&title) {
+        return div().hidden().into_any_element();
+    }
     let name = text_style(div(), tokens::BODY).child(title.clone());
     let mut text = div().flex().flex_col().gap(px(tokens::SPACE_2)).flex_1().min_w_0().child(name);
     if let Some(about) = about {

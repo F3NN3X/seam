@@ -107,7 +107,7 @@ pub fn finish_naming(panel: &mut Panel, window: &mut Window, cx: &mut Context<Pa
 
 // ---- Actions
 
-fn capture(panel: &mut Panel, window: &mut Window, cx: &mut Context<Panel>) {
+pub fn capture(panel: &mut Panel, window: &mut Window, cx: &mut Context<Panel>) {
     panel.call("workspace.capture", json!({}), window, cx, |panel, result, window, cx| match result {
         Ok(done) => {
             panel.workspace = done["id"].as_str().map(String::from);

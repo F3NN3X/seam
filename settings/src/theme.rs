@@ -19,7 +19,7 @@ const THEMES: &str = r##"{"name":"Seam","themes":[
   "mono_font.family":"Cascadia Mono","mono_font.size":13,"radius":8,"radius.lg":12,"shadow":false,
   "colors":{"background":"#202020","foreground":"#F3F3F3","border":"#F3F3F314","ring":"#F3F3F3","input.border":"#F3F3F314",
    "muted.background":"#2A2A2A","muted.foreground":"#A0A0A0","popover.background":"#333333","popover.foreground":"#F3F3F3",
-   "accent.background":"#333333","accent.foreground":"#F3F3F3","primary.background":"#F3F3F3","primary.foreground":"#1A1A1A",
+   "accent.background":"#3A3A3A","accent.foreground":"#F3F3F3","primary.background":"#F3F3F3","primary.foreground":"#1A1A1A",
    "primary.hover.background":"#FFFFFF","primary.active.background":"#FFFFFF","secondary.background":"#333333",
    "secondary.foreground":"#F3F3F3","secondary.hover.background":"#3A3A3A","secondary.active.background":"#3A3A3A",
    "button.primary.background":"#F3F3F3","button.primary.foreground":"#1A1A1A","button.primary.hover.background":"#FFFFFF",

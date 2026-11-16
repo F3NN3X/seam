@@ -16,16 +16,15 @@
 
 use crate::geom;
 use crate::log;
-use crate::showlayout::{Color, fill, text};
+use crate::showlayout::{Color, fill};
 use crate::wincontrol;
-use seam::overview::{self, Dir, Escape, Landing};
+use seam::overview::{self, Dir, Escape, Landing, Repaint};
 use seam::winutil;
 use seam::zones::Rect;
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU32, Ordering};
-use std::sync::mpsc::channel;
-use std::sync::{Mutex, MutexGuard};
+use std::sync::{Mutex, MutexGuard, OnceLock};
 use std::time::{Duration, Instant};
 use windows::Win32::Foundation::*;
 use windows::Win32::Graphics::Dwm::*;
@@ -33,16 +32,18 @@ use windows::Win32::Graphics::Gdi::*;
 use windows::Win32::System::Com::{COINIT_APARTMENTTHREADED, CoInitializeEx, CoUninitialize};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::System::Threading::GetCurrentThreadId;
-use windows::Win32::UI::Accessibility::{HCF_HIGHCONTRASTON, HIGHCONTRASTW};
+use windows::Win32::UI::Accessibility::{HCF_HIGHCONTRASTON, HIGHCONTRASTW, NotifyWinEvent};
 use windows::Win32::UI::HiDpi::GetDpiForWindow;
 use windows::Win32::UI::Input::KeyboardAndMouse::*;
 use windows::Win32::UI::WindowsAndMessaging::*;
-use windows::core::{PCWSTR, w};
+use windows::core::{HSTRING, PCWSTR, w};
 
 mod draw;
+mod fonts;
 mod list;
 mod window;
 
+use fonts::text;
 pub use window::show;
 
 /// Moves are waiting for the tray: `take_moves` has them.
@@ -275,6 +276,8 @@ struct State {
     surrogate: Option<u16>,
     /// Wheel turns over a label not yet worth a jump, in WHEEL_DELTA units.
     wheel: i32,
+    /// The name last given to a screen reader, so it hears a change once.
+    spoken: RefCell<String>,
 }
 
 impl State {
@@ -349,8 +352,8 @@ thread_local! {
 static OPEN: AtomicU32 = AtomicU32::new(0);
 /// The overview's thread on its way out, which hasn't ended yet, or 0.
 static CLOSING: AtomicU32 = AtomicU32::new(0);
-/// One thread starts an overview at a time.
-static LAUNCH: Mutex<()> = Mutex::new(());
+/// The tray has asked for an overview whose windows don't exist yet.
+static OPENING: overview::Opening = overview::Opening::new();
 /// Moves for the tray, in order.
 static MOVES: Mutex<Vec<Move>> = Mutex::new(Vec::new());
 
@@ -389,6 +392,18 @@ fn quit() {
         CLOSING.store(GetCurrentThreadId(), Ordering::SeqCst);
         PostQuitMessage(0);
     }
+}
+
+/// Seam is quitting: close the overview and let go of its fonts.
+pub fn shutdown() {
+    close();
+    fonts::release();
+}
+
+/// Milliseconds since the first call, for the opening flag.
+fn now_ms() -> u64 {
+    static START: OnceLock<Instant> = OnceLock::new();
+    START.get_or_init(Instant::now).elapsed().as_millis() as u64
 }
 
 pub fn take_moves() -> Vec<Move> {

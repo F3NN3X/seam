@@ -128,7 +128,7 @@ Set keys for **Rotate windows** and **Reset sizes** on Shortcuts (neither has a 
 
 ## Tray and shortcuts
 
-- [ ] **Menu.** Right-click the tray icon: status line, **Open Seam…**, **Line Up Screens…**, the **Workspaces** menu when there are workspaces, **Tile windows**, **Remap pointer at borders**, **Release pinned windows**, **Quit Seam**.
+- [ ] **Menu.** Right-click the tray icon: status lines, the workspaces of this desk with a mark on the one in use and **Put windows back**, then **Switch back to** the previous one, **Tile windows**, **Free all windows** (only while a screen is tiled) and **Release pinned windows**, then **Line up screens**, **Pause pointer remap**, **Pause Seam** with their shortcuts written beside them, **Overview**, **Open Seam** and **Quit Seam**. See also [The 0.8 Seam window](#the-08-seam-window).
 - [ ] **Left-click, migrated.** With `"tray_click": "line_up"`, left-click opens Line Up. Press Esc.
 - [ ] **Left-click, new install.** With `"tray_click": "open"`, left-click opens the Seam window.
 - [ ] **Line up shortcut.** Press Ctrl+Shift+Alt+L. Line Up opens. Press Esc.
@@ -1011,6 +1011,76 @@ Turn the debug log on, and **Remember folders and pages** on at the bottom of Wo
 - [ ] **Files.** **Open** shows the folder holding `config.json`. **Export…** then **Import…** round-trips your settings, and importing a broken file is refused with nothing changed.
 - [ ] **About.** **Copy diagnostics** puts your version, Windows build, screens and borders on the clipboard, with no window titles or file paths.
 - [ ] **Panel missing.** Rename `seam-settings.exe`, choose **Open Seam…**. A balloon says it's unavailable and Seam keeps running. Rename it back.
+
+## The 0.8 Seam window
+
+Run these on a desk with two or more screens. Back up `config.json` first.
+
+### Look and shell
+
+- [ ] **Mica on.** With Windows' **Transparency effects** on (Settings > Personalization > Colors) and no contrast theme, the window's ground, title bar and sidebar show the wallpaper's tint through them, and cards stay readable. Drag the window over a bright and a dark area: the tint follows.
+- [ ] **Mica off.** Turn **Transparency effects** off with the window open: it turns solid within a moment, with no restart. Turn it back on and Mica returns.
+- [ ] **Title bar.** The title bar is drawn by Seam: **Back**, the mark, "Seam", the command bar and minimize, maximize and close. Drag it to move the window and double-click it to maximize. Hover the maximize button for a second: Windows' Snap Layouts flyout shows, and picking a cell snaps the window. Close, minimize and maximize work, and the window comes back at the same size.
+- [ ] **Sidebar status.** The status card reads "Remap on" with the desk's name and screen count. Pause the remap from the tray: it reads "Remap paused". Press it: Displays opens.
+- [ ] **Pages.** The sidebar has Displays, Zones, Windows and Workspaces, then Shortcuts, General, Help and About. Each page title has a **?** that opens its Help topic.
+- [ ] **Pressed and disabled.** Hold the mouse down on a nav item, a segmented option, a layout tile and a workspace tile: each looks pressed, visibly different from rest, in light and dark. A disabled control, such as **Edge resistance** while the remap is off, is dimmed and says why.
+
+### Command bar
+
+- [ ] **Open.** Press Ctrl+F: the field in the title bar has focus. Type "pause": results open under it in two groups, **Actions** and **Settings**, with a footer naming the keys.
+- [ ] **Run an action.** Down to **Pause Seam** and Enter: Seam pauses, and the tray icon shows the slash. Run it again to resume. **Line up screens** opens Line Up, and Esc closes it.
+- [ ] **Open a setting.** Type "corner" and Enter on the setting: the Windows page opens scrolled to **Open the overview from a corner**. Esc in the field clears it and gives the focus back.
+- [ ] **No match.** Type "zzzz": it says "Nothing matches. Try a shorter word".
+- [ ] **Show changed settings.** Change two settings on Zones, run **Show changed settings** from the bar: only those rows show, under "Showing settings you've changed" with **Show all**. Press **Show all**: everything is back. On a page you haven't changed, it says "Nothing on this page differs from its default".
+
+### Windows page
+
+- [ ] **Where things are.** The Windows page has the Tiling card (with a screen choice), **Put windows back when Seam quits**, the focus and pin borders, pinned windows, **Move and resize from anywhere**, the overview corner, **Where apps open** with **Left alone**, other window managers and **Step aside for games and full-screen apps**. Zones has only layouts and snapping.
+- [ ] **Per-screen tiling.** On a desk with two screens, pick screen 2 in the Tiling card and turn on the switch and a family: only screen 2 tiles, and screen 1 stays as it was.
+- [ ] **Borders.** The focus and pin borders are lists with None, Windows accent or Seam amber, the colours and Custom, each with a dot. Pick Custom: the colour picker opens.
+- [ ] **Move and resize.** The key list has Off, Alt, Win and Ctrl+Alt. The corner list has Off and the four corners, and going to Off and back keeps the corner you had.
+- [ ] **Open it by page.** Run `seam-settings.exe --page windows`: it opens on the Windows page.
+
+### Undo notice
+
+- [ ] **Countdown.** On Workspaces, switch to another workspace while one is in use. One notice shows at the bottom right with **Undo** and a bar that runs down over 8 seconds. Do nothing: it goes. Switch again and press **Undo** before it ends: the first workspace is back, and a second press can't run it twice.
+- [ ] **One at a time.** Do **Update from screen** and, within the 8 seconds, **Use suggested keys** on Shortcuts: the second notice replaces the first. Undo on the second clears only the keys it filled.
+- [ ] **No bar without animations.** Turn off Windows' **Animation effects** (Settings > Accessibility > Visual effects): the notice shows with no countdown bar. Turn it back on.
+- [ ] **No Undo where it can't.** **Put windows back** shows a plain notice with a count. **Import** asks "Replace your settings?" first and offers no Undo.
+
+### New screen
+
+- [ ] **Note and dot.** With `ask_new_desks` on (**Offer to line up new screens** on General), connect a set of screens Seam hasn't seen. Displays says "A screen Seam hasn't seen is connected" with **Line up the new screen**, the sidebar reads "New screen to line up", and the tray icon shows a red dot.
+- [ ] **Gone with the balloon.** Once the tray's balloon about the new screens has shown, the note, the sidebar text and the dot go. Press **Line up the new screen** instead of waiting: Line Up opens.
+
+### Tray icon states
+
+- [ ] **On.** The icon is the Seam mark, and the tooltip says "Remap on".
+- [ ] **Paused.** Choose **Pause Seam**: the mark has a slash, and the tooltip says paused. **Resume Seam** brings it back.
+- [ ] **Needs you.** With a new set of screens (see above), the mark has a red dot ringed in the taskbar's colour. Switch Windows' taskbar between light and dark: the icon follows without a restart.
+- [ ] **Order.** The menu order is the one in [Tray and shortcuts](#tray-and-shortcuts). The active workspace has a mark, and "moved" after it once a window has moved.
+
+### First run
+
+- [ ] **Shows once.** Quit Seam, set `"setup_done": false` in `config.json`, and start Seam. Open the window: a three-step dialog shows with **Line up your screens**, **Pick zone layouts** and **Capture a workspace**, and **Skip setup** and **Do it later** in the footer.
+- [ ] **Steps.** **Start Line Up** opens Line Up for each screen, and the dialog moves on when you finish or cancel it. **Use these layouts** gives each screen the layout you picked. **Capture current windows** captures and shows "Seam is ready".
+- [ ] **Closing.** Press **Skip setup**: `config.json` has `"setup_done": true` and it doesn't show again. Set it to `false` again and close the whole window without answering: it shows again at the next open. Esc and a click outside the dialog set it to `true`.
+- [ ] **Existing users.** Remove the `setup_done` line from `config.json` and restart: the setup doesn't show,.
+
+### Keyboard, text size and contrast
+
+- [ ] **F6.** Press F6 in the window: the focus moves from the title bar to the sidebar to the page and around. Shift+F6 goes back. With a dialog open, it stays in the dialog.
+- [ ] **Lists.** Up and Down move in the sidebar, the workspace list, Help topics, border rows and the app picker. Tab, Space and Enter reach **New empty workspace**, the workspace list and the map's screens.
+- [ ] **Back.** In Help, open a topic, then press Alt+Left or the mouse's back button: the list is back. Back in the title bar does the same.
+- [ ] **Text size 150%.** In Settings > Accessibility > Text size, set 150% and open the window: the text is larger on every page, with nothing cut off on Displays, Zones, Windows, Workspaces, Shortcuts and General. Set it back to 100% afterwards.
+- [ ] **Contrast theme.** Turn on a contrast theme (Settings > Accessibility > Contrast themes, for example Night sky): the window uses the theme's colours, with no Mica, solid outlines, a thicker edge on the chosen workspace and a bar on the chosen border row. Every page reads clearly, and hover and pressed use the highlight colour. Turn it off and the normal look returns.
+- [ ] **Narrator.** With Narrator on, the map's screens and borders are read as buttons with their names, and the workspace delay slider is read with its label and value. Known gaps, not failures: the command bar's highlighted result isn't read as you type, a colour entry with a dot has no name, and Undo notices and dialog titles aren't announced.
+
+### Dates, redraws and open time
+
+- [ ] **Locale dates.** Set Windows' region format to one with a different date order (Settings > Time & language > Language & region, for example English (United States) and then Norwegian). Open the desk menu on Displays, a border's date and About's release date: each follows the region, such as "9 Nov" and "Nov 9". Day-old dates still say "today" and "yesterday".
+- [ ] **Open time.** Quit Seam, run `seam.exe --log`, and open the window. `seam.log` has lines for "app running", "Panel::new" and "first frame" with times. Without `--log` or `SEAM_LOG=1`, no such lines are written.
+- [ ] **No flicker.** With Workspaces open and nothing changing, leave the window for a minute: it doesn't flash. A real change, such as a switch from the tray, updates it at once.
 
 ## Sidebar and Help
 

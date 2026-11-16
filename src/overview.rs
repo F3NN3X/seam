@@ -4,6 +4,7 @@
 //! draws them and moves the windows.
 
 use crate::zones::Rect;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 /// How well a search matches a window, higher is better, or None when some word of
 /// it is in neither the title nor the app's name. Case doesn't count. Each word scores
@@ -278,6 +279,82 @@ pub fn desktop_label(current: bool, name: Option<&str>, place: Option<usize>) ->
         (false, Some(name), _) => name.to_string(),
         (false, None, Some(i)) => format!("Desktop {}", i + 1),
         (false, None, None) => "Another desktop".to_string(),
+    }
+}
+
+/// What a screen reader hears of the overview: the selected window by app and title, or
+/// how many windows are shown when nothing is selected.
+pub fn spoken(selected: Option<(&str, &str)>, shown: usize) -> String {
+    match selected {
+        Some((app, title)) => match (app.trim(), title.trim()) {
+            ("", "") => "Seam overview".to_string(),
+            (app, "") => format!("Seam overview: {app}"),
+            ("", title) => format!("Seam overview: {title}"),
+            (app, title) => format!("Seam overview: {app} - {title}"),
+        },
+        None => match shown {
+            1 => "Seam overview: 1 window".to_string(),
+            n => format!("Seam overview: {n} windows"),
+        },
+    }
+}
+
+/// The places where two lists of the same length differ.
+pub fn changed<T: PartialEq>(before: &[T], after: &[T]) -> Vec<usize> {
+    before.iter().zip(after).enumerate().filter(|(_, (a, b))| a != b).map(|(i, _)| i).collect()
+}
+
+/// What a details slice needs repainted.
+#[derive(Debug, PartialEq, Eq)]
+pub enum Repaint {
+    Nothing,
+    /// Only these windows' tiles.
+    Tiles(Vec<usize>),
+    /// The windows shown changed, so the tiles moved.
+    All,
+}
+
+/// The whole view when the search now keeps other windows or in another order, else just
+/// the tiles of the shown windows whose details changed.
+pub fn repaint(before: &[usize], after: &[usize], changed: &[usize]) -> Repaint {
+    if before != after {
+        return Repaint::All;
+    }
+    let dirty: Vec<usize> = changed.iter().copied().filter(|w| after.contains(w)).collect();
+    if dirty.is_empty() { Repaint::Nothing } else { Repaint::Tiles(dirty) }
+}
+
+/// How long a request to open may stay unanswered before another is let through, in case
+/// the overview's thread died before its windows existed.
+pub const OPENING_LIMIT_MS: u64 = 5_000;
+
+/// Set by the tray when it asks for the overview and cleared by the overview's thread once
+/// its windows exist, so a second request in between is dropped. Holds the time of the
+/// request, in ms from some fixed start, plus one, or 0 when none is out.
+#[derive(Debug, Default)]
+pub struct Opening(AtomicU64);
+
+impl Opening {
+    pub const fn new() -> Self {
+        Self(AtomicU64::new(0))
+    }
+
+    /// Ask to open at `now`. False when a request is already out and not yet past the limit.
+    pub fn begin(&self, now: u64) -> bool {
+        let out = self.0.load(Ordering::SeqCst);
+        if out != 0 && now.saturating_sub(out - 1) < OPENING_LIMIT_MS {
+            return false;
+        }
+        self.0.compare_exchange(out, now + 1, Ordering::SeqCst, Ordering::SeqCst).is_ok()
+    }
+
+    /// The windows exist, or the thread ended without them.
+    pub fn done(&self) {
+        self.0.store(0, Ordering::SeqCst);
+    }
+
+    pub fn is_out(&self) -> bool {
+        self.0.load(Ordering::SeqCst) != 0
     }
 }
 
@@ -570,5 +647,52 @@ mod tests {
         assert_eq!(desktop_label(false, Some("Work"), Some(1)), "Work");
         assert_eq!(desktop_label(false, Some("  "), Some(1)), "Desktop 2");
         assert_eq!(desktop_label(false, None, None), "Another desktop");
+    }
+
+    #[test]
+    fn the_name_read_out_is_the_app_and_title_or_the_count() {
+        assert_eq!(spoken(Some(("Firefox", "Inbox")), 5), "Seam overview: Firefox - Inbox");
+        assert_eq!(spoken(Some(("Firefox", " ")), 5), "Seam overview: Firefox");
+        assert_eq!(spoken(Some(("", "Inbox")), 5), "Seam overview: Inbox");
+        assert_eq!(spoken(Some(("", "")), 5), "Seam overview");
+        assert_eq!(spoken(None, 1), "Seam overview: 1 window");
+        assert_eq!(spoken(None, 0), "Seam overview: 0 windows");
+        assert_eq!(spoken(None, 7), "Seam overview: 7 windows");
+    }
+
+    #[test]
+    fn a_details_slice_repaints_only_the_shown_tiles_that_changed() {
+        assert_eq!(changed(&["a", "b", "c"], &["a", "x", "y"]), vec![1, 2]);
+        assert!(changed(&[1, 2], &[1, 2]).is_empty());
+        assert_eq!(repaint(&[0, 1, 2], &[0, 1, 2], &[]), Repaint::Nothing);
+        assert_eq!(repaint(&[0, 1, 2], &[0, 1, 2], &[1, 2]), Repaint::Tiles(vec![1, 2]));
+        // A window the search leaves out has no tile to repaint.
+        assert_eq!(repaint(&[0, 2], &[0, 2], &[1]), Repaint::Nothing);
+        assert_eq!(repaint(&[0, 2], &[0, 2], &[1, 2]), Repaint::Tiles(vec![2]));
+        // The search keeps other windows, or the same in another order: every tile moved.
+        assert_eq!(repaint(&[0, 1], &[1, 0], &[]), Repaint::All);
+        assert_eq!(repaint(&[0, 1], &[0], &[1]), Repaint::All);
+    }
+
+    #[test]
+    fn a_second_request_while_one_is_opening_is_dropped() {
+        let o = Opening::new();
+        assert!(!o.is_out());
+        assert!(o.begin(0));
+        assert!(o.is_out());
+        assert!(!o.begin(1));
+        assert!(!o.begin(OPENING_LIMIT_MS - 1));
+        o.done();
+        assert!(!o.is_out());
+        assert!(o.begin(2));
+    }
+
+    #[test]
+    fn a_request_older_than_the_limit_is_let_past_in_case_the_thread_died() {
+        let o = Opening::new();
+        assert!(o.begin(100));
+        assert!(!o.begin(100 + OPENING_LIMIT_MS - 1));
+        assert!(o.begin(100 + OPENING_LIMIT_MS));
+        assert!(!o.begin(100 + OPENING_LIMIT_MS + 1));
     }
 }

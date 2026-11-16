@@ -55,6 +55,8 @@ pub enum Event {
     Desktop(Option<String>),
     /// A tiled window took the focus, which scrolls a Scrolling screen to show it.
     Focused(isize),
+    /// A virtual desktop whose trees are stale (`tiling::stale`): it was deleted.
+    Stale(String),
 }
 
 enum Job {
@@ -72,6 +74,8 @@ enum Job {
     Retile,
     /// Say which desktop is in front, even when it is the one said last.
     Look,
+    /// Whether these desktops, each with the windows of its trees, were deleted.
+    Stale(Vec<(String, Vec<isize>)>),
 }
 
 static OWNER: AtomicIsize = AtomicIsize::new(0);
@@ -149,6 +153,14 @@ pub fn foreground(hwnd: isize) {
 /// Tiling turned on: tile again what a tray that ran before had tiled, and learn the desktop in front.
 pub fn retile() {
     let _ = send(Job::Retile);
+}
+
+/// The desktop in front changed: look whether the other desktops with trees, each with
+/// the windows of its trees, are still there. From the tray thread.
+pub fn check_stale(desktops: Vec<(String, Vec<isize>)>) {
+    if !desktops.is_empty() {
+        let _ = send(Job::Stale(desktops));
+    }
 }
 
 /// A workspace switch ended. From the tray thread.
@@ -286,6 +298,21 @@ fn work(jobs: Receiver<Job>) {
                     events.push(Event::Desktop(front.clone()));
                     LOOKED.store(true, Ordering::SeqCst);
                     said = true;
+                }
+                Job::Stale(list) => {
+                    for (desktop, windows) in list {
+                        // A window the shell won't place, as one on every desktop, counts as still there.
+                        let found = |k: &isize| {
+                            let h = hwnd_of(*k);
+                            unsafe { IsWindow(Some(h)) }
+                                .as_bool()
+                                .then(|| desktops.of(h).unwrap_or_else(|| desktop.clone()))
+                        };
+                        let found: Vec<Option<String>> = windows.iter().map(found).collect();
+                        if seam::tiling::stale(&desktop, &found) {
+                            events.push(Event::Stale(desktop));
+                        }
+                    }
                 }
                 Job::Retile => {
                     events.extend(stamped(&mut desktops).into_iter().map(Event::Arrived));

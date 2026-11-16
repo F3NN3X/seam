@@ -41,6 +41,9 @@ impl Engine {
                 }
             }
         }
+        if !first {
+            self.tiled_look_stale(&now);
+        }
         if self.drag.is_some() {
             self.cancel_drag();
         }
@@ -62,6 +65,21 @@ impl Engine {
         }
         // A parked window gone to on this desktop, by Alt+Tab or the taskbar, scrolls into view now.
         self.scroll_focus_waited();
+    }
+
+    /// The desktop in front changed, as it does when one is deleted and Windows moves its
+    /// windows to a neighbour: the worker looks whether each other desktop's trees still
+    /// have a window there (`tiling::stale`). The public API can't list desktops.
+    fn tiled_look_stale(&self, now: &str) {
+        let mut others: Vec<(String, Vec<isize>)> = Vec::new();
+        for t in self.tiling.trees.iter().filter(|t| t.desktop != now && !t.desktop.is_empty()) {
+            let windows = t.all().into_iter().chain(t.resting.iter().map(|(k, ..)| *k));
+            match others.iter_mut().find(|(d, _)| *d == t.desktop) {
+                Some((_, list)) => list.extend(windows),
+                None => others.push((t.desktop.clone(), windows.collect())),
+            }
+        }
+        crate::tiler::check_stale(others);
     }
 
     /// After a drag, and once moves are over: who holds each zone of a tiled screen is
@@ -92,6 +110,8 @@ impl Engine {
                 self.tiled_apply(i);
                 continue;
             }
+            // Undo of a split: the splits before it, which the windows it put back are numbered by.
+            let node = self.tiling.unsplit.take_if(|(s, _)| *s == screen).map_or(node, |(_, before)| before);
             let n = zones::leaf_count(&node);
             let old = self.tiling.trees[i].tree.clone();
             let mut held: Vec<(usize, isize, bool)> = Vec::new();
@@ -163,6 +183,20 @@ impl Engine {
         if changed {
             self.tiled_sync();
         }
+    }
+
+    /// Undo of a split on a tiled screen: its tree takes the splits it had before
+    /// (`before`) while it still has the split's (`after`), by the next `tiled_resync`,
+    /// once Undo's windows have landed. False when the screen isn't tiled, scrolls, or its
+    /// splits changed since.
+    pub(in crate::snap) fn tiled_unsplit(&mut self, screen: &str, before: Node, after: &Node) -> bool {
+        let here = |t: &&Tiled| t.screen == screen && t.desktop == self.tiling.desktop;
+        let Some(t) = self.tiling.trees.iter().find(here).filter(|_| self.tiling_on(screen)) else { return false };
+        if t.strip.is_some() || t.tree.layout() != *after {
+            return false;
+        }
+        self.tiling.unsplit = Some((screen.to_string(), before));
+        true
     }
 
     pub(in crate::snap) fn tiled_dragged(&mut self, screen: &str, tree: &Node) -> bool {

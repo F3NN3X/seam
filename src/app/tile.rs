@@ -298,16 +298,20 @@ pub(super) fn undo_tile(app: &mut App) {
         log::info!("tile screen: too late to undo");
         return;
     }
-    let (mut layout_back, changed) = (false, undo.changed.is_some());
+    let (mut layout_back, changed, mut unsplit) = (false, undo.changed.is_some(), false);
     if let Some(change) = undo.changed {
         let desk = app.cfg.desks.get(&app.sig);
         let now = desk.and_then(|d| d.zones.get(&undo.screen)).and_then(zones::layout_of);
         if desk.is_some() && now == change.now {
             layout_back = set_screen_layout(app, &undo.screen, change.before, false);
+        } else if let (Some(before), Some(after)) = (change.before, change.now) {
+            // A split on a tiled screen changed its tree, not its saved layout: the tree takes its
+            // splits back once the windows have landed, so it is never out of step with them.
+            unsplit = snap::tiling_unsplit(&undo.screen, before.tree, &after.tree);
         }
     }
     // Where the screen kept another layout, the numbers are not the old layout's to give back.
-    snap::rezone(if changed && !layout_back { Vec::new() } else { undo.keep });
+    snap::rezone(if changed && !layout_back && !unsplit { Vec::new() } else { undo.keep });
     // A tiled screen's splits come back before its windows do, so they land in the right tiles.
     // When a handle or a window has changed them since, the windows stay in the tiles they are in.
     if let Some((before, after)) = undo.tree
@@ -338,6 +342,9 @@ pub(super) fn undo_tile(app: &mut App) {
         snap::adhoc_area(id, area);
     }
     snap::place_more(back);
+    if unsplit {
+        snap::tiling_resync();
+    }
     log::info!("tile screen: undone");
 }
 

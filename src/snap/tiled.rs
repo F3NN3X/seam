@@ -87,6 +87,10 @@ pub(super) struct Tiling {
     focus_wait: Option<isize>,
     /// Seam is paused, stepped aside or has zones off, so no window stays parked.
     stood_down: bool,
+    /// Deleted virtual desktops the worker found, for the tray to take out of the settings.
+    stale: Vec<String>,
+    /// A screen whose split was undone, and its splits before it, for the next resync.
+    unsplit: Option<(String, Node)>,
 }
 
 /// A tiled screen as the state shows it.
@@ -111,6 +115,11 @@ pub fn tiling_events() -> bool {
                 Event::Desktop(id) => e.tiled_desktop(id),
                 Event::Focused(hwnd) => e.tiled_focused(hwnd),
                 Event::Refused(why) => e.tiling.refused = Some(why.to_string()),
+                Event::Stale(desktop) => {
+                    if !e.tiling.stale.contains(&desktop) {
+                        e.tiling.stale.push(desktop);
+                    }
+                }
             }
         }
         if log::enabled() {
@@ -159,6 +168,17 @@ pub fn tiling_reset(screen: &str) -> Result<Turned, String> {
 /// False when they aren't the evened ones any more, and nothing changed.
 pub fn tiling_restore(screen: &str, before: Node, after: Node) -> bool {
     with_engine(|e| e.tiled_restore(screen, before, after)).unwrap_or(false)
+}
+
+/// Undo of a split on a tiled screen: its tree takes back the splits it had before, once
+/// Undo's windows land (`tiling_resync`). False when they aren't the split's any more.
+pub fn tiling_unsplit(screen: &str, before: Node, after: &Node) -> bool {
+    with_engine(|e| e.tiled_unsplit(screen, before, after)).unwrap_or(false)
+}
+
+/// The tiled screens follow where the windows are, now or once the moves under way land.
+pub fn tiling_resync() {
+    with_engine(|e| e.tiled_resync(None));
 }
 
 /// Seam is quitting and the user wants the windows back: every tiled screen on every virtual
@@ -236,6 +256,16 @@ unsafe extern "system" fn on_grace(_: HWND, _: u32, id: usize, _: u32) {
             let _ = KillTimer(None, id);
         }
     }
+}
+
+/// The deleted virtual desktops the worker found since this was last asked. Never the
+/// one in front, which is there whatever its windows said.
+pub fn take_stale_desktops() -> Vec<String> {
+    let take = |e: &mut Engine| {
+        let front = e.tiling.known.then(|| e.tiling.desktop.clone());
+        std::mem::take(&mut e.tiling.stale).into_iter().filter(|d| Some(d) != front.as_ref()).collect()
+    };
+    with_engine(take).unwrap_or_default()
 }
 
 /// Why the Float or tile key's window wasn't tiled, once.
@@ -359,7 +389,8 @@ impl Engine {
             self.sync_overlay();
         }
         self.sync_dividers();
-        let resting: HashSet<isize> = self.tiling.trees.iter().flat_map(|t| t.resting.iter().map(|(h, ..)| *h)).collect();
+        let resting: HashSet<isize> =
+            self.tiling.trees.iter().flat_map(|t| t.resting.iter().map(|(h, ..)| *h)).collect();
         let tiled = self.tiling.trees.iter().flat_map(Tiled::all).chain(resting.iter().copied()).collect();
         crate::tiler::set_tiled(tiled, resting);
     }

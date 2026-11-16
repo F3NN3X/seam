@@ -1,7 +1,7 @@
 //! Workspaces: save which apps are where on a desk, and switch between them.
 
 use crate::icons;
-use crate::pages::{app_picker, workspace_editor};
+use crate::pages::{app_picker, shortcuts, workspace_editor};
 use crate::panel::{Panel, error_text, refusal};
 use crate::theme::tokens::{self, text_style};
 use crate::theme::{Palette, palette};
@@ -112,6 +112,7 @@ pub fn finish_naming(panel: &mut Panel, window: &mut Window, cx: &mut Context<Pa
 pub fn capture(panel: &mut Panel, window: &mut Window, cx: &mut Context<Panel>) {
     panel.call("workspace.capture", json!({}), window, cx, |panel, result, window, cx| match result {
         Ok(done) => {
+            shortcuts::stop_recording(panel);
             panel.workspace = done["id"].as_str().map(String::from);
             start_naming(panel, cx);
             panel.reload_config(window, cx);
@@ -153,9 +154,11 @@ fn duplicate(panel: &mut Panel, ws: &Workspace, window: &mut Window, cx: &mut Co
     let copy = Workspace { id: workspace::new_id(&ids), name: name.clone(), hotkey: None, ..ws.clone() };
     let mut list = before.clone();
     list.push(workspace::to_value(&copy));
+    shortcuts::stop_recording(panel);
     panel.workspace = Some(copy.id.clone());
     save(panel, list, window, cx);
     let undo = move |panel: &mut Panel, window: &mut Window, cx: &mut Context<Panel>| {
+        shortcuts::stop_recording(panel);
         panel.workspace = None;
         save(panel, before.clone(), window, cx)
     };
@@ -168,6 +171,7 @@ fn create_empty(panel: &mut Panel, window: &mut Window, cx: &mut Context<Panel>)
     let names: Vec<String> = existing.iter().map(|w| w.name.clone()).collect();
     let ids: Vec<String> = existing.iter().map(|w| w.id.clone()).collect();
     let created = Workspace { id: workspace::new_id(&ids), name: workspace::next_name(&names), ..Workspace::default() };
+    shortcuts::stop_recording(panel);
     panel.workspace = Some(created.id.clone());
     list.push(workspace::to_value(&created));
     save(panel, list, window, cx);
@@ -188,6 +192,7 @@ fn delete(panel: &mut Panel, id: &str, window: &mut Window, cx: &mut Context<Pan
     let before = saved(panel);
     let name = workspace::list(&before).into_iter().find(|w| w.id == id).map(|w| w.name).unwrap_or_default();
     let rest = before.iter().filter(|v| workspace::parse(v).is_none_or(|w| w.id != id)).cloned().collect();
+    shortcuts::stop_recording(panel);
     panel.workspace = None;
     save(panel, rest, window, cx);
     panel.offer_undo(
@@ -262,6 +267,7 @@ fn add_imported(panel: &mut Panel, file: Export, window: &mut Window, cx: &mut C
     let ids: Vec<String> = existing.iter().map(|w| w.id.clone()).collect();
     let imported = workspace::import(file, &screen_infos(panel), &names, &ids);
     let note = Notification::new().message(format!("Imported {}", imported.name));
+    shortcuts::stop_recording(panel);
     panel.workspace = Some(imported.id.clone());
     list.push(workspace::to_value(&imported));
     save(panel, list, window, cx);
@@ -347,16 +353,19 @@ fn put_back(panel: &Panel, count: usize, window: &mut Window, cx: &mut Context<P
     });
 }
 
-/// Switch to the workspace. Undo goes back to the one before.
+/// Switch to the workspace. Undo goes back to the one that was in use, when there was another.
 fn switch_to(panel: &Panel, ws: &Workspace, window: &mut Window, cx: &mut Context<Panel>) {
     let name = ws.name.clone();
+    let before = panel.state.as_ref().and_then(|s| s.workspace.as_ref()).map(|w| w.id.clone());
+    let undoable = before.is_some_and(|id| id != ws.id);
     panel.call("workspace.switch", json!({ "id": ws.id }), window, cx, move |panel, result, window, cx| match result {
-        Ok(_) => {
+        Ok(_) if undoable => {
             let undo = |panel: &mut Panel, window: &mut Window, cx: &mut Context<Panel>| {
                 panel.command("workspace.switch_back", json!({}), window, cx)
             };
             panel.offer_undo(format!("Switched to {name}"), undo, window, cx);
         }
+        Ok(_) => window.push_notification(Notification::new().message(format!("Switched to {name}")), cx),
         Err(e) => window.push_notification(refusal("Seam can't do that", &error_text(&e)), cx),
     });
 }

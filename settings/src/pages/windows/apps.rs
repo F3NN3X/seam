@@ -194,7 +194,7 @@ fn set_float(panel: &mut Panel, at: usize, on: bool, window: &mut Window, cx: &m
 fn more_menu(
     id: (&'static str, usize),
     title: &str,
-    edit: Option<usize>,
+    edit: Option<String>,
     remove: Removing,
     cx: &mut Context<Panel>,
 ) -> AnyElement {
@@ -204,11 +204,12 @@ fn more_menu(
         .icon(Icon::new(assets::IconName::Ellipsis))
         .accessibility_label(format!("More for {title}"))
         .dropdown_menu(move |mut menu, _, _| {
-            if let Some(at) = edit {
+            if let Some(app) = edit.clone() {
                 let weak = weak.clone();
                 menu = menu.item(PopupMenuItem::new("Edit").on_click(move |_, _, cx| {
+                    let app = app.clone();
                     let _ = weak.update(cx, |panel, cx| {
-                        panel.rule_open = if panel.rule_open == Some(at) { None } else { Some(at) };
+                        panel.rule_open = if panel.rule_open.as_ref() == Some(&app) { None } else { Some(app) };
                         cx.notify();
                     });
                 }));
@@ -256,10 +257,10 @@ fn rule_rows(
     let p = palette(cx);
     let title = app_title(rule);
     let remove: Removing = Rc::new(move |panel, window, cx| self::remove(panel, at, window, cx));
-    let more = more_menu(("rule-more", at), &title, Some(at), remove, cx);
+    let more = more_menu(("rule-more", at), &title, Some(icons::identity(rule)), remove, cx);
     let main = app_row(app_icon(rule, &panel.icons, p), title, rule_line(rule, screens), more, p);
     let mut rows = vec![main.into_any_element()];
-    if panel.rule_open == Some(at) {
+    if panel.rule_open.as_ref() == Some(&icons::identity(rule)) {
         rows.extend(details(panel, at, rule, screens, window, cx));
     }
     rows
@@ -353,7 +354,7 @@ fn left_alone_row(i: usize, name: String, p: Palette, cx: &mut Context<Panel>) -
         }
     });
     let more = more_menu(("never-manage", i), &name, None, remove, cx);
-    app_row(icon, name, "Workspaces leave it alone".into(), more, p).into_any_element()
+    app_row(icon, name, "Seam doesn't snap, move or capture its windows".into(), more, p).into_any_element()
 }
 
 /// The card: a row for each rule and each app left alone, then "Add an app".
@@ -378,5 +379,13 @@ pub fn section_view(panel: &mut Panel, window: &mut Window, cx: &mut Context<Pan
     } else {
         rows.push(div().flex().px(px(tokens::SPACE_16)).py(px(tokens::SPACE_12)).child(button).into_any_element());
     }
-    section("Where apps open", card(rows, p), p)
+    let hint = ui::description(
+        "Choose Never include this app on a workspace's app to add one to the apps Seam leaves alone",
+        p,
+    );
+    let lonely = panel.config.zones.exclude.is_empty();
+    let body = card(rows, p).within(false, move |group| {
+        div().flex().flex_col().gap(px(tokens::SPACE_8)).child(group).children(lonely.then_some(hint))
+    });
+    section("Where apps open", body, p)
 }

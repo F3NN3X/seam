@@ -48,7 +48,7 @@ fn types_characters(combo: &str) -> bool {
     combo.contains("Ctrl") && combo.contains("Alt") && !combo.contains("Shift") && printable
 }
 
-fn stop_recording(panel: &mut Panel) {
+pub fn stop_recording(panel: &mut Panel) {
     panel.recording = None;
     panel.recorder = None;
 }

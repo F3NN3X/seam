@@ -75,7 +75,8 @@ pub(super) fn colour_select(
     let select = ui::select(format!("select-{field}"), title, options(&chosen), selected, WIDTH, cx, choose);
     // The picker's own button sits under the Select, unseen, so its popover opens from there.
     let trigger = picker.read(cx).is_open().then(|| {
-        let picker = ColorPicker::new(picker).anchor(Anchor::TopLeft).accessibility_label(title);
+        let picker =
+            ColorPicker::new(picker).anchor(Anchor::TopLeft).accessibility_label(format!("Custom colour for {title}"));
         div().absolute().left_0().bottom_0().w(px(tokens::SPACE_4)).h(px(tokens::SPACE_4)).opacity(0.).child(picker)
     });
     div().relative().child(select).children(trigger).into_any_element()

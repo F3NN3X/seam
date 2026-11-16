@@ -112,8 +112,8 @@ pub struct Panel {
     pub disclosed: HashSet<&'static str>,
     /// The screen whose zones the Zones page shows, as an index into `mons`.
     pub zone_screen: usize,
-    /// The Where apps open rule whose details are open, by its place in the saved list.
-    pub rule_open: Option<usize>,
+    /// The Where apps open rule whose details are open, by the app's identity.
+    pub rule_open: Option<String>,
     /// "Show all screens" under Your layouts: every custom layout, not only those for
     /// the screen. Kept while the panel is open, not saved.
     pub all_layouts: bool,

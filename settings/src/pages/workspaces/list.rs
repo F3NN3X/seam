@@ -2,6 +2,7 @@
 
 use super::app_title;
 use crate::icons::{self, Icons};
+use crate::pages::shortcuts;
 use crate::panel::Panel;
 use crate::theme::Palette;
 use crate::theme::tokens::{self, text_style};
@@ -139,6 +140,7 @@ pub(super) fn item(
         .children(meta)
         .child(icon_strip(i, ws, icons, p))
         .on_click(cx.listener(move |panel, _, _, cx| {
+            shortcuts::stop_recording(panel);
             panel.workspace = Some(id.clone());
             panel.naming = false;
             panel.editing.expanded = None;

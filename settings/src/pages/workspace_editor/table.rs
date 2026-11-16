@@ -231,13 +231,17 @@ fn more_menu(ws: &Workspace, row: &AppRow, merged: Merge, title: &str, cx: &mut 
                         update_rows(panel, &id, &windows, note, window, cx, |rule| rule.launch = !starts);
                     });
                 }))
-                .item(PopupMenuItem::new("Start order details…").on_click(move |_, _, cx| {
-                    let this = Some((details_id.clone(), first));
-                    let _ = details.update(cx, |panel, cx| {
-                        panel.editing.expanded = if panel.editing.expanded == this { None } else { this };
-                        cx.notify();
-                    });
-                }));
+                .item(
+                    PopupMenuItem::new(one_window("Start order details…", merged))
+                        .disabled(merged == Merge::Merged)
+                        .on_click(move |_, _, cx| {
+                            let this = Some((details_id.clone(), first));
+                            let _ = details.update(cx, |panel, cx| {
+                                panel.editing.expanded = if panel.editing.expanded == this { None } else { this };
+                                cx.notify();
+                            });
+                        }),
+                );
             // Several windows can be shown one by one, and shown as one again.
             let label = match merged {
                 Merge::Merged => Some("Edit each window"),
@@ -262,10 +266,14 @@ fn more_menu(ws: &Workspace, row: &AppRow, merged: Merge, title: &str, cx: &mut 
                 sticky,
             ));
             let (now, now_here) = (weak.clone(), here.clone());
-            menu = menu.item(PopupMenuItem::new("Use where it is now").on_click(move |_, window, cx| {
-                let ws = now_here.clone();
-                let _ = now.update(cx, |panel, cx| where_it_is(panel, &ws, first, window, cx));
-            }));
+            menu = menu.item(
+                PopupMenuItem::new(one_window("Use where it is now", merged))
+                    .disabled(merged == Merge::Merged)
+                    .on_click(move |_, window, cx| {
+                        let ws = now_here.clone();
+                        let _ = now.update(cx, |panel, cx| where_it_is(panel, &ws, first, window, cx));
+                    }),
+            );
             if excludable {
                 let (never, id, windows) = (weak.clone(), id.clone(), windows.clone());
                 menu = menu.item(PopupMenuItem::new("Never include this app").on_click(move |_, window, cx| {
@@ -280,6 +288,14 @@ fn more_menu(ws: &Workspace, row: &AppRow, merged: Merge, title: &str, cx: &mut 
             }))
         })
         .into_any_element()
+}
+
+/// A menu entry that acts on one window, which a merged row can't say: it names the way out.
+fn one_window(label: &str, merge: Merge) -> String {
+    match merge {
+        Merge::Merged => format!("{label} (use Edit each window first)"),
+        _ => label.to_string(),
+    }
 }
 
 fn pin_words(bit: usize) -> &'static str {
@@ -341,12 +357,14 @@ fn name_cell(ws: &Workspace, row: &AppRow, title: &str, state: Option<RowState>,
 
 /// What dropping a row on another row, or a group's header, does: reorder within a screen, or
 /// send the app to another.
-fn dropped(panel: &mut Panel, drag: &DragRow, target: (usize, &str), window: &mut Window, cx: &mut Context<Panel>) {
+fn dropped(panel: &mut Panel, drag: &DragRow, target: (&[usize], &str), window: &mut Window, cx: &mut Context<Panel>) {
     let Some(ws) = all(panel).into_iter().find(|w| w.id == drag.workspace) else { return };
     let Some(moving) = drag.windows.first().and_then(|i| ws.windows.get(*i)) else { return };
-    let (at, screen) = target;
+    let (row, screen) = target;
     if moving.monitor == screen {
-        let after = drag.windows.first().is_some_and(|i| *i < at);
+        // Going down, it lands after the target row's last window, so never inside a merged row.
+        let after = drag.windows.first().zip(row.first()).is_some_and(|(from, to)| from < to);
+        let Some(at) = (if after { row.last() } else { row.first() }).copied() else { return };
         move_rows(panel, &drag.workspace, &drag.windows, (at, after), window, cx);
         return;
     }
@@ -363,7 +381,7 @@ fn group_head(group: &Group, screens: &[Screen], ws: &Workspace, p: Palette, cx:
         None => ("Screen not connected".to_string(), model_of(&group.monitor)),
     };
     let (monitor, dropping) = (group.monitor.clone(), ws.id.clone());
-    let at = group.rows.first().and_then(|r| r.windows.first()).copied().unwrap_or_default();
+    let at = group.rows.first().map(|r| r.windows.clone()).unwrap_or_default();
     div()
         .id(ElementId::Name(format!("group-{}", group.monitor).into()))
         .flex()
@@ -377,7 +395,7 @@ fn group_head(group: &Group, screens: &[Screen], ws: &Workspace, p: Palette, cx:
         .drag_over::<DragRow>(move |d, _, _, _| d.bg(p.surface_raised))
         .on_drop(cx.listener(move |panel, drag: &DragRow, window, cx| {
             if drag.workspace == dropping {
-                dropped(panel, drag, (at, monitor.as_str()), window, cx);
+                dropped(panel, drag, (&at, monitor.as_str()), window, cx);
             }
         }))
         .into_any_element()
@@ -427,7 +445,7 @@ fn app_row(
         .child(div().flex().flex_none().justify_end().w(px(MORE_WIDTH)).child(more_menu(ws, row, merge, &title, cx)));
 
     let (keys, dropped_on, monitor) = (id.clone(), id, group.monitor.clone());
-    let moving = row.windows.clone();
+    let (moving, target) = (row.windows.clone(), row.windows.clone());
     let last = ws.windows.len() - 1;
     let mut body = div()
         .id(("ws-row", first))
@@ -453,7 +471,7 @@ fn app_row(
         .drag_over::<DragRow>(move |d, _, _, _| d.bg(p.surface_raised))
         .on_drop(cx.listener(move |panel, drag: &DragRow, window, cx| {
             if drag.workspace == dropped_on {
-                dropped(panel, drag, (first, monitor.as_str()), window, cx);
+                dropped(panel, drag, (&target, monitor.as_str()), window, cx);
             }
         }))
         .child(main);

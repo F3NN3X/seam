@@ -44,6 +44,7 @@ impl Panel {
     }
 
     fn show_now(&mut self, page: Page, reveal: Option<&'static str>, window: &mut Window, cx: &mut Context<Self>) {
+        pages::shortcuts::stop_recording(self);
         self.page = page;
         self.changed_only = false;
         if page == Page::Workspaces {

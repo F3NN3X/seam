@@ -67,6 +67,8 @@ pub fn run() {
         };
 
         APP.with(|a| *a.borrow_mut() = Some(new_app(hwnd, cfg)));
+        // A Seam that crashed may have left Scrolling's parked windows off every screen.
+        snap::tiling_unstrand(&monitors::enumerate());
         start_services(hwnd);
         open_for_launch(hwnd, line_up, updated_from.as_deref(), has_flag("--tray-only"));
 

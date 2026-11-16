@@ -130,6 +130,7 @@ A stack puts several windows in one zone, one on top, and a key brings the next 
 - **How it shares the screen.** Pick a family:
   - **Smart** gives a new window a share of the largest window's space, split along its longer side.
   - **Columns**, **Main + stack** and **Grid** share the screen evenly in that shape. Main + stack keeps the main window's share when you drag its handle.
+  - **Scrolling** puts each new window in a column on a strip that can be wider than the screen, half the screen wide, after the focused one. The screen shows whole columns from one column's left edge; the others wait outside every screen, so none shows on the screen next to it, and they are still in Alt+Tab, the taskbar and the overview. Going to one, by any of those, scrolls it into view. **Scroll left** and **Scroll right** focus the next column and scroll to it, **Move column left** and **Move column right** swap the focused column with its neighbour, and **Column width** steps it through a third, a half, two thirds and the full screen (no keys until you set them). Win+wheel over a Scrolling screen scrolls it a column at a time. An app that moves a waiting window back onto a screen floats there. While Seam is paused, steps aside or has zones off, when a screen is plugged in or out, when Scrolling turns off and when Seam quits, the waiting windows come back onto their screen. After a crash they come back the next time Seam starts. Rotate windows and Reset sizes don't apply to it.
 - **Gaps close.** A window you close leaves a gap the others fill. A minimized window's space waits 600 ms, then closes too, and restoring the window gives it its space back, or a share. Windows minimized together, as by Win+D, keep their spaces until they come back, or for 30 seconds with none back.
 - **Too big for its share.** A window that can't shrink that far joins a stack in that space, and gets a share of its own once there's room.
 - **Dragging works as with any zones.** Drop in the middle of a window to swap, or press S to stack. Drop on its edge to split its space, and drag a gap's handle to resize both sides.
@@ -140,7 +141,7 @@ A stack puts several windows in one zone, one on top, and a key brings the next 
 - **Put windows back when Seam quits** is a switch under the screen's row, off by default. With it on, Quit Seam frees every tiled screen on every virtual desktop first, as Free all windows does, and waits up to a second for the windows to move. An update, a restart, a crash, a sign-out or a shutdown keeps the arrangement, the same rule as pins.
 - **When nothing moves.** Nothing moves while Seam is paused or steps aside for a full-screen app, while zones are off, or during a workspace switch. The gaps close afterwards, and windows that opened during a switch are tiled once it ends, except those the switch placed.
 - **Per virtual desktop.** Each virtual desktop keeps its own arrangement, so tiling one never moves windows on another. A restart of Seam tiles the windows again. **Save from windows** keeps an arrangement as a layout.
-- **In the API:** `tiling.set`, `tiling.free`, and `tiling` in the state.
+- **In the API:** `tiling.set`, `tiling.free`, `tiling.scroll`, and `tiling` in the state.
 
 ### Overview
 
@@ -403,6 +404,8 @@ Yes, through the [local API](docs/api.md), which is what the Stream Deck plugin 
 | S (while zones show in a drag) | Stack the window on the one in the zone instead of swapping |
 | None until you set one | **Pause Seam**, **Show overview**, **Rotate windows**, **Reset sizes**, swap, grow, shrink, two thirds, tile, **Quick layout**, **Fit group to screen**, **Size menu**, next and previous zone, **Next window in stack**, **Previous window in stack**, **Float or tile this window**, **Free all windows**, the three pin keys, one capture key, **Snap back to this workspace**, **Switch back to the previous workspace**, **Save windows to the active workspace**, **Focus on this window**, **Spotlight**, and one key per workspace |
 | None until you set one, per number | **Add window to workspace 1** to **9**: the focused window joins that workspace of the desk, in list order |
+| None until you set one | **Scroll left**, **Scroll right**, **Move column left**, **Move column right** and **Column width**, on a Scrolling screen |
+| Win+wheel (over a Scrolling screen) | Scroll the strip a column at a time |
 
 Set these on the Shortcuts page. Ctrl+Shift+Alt plus a number is a good choice for workspaces, since Ctrl+Alt alone types characters on many keyboards.
 
@@ -462,6 +465,7 @@ This builds the tray app, `target\release\seam.exe`. To include the settings pan
 - Close only asks. Apps with unsaved work will prompt, and those windows stay open.
 - The overview can't move a window to another virtual desktop, because Windows' public interface only lets an app move its own windows there. It can take you to that desktop.
 - Smart tiling and stacks leave windows of apps running as administrator alone, since Seam can't move or mark them.
+- If Seam crashes or is ended from Task Manager while Scrolling has windows waiting off-screen, they stay there until Seam starts again, which brings them back.
 - The tray icon is drawn at runtime.
 
 ## License

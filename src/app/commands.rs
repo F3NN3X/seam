@@ -108,6 +108,10 @@ pub(super) fn run_command(app: &mut App, queued: Queued) {
             tiling::free_tiling(app, number, Some(reply));
             return;
         }
+        Command::TilingScroll { number, left } => {
+            tiling::scroll(app, number, left, Some(reply));
+            return;
+        }
         Command::ScreenRotate { number, back } => {
             turn::start_turn(app, Verb::Rotate, number, !back, Some(reply));
             return;

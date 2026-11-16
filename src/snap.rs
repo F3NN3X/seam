@@ -50,8 +50,9 @@ pub use stacks::{
 };
 pub use swap::{WM_APP_SWAP_LOOK, look_ready};
 pub use tiled::{
-    Turned, is_tiled, take_tiling_refused, tiled, tiled_dragged, tiling_desktop, tiling_events, tiling_float,
-    tiling_free, tiling_free_for_quit, tiling_reset, tiling_restore, tiling_rotate, tiling_switch_ended,
+    Turned, is_tiled, take_tiling_refused, tiled, tiled_dragged, tiling_column, tiling_desktop, tiling_events,
+    tiling_float, tiling_free, tiling_free_for_quit, tiling_reset, tiling_restore, tiling_rotate, tiling_scroll,
+    tiling_switch_ended, tiling_unpark_for_quit, tiling_unstrand,
 };
 
 /// A window the tray couldn't move, probably because it runs as administrator.
@@ -347,9 +348,13 @@ pub fn update(owner: HWND, cfg: &Config, sig: &str, mons: &[Mon], aside: Option<
     // The worker reads opens and restores only while they can be tiled.
     crate::tiler::configure(owner.0 as isize, exclude.to_vec(), tiles && cfg.zones.enabled);
     crate::wm::tiling(tiles);
+    // Paused, stepped aside or zones off, nothing would scroll a parked window back into view.
+    let paused = matches!(crate::standby::reason(), Some(crate::standby::Standby::Paused));
+    let stood_down = !cfg.zones.enabled || aside.is_some() || paused;
     with_engine(|e| {
         // A tiled screen's zones are its tree, in place of its own layout.
         e.tiling_config(tiling);
+        e.scroll_standing(stood_down);
         let screens = e.with_tiled(screens);
         // A change that isn't about zones mustn't cut a drag short.
         let same = e.owner == owner.0 as isize
@@ -366,6 +371,7 @@ pub fn update(owner: HWND, cfg: &Config, sig: &str, mons: &[Mon], aside: Option<
         }
         e.cancel_drag();
         let margins_changed = e.screens.iter().map(|s| s.margins).ne(screens.iter().map(|s| s.margins));
+        let moved = e.screens.iter().map(|s| (&s.id, s.bounds)).ne(screens.iter().map(|s| (&s.id, s.bounds)));
         e.owner = owner.0 as isize;
         e.enabled = cfg.zones.enabled;
         e.aside = aside.map(String::from);
@@ -375,6 +381,10 @@ pub fn update(owner: HWND, cfg: &Config, sig: &str, mons: &[Mon], aside: Option<
         e.drag_size = drag_size;
         e.alt_keys = alt_keys;
         e.screens = screens;
+        // A screen went, came or moved: parked windows come back first, then park again below.
+        if moved {
+            e.scroll_screens_changed();
+        }
         // An ad-hoc group is for a screen with no zones, as it was when it was made.
         e.adhoc_screens_changed();
         if !e.settings.refit || e.aside.is_some() || e.standing_by {

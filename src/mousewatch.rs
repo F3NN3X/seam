@@ -1,11 +1,12 @@
 //! Where the pointer goes on the desk: resting it in an outer corner opens the
-//! overview. A low-level mouse hook on a thread of its own (the D204 pattern), in only
-//! while something wants it. It never swallows anything: the callback reads atomics and
-//! the buttons, keeps the rest's state and posts, and the thread times the rest. A use
-//! that needs the pointer later adds its own want to `configure`, and the hook is in
-//! while any is. `src/hook.rs` is left alone. While it is in, the thread wakes for a
-//! rest's timer and once a minute to look whether Windows took the hook out, and for
-//! nothing else.
+//! overview, and Win+wheel over a Scrolling screen scrolls its strip. A low-level mouse
+//! hook on a thread of its own (the D204 pattern), in only while something wants it.
+//! The callback reads atomics, the buttons and the Win keys, keeps the rest's and the
+//! wheel's state and posts, and the thread times the rest. It swallows only a wheel
+//! turned with Win held over a Scrolling screen. A use that needs the pointer later adds
+//! its own want to `configure`, and the hook is in while any is. `src/hook.rs` is left
+//! alone. While it is in, the thread wakes for a rest's timer, for a Win+wheel's key tap,
+//! and once a minute to look whether Windows took the hook out, and for nothing else.
 
 use crate::log;
 use seam::desk::Mon;
@@ -27,6 +28,9 @@ use rules::{Corner, Rest, Step};
 
 /// The pointer rested in the corner: open the overview.
 pub const WM_APP_CORNER: u32 = WM_APP + 40;
+/// Win+wheel over a Scrolling screen, one column's worth: wparam the way and when (`wheel_of`),
+/// lparam the point, x low and y high.
+pub const WM_APP_WHEEL: u32 = WM_APP + 41;
 
 /// To the hook's thread: look at the rest again in wparam milliseconds.
 const MSG_WAIT: u32 = WM_APP + 1;
@@ -34,6 +38,12 @@ const MSG_WAIT: u32 = WM_APP + 1;
 const MSG_WAKE: u32 = WM_APP + 2;
 /// The hook's thread looks whether Windows took the hook out.
 const MSG_CHECK: u32 = WM_APP + 3;
+/// The hook's thread taps a key no app uses, so letting go of Win after a Win+wheel opens no Start.
+const MSG_TAP: u32 = WM_APP + 4;
+/// One notch of a wheel. A touchpad's smaller steps add up to one.
+const NOTCH: i32 = 120;
+/// How often the hook's thread looks whether Win came up after a tap, so the next press gets its own.
+const WIN_UP_MS: u32 = 30;
 /// How often the hook's thread looks, while it is in.
 const CHECK_MS: u32 = 60_000;
 /// Corners kept for the hook, one per screen at most. Past this many screens, the rest are left out.
@@ -46,6 +56,9 @@ static OWNER: AtomicIsize = AtomicIsize::new(0);
 /// at worst a mix for one move during a display change.
 static SPOTS: [[AtomicI32; 4]; MAX_SPOTS] = [const { [const { AtomicI32::new(0) }; 4] }; MAX_SPOTS];
 static COUNT: AtomicUsize = AtomicUsize::new(0);
+/// The Scrolling screens, left, top, right and bottom, and how many, written the same way.
+static WHEEL: [[AtomicI32; 4]; MAX_SPOTS] = [const { [const { AtomicI32::new(0) }; 4] }; MAX_SPOTS];
+static WHEEL_COUNT: AtomicUsize = AtomicUsize::new(0);
 /// Something wants the hook.
 static ON: AtomicBool = AtomicBool::new(false);
 /// Counts starts and stops: a hook whose generation is gone goes.
@@ -59,6 +72,10 @@ thread_local! {
     static REST: Cell<Rest> = const { Cell::new(Rest::Away) };
     /// Calls of the hook on this thread, to tell whether Windows took it out.
     static CALLS: Cell<u64> = const { Cell::new(0) };
+    /// The wheel turned with Win held and not yet a notch, so a touchpad scrolls a column a notch.
+    static TURNED: Cell<i32> = const { Cell::new(0) };
+    /// A Start-suppressing tap was asked for while Win is down; it clears when Win comes up.
+    static TAPPED: Cell<bool> = const { Cell::new(false) };
 }
 
 /// The spots of the chosen corner on this desk: the screens' outer corners only, each
@@ -77,8 +94,9 @@ fn dpi_of(r: Rect) -> u32 {
 }
 
 /// Put the hook in or take it out. `corner` is where a rest opens the overview, empty
-/// while that is off or Seam stands by. Cheap when nothing changed.
-pub fn configure(owner: isize, corner: &[Spot]) {
+/// while that is off or Seam stands by; `wheel` the screens Win+wheel scrolls, empty
+/// while none does. Cheap when nothing changed.
+pub fn configure(owner: isize, corner: &[Spot], wheel: &[Rect]) {
     OWNER.store(owner, Ordering::SeqCst);
     COUNT.store(0, Ordering::SeqCst);
     for (slot, spot) in SPOTS.iter().zip(corner) {
@@ -87,7 +105,25 @@ pub fn configure(owner: isize, corner: &[Spot]) {
         }
     }
     COUNT.store(corner.len().min(MAX_SPOTS), Ordering::SeqCst);
-    let on = !corner.is_empty();
+    set_wheel(wheel);
+}
+
+/// The screens Win+wheel scrolls now, those scrolling on the virtual desktop in front, kept
+/// apart from the corner so a desktop switch changes only these. Puts the hook in or takes
+/// it out when that changes what is wanted. Cheap when nothing changed.
+pub fn set_wheel(wheel: &[Rect]) {
+    WHEEL_COUNT.store(0, Ordering::SeqCst);
+    for (slot, r) in WHEEL.iter().zip(wheel) {
+        for (cell, value) in slot.iter().zip([r.left, r.top, r.right, r.bottom]) {
+            cell.store(value, Ordering::SeqCst);
+        }
+    }
+    WHEEL_COUNT.store(wheel.len().min(MAX_SPOTS), Ordering::SeqCst);
+    want(COUNT.load(Ordering::SeqCst) > 0 || !wheel.is_empty());
+}
+
+/// The hook in or out, as `on` says.
+fn want(on: bool) {
     if ON.swap(on, Ordering::SeqCst) == on {
         // Still on: the hook's thread looks whether Windows took the hook out.
         let open = OPEN.load(Ordering::SeqCst);
@@ -114,6 +150,7 @@ pub fn configure(owner: isize, corner: &[Spot]) {
 pub fn stop() {
     ON.store(false, Ordering::SeqCst);
     COUNT.store(0, Ordering::SeqCst);
+    WHEEL_COUNT.store(0, Ordering::SeqCst);
     WANTED.fetch_add(1, Ordering::SeqCst);
     let open = OPEN.swap(0, Ordering::SeqCst);
     if open != 0 {
@@ -152,10 +189,21 @@ fn run(generation: u64) {
                     let check = SetTimer(None, 0, CHECK_MS, None);
                     // The rest's timer, or 0 while none runs.
                     let mut wait = 0;
+                    // The timer that watches for Win coming up after a tap, or 0.
+                    let mut win_up = 0;
                     let mut seen = (CALLS.get(), cursor());
                     while WANTED.load(Ordering::SeqCst) == generation && GetMessageW(&mut msg, None, 0, 0).as_bool() {
                         let timer = msg.message == WM_TIMER && msg.hwnd.is_invalid();
-                        if msg.message == MSG_WAIT {
+                        if msg.message == MSG_TAP {
+                            crate::altdrag::tap();
+                            win_up = SetTimer(None, win_up, WIN_UP_MS, None);
+                        } else if timer && win_up != 0 && msg.wParam.0 == win_up {
+                            if !win_held() {
+                                let _ = KillTimer(None, win_up);
+                                win_up = 0;
+                                TAPPED.set(false);
+                            }
+                        } else if msg.message == MSG_WAIT {
                             // The same id puts the timer back rather than start another.
                             wait = SetTimer(None, wait, msg.wParam.0 as u32, None);
                         } else if timer && wait != 0 && msg.wParam.0 == wait {
@@ -222,14 +270,71 @@ fn in_corner(pt: POINT) -> bool {
     rules::in_corner(SPOTS[..count].iter().map(spot), (pt.x, pt.y))
 }
 
-/// Follow the pointer in and out of the corner, and have the thread time a rest.
-/// Everything passes through.
+/// Whether the point is over a Scrolling screen, from the atomics.
+fn over_scrolling(pt: POINT) -> bool {
+    let count = WHEEL_COUNT.load(Ordering::Relaxed).min(MAX_SPOTS);
+    WHEEL[..count].iter().any(|s| {
+        let [left, top, right, bottom] = [0, 1, 2, 3].map(|edge| s[edge].load(Ordering::Relaxed));
+        pt.x >= left && pt.x < right && pt.y >= top && pt.y < bottom
+    })
+}
+
+/// Either Win key is down.
+fn win_held() -> bool {
+    [VK_LWIN, VK_RWIN].into_iter().any(|vk| unsafe { GetAsyncKeyState(i32::from(vk.0)) } < 0)
+}
+
+/// A post's wparam: the way, and the hook's time of the wheel, for the lag in `--log`.
+fn wheel_param(left: bool, time: u32) -> usize {
+    ((time as usize) << 1) | usize::from(left)
+}
+
+/// The way and how many milliseconds ago the hook heard it, from a `WM_APP_WHEEL`'s wparam.
+pub fn wheel_of(wparam: usize) -> (bool, u32) {
+    let time = (wparam >> 1) as u32;
+    (wparam & 1 == 1, unsafe { GetTickCount() }.wrapping_sub(time))
+}
+
+/// A wheel turned with Win held over a Scrolling screen: tell the tray a notch at a time,
+/// and have the thread tap a key so letting go of Win opens no Start. Up and left
+/// scroll left. Whether it is swallowed.
+fn wheel(msg: u32, info: &MSLLHOOKSTRUCT) -> bool {
+    let vertical = msg == WM_MOUSEWHEEL;
+    if !(vertical || msg == WM_MOUSEHWHEEL) || !win_held() || !over_scrolling(info.pt) {
+        TURNED.set(0);
+        return false;
+    }
+    let delta = i32::from((info.mouseData >> 16) as u16 as i16);
+    let (steps, turned) = seam::strip::notches(TURNED.get(), delta, vertical, NOTCH);
+    TURNED.set(turned);
+    let owner = HWND(OWNER.load(Ordering::SeqCst) as *mut _);
+    let point = (info.pt.x as u16 as isize) | ((info.pt.y as u16 as isize) << 16);
+    for _ in 0..steps.unsigned_abs() {
+        unsafe {
+            let _ = PostMessageW(Some(owner), WM_APP_WHEEL, WPARAM(wheel_param(steps < 0, info.time)), LPARAM(point));
+        }
+    }
+    // One tap per Win press: a touchpad's swipe sends dozens of events.
+    if !TAPPED.get() {
+        TAPPED.set(true);
+        unsafe {
+            let _ = PostThreadMessageW(GetCurrentThreadId(), MSG_TAP, WPARAM(0), LPARAM(0));
+        }
+    }
+    true
+}
+
+/// Follow the pointer in and out of the corner, and have the thread time a rest. Only a
+/// Win+wheel over a Scrolling screen is swallowed; everything else passes through.
 unsafe extern "system" fn mouse_proc(code: i32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
     unsafe {
         CALLS.set(CALLS.get() + 1);
         if code >= 0 {
             let info = &*(lparam.0 as *const MSLLHOOKSTRUCT);
             let msg = wparam.0 as u32;
+            if wheel(msg, info) {
+                return LRESULT(1);
+            }
             let press = matches!(msg, WM_LBUTTONDOWN | WM_RBUTTONDOWN | WM_MBUTTONDOWN | WM_XBUTTONDOWN);
             if press || msg == WM_MOUSEMOVE {
                 let inside = in_corner(info.pt);

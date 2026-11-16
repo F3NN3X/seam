@@ -123,6 +123,15 @@ pub struct Hotkeys {
     pub add_to_7: Option<String>,
     pub add_to_8: Option<String>,
     pub add_to_9: Option<String>,
+    /// "Scroll left" and "Scroll right": on a Scrolling screen, the column next to the
+    /// focused one takes the focus, and the strip scrolls to show it.
+    pub scroll_left: Option<String>,
+    pub scroll_right: Option<String>,
+    /// "Move column left" and "Move column right": the focused window's column swaps with its neighbour.
+    pub column_left: Option<String>,
+    pub column_right: Option<String>,
+    /// "Column width": the focused window's column goes to the next of 1/3, 1/2, 2/3 and full.
+    pub column_width: Option<String>,
 }
 
 impl Default for Hotkeys {
@@ -179,6 +188,11 @@ impl Default for Hotkeys {
             add_to_7: None,
             add_to_8: None,
             add_to_9: None,
+            scroll_left: None,
+            scroll_right: None,
+            column_left: None,
+            column_right: None,
+            column_width: None,
         }
     }
 }
@@ -509,12 +523,38 @@ pub fn clear_tiling(tiling: &mut BTreeMap<String, TileScreen>) {
 /// Smart tiling on one screen of a desk: the family, and the virtual desktops it is
 /// on for, by id. Off on every desktop by default.
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(default)]
+#[serde(from = "TileScreenFile", into = "TileScreenFile")]
 pub struct TileScreen {
     pub family: crate::tiling::Family,
     /// Ids of the virtual desktops it tiles on. An empty id is a Windows that doesn't
     /// say which desktop a window is on.
     pub desktops: Vec<String>,
+}
+
+/// `TileScreen` as the file has it. Scrolling is saved as Smart with `scrolling` set, so
+/// an older Seam, which knows no Scrolling, reads Smart rather than failing on the file.
+#[derive(Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
+struct TileScreenFile {
+    family: crate::tiling::Family,
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    scrolling: bool,
+    desktops: Vec<String>,
+}
+
+impl From<TileScreenFile> for TileScreen {
+    fn from(f: TileScreenFile) -> TileScreen {
+        let family = if f.scrolling { crate::tiling::Family::Scrolling } else { f.family };
+        TileScreen { family, desktops: f.desktops }
+    }
+}
+
+impl From<TileScreen> for TileScreenFile {
+    fn from(t: TileScreen) -> TileScreenFile {
+        let scrolling = t.family == crate::tiling::Family::Scrolling;
+        let family = if scrolling { crate::tiling::Family::Smart } else { t.family };
+        TileScreenFile { family, scrolling, desktops: t.desktops }
+    }
 }
 
 impl TileScreen {

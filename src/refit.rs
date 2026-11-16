@@ -47,6 +47,10 @@ pub fn display_changed() {
         e.adhoc_screens_changed();
         e.refit_schedule();
     });
+    // A parked place may be on a screen that just came, and a place to come back to on one
+    // that went: every parked window comes back now onto the screens there are, read fresh,
+    // and parks again once `update` has them.
+    tiled::tiling_display_changed(&seam::monitors::enumerate());
 }
 
 /// Line Up closed, so a re-fit that was waiting for it can go.

@@ -98,6 +98,14 @@ fn command(method: &str, p: &Value) -> Result<Command, RpcError> {
         }),
         "tiling.set" => tiling_set(p)?,
         "tiling.free" => Command::TilingFree(screen_param(p)?),
+        "tiling.scroll" => Command::TilingScroll {
+            number: screen_param(p)?,
+            left: match p.get("dir").and_then(Value::as_str) {
+                Some("left") => true,
+                Some("right") => false,
+                _ => return Err(RpcError::new(INVALID_PARAMS, "dir must be left or right")),
+            },
+        },
         "window.pin" => window_pin(p)?,
         "window.focus_only" => window_focus_only(p)?,
         "window.spotlight" => Command::WindowSpotlight(match p.get("on") {
@@ -320,10 +328,9 @@ fn tiling_set(p: &Value) -> Result<Command, RpcError> {
     };
     let family = match str_param(p, "family")? {
         None => None,
-        Some(name) => Some(
-            crate::tiling::Family::parse(&name)
-                .ok_or_else(|| RpcError::new(INVALID_PARAMS, "family must be smart, columns, main_stack or grid"))?,
-        ),
+        Some(name) => Some(crate::tiling::Family::parse(&name).ok_or_else(|| {
+            RpcError::new(INVALID_PARAMS, "family must be smart, columns, main_stack, grid or scrolling")
+        })?),
     };
     if on.is_none() && family.is_none() {
         return Err(RpcError::new(INVALID_PARAMS, "on or family is required"));
@@ -533,6 +540,17 @@ mod tests {
                 Command::TilingSet { number: None, on: None, family: Some(crate::tiling::Family::Grid) },
             ),
             (request("tiling.free", r#"{"number":1}"#), anyone, Command::TilingFree(Some(1))),
+            (
+                request("tiling.set", r#"{"family":"scrolling"}"#),
+                anyone,
+                Command::TilingSet { number: None, on: None, family: Some(crate::tiling::Family::Scrolling) },
+            ),
+            (request("tiling.scroll", r#"{"dir":"left"}"#), anyone, Command::TilingScroll { number: None, left: true }),
+            (
+                request("tiling.scroll", r#"{"number":2,"dir":"right"}"#),
+                anyone,
+                Command::TilingScroll { number: Some(2), left: false },
+            ),
             (request("screen.rotate", "{}"), anyone, Command::ScreenRotate { number: None, back: false }),
             (
                 request("screen.rotate", r#"{"number":2,"dir":"back"}"#),
@@ -625,6 +643,8 @@ mod tests {
             (request("window.stack_cycle", r#"{"dir":"left"}"#), anyone, INVALID_PARAMS),
             (request("tiling.set", "{}"), anyone, INVALID_PARAMS),
             (request("tiling.set", r#"{"family":"dwindle"}"#), anyone, INVALID_PARAMS),
+            (request("tiling.scroll", "{}"), anyone, INVALID_PARAMS),
+            (request("tiling.scroll", r#"{"dir":"up"}"#), anyone, INVALID_PARAMS),
             (request("screen.identify", r#"{"number":-1}"#), anyone, INVALID_PARAMS),
             (request("screen.rotate", r#"{"dir":"left"}"#), anyone, INVALID_PARAMS),
             (request("screen.rotate", r#"{"dir":5}"#), anyone, INVALID_PARAMS),
@@ -713,6 +733,7 @@ mod tests {
             ("window.stack", r#"{"on":true}"#),
             ("tiling.set", r#"{"on":true}"#),
             ("tiling.free", "{}"),
+            ("tiling.scroll", r#"{"dir":"left"}"#),
             ("screen.rotate", "{}"),
             ("screen.reset_sizes", "{}"),
             ("workspace.add_window", r#"{"number":1}"#),

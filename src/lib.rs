@@ -17,6 +17,7 @@ pub mod overview;
 pub mod palette;
 pub mod stack;
 pub mod state;
+pub mod strip;
 pub mod tiling;
 pub mod turn;
 pub mod updates;

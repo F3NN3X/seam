@@ -15,14 +15,14 @@ const REPO: &str = "https://github.com/F3NN3X/seam";
 
 /// Two screen outlines with the amber seam between them.
 fn mark(p: Palette) -> Div {
-    let outline = |w: f32, h: f32| div().w(px(w)).h(px(h)).border_1().border_color(p.text).rounded(px(2.));
+    let outline = |w: f32, h: f32| div().w(px(w)).h(px(h)).border_1().border_color(p.text_primary).rounded(px(2.));
     div()
         .flex()
         .items_center()
         .justify_center()
         .gap(px(2.))
         .size(px(48.))
-        .bg(p.card)
+        .bg(p.surface_card)
         .border_1()
         .border_color(p.hairline)
         .rounded(px(12.))
@@ -114,7 +114,7 @@ pub fn render(panel: &mut Panel, window: &mut Window, cx: &mut Context<Panel>) -
             .child(
                 div()
                     .text_size(px(12.))
-                    .text_color(p.muted)
+                    .text_color(p.text_muted)
                     .child("Diagnostics holds your version, Windows build, screens and saved borders. No window titles or file paths"),
             ),
         p,

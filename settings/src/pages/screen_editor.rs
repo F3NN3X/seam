@@ -252,10 +252,12 @@ impl ScreenEditor {
                 .px(px(12.))
                 .py(px(6.))
                 .rounded(px(8.))
-                .bg(p.raised.opacity(0.85))
-                .text_color(p.text)
+                .bg(p.surface_raised.opacity(0.85))
+                .text_color(p.text_primary)
                 .child(div().text_size(px(24.)).child((i + 1).to_string()))
-                .child(ui::tabular(div().text_size(px(13.)).text_color(p.secondary).child(format!("{} px", cell.w))));
+                .child(ui::tabular(
+                    div().text_size(px(13.)).text_color(p.text_secondary).child(format!("{} px", cell.w)),
+                ));
             root = root.child(
                 div()
                     .id(("screen-zone", i))
@@ -271,7 +273,7 @@ impl ScreenEditor {
                     .border_1()
                     .rounded(px(6.))
                     .when(chosen, |d| d.bg(p.accent.opacity(0.18)).border_color(p.accent))
-                    .when(!chosen, |d| d.bg(p.raised.opacity(0.3)).border_color(p.hairline_strong))
+                    .when(!chosen, |d| d.bg(p.surface_raised.opacity(0.3)).border_color(p.hairline_strong))
                     .when(!mirror, |d| {
                         d.cursor_pointer().on_mouse_down(MouseButton::Left, move |_, _, cx| {
                             panel.update(cx, |panel, cx| select(panel, i, cx));
@@ -301,7 +303,7 @@ impl ScreenEditor {
             let held = dragging == Some(&d.path);
             let (x, y) = if vertical { (d.area.x + first, d.area.y) } else { (d.area.x, d.area.y + first) };
             let (length_w, length_h) = (at(scale, d.area.w), at(scale, d.area.h));
-            let line = div().bg(if held { p.accent } else { p.secondary });
+            let line = div().bg(if held { p.accent } else { p.text_secondary });
             let thin = px(2. / scale);
             let mut handle =
                 div().id(("screen-divider", k)).absolute().flex().items_center().justify_center().child(if vertical {
@@ -336,12 +338,12 @@ impl ScreenEditor {
                     .top(at(scale, y) + px(if vertical { 8. } else { 12. }))
                     .px(px(8.))
                     .py(px(4.))
-                    .bg(p.raised)
+                    .bg(p.surface_raised)
                     .border_1()
                     .border_color(p.hairline_strong)
                     .rounded(px(6.))
                     .text_size(px(12.))
-                    .text_color(p.text)
+                    .text_color(p.text_primary)
                     .child(ui::tabular(div().child(format!("{} px and {} px", first, along - first))));
                 root = root.child(tag);
             }

@@ -64,7 +64,7 @@ fn border_rows(panel: &Panel, state: &State, p: Palette, cx: &mut Context<Panel>
             .items_center()
             .gap(px(8.))
             .text_size(px(13.))
-            .child(ui::dot(if lined_up { p.positive } else { p.muted }, lined_up))
+            .child(ui::dot(if lined_up { p.positive } else { p.text_muted }, lined_up))
             .child(match (lined_up, lined_up_when.as_deref()) {
                 (true, Some(when)) => format!("Lined up {when}"),
                 (true, None) => "Lined up".to_string(),
@@ -172,7 +172,7 @@ fn ease_alert(p: Palette, cx: &mut Context<Panel>) -> Div {
         .items_center()
         .gap(px(12.))
         .p(px(16.))
-        .bg(p.card)
+        .bg(p.surface_card)
         .border_1()
         .border_color(p.accent)
         .rounded(px(12.))
@@ -297,13 +297,13 @@ fn layout_card(
                 .flex_col()
                 .gap(px(2.))
                 .child(div().text_size(px(16.)).child("Physical layout"))
-                .child(div().text_size(px(12.)).text_color(p.muted).child(caption)),
+                .child(div().text_size(px(12.)).text_color(p.text_muted).child(caption)),
         )
         .when(!one_screen, |d| d.child(div().flex().flex_none().items_center().gap(px(8.)).child(views).child(show)));
     let body = if one_screen {
         div()
             .text_size(px(13.))
-            .text_color(p.secondary)
+            .text_color(p.text_secondary)
             .child("Only one screen is connected, so there's nothing to line up")
     } else {
         map(panel, state, width, p, cx)
@@ -347,7 +347,7 @@ fn pointer_card(panel: &Panel, p: Palette, window: &mut Window, cx: &mut Context
         }
     }
     let ends = |low: &'static str, high: &'static str, slider: &Entity<SliderState>| {
-        let end = |text| div().text_size(px(12.)).text_color(p.muted).child(text);
+        let end = |text| div().text_size(px(12.)).text_color(p.text_muted).child(text);
         div()
             .flex()
             .flex_none()

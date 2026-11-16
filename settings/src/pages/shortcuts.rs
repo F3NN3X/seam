@@ -155,11 +155,11 @@ fn shortcut_row(
     } else if panel.hotkey_warning.as_deref() == Some(action.as_str()) {
         Some(note("Ctrl+Alt types characters on many keyboards. Add Shift", p.negative))
     } else {
-        caption(&action).map(|text| note(text, p.secondary))
+        caption(&action).map(|text| note(text, p.text_secondary))
     };
     let keys = match combo {
         Some(combo) => keycaps(combo, conflict, p).into_any_element(),
-        None => div().text_size(px(13.)).text_color(p.muted).child("Not set").into_any_element(),
+        None => div().text_size(px(13.)).text_color(p.text_muted).child("Not set").into_any_element(),
     };
     let label = if combo.is_some() { "Change" } else { "Record" };
     let button = ui::secondary(("change", slot), label, cx)

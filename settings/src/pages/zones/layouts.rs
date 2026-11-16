@@ -48,15 +48,16 @@ pub(super) fn tile(
                         .w(px(r.w as f32))
                         .h(px(r.h as f32))
                         .rounded(px(2.))
-                        .bg(p.segment),
+                        .bg(p.surface_segment),
                 );
             }
         }
         None if matches!(choice, Pick::New) => {
             let plus = div().size_full().flex().items_center().justify_center().rounded(px(4.)).border_1();
-            art = art.child(plus.border_dashed().border_color(p.hairline_strong).text_color(p.secondary).child("+"));
+            art =
+                art.child(plus.border_dashed().border_color(p.hairline_strong).text_color(p.text_secondary).child("+"));
         }
-        None => art = art.child(div().size_full().rounded(px(4.)).bg(p.page)),
+        None => art = art.child(div().size_full().rounded(px(4.)).bg(p.surface_page)),
     }
     let title = choice.title();
     let more = match &choice {
@@ -76,10 +77,10 @@ pub(super) fn tile(
         .py(px(8.))
         .w(px(width))
         .rounded(px(10.))
-        .bg(p.card)
+        .bg(p.surface_card)
         .border_1()
         .border_color(if selected { p.accent } else { p.hairline })
-        .when(ui::focused(&focus, window), |d| d.focus_ring_style(window, cx))
+        .when(ui::focused(&focus, window), |d| ui::focus_ring(d, 10., 1., p))
         .child(art)
         .child(
             div()
@@ -91,10 +92,10 @@ pub(super) fn tile(
                     div()
                         .truncate()
                         .text_size(px(text))
-                        .text_color(if selected { p.text } else { p.secondary })
+                        .text_color(if selected { p.text_primary } else { p.text_secondary })
                         .child(title),
                 )
-                .children(note.map(|note| div().truncate().text_size(px(12.)).text_color(p.muted).child(note))),
+                .children(note.map(|note| div().truncate().text_size(px(12.)).text_color(p.text_muted).child(note))),
         );
     let face = face
         .cursor_pointer()

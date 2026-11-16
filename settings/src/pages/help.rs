@@ -34,7 +34,7 @@ fn bullets(items: &[&str], p: Palette) -> Div {
             .flex()
             .items_start()
             .gap(px(8.))
-            .child(div().flex_none().mt(px(8.)).size(px(4.)).rounded_full().bg(p.muted))
+            .child(div().flex_none().mt(px(8.)).size(px(4.)).rounded_full().bg(p.text_muted))
             .child(paragraph(text).flex_1().min_w_0())
     };
     div().flex().flex_col().gap(px(4.)).children(items.iter().map(item))
@@ -54,8 +54,8 @@ fn list_card(i: usize, topic: &Topic, picked: bool, p: Palette, cx: &mut Context
         .border_1()
         .cursor_pointer()
         .text_size(px(14.))
-        .when(picked, |d| d.bg(p.raised).border_color(p.hairline_strong))
-        .when(!picked, |d| d.bg(p.card).border_color(p.hairline).hover(|d| d.bg(p.raised)))
+        .when(picked, |d| d.bg(p.surface_raised).border_color(p.hairline_strong))
+        .when(!picked, |d| d.bg(p.surface_card).border_color(p.hairline).hover(|d| d.bg(p.surface_raised)))
         .child(topic.title)
         .on_click(cx.listener(move |panel, _, _, cx| {
             panel.help_topic = i;

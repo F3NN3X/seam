@@ -311,7 +311,7 @@ fn icon_strip(i: usize, ws: &Workspace, icons: &Icons, p: Palette) -> Div {
         let name = SharedString::from(app_title(rule));
         let slot = match icons.get(rule) {
             Some(image) => slot.child(img(image).size(px(16.))),
-            None => slot.child(div().size(px(16.)).rounded(px(4.)).bg(p.muted)),
+            None => slot.child(div().size(px(16.)).rounded(px(4.)).bg(p.text_muted)),
         };
         slot.tooltip(move |window, cx| Tooltip::new(name.clone()).build(window, cx))
     });
@@ -320,10 +320,15 @@ fn icon_strip(i: usize, ws: &Workspace, icons: &Icons, p: Palette) -> Div {
         .items_center()
         .gap(px(4.))
         .children(shown)
-        .when(apps.is_empty(), |d| d.child(div().text_size(px(12.)).text_color(p.muted).child("No windows yet")))
+        .when(apps.is_empty(), |d| d.child(div().text_size(px(12.)).text_color(p.text_muted).child("No windows yet")))
         .when(more > 0, |d| {
             d.child(
-                div().flex_none().whitespace_nowrap().text_size(px(12.)).text_color(p.muted).child(format!("+{more}")),
+                div()
+                    .flex_none()
+                    .whitespace_nowrap()
+                    .text_size(px(12.))
+                    .text_color(p.text_muted)
+                    .child(format!("+{more}")),
             )
         })
 }
@@ -339,7 +344,7 @@ struct Marks {
 fn list_card(i: usize, ws: &Workspace, icons: &Icons, marks: Marks, p: Palette, cx: &mut Context<Panel>) -> AnyElement {
     let id = ws.id.clone();
     let picked = marks.picked;
-    let default = marks.default.then(|| div().text_size(px(12.)).text_color(p.secondary).child("Default"));
+    let default = marks.default.then(|| div().text_size(px(12.)).text_color(p.text_secondary).child("Default"));
     // The marks get a line of their own, so the name keeps the card's full width.
     let tags = (marks.default || marks.active.is_some()).then(|| {
         div()
@@ -376,8 +381,8 @@ fn list_card(i: usize, ws: &Workspace, icons: &Icons, marks: Marks, p: Palette, 
         .rounded(px(12.))
         .border_1()
         .cursor_pointer()
-        .when(picked, |d| d.bg(p.raised).border_color(p.hairline_strong))
-        .when(!picked, |d| d.bg(p.card).border_color(p.hairline).hover(|d| d.bg(p.raised)))
+        .when(picked, |d| d.bg(p.surface_raised).border_color(p.hairline_strong))
+        .when(!picked, |d| d.bg(p.surface_card).border_color(p.hairline).hover(|d| d.bg(p.surface_raised)))
         .child(name)
         .children(tags)
         .child(detail)
@@ -393,7 +398,7 @@ fn list_card(i: usize, ws: &Workspace, icons: &Icons, marks: Marks, p: Palette, 
 /// The status on the card of the workspace in use: a dot and a word, as the editor's rows have.
 fn active_status(drifted: bool, p: Palette) -> AnyElement {
     let word = if drifted { "Active, moved" } else { "Active" };
-    let text = div().text_size(px(12.)).text_color(p.secondary).child(word);
+    let text = div().text_size(px(12.)).text_color(p.text_secondary).child(word);
     div().flex().flex_none().items_center().gap(px(8.)).child(ui::dot(p.positive, true)).child(text).into_any_element()
 }
 
@@ -689,9 +694,9 @@ pub fn render(panel: &mut Panel, window: &mut Window, cx: &mut Context<Panel>) -
         .size_full()
         .rounded(px(11.))
         .text_size(px(14.))
-        .text_color(p.secondary)
+        .text_color(p.text_secondary)
         .cursor_pointer()
-        .hover(|d| d.bg(p.card))
+        .hover(|d| d.bg(p.surface_card))
         .child("New empty workspace")
         .on_click(cx.listener(|panel, _, window, cx| create_empty(panel, window, cx)));
     let new_empty =

@@ -6,7 +6,7 @@ use crate::theme::palette;
 use crate::ui::{self, card, row};
 use gpui_kit::component::button::ButtonVariants;
 use gpui_kit::component::menu::{DropdownMenu, PopupMenuItem};
-use gpui_kit::component::{Sizable, ThemeStyled, WindowExt};
+use gpui_kit::component::{Sizable, WindowExt};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 use seam::config::WindowSize;

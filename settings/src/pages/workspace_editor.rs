@@ -12,7 +12,7 @@ use gpui_kit::component::button::ButtonVariants;
 use gpui_kit::component::input::{Input, InputEvent, InputState};
 use gpui_kit::component::menu::{DropdownMenu, PopupMenuItem};
 use gpui_kit::component::slider::{SliderEvent, SliderState};
-use gpui_kit::component::{ActiveTheme, Icon, ThemeStyled, WindowExt};
+use gpui_kit::component::{ActiveTheme, Icon, WindowExt};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 use seam::state::Screen;
@@ -203,13 +203,19 @@ pub fn exe_line(rule: &Rule) -> String {
 
 /// The app's icon, or its first letter while there is none.
 pub fn app_icon(rule: &Rule, icons: &Icons, p: Palette) -> Div {
-    let tile =
-        div().flex().flex_none().items_center().justify_center().size(px(ICON_WIDTH)).rounded(px(8.)).bg(p.raised);
+    let tile = div()
+        .flex()
+        .flex_none()
+        .items_center()
+        .justify_center()
+        .size(px(ICON_WIDTH))
+        .rounded(px(8.))
+        .bg(p.surface_raised);
     match icons.get(rule) {
         Some(image) => tile.child(img(image).size(px(16.))),
         None => {
             let letter = app_title(rule).chars().next().map(|c| c.to_uppercase().to_string()).unwrap_or_default();
-            tile.text_size(px(14.)).text_color(p.secondary).child(letter)
+            tile.text_size(px(14.)).text_color(p.text_secondary).child(letter)
         }
     }
 }

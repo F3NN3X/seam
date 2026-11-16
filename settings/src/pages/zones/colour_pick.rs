@@ -92,12 +92,12 @@ pub(super) fn swatches(
             .rounded_full()
             .border_1()
             .border_color(p.hairline_strong)
-            .bg(fill.unwrap_or(p.raised))
+            .bg(fill.unwrap_or(p.surface_raised))
             .text_size(px(12.))
-            .when(fill.is_none() && !selected, |d| d.text_color(p.secondary).child(choice.glyph()))
+            .when(fill.is_none() && !selected, |d| d.text_color(p.text_secondary).child(choice.glyph()))
             .when(selected, |d| {
                 // Black or white, whichever reads better on the swatch.
-                let ink = fill.map_or(p.text, |f| {
+                let ink = fill.map_or(p.text_primary, |f| {
                     let c = Rgba::from(f);
                     let luma = 0.2126 * c.r + 0.7152 * c.g + 0.0722 * c.b;
                     if luma > 0.5 { hsla(0., 0., 0., 1.) } else { hsla(0., 0., 1., 1.) }
@@ -129,7 +129,7 @@ pub(super) fn swatches(
                 .track_focus(&focus)
                 .tab_index(0)
                 .cursor_pointer()
-                .when(selected || ui::focused(&focus, window), |d| d.focus_ring_style(window, cx))
+                .when(selected || ui::focused(&focus, window), |d| ui::focus_ring(d, 12., 0., p))
                 .when(!custom, |d| d.on_click(cx.listener(move |panel, _, window, cx| click(panel, window, cx))))
                 .on_key_down(cx.listener(move |panel, e: &KeyDownEvent, window, cx| {
                     if matches!(e.keystroke.key.as_str(), "space" | "enter") {
@@ -137,7 +137,7 @@ pub(super) fn swatches(
                     }
                 }));
         } else {
-            face = face.when(selected, |d| d.focus_ring_style(window, cx));
+            face = face.when(selected, |d| ui::focus_ring(d, 12., 0., p));
         }
         // The picker's own button is laid over the swatch, unseen, so the popover opens
         // from the swatch and the swatch keeps its ring, check and tooltip.

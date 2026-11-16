@@ -91,7 +91,7 @@ pub(super) fn desk_rows(panel: &Panel, window: &Window, cx: &mut Context<Panel>)
             .gap(px(8.))
             .text_size(px(14.))
             .child(desk.name.clone())
-            .when(in_use, |d| d.child(div().text_size(px(12.)).text_color(p.muted).child("in use")));
+            .when(in_use, |d| d.child(div().text_size(px(12.)).text_color(p.text_muted).child("in use")));
         let view = cx.entity().downgrade();
         let more = ui::secondary(("more", i), "", cx)
             .ghost()

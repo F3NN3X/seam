@@ -66,10 +66,10 @@ impl Panel {
             .rounded(px(6.))
             .text_size(px(14.))
             .cursor_pointer()
-            .when(active, |d| d.bg(p.raised).text_color(p.text))
-            .when(!active, |d| d.text_color(p.secondary).hover(|d| d.bg(p.card)))
-            .when(ui::focused(&focus, window), |d| d.focus_ring_style(window, cx))
-            .child(Icon::new(page.icon()).size(px(16.)).text_color(if active { p.text } else { p.muted }))
+            .when(active, |d| d.bg(p.surface_raised).text_color(p.text_primary))
+            .when(!active, |d| d.text_color(p.text_secondary).hover(|d| d.bg(p.surface_card)))
+            .when(ui::focused(&focus, window), |d| ui::focus_ring(d, 6., 0., p))
+            .child(Icon::new(page.icon()).size(px(16.)).text_color(if active { p.text_primary } else { p.text_muted }))
             .child(div().flex_1().child(page.title()))
             .when(update_ready, |d| d.child(ui::dot(p.accent, true)))
             .on_click(cx.listener(move |this, _, window, cx| this.show(page, None, window, cx)))
@@ -82,7 +82,7 @@ impl Panel {
 
     fn status_row(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let p = palette(cx);
-        let base = div().flex().items_center().gap(px(8.)).mt(px(12.)).p(px(8.)).rounded(px(8.)).bg(p.card);
+        let base = div().flex().items_center().gap(px(8.)).mt(px(12.)).p(px(8.)).rounded(px(8.)).bg(p.surface_card);
         let text = |title: String, detail: String| {
             div()
                 .flex()
@@ -90,7 +90,7 @@ impl Panel {
                 .flex_1()
                 .min_w_0()
                 .child(div().text_size(px(13.)).font_weight(FontWeight::MEDIUM).child(title))
-                .child(div().text_size(px(12.)).text_color(p.secondary).truncate().child(detail))
+                .child(div().text_size(px(12.)).text_color(p.text_secondary).truncate().child(detail))
         };
         let Some(state) = &self.state else {
             return base
@@ -101,11 +101,11 @@ impl Panel {
                 );
         };
         let (title, color, filled) = match state.remap {
-            _ if state.paused => ("Paused", p.muted, true),
-            _ if state.stepped_aside => ("Stepped aside", p.muted, false),
+            _ if state.paused => ("Paused", p.text_muted, true),
+            _ if state.stepped_aside => ("Stepped aside", p.text_muted, false),
             Remap::On => ("Remap on", p.positive, true),
-            Remap::Paused => ("Remap paused", p.muted, true),
-            Remap::OffNoBorders => ("Not lined up", p.muted, false),
+            Remap::Paused => ("Remap paused", p.text_muted, true),
+            Remap::OffNoBorders => ("Not lined up", p.text_muted, false),
         };
         let screens = state.screens.len();
         let detail = format!("{}, {screens} screen{}", state.desk.name, if screens == 1 { "" } else { "s" });
@@ -114,7 +114,7 @@ impl Panel {
             if enabled { (assets::IconName::Pause, "Pause remap") } else { (assets::IconName::Play, "Resume remap") };
         let toggle = Button::new("toggle-remap")
             .ghost()
-            .icon(Icon::new(icon).size(px(16.)).text_color(p.secondary))
+            .icon(Icon::new(icon).size(px(16.)).text_color(p.text_secondary))
             .tooltip(label)
             .accessibility_label(label)
             .on_click(cx.listener(move |this, _, window, cx| {
@@ -127,8 +127,8 @@ impl Panel {
         let p = palette(cx);
         let search = Input::new(&self.search)
             .appearance(false)
-            .prefix(Icon::new(assets::IconName::Search).size(px(16.)).text_color(p.muted))
-            .suffix(ui::keycaps("Ctrl F", false, p).text_color(p.secondary));
+            .prefix(Icon::new(assets::IconName::Search).size(px(16.)).text_color(p.text_muted))
+            .suffix(ui::keycaps("Ctrl F", false, p).text_color(p.text_secondary));
         let mut top = div().flex().flex_col().gap(px(2.)).mt(px(16.));
         for page in Page::top_group() {
             top = top.child(self.nav_row(page, window, cx));
@@ -144,7 +144,7 @@ impl Panel {
             .w(px(240.))
             .h_full()
             .p(px(12.))
-            .bg(p.sidebar)
+            .bg(p.surface_sidebar)
             .border_r_1()
             .border_color(p.hairline)
             .child(
@@ -154,7 +154,7 @@ impl Panel {
                     .h(px(32.))
                     .px(px(8.))
                     .rounded(px(8.))
-                    .bg(p.input)
+                    .bg(p.surface_input)
                     .border_1()
                     .border_color(p.hairline)
                     .child(search),
@@ -163,14 +163,14 @@ impl Panel {
             .child(top)
             // The app's own pages sit at the bottom, above the version.
             .child(div().flex_1())
-            .child(div().mt(px(24.)).mb(px(8.)).px(px(8.)).text_size(px(12.)).text_color(p.muted).child("App"))
+            .child(div().mt(px(24.)).mb(px(8.)).px(px(8.)).text_size(px(12.)).text_color(p.text_muted).child("App"))
             .child(app)
             .child(
                 div()
                     .mt(px(12.))
                     .px(px(8.))
                     .text_size(px(12.))
-                    .text_color(p.muted)
+                    .text_color(p.text_muted)
                     .child(format!("Seam {}", env!("CARGO_PKG_VERSION"))),
             )
     }
@@ -227,7 +227,7 @@ impl Panel {
             div()
                 .id(i)
                 .cursor_pointer()
-                .hover(|d| d.bg(p.raised))
+                .hover(|d| d.bg(p.surface_raised))
                 .child(ui::row(hit.title, Some(page.title().into()), div(), p))
                 .on_click(cx.listener(move |this, _, window, cx| {
                     if let Some(topic) = topic {
@@ -273,8 +273,8 @@ impl Render for Panel {
             .on_action(cx.listener(|this, _: &ClearSearch, window, cx| this.clear_search(window, cx)))
             .flex()
             .size_full()
-            .bg(p.page)
-            .text_color(p.text)
+            .bg(p.surface_page)
+            .text_color(p.text_primary)
             .font_family(cx.theme().font_family.clone())
             .child(self.sidebar(window, cx))
             .child(

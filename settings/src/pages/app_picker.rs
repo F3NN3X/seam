@@ -174,7 +174,7 @@ pub fn button(panel: &mut Panel, taken: &[Rule], there: &'static str, add: Add, 
                     };
                     let icon = match icon {
                         Some(image) => div().flex_none().size(px(16.)).child(img(image.clone()).size(px(16.))),
-                        None => div().flex_none().size(px(16.)).rounded(px(4.)).bg(p.muted),
+                        None => div().flex_none().size(px(16.)).rounded(px(4.)).bg(p.text_muted),
                     };
                     div()
                         .id(("pick", n))
@@ -185,7 +185,7 @@ pub fn button(panel: &mut Panel, taken: &[Rule], there: &'static str, add: Add, 
                         .py(px(4.))
                         .rounded(px(6.))
                         .cursor_pointer()
-                        .hover(|d| d.bg(p.raised))
+                        .hover(|d| d.bg(p.surface_raised))
                         .child(icon)
                         .child(
                             div()
@@ -194,7 +194,8 @@ pub fn button(panel: &mut Panel, taken: &[Rule], there: &'static str, add: Add, 
                                 .min_w_0()
                                 .child(div().text_size(px(14.)).truncate().child(name))
                                 .children(
-                                    detail.map(|d| div().text_size(px(12.)).text_color(p.muted).truncate().child(d)),
+                                    detail
+                                        .map(|d| div().text_size(px(12.)).text_color(p.text_muted).truncate().child(d)),
                                 ),
                         )
                         .on_click(move |_, window, cx| {

@@ -49,6 +49,8 @@ impl Engine {
             return;
         }
         let before = std::mem::replace(&mut self.tiling.desktop, now.clone());
+        // An Undo's splits were for the desktop that was in front.
+        self.tiling.unsplit = None;
         for i in 0..self.tiling.trees.len() {
             let t = &self.tiling.trees[i];
             if t.desktop == before && !first {
@@ -121,6 +123,8 @@ impl Engine {
             .filter(|s| self.tiling_on(&s.id))
             .filter_map(|s| Some((s.id.clone(), s.layout.as_ref()?.tree.clone())))
             .collect();
+        // An Undo's splits not taken in time are an old split's, and no later drag's.
+        self.tiling.unsplit.take_if(|(.., at)| at.elapsed() >= UNSPLIT_FOR);
         let mut changed = false;
         for (screen, node) in screens {
             let desktop = self.tiling.desktop.clone();
@@ -132,7 +136,8 @@ impl Engine {
                 continue;
             }
             // Undo of a split: the splits before it, which the windows it put back are numbered by.
-            let node = self.tiling.unsplit.take_if(|(s, _)| *s == screen).map_or(node, |(_, before)| before);
+            let ours = |(s, _, at): &mut (String, Node, Instant)| *s == screen && at.elapsed() < UNSPLIT_FOR;
+            let node = self.tiling.unsplit.take_if(ours).map_or(node, |(_, before, _)| before);
             let n = zones::leaf_count(&node);
             let old = self.tiling.trees[i].tree.clone();
             let mut held: Vec<(usize, isize, bool)> = Vec::new();
@@ -163,7 +168,7 @@ impl Engine {
             let mut close = false;
             let out: Vec<isize> =
                 old.windows().filter(|k| tree.zone_of(*k).is_none() && !stacked.contains(k)).collect();
-            for k in out {
+            for &k in &out {
                 winutil::set_tile_stamp(hwnd_of(k), 0);
                 self.tiling.trees[i].before.remove(&k);
                 if Some(k) != dragged {
@@ -179,6 +184,7 @@ impl Engine {
                     close = true;
                 }
             }
+            self.capped_drop(i, &mut tree, &out);
             if tree == old {
                 continue;
             }
@@ -206,6 +212,51 @@ impl Engine {
         }
     }
 
+    /// Scrolling: a drop never takes a strip past `MAX_COLUMNS`. A window new to it past
+    /// that leaves the view's tile empty, which the strip drops, and floats where it was
+    /// dropped, and the tray says so. `out` are the windows leaving the strip.
+    fn capped_drop(&mut self, i: usize, tree: &mut Tree, out: &[isize]) {
+        let Some(strip) = &self.tiling.trees[i].strip else { return };
+        let room = seam::strip::MAX_COLUMNS.saturating_sub(strip.windows().filter(|k| !out.contains(k)).count());
+        let over: Vec<isize> = tree.windows().filter(|k| !strip.has(*k)).skip(room).collect();
+        for k in over {
+            if let Some(z) = tree.zone_of(k) {
+                tree.tiles[z].hwnd = None;
+            }
+            log::info!(
+                "scrolling: the strip holds {} columns already, so a dropped window floats",
+                seam::strip::MAX_COLUMNS
+            );
+            winutil::set_floated(hwnd_of(k), true);
+            self.unsnap(hwnd_of(k), true);
+            self.tiling.capped = true;
+            unsafe {
+                let _ = PostMessageW(Some(hwnd_of(self.owner)), crate::tiler::WM_APP_TILING, WPARAM(0), LPARAM(0));
+            }
+        }
+    }
+
+    /// The trees of a deleted virtual desktop end, its windows staying where Windows moved
+    /// them. Its id stays in the settings: a deleted desktop's id never comes back, so it
+    /// is harmless there, and a misfire never turns tiling off on a desktop that is there
+    /// (D644). Never the desktop in front.
+    pub(in crate::snap) fn tiled_end_desktop(&mut self, desktop: &str) {
+        if self.tiling.known && desktop == self.tiling.desktop {
+            return;
+        }
+        let (ended, kept): (Vec<Tiled>, Vec<Tiled>) =
+            std::mem::take(&mut self.tiling.trees).into_iter().partition(|t| t.desktop == desktop);
+        self.tiling.trees = kept;
+        if ended.is_empty() {
+            return;
+        }
+        log::info!("tiling: a virtual desktop was deleted, so its {} tiled screens end", ended.len());
+        for t in ended {
+            self.tiled_release(t);
+        }
+        self.tiled_sync();
+    }
+
     /// Undo of a split on a tiled screen: its tree takes the splits it had before
     /// (`before`) while it still has the split's (`after`), by the next `tiled_resync`,
     /// once Undo's windows have landed. False when the screen isn't tiled, scrolls, or its
@@ -216,7 +267,7 @@ impl Engine {
         if t.strip.is_some() || t.tree.layout() != *after {
             return false;
         }
-        self.tiling.unsplit = Some((screen.to_string(), before));
+        self.tiling.unsplit = Some((screen.to_string(), before, Instant::now()));
         true
     }
 
@@ -257,29 +308,32 @@ impl Engine {
         (n, undo)
     }
 
+    /// Whether Undo of Free all can still tile its windows, before tiling is turned on for
+    /// it: its desktop is in front, the screen's family is the freed tree's, and nothing
+    /// is tiled on the screen since.
+    pub(in crate::snap) fn free_undoable(&self, undo: &FreeUndo) -> bool {
+        let family = self.tiling.config.get(&undo.screen).map(|c| c.family).unwrap_or_default();
+        let tiled = |t: &Tiled| t.screen == undo.screen && t.desktop == undo.desktop && !t.all().is_empty();
+        let front = self.tiling.known && undo.desktop == self.tiling.desktop;
+        front && family == undo.tree.family && !self.tiling.trees.iter().any(tiled)
+    }
+
     /// Undo of Free all, with tiling on again for its screen and desktop: the tree it freed
     /// takes back the windows still where Free all left them, by `tiling::plan_apply`, and
     /// they move into their tiles. A window moved by hand since, minimized, maximized,
     /// floated, tiled elsewhere or closed stays as it is. Returns how many were tiled again.
     pub(in crate::snap) fn tiling_unfree(&mut self, undo: FreeUndo) -> usize {
-        let family = self.tiling.config.get(&undo.screen).map(|c| c.family).unwrap_or_default();
-        let tiled = |t: &Tiled| t.screen == undo.screen && t.desktop == undo.desktop && !t.all().is_empty();
-        let ready = self.tiling_on(&undo.screen) && undo.desktop == self.tiling.desktop && family == undo.tree.family;
-        if !ready || self.tiling.trees.iter().any(tiled) {
+        if !self.tiling_on(&undo.screen) || !self.free_undoable(&undo) {
             return 0;
         }
         let looked = undo.strip.as_ref().map_or_else(|| undo.tree.clone(), Strip::whole);
         let seen = |k: isize| {
             let h = hwnd_of(k);
-            let now = winutil::visible_rect(h);
-            let left =
-                undo.left.get(&k).zip(now).is_some_and(|(at, now)| !tiling::moved(now, *at, winutil::is_resizable(h)));
+            let (now, resizable) = (winutil::visible_rect(h), winutil::is_resizable(h));
             let away = winutil::is_minimized(h) || winutil::is_maximized(h);
-            Seen {
-                floated: !left || away || winutil::is_floated(h) || self.tree_of(k).is_some(),
-                gone: gone(k),
-                ..Seen::default()
-            }
+            let (floated, tiled) = (winutil::is_floated(h), self.tree_of(k).is_some());
+            let untouched = tiling::untouched(undo.left.get(&k).copied(), now, resizable, away, floated, tiled);
+            Seen { floated: !untouched, gone: gone(k), ..Seen::default() }
         };
         let plan = tiling::plan_apply(&looked, seen, |_| None);
         let i = self.tree_index(&undo.screen, &undo.desktop);

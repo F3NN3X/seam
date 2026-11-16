@@ -358,7 +358,9 @@ fn arrival(desktops: &mut Desktops, hwnd: isize, restored: bool, asked: bool) ->
     }
     // A restore too: a window a workspace switch placed is the workspace's (D564). One
     // tiling held before it was minimized is tiling's still, captured or not.
-    if winutil::ws_stamp(h).is_some() && !seam::tiling::stamped_may_tile(asked, restored, is_resting(hwnd)) {
+    if winutil::ws_stamp(h).is_some()
+        && !seam::tiling::stamped_may_tile(asked, restored, is_resting(hwnd), switch_settling())
+    {
         return Err("placed by a workspace or an app rule");
     }
     if winutil::is_maximized(h) || winutil::is_minimized(h) {

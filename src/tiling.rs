@@ -287,16 +287,19 @@ pub fn after_pause<T>(pending: Vec<(isize, T)>, by_switch: impl Fn(isize) -> boo
 
 /// Whether the worker may tile a window that has a workspace stamp: a capture, Update,
 /// Quick save or a switch put it there. Only when the Float or tile key asks for it, or
-/// when it was tiled and comes back from minimized (`resting`): the switch's pause and
-/// `moved` already keep a window a switch placed out of its tile (D564).
-pub fn stamped_may_tile(asked: bool, restored: bool, resting: bool) -> bool {
-    asked || (restored && resting)
+/// when it was tiled and comes back from minimized (`resting`), but not while a switch
+/// runs or ended a moment ago (`settling`): that restore may be the switch's own, late
+/// from a slow app. The switch's pause and `moved` keep the rest of what a switch placed
+/// out of its tiles (D564).
+pub fn stamped_may_tile(asked: bool, restored: bool, resting: bool, settling: bool) -> bool {
+    asked || (restored && resting && !settling)
 }
 
 /// Whether the trees of a virtual desktop are stale, the desktop deleted: Windows moved
 /// its windows to a neighbour. `found` is each of their windows' desktop now, None for
 /// one closed. Stale once a window reports another desktop and none reports this one.
-/// Trees whose windows all closed can't tell, so they stay.
+/// Trees whose windows all closed can't tell, so they stay. A stale desktop's trees end;
+/// its id stays in the settings, harmless, so a misfire turns nothing off (D644).
 pub fn stale(desktop: &str, found: &[Option<String>]) -> bool {
     let live = || found.iter().flatten();
     live().any(|d| d != desktop) && !live().any(|d| d == desktop)
@@ -335,6 +338,21 @@ pub fn moved(now: Rect, at: Rect, resizable: bool) -> bool {
     let bigger = now.w > at.w + MOVED_PX || now.h > at.h + MOVED_PX;
     let smaller = resizable && (now.w < at.w - SMALLER_PX || now.h < at.h - SMALLER_PX);
     off || bigger || smaller
+}
+
+/// Whether Undo of Free all may tile a window again: its frame `now` is still where Free
+/// all left it (`left`, by `moved`), and it isn't minimized or maximized (`away`),
+/// floated by hand, or tiled again elsewhere since.
+pub fn untouched(
+    left: Option<Rect>,
+    now: Option<Rect>,
+    resizable: bool,
+    away: bool,
+    floated: bool,
+    tiled: bool,
+) -> bool {
+    let still = left.zip(now).is_some_and(|(at, now)| !moved(now, at, resizable));
+    still && !away && !floated && !tiled
 }
 
 fn area_of(r: &Rect) -> i64 {
@@ -924,19 +942,23 @@ mod tests {
 
     #[test]
     fn a_stamped_window_is_tiled_only_when_asked_or_back_from_its_rest() {
-        assert!(stamped_may_tile(true, false, false));
+        assert!(stamped_may_tile(true, false, false, false));
+        assert!(stamped_may_tile(true, false, false, true));
         // A captured window, tiled, minimized and restored, takes a tile again.
-        assert!(stamped_may_tile(false, true, true));
+        assert!(stamped_may_tile(false, true, true, false));
+        // Not a restore during a switch or its grace, which may be the switch's own.
+        assert!(!stamped_may_tile(false, true, true, true));
         // A window a workspace placed: a new one, or a restore of one tiling never held.
-        assert!(!stamped_may_tile(false, false, false));
-        assert!(!stamped_may_tile(false, true, false));
-        assert!(!stamped_may_tile(false, false, true));
+        assert!(!stamped_may_tile(false, false, false, false));
+        assert!(!stamped_may_tile(false, true, false, false));
+        assert!(!stamped_may_tile(false, false, true, false));
     }
 
     #[test]
     fn a_tree_is_stale_once_its_windows_report_only_another_desktop() {
         let (a, b) = (Some("A".to_string()), Some("B".to_string()));
-        // Its desktop deleted: every window went to the neighbour, or closed.
+        // Its desktop deleted: every window went to the neighbour, or closed. Only its trees
+        // end on this; its id stays in the settings (D644).
         assert!(stale("A", &[b.clone(), b.clone()]));
         assert!(stale("A", &[b.clone(), None]));
         // One still there keeps it.
@@ -957,6 +979,28 @@ mod tests {
         assert_eq!(plan.tree.rects(AREA, 0), vec![AREA]);
         // None moved: the tree comes back as it was.
         assert_eq!(plan_apply(&three, |_| Seen::default(), |_| None).tree, three);
+    }
+
+    #[test]
+    fn undo_of_free_all_takes_only_a_window_still_where_it_was_left() {
+        let at = Rect { x: 100, y: 100, w: 800, h: 600 };
+        let here = |now: Rect, resizable: bool| untouched(Some(at), Some(now), resizable, false, false, false);
+        assert!(here(at, true));
+        // A few pixels off, as an app that settles does, still counts.
+        assert!(here(Rect { x: 104, w: 796, ..at }, true));
+        // Moved more than 4 px, bigger, or resized 48 px smaller: moved by hand.
+        assert!(!here(Rect { x: 105, ..at }, true));
+        assert!(!here(Rect { w: 805, ..at }, true));
+        assert!(!here(Rect { w: 751, ..at }, true));
+        // A window that can't be resized may come out smaller.
+        assert!(here(Rect { w: 751, ..at }, false));
+        // No frame now, or none recorded at the free.
+        assert!(!untouched(Some(at), None, true, false, false, false));
+        assert!(!untouched(None, Some(at), true, false, false, false));
+        // Minimized or maximized, floated by hand, or tiled elsewhere since.
+        assert!(!untouched(Some(at), Some(at), true, true, false, false));
+        assert!(!untouched(Some(at), Some(at), true, false, true, false));
+        assert!(!untouched(Some(at), Some(at), true, false, false, true));
     }
 
     #[test]

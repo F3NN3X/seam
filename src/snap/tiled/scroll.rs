@@ -558,8 +558,11 @@ impl Engine {
             // The quit's one second, shared with the pins and Free all: a slow app, hung or not,
             // never holds it up, as its call waits on the worker and the quit doesn't.
             (Ok(_), Some(until)) => {
-                if finished.recv_timeout(until.saturating_duration_since(Instant::now())).is_err() {
-                    log::info!("scrolling: out of time on quit, a slow app's minimized parked window keeps its place");
+                let waited = finished.recv_timeout(until.saturating_duration_since(Instant::now()));
+                if waited == Err(std::sync::mpsc::RecvTimeoutError::Timeout) {
+                    log::info!(
+                        "scrolling: out of time on quit, a slow app's minimized parked window may keep its place"
+                    );
                 }
             }
             (Ok(_), None) => {}

@@ -28,6 +28,11 @@ pub use hand::FreeUndo;
 pub use scroll::{tiling_column, tiling_display_changed, tiling_scroll, tiling_unpark_for_quit, tiling_unstrand};
 pub use turn::Turned;
 
+/// How soon a timer that found the engine busy tries again, in milliseconds.
+const RETRY_MS: u32 = 50;
+/// How long Undo of a split waits for its resync before the splits it keeps are dropped.
+const UNSPLIT_FOR: Duration = Duration::from_secs(10);
+
 /// One screen's tree on one virtual desktop.
 pub(super) struct Tiled {
     screen: String,
@@ -88,10 +93,11 @@ pub(super) struct Tiling {
     focus_wait: Option<isize>,
     /// Seam is paused, stepped aside or has zones off, so no window stays parked.
     stood_down: bool,
-    /// Deleted virtual desktops the worker found, for the tray to take out of the settings.
-    stale: Vec<String>,
-    /// A screen whose split was undone, and its splits before it, for the next resync.
-    unsplit: Option<(String, Node)>,
+    /// A screen whose split was undone, its splits before it, and when, for the next
+    /// resync within `UNSPLIT_FOR`.
+    unsplit: Option<(String, Node, Instant)>,
+    /// A drop past the strip's column cap floated a window, for the tray's notice.
+    capped: bool,
 }
 
 /// A tiled screen as the state shows it.
@@ -116,11 +122,7 @@ pub fn tiling_events() -> bool {
                 Event::Desktop(id) => e.tiled_desktop(id),
                 Event::Focused(hwnd) => e.tiled_focused(hwnd),
                 Event::Refused(why) => e.tiling.refused = Some(why.to_string()),
-                Event::Stale(desktop) => {
-                    if !e.tiling.stale.contains(&desktop) {
-                        e.tiling.stale.push(desktop);
-                    }
-                }
+                Event::Stale(desktop) => e.tiled_end_desktop(&desktop),
             }
         }
         if log::enabled() {
@@ -155,8 +157,15 @@ pub fn tiling_free(screen: &str) -> (usize, Option<FreeUndo>) {
     with_engine(|e| e.tiling_free(screen)).unwrap_or((0, None))
 }
 
-/// Undo of Free all, once tiling is on again for its screen and desktop: the windows still
-/// where it left them take their tiles back. Returns how many.
+/// Whether Undo of Free all can still tile its windows: its desktop is in front, the
+/// screen's family is the same, and nothing is tiled there since. Asked before tiling is
+/// turned on for it.
+pub fn tiling_can_unfree(undo: &FreeUndo) -> bool {
+    with_engine(|e| e.free_undoable(undo)).unwrap_or(false)
+}
+
+/// The Undo of Free all itself: the windows still where it left them take their tiles
+/// back. Returns how many.
 pub fn tiling_unfree(undo: FreeUndo) -> usize {
     with_engine(|e| e.tiling_unfree(undo)).unwrap_or(0)
 }
@@ -259,21 +268,24 @@ unsafe extern "system" fn on_grace(_: HWND, _: u32, id: usize, _: u32) {
             }
         }
     });
-    if taken.is_some() {
-        unsafe {
+    retry_or_kill(taken.is_some(), id, on_grace);
+}
+
+/// A timer callback that ran kills its timer; one that found the engine busy tries again
+/// soon, whatever the timer's own delay was.
+fn retry_or_kill(ran: bool, id: usize, callback: unsafe extern "system" fn(HWND, u32, usize, u32)) {
+    unsafe {
+        if ran {
             let _ = KillTimer(None, id);
+        } else {
+            SetTimer(None, id, RETRY_MS, Some(callback));
         }
     }
 }
 
-/// The deleted virtual desktops the worker found since this was last asked. Never the
-/// one in front, which is there whatever its windows said.
-pub fn take_stale_desktops() -> Vec<String> {
-    let take = |e: &mut Engine| {
-        let front = e.tiling.known.then(|| e.tiling.desktop.clone());
-        std::mem::take(&mut e.tiling.stale).into_iter().filter(|d| Some(d) != front.as_ref()).collect()
-    };
-    with_engine(take).unwrap_or_default()
+/// Whether a drop past a strip's column cap floated a window since this was last asked.
+pub fn take_tiling_capped() -> bool {
+    with_engine(|e| std::mem::take(&mut e.tiling.capped)).unwrap_or(false)
 }
 
 /// Why the Float or tile key's window wasn't tiled, once.
@@ -308,11 +320,7 @@ unsafe extern "system" fn on_gaps(_: HWND, _: u32, id: usize, _: u32) {
             e.tiled_gaps();
         }
     });
-    if taken.is_some() {
-        unsafe {
-            let _ = KillTimer(None, id);
-        }
-    }
+    retry_or_kill(taken.is_some(), id, on_gaps);
 }
 
 impl Tiled {
@@ -490,6 +498,7 @@ impl Engine {
     fn tiled_release(&mut self, t: Tiled) {
         let screens = self.screens_now();
         self.unpark(&t, None, &[], &screens);
+        self.tiling.unsplit.take_if(|(s, ..)| *s == t.screen);
         for k in t.all() {
             winutil::set_tile_stamp(hwnd_of(k), 0);
             if t.desktop == self.tiling.desktop {
@@ -607,6 +616,11 @@ impl Engine {
         }
         if self.tiling.trees[i].strip.as_ref().is_some_and(Strip::is_full) {
             log::info!("scrolling: the strip holds {} columns already, so a window floats", seam::strip::MAX_COLUMNS);
+            // Nothing left to tile it again: no rest to come back to, no stamp for the next start.
+            for t in &mut self.tiling.trees {
+                t.resting.retain(|(k, ..)| *k != a.hwnd);
+            }
+            winutil::set_tile_stamp(h, 0);
             return;
         }
         for t in &mut self.tiling.trees {

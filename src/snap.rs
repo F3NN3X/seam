@@ -50,10 +50,10 @@ pub use stacks::{
 };
 pub use swap::{WM_APP_SWAP_LOOK, look_ready};
 pub use tiled::{
-    FreeUndo, Turned, is_tiled, take_stale_desktops, take_tiling_refused, tiled, tiled_dragged, tiling_column,
-    tiling_desktop, tiling_events, tiling_float, tiling_free, tiling_free_for_quit, tiling_reset, tiling_restore,
-    tiling_resync, tiling_rotate, tiling_scroll, tiling_switch_ended, tiling_unfree, tiling_unpark_for_quit,
-    tiling_unsplit, tiling_unstrand,
+    FreeUndo, Turned, is_tiled, take_tiling_capped, take_tiling_refused, tiled, tiled_dragged, tiling_can_unfree,
+    tiling_column, tiling_desktop, tiling_events, tiling_float, tiling_free, tiling_free_for_quit, tiling_reset,
+    tiling_restore, tiling_resync, tiling_rotate, tiling_scroll, tiling_switch_ended, tiling_unfree,
+    tiling_unpark_for_quit, tiling_unsplit, tiling_unstrand,
 };
 
 /// A window the tray couldn't move, probably because it runs as administrator.

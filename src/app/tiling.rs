@@ -63,11 +63,14 @@ pub(super) fn tiling_events(app: &mut App) -> bool {
     if !snap::tiling_events() {
         return false;
     }
-    prune_desktops(app, &snap::take_stale_desktops());
     // The desktop in front may have changed: Win+wheel follows it.
     mousewatch::set_wheel(&wheel_screens(app));
     if let Some(why) = snap::take_tiling_refused() {
         notify(app, "Float or tile this window", &format!("That window can't be tiled: {why}"), BalloonAction::None);
+    }
+    if snap::take_tiling_capped() {
+        let body = format!("The strip holds {} columns already, so the window floats", seam::strip::MAX_COLUMNS);
+        notify(app, "Scrolling", &body, BalloonAction::None);
     }
     if !app.tiling_wait.is_empty() {
         let looked = crate::tiler::take_looked();
@@ -88,24 +91,6 @@ pub(super) fn tiling_events(app: &mut App) -> bool {
     }
     publish(app);
     true
-}
-
-/// Deleted virtual desktops leave this desk's tiling settings, and their trees end, their
-/// windows staying where Windows moved them.
-fn prune_desktops(app: &mut App, stale: &[String]) {
-    let Some(desk) = app.cfg.desks.get_mut(&app.sig).filter(|_| !stale.is_empty()) else { return };
-    let before = desk.tiling.clone();
-    for entry in desk.tiling.values_mut() {
-        entry.desktops.retain(|d| !stale.contains(d));
-    }
-    desk.tiling.retain(|_, t| *t != seam::config::TileScreen::default());
-    if desk.tiling == before {
-        return;
-    }
-    log::info!("tiling: {} deleted virtual desktops leave the settings", stale.len());
-    persist(app);
-    snap::update(app.hwnd, &app.cfg, &app.sig, &app.mons, aside(app).as_deref());
-    pointer_watch(app);
 }
 
 /// Why a setting can't be made while the desktop in front isn't known.
@@ -192,14 +177,24 @@ pub(super) fn undo_free(app: &mut App) {
         log::info!("free all: too late to undo");
         return;
     }
-    if !app.cfg.zones.enabled || snap::tiling_desktop().as_deref() != Some(undo.desktop()) {
-        log::info!("free all: zones are off or another desktop is in front, so it isn't undone");
+    if !app.cfg.zones.enabled || !snap::tiling_can_unfree(&undo) {
+        log::info!("free all: zones are off, or the desktop, the family or the screen's tiling changed since");
+        notify(app, "Free all windows", "Nothing to undo: things changed since", BalloonAction::None);
         return;
     }
-    let desktop = undo.desktop().to_string();
-    apply(app, TilingWait { screen: undo.screen().to_string(), on: Some(true), family: None, reply: None }, &desktop);
+    let (screen, desktop) = (undo.screen().to_string(), undo.desktop().to_string());
+    let was_on = app.cfg.desks.get(&app.sig).and_then(|d| d.tiling.get(&screen)).is_some_and(|t| t.on(&desktop));
+    let wait = |on| TilingWait { screen: screen.clone(), on: Some(on), family: None, reply: None };
+    apply(app, wait(true), &desktop);
     let n = snap::tiling_unfree(undo);
     log::info!("free all: undone, {n} windows tiled again");
+    if n == 0 {
+        // Nothing came back, so the setting goes back to how Undo found it.
+        if !was_on {
+            apply(app, wait(false), &desktop);
+        }
+        notify(app, "Free all windows", "Nothing to undo: the windows moved since", BalloonAction::None);
+    }
 }
 
 /// Scroll left or right on a Scrolling screen, from the keys or `tiling.scroll`: the

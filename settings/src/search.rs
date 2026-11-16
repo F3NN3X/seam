@@ -28,11 +28,6 @@ const fn entry(page: Page, title: &'static str, about: &'static str, keywords: &
     Entry { page, title, about, keywords, within: None, topic: None }
 }
 
-/// A button in About's Support section.
-const fn support(title: &'static str, about: &'static str, keywords: &'static str) -> Entry {
-    Entry { page: Page::About, title, about, keywords, within: Some("Support"), topic: None }
-}
-
 const ENTRIES: &[Entry] = &[
     entry(Page::Displays, "Line up screens", "Line up where your screens physically meet", "calibrate border"),
     entry(
@@ -328,6 +323,12 @@ const ENTRIES: &[Entry] = &[
         "Start order, a delay and waiting for an app's window",
         "launch stage order wait minimized",
     ),
+    entry(
+        Page::Shortcuts,
+        "Use suggested keys",
+        "Give every shortcut with no keys one that doesn't clash",
+        "hotkey keyboard suggest default fill not set record all",
+    ),
     entry(Page::Shortcuts, "Line up screens", "Global shortcut", "hotkey keyboard"),
     entry(Page::Shortcuts, "Pause or resume pointer remap", "Global shortcut", "hotkey keyboard"),
     entry(
@@ -501,11 +502,11 @@ const ENTRIES: &[Entry] = &[
         "hotkey keyboard workspace add send move window row numbered one two three",
     ),
     entry(Page::General, "Start with Windows", "Seam waits in the tray after you sign in", "login autostart"),
-    entry(Page::General, "Offer to line up new screens", "Asks once when screens Seam hasn't seen connect", ""),
+    entry(Page::General, "Offer to line up new screens", "Asks once when a screen Seam hasn't seen connects", ""),
     entry(
         Page::General,
         "When I sign in",
-        "Do nothing, offer my last session, or open a workspace",
+        "Nothing, offer my last session, or open a workspace",
         "session restore reboot sign out login startup workspace ask first",
     ),
     entry(
@@ -514,7 +515,12 @@ const ENTRIES: &[Entry] = &[
         "Windows' Restart apps, or Seam, after you sign in",
         "session restore restart apps sign-in options twice",
     ),
-    entry(Page::General, "Left-click", "Right-click always shows the menu", "tray icon"),
+    entry(
+        Page::General,
+        "Clicking the tray icon",
+        "Right-click always shows the menu",
+        "tray icon left-click open line up",
+    ),
     entry(
         Page::Windows,
         "Step aside for games and full-screen apps",
@@ -540,10 +546,16 @@ const ENTRIES: &[Entry] = &[
     entry(Page::About, "Check for updates every day", "Last checked, and check now", "update version"),
     entry(Page::About, "Install updates on their own", "Only while you're away from the computer", "update"),
     entry(Page::About, "Include pre-releases", "Get new features early", "update beta"),
-    support("Copy diagnostics", "Your version, Windows build, screens and saved borders", "support"),
-    support("Report a problem", "Opens a new GitHub issue", "bug"),
-    support("Source on GitHub", "", "code"),
-    support("Licenses", "", "open source"),
+    entry(Page::About, "Copy diagnostics", "Your version, Windows build, screens and saved borders", "support"),
+    entry(Page::About, "Report a problem", "Opens a new GitHub issue", "support bug"),
+    entry(Page::About, "Source code", "github.com/F3NN3X/seam", "github repository open"),
+    entry(Page::About, "Licenses", "Seam's licence and the open source parts it uses", "license open source"),
+    entry(
+        Page::Help,
+        "Getting started",
+        "Line up your screens, pick zone layouts, capture a workspace",
+        "first steps begin tutorial",
+    ),
 ];
 
 /// One entry for each Help topic, found by any word of its text.
@@ -566,4 +578,33 @@ pub fn find(query: &str) -> Vec<&'static Entry> {
             || e.topic.is_some_and(|i| help::TOPICS[i].mentions(&query))
     };
     ENTRIES.iter().chain(TOPICS.iter()).filter(hit).collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn every_topic_is_on_exactly_one_card() {
+        for topic in help::TOPICS {
+            let cards = help::CARDS.iter().filter(|(_, titles)| titles.contains(&topic.title)).count();
+            assert_eq!(cards, 1, "{}", topic.title);
+        }
+        for title in help::CARDS.iter().flat_map(|(_, titles)| titles.iter()) {
+            assert!(help::position(title).is_some(), "{title} isn't a topic");
+        }
+    }
+
+    #[test]
+    fn a_topic_names_settings_and_topics_that_exist() {
+        for topic in help::TOPICS {
+            for setting in topic.settings {
+                let found = ENTRIES.iter().any(|e| e.page == setting.page && e.title == setting.title);
+                assert!(found, "{}: {} isn't a search entry of {}", topic.title, setting.title, setting.page.title());
+            }
+            for title in topic.related {
+                assert!(help::position(title).is_some(), "{}: {title} isn't a topic", topic.title);
+            }
+        }
+    }
 }

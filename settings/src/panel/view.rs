@@ -37,14 +37,40 @@ impl Panel {
 
     /// Open the Help topic titled `title`.
     pub fn open_topic(&mut self, title: &str, window: &mut Window, cx: &mut Context<Self>) {
-        if let Some(at) = crate::help::TOPICS.iter().position(|t| t.title == title) {
-            self.help_topic = at;
-        }
+        self.help_topic = crate::help::position(title);
         self.show(Page::Help, None, window, cx);
+    }
+
+    /// A help topic is open, so Back has somewhere to go.
+    fn can_go_back(&self) -> bool {
+        self.page == Page::Help && self.help_topic.is_some()
+    }
+
+    /// Open the topic at `at` in `help::TOPICS`, from its top.
+    pub fn open_help_topic(&mut self, at: usize, cx: &mut Context<Self>) {
+        self.help_topic = Some(at);
+        self.page_scroll.set_offset(Point::default());
+        cx.notify();
+    }
+
+    /// Back from a help topic to the topics.
+    pub fn go_back(&mut self, cx: &mut Context<Self>) {
+        if self.can_go_back() {
+            self.help_topic = None;
+            self.page_scroll.set_offset(Point::default());
+            cx.notify();
+        }
     }
 
     fn show_now(&mut self, page: Page, reveal: Option<&'static str>, window: &mut Window, cx: &mut Context<Self>) {
         pages::shortcuts::stop_recording(self);
+        if page != Page::Help {
+            self.help_topic = None;
+        }
+        if self.page == Page::Shortcuts && page != Page::Shortcuts {
+            self.all_shortcuts = false;
+            self.shortcut_filter.update(cx, |input, cx| input.set_value("", window, cx));
+        }
         self.page = page;
         self.changed_only = false;
         if page == Page::Workspaces {
@@ -110,12 +136,20 @@ impl Panel {
             .child(Icon::new(page.icon()).size(px(16.)).text_color(if active { p.text_primary } else { p.text_muted }))
             .child(div().flex_1().child(page.title()))
             .when(update_ready, |d| d.child(ui::dot(p.accent, true)))
-            .on_click(cx.listener(move |this, _, window, cx| this.show(page, None, window, cx)))
+            .on_click(cx.listener(move |this, _, window, cx| this.go_to_nav(page, window, cx)))
             .on_key_down(cx.listener(move |this, e: &KeyDownEvent, window, cx| {
                 if matches!(e.keystroke.key.as_str(), "space" | "enter") {
-                    this.show(page, None, window, cx);
+                    this.go_to_nav(page, window, cx);
                 }
             }))
+    }
+
+    /// A sidebar item opens its page. Help's shows the topics, even from inside a topic.
+    fn go_to_nav(&mut self, page: Page, window: &mut Window, cx: &mut Context<Self>) {
+        if page == Page::Help {
+            self.help_topic = None;
+        }
+        self.show(page, None, window, cx);
     }
 
     fn status_row(&self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement + use<> {
@@ -200,10 +234,9 @@ impl Panel {
     /// The window's own title bar: Back, the mark, and the command bar slot between the kit's controls.
     fn title_bar(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let p = palette(cx);
-        // Back closes a help topic or a workspace's detail. Neither is a view of its own yet
-        // (Help always shows a topic, Workspaces always its editor), so it stays disabled until
-        // the Help and Workspaces pages bring them.
-        let can_go_back = false;
+        // Back closes a help topic or a workspace's detail. Workspaces always shows its editor
+        // (no view of its own yet), so only an open help topic enables it.
+        let can_go_back = self.can_go_back();
         let back = Button::new("back")
             .ghost()
             .icon(Icon::new(assets::IconName::ChevronLeft).size(px(tokens::SIZE_ICON)).text_color(p.text_muted))
@@ -211,7 +244,8 @@ impl Panel {
             .h(px(32.))
             .tooltip(if can_go_back { "Back" } else { "Back works inside a help topic or a workspace" })
             .accessibility_label("Back")
-            .disabled(!can_go_back);
+            .disabled(!can_go_back)
+            .on_click(cx.listener(|this, _, _, cx| this.go_back(cx)));
         let left = div()
             .flex()
             .items_center()
@@ -343,7 +377,7 @@ impl Render for Panel {
             Page::Workspaces => pages::workspaces::render(self, window, cx).into_any_element(),
             Page::Shortcuts => pages::shortcuts::render(self, window, cx).into_any_element(),
             Page::General => pages::general::render(self, window, cx).into_any_element(),
-            Page::Help => pages::help::render(self, cx).into_any_element(),
+            Page::Help => pages::help::render(self, window, cx).into_any_element(),
             Page::About => pages::about::render(self, window, cx).into_any_element(),
         };
         ui::reveal_built();
@@ -354,6 +388,7 @@ impl Render for Panel {
             .key_context(CONTEXT)
             .on_action(cx.listener(|this, _: &FocusSearch, window, cx| this.focus_search(window, cx)))
             .on_action(cx.listener(|this, _: &ClearSearch, window, cx| this.dismiss(window, cx)))
+            .on_action(cx.listener(|this, _: &GoBack, _, cx| this.go_back(cx)))
             .flex()
             .flex_col()
             .size_full()

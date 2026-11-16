@@ -1,7 +1,8 @@
-//! App-wide things: startup, the tray icon, other apps, files.
+//! App-wide things: startup, other apps and assistants, files.
 
 use crate::pages::workspaces::{all, desk_sig};
 use crate::panel::{Panel, error_text, refusal};
+use crate::theme::tokens::{self, text_style};
 use crate::theme::{Palette, palette};
 use crate::ui::{self, card, row, row_with, section, switch};
 use gpui_kit::component::menu::{DropdownMenu, PopupMenuItem};
@@ -129,8 +130,57 @@ pub fn render(panel: &mut Panel, window: &mut Window, cx: &mut Context<Panel>) -
     let view = cx.entity();
 
     let startup = startup_section(panel, &view, p, window, cx);
-    let tray_icon = tray_icon_section(panel, &view, p, window, cx);
     let standing_by = standing_by_note(panel, p, cx);
+    let others = others_section(panel, &view, p, window, cx);
+    let debug_log = switch(
+        "debug-log",
+        "Debug log",
+        panel.config.debug_log,
+        window,
+        cx,
+        setter(&view, |on| json!({ "debug_log": on })),
+    );
+    let files = files_section(debug_log, p, cx);
+    let header = ui::page_title(
+        "General",
+        "How Seam starts, works with other apps, and where it keeps its files",
+        Some("When you sign in"),
+        p,
+        cx,
+    );
+
+    div()
+        .flex()
+        .flex_col()
+        .gap(px(ui::SECTION_GAP))
+        .child(header)
+        .children(standing_by)
+        .child(startup)
+        .child(others)
+        .child(files)
+        .child(
+            text_style(div(), tokens::CAPTION)
+                .text_color(p.text_muted)
+                .child("Seam follows your Windows light or dark mode"),
+        )
+}
+
+/// A switch's change handler that patches one boolean setting.
+fn setter(view: &Entity<Panel>, patch: fn(bool) -> Value) -> impl Fn(bool, &mut Window, &mut App) + 'static + use<> {
+    let view = view.clone();
+    move |on: bool, window: &mut Window, cx: &mut App| {
+        view.update(cx, |panel, cx| panel.patch(patch(on), window, cx));
+    }
+}
+
+/// The Other apps and assistants section: the local API, then the assistants' rows.
+fn others_section(
+    panel: &Panel,
+    view: &Entity<Panel>,
+    p: Palette,
+    window: &mut Window,
+    cx: &mut Context<Panel>,
+) -> AnyElement {
     let connected = panel
         .state
         .as_ref()
@@ -143,46 +193,14 @@ pub fn render(panel: &mut Panel, window: &mut Window, cx: &mut Context<Panel>) -
         panel.config.api.enabled,
         window,
         cx,
-        setter(&view, |on| json!({ "api": { "enabled": on } })),
+        setter(view, |on| json!({ "api": { "enabled": on } })),
     );
-    let debug_log = switch(
-        "debug-log",
-        "Debug log",
-        panel.config.debug_log,
-        window,
-        cx,
-        setter(&view, |on| json!({ "debug_log": on })),
-    );
-    let files = files_section(debug_log, p, cx);
-    let assistants = super::assistants::render(panel, &view, window, cx);
-
-    div()
-        .flex()
-        .flex_col()
-        .gap(px(ui::SECTION_GAP))
-        .child(ui::page_title("General", "How Seam starts and where it keeps its files", p))
-        .children(standing_by)
-        .child(startup)
-        .child(tray_icon)
-        .child(section(
-            "Other apps",
-            card(vec![row("Let other apps control Seam", Some(api_about.into()), api, p)], p),
-            p,
-        ))
-        .child(assistants)
-        .child(files)
-        .child(div().text_size(px(12.)).text_color(p.text_muted).child("Seam follows your Windows light or dark mode"))
+    let mut rows = vec![row("Let other apps control Seam", Some(api_about.into()), api, p)];
+    rows.extend(super::assistants::rows(panel, view, window, cx));
+    section("Other apps and assistants", card(rows, p), p)
 }
 
-/// A switch's change handler that patches one boolean setting.
-fn setter(view: &Entity<Panel>, patch: fn(bool) -> Value) -> impl Fn(bool, &mut Window, &mut App) + 'static + use<> {
-    let view = view.clone();
-    move |on: bool, window: &mut Window, cx: &mut App| {
-        view.update(cx, |panel, cx| panel.patch(patch(on), window, cx));
-    }
-}
-
-/// The Startup section: Windows start-up, new screens, and what happens at sign-in.
+/// The Startup section: Windows start-up, what happens at sign-in, new screens and the tray icon.
 fn startup_section(
     panel: &Panel,
     view: &Entity<Panel>,
@@ -243,7 +261,7 @@ fn startup_section(
     let when = ui::segmented(
         "sign-in-mode",
         "When I sign in",
-        &["Do nothing", "Offer my last session", "Open a workspace"],
+        &["Nothing", "Offer my last session", "Open a workspace"],
         mode_at,
         window,
         cx,
@@ -268,16 +286,21 @@ fn startup_section(
         }
     });
     let seam_reopens = panel.config.restore_apps == RestoreApps::Seam;
+    let offers_last = sign_in.mode == SignInMode::LastSession;
     let reopen_choice = ui::segmented(
         "restore-apps",
         "Who reopens the apps",
-        &["Windows reopens them", "Seam reopens them"],
+        &["Windows", "Seam"],
         usize::from(seam_reopens),
         window,
         cx,
         {
             let view = view.clone();
             move |i, window, cx| {
+                // It only applies when Seam offers the last session, so it does nothing otherwise.
+                if !offers_last {
+                    return;
+                }
                 view.update(cx, |panel, cx| match i {
                     0 => panel.patch(json!({ "restore_apps": "windows" }), window, cx),
                     _ if panel.config.restore_apps != RestoreApps::Seam => confirm_seam_reopens(window, cx),
@@ -286,11 +309,6 @@ fn startup_section(
             }
         },
     );
-    let reopen_about = if seam_reopens {
-        "Seam starts the apps that aren't running, and turns Windows' Restart apps off meanwhile"
-    } else {
-        "Windows' Restart apps or the apps themselves open them, and Seam puts each window back"
-    };
     let restart_note = (sign_in.mode == SignInMode::LastSession
         && seam_reopens
         && panel.state.as_ref().is_some_and(|s| s.restart_apps))
@@ -299,17 +317,32 @@ fn startup_section(
             .on_click(|_, _, cx| cx.open_url("ms-settings:signinoptions"));
         ui::note("Windows' Restart apps is on again, so apps may open twice", Some(open), p)
     });
+    let clicking = usize::from(panel.config.tray_click == TrayClick::LineUp);
+    let tray_click = ui::segmented(
+        "tray-click",
+        "Clicking the tray icon",
+        &["Opens Seam", "Starts Line Up"],
+        clicking,
+        window,
+        cx,
+        {
+            let view = view.clone();
+            move |i, window, cx| {
+                let value = if i == 0 { "open" } else { "line_up" };
+                view.update(cx, |panel, cx| panel.patch(json!({ "tray_click": value }), window, cx));
+            }
+        },
+    );
 
     let mut startup_rows = vec![
         row("Start with Windows", Some(start_about.into()), start_with_windows, p),
-        row("Offer to line up new screens", Some("Asks once when screens Seam hasn't seen connect".into()), offer, p),
         row(
             "When I sign in",
             Some(
                 if sig.is_empty() {
                     "Waiting for Seam to report this desk"
                 } else {
-                    "What Seam does on this desk when it starts at sign-in"
+                    "What Seam does on this desk when it starts"
                 }
                 .into(),
             ),
@@ -317,26 +350,29 @@ fn startup_section(
             p,
         ),
     ];
-    match sign_in.mode {
-        SignInMode::Nothing => {}
-        SignInMode::LastSession => {
-            startup_rows.push(row("Who reopens the apps", Some(reopen_about.into()), reopen_choice, p));
-        }
-        SignInMode::Workspace => {
-            startup_rows.push(row(
-                "Workspace",
-                Some("Switches to it like any workspace switch".into()),
-                workspace_choice,
-                p,
-            ));
-            startup_rows.push(row(
-                "Ask first",
-                Some("Shows a notice to click, and opens nothing until you do".into()),
-                ask_first,
-                p,
-            ));
-        }
+    if sign_in.mode == SignInMode::Workspace {
+        startup_rows.push(row(
+            "Workspace",
+            Some("Switches to it like any workspace switch".into()),
+            workspace_choice,
+            p,
+        ));
+        startup_rows.push(row(
+            "Ask first",
+            Some("Shows a notice to click, and opens nothing until you do".into()),
+            ask_first,
+            p,
+        ));
     }
+    startup_rows.extend([
+        ui::dimmed(
+            row("Who reopens the apps", Some("Seam puts each window back either way".into()), reopen_choice, p),
+            "restore-apps-row",
+            (!offers_last).then_some("Applies when Seam offers your last session"),
+        ),
+        row("Offer to line up new screens", Some("Asks once when a screen Seam hasn't seen connects".into()), offer, p),
+        row("Clicking the tray icon", Some("Right-click always shows the menu".into()), tray_click, p),
+    ]);
     section(
         "Startup",
         card(startup_rows, p)
@@ -374,30 +410,6 @@ fn workspace_choice(
         .into_any_element()
 }
 
-/// The Tray icon section.
-fn tray_icon_section(
-    panel: &Panel,
-    view: &Entity<Panel>,
-    p: Palette,
-    window: &mut Window,
-    cx: &mut Context<Panel>,
-) -> AnyElement {
-    let selected = usize::from(panel.config.tray_click == TrayClick::LineUp);
-    let left_click =
-        ui::segmented("tray-click", "Left-click", &["Open Seam", "Start Line Up"], selected, window, cx, {
-            let view = view.clone();
-            move |i, window, cx| {
-                let value = if i == 0 { "open" } else { "line_up" };
-                view.update(cx, |panel, cx| panel.patch(json!({ "tray_click": value }), window, cx));
-            }
-        });
-    section(
-        "Tray icon",
-        card(vec![row("Left-click", Some("Right-click always shows the menu".into()), left_click, p)], p),
-        p,
-    )
-}
-
 /// Paused or waiting for a full-screen app, in words, with the way out of a pause.
 fn standing_by_note(panel: &Panel, p: Palette, cx: &mut Context<Panel>) -> Option<Div> {
     panel.state.as_ref().and_then(|s| {
@@ -412,21 +424,33 @@ fn standing_by_note(panel: &Panel, p: Palette, cx: &mut Context<Panel>) -> Optio
     })
 }
 
+/// The `…` next to Open: Export… and Import…, for the settings folder.
+fn folder_menu(cx: &mut Context<Panel>) -> AnyElement {
+    let weak = cx.entity().downgrade();
+    let menu = move |menu: gpui_kit::component::menu::PopupMenu, _: &mut Window, _: &mut Context<_>| {
+        let (export_view, import_view) = (weak.clone(), weak.clone());
+        menu.item(PopupMenuItem::new("Export…").on_click(move |_, window, cx| {
+            let _ = export_view.update(cx, |panel, cx| export(panel, window, cx));
+        }))
+        .item(PopupMenuItem::new("Import…").on_click(move |_, window, cx| {
+            let _ = import_view.update(cx, |_, cx| import(window, cx));
+        }))
+    };
+    ui::secondary("folder-more", "…", cx)
+        .accessibility_label("Export or import settings")
+        .dropdown_menu(menu)
+        .into_any_element()
+}
+
 /// The Files and troubleshooting section, around the debug log switch.
 fn files_section(debug_log: Stateful<Div>, p: Palette, cx: &mut Context<Panel>) -> AnyElement {
     let folder = div()
         .flex()
         .gap(px(8.))
-        .child(
-            ui::secondary("export", "Export…", cx)
-                .on_click(cx.listener(|panel, _, window, cx| export(panel, window, cx))),
-        )
-        .child(ui::secondary("import", "Import…", cx).on_click(cx.listener(|_, _, window, cx| import(window, cx))))
-        .child(ui::secondary("open-folder", "Open", cx).on_click(|_, _, _| open_folder()));
-    let folder_path = div()
+        .child(ui::secondary("open-folder", "Open", cx).on_click(|_, _, _| open_folder()))
+        .child(folder_menu(cx));
+    let folder_path = text_style(div(), tokens::MONO)
         .font_family(cx.theme().mono_font_family.clone())
-        .font_weight(FontWeight::NORMAL)
-        .text_size(px(13.))
         .text_color(p.text_secondary)
         .child(folder_label());
     section(

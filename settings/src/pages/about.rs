@@ -1,9 +1,11 @@
 //! Version, updates, support links and diagnostics.
 
-use crate::pages::updates;
+use crate::pages::updates::{self, UpdateUi};
 use crate::panel::Panel;
+use crate::theme::tokens::{self, text_style};
 use crate::theme::{Palette, palette};
-use crate::ui;
+use crate::ui::{self, card, row, row_with};
+use gpui_kit::component::ActiveTheme;
 use gpui_kit::component::WindowExt;
 use gpui_kit::component::notification::Notification;
 use gpui_kit::*;
@@ -81,13 +83,35 @@ pub fn copy_diagnostics(panel: &Panel, window: &mut Window, cx: &mut Context<Pan
     window.push_notification(Notification::new().message("Copied diagnostics"), cx);
 }
 
-pub fn render(panel: &mut Panel, window: &mut Window, cx: &mut Context<Panel>) -> impl IntoElement + use<> {
-    let p = palette(cx);
-    let header = div().flex().items_center().gap(px(16.)).child(mark(p)).child(ui::page_title(
-        format!("Seam {}", env!("CARGO_PKG_VERSION")),
-        format!("Build {} on Windows 11 {}", option_env!("SEAM_BUILD").unwrap_or("dev"), winver::display_version()),
-        p,
-    ));
+/// How the update check stands, at the right of the header. Nothing while an update is on its way
+/// or has failed, as the card under it says so, and nothing for the Store copy, which the Store updates.
+fn update_status(panel: &Panel, p: Palette) -> Option<Div> {
+    if package::is_packaged() {
+        return None;
+    }
+    let (word, color, filled) = match &panel.update_ui {
+        UpdateUi::Checking => ("Checking…", p.text_muted, false),
+        UpdateUi::Idle => match (&panel.update_file.available, panel.update_file.ready, &panel.update_file.error) {
+            (_, _, Some(_)) => return None,
+            (Some(version), true, _) if version != env!("CARGO_PKG_VERSION") => ("Update ready", p.accent, true),
+            (Some(version), false, _) if version != env!("CARGO_PKG_VERSION") => ("Update available", p.accent, false),
+            _ => ("Up to date", p.positive, true),
+        },
+        _ => return None,
+    };
+    Some(
+        div()
+            .flex()
+            .flex_none()
+            .items_center()
+            .gap(px(tokens::SPACE_8))
+            .child(ui::dot(color, filled))
+            .child(text_style(div(), tokens::LABEL).text_color(p.text_secondary).child(word)),
+    )
+}
+
+/// The Support and Seam sections: diagnostics, the issue form, the source and the licences.
+fn links_sections(p: Palette, cx: &mut Context<Panel>) -> [AnyElement; 2] {
     let copy = ui::secondary("copy-diagnostics", "Copy diagnostics", cx)
         .on_click(cx.listener(|panel, _, window, cx| copy_diagnostics(panel, window, cx)));
     let report = ui::secondary("report", "Report a problem", cx).on_click(cx.listener(|panel, _, window, cx| {
@@ -95,9 +119,46 @@ pub fn render(panel: &mut Panel, window: &mut Window, cx: &mut Context<Panel>) -
         cx.open_url(&format!("{REPO}/issues/new"));
         window.push_notification(Notification::new().message("Diagnostics copied. Paste them into the issue"), cx);
     }));
-    let source = ui::secondary("source", "Source on GitHub", cx).on_click(|_, _, cx| cx.open_url(REPO));
-    let licenses = ui::secondary("licenses", "Licenses", cx)
+    let source = ui::secondary("source", "Open on GitHub", cx).on_click(|_, _, cx| cx.open_url(REPO));
+    let licenses = ui::secondary("licenses", "View licenses", cx)
         .on_click(|_, _, cx| cx.open_url(&format!("{REPO}/blob/main/LICENSE")));
+    let repo_name = text_style(div(), tokens::MONO)
+        .font_family(cx.theme().mono_font_family.clone())
+        .text_color(p.text_secondary)
+        .child(REPO.trim_start_matches("https://"));
+    let support = vec![
+        row(
+            "Copy diagnostics",
+            Some("Your version, Windows build, screens and saved borders. No window titles or file paths".into()),
+            copy,
+            p,
+        ),
+        row("Report a problem", Some("Opens a new issue on GitHub. Paste your diagnostics into it".into()), report, p),
+    ];
+    let seam = vec![
+        row_with("Source code", Some(repo_name.into_any_element()), source),
+        row("Licenses", Some("Seam's licence and the open source parts it uses".into()), licenses, p),
+    ];
+    [ui::section("Support", card(support, p), p), ui::section("Seam", card(seam, p), p)]
+}
+
+pub fn render(panel: &mut Panel, window: &mut Window, cx: &mut Context<Panel>) -> impl IntoElement + use<> {
+    let p = palette(cx);
+    let title = ui::page_title(
+        format!("Seam {}", env!("CARGO_PKG_VERSION")),
+        format!("Build {} on Windows 11 {}", option_env!("SEAM_BUILD").unwrap_or("dev"), winver::display_version()),
+        Some("Updates"),
+        p,
+        cx,
+    );
+    let header = div()
+        .flex()
+        .items_center()
+        .gap(px(tokens::SPACE_16))
+        .child(mark(p))
+        .child(title)
+        .child(div().flex_1())
+        .children(update_status(panel, p));
     let mut page = div().flex().flex_col().gap(px(ui::SECTION_GAP)).child(header);
     if let Some(note) = updates::unsigned_note(cx) {
         page = page.child(note);
@@ -107,19 +168,5 @@ pub fn render(panel: &mut Panel, window: &mut Window, cx: &mut Context<Panel>) -
     {
         page = page.child(card);
     }
-    page.child(updates::group(panel, window, cx)).child(ui::section(
-        "Support",
-        div()
-            .flex()
-            .flex_col()
-            .gap(px(8.))
-            .child(div().flex().gap(px(8.)).child(copy).child(report).child(source).child(licenses))
-            .child(
-                div()
-                    .text_size(px(12.))
-                    .text_color(p.text_muted)
-                    .child("Diagnostics holds your version, Windows build, screens and saved borders. No window titles or file paths"),
-            ),
-        p,
-    ))
+    page.child(updates::group(panel, window, cx)).children(links_sections(p, cx))
 }

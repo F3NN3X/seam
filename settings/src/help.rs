@@ -6,19 +6,62 @@ use crate::panel::Page;
 pub enum Block {
     Text(&'static str),
     List(&'static [&'static str]),
-    /// A step, with a button that opens the page that does it.
-    Step {
-        title: &'static str,
-        text: &'static str,
-        page: Page,
-    },
+}
+
+/// A row of the settings a topic is about, and where it is.
+pub struct Setting {
+    pub title: &'static str,
+    pub page: Page,
+    pub section: &'static str,
 }
 
 pub struct Topic {
     pub title: &'static str,
+    /// The line under the title.
+    pub about: &'static str,
     pub blocks: &'static [Block],
     /// The page the button under the text opens.
     pub opens: Option<Page>,
+    pub settings: &'static [Setting],
+    /// Topics to read next, by title.
+    pub related: &'static [&'static str],
+}
+
+/// Help's cards: a page's name, and the titles of the topics under it.
+pub const CARDS: &[(&str, &[&str])] = &[
+    ("Displays", &["Pointer and borders", "Line Up aids", "Glue and Not on my desk", "Layout views"]),
+    ("Zones and workspaces", &["Zones", "Workspaces", "Where apps open", "When you sign in"]),
+    (
+        "Windows",
+        &[
+            "Moving windows",
+            "Focus and Spotlight",
+            "Pins and borders",
+            "Apps running as administrator",
+            "Pause and full-screen apps",
+        ],
+    ),
+    ("Other apps", &["Shortcuts", "Stream Deck", "Local API", "Assistants (MCP)", "Updates"]),
+];
+
+/// The three steps Help starts with: what to do, and the page that does it.
+pub const GETTING_STARTED: &[(&str, &str, Page)] = &[
+    (
+        "Line up your screens",
+        "Drag two lines across each border until the stripes run straight over the bezel",
+        Page::Displays,
+    ),
+    (
+        "Pick zone layouts",
+        "Choose Columns, Rows, Grid, Priority, Main + stack or Stack + main for each screen",
+        Page::Zones,
+    ),
+    ("Capture a workspace", "Arrange your windows, then save which app is where", Page::Workspaces),
+];
+
+/// The index of the topic titled `title`.
+pub fn position(title: &str) -> Option<usize> {
+    TOPICS.iter().position(|t| t.title == title)
 }
 
 impl Topic {
@@ -29,7 +72,6 @@ impl Topic {
             || self.blocks.iter().any(|block| match block {
                 Block::Text(text) => has(text),
                 Block::List(items) => items.iter().any(|item| has(item)),
-                Block::Step { title, text, .. } => has(title) || has(text),
             })
     }
 }
@@ -39,35 +81,12 @@ pub fn plain(text: &str) -> String {
     text.replace("**", "")
 }
 
-use Block::{List, Step, Text};
+use Block::{List, Text};
 
 pub const TOPICS: &[Topic] = &[
     Topic {
-        title: "Getting started",
-        blocks: &[
-            Text(
-                "Seam makes the pointer cross where your screens physically meet, and puts your windows where you want them. Three steps get you there.",
-            ),
-            Step {
-                title: "Line up your screens",
-                text: "Drag two lines across each border until the stripes run straight over the bezel",
-                page: Page::Displays,
-            },
-            Step {
-                title: "Pick zone layouts",
-                text: "Choose Columns, Rows, Grid, Priority, Main + stack or Stack + main for each screen",
-                page: Page::Zones,
-            },
-            Step {
-                title: "Capture a workspace",
-                text: "Arrange your windows, then save which app is where",
-                page: Page::Workspaces,
-            },
-        ],
-        opens: None,
-    },
-    Topic {
         title: "Pointer and borders",
+        about: "How the pointer crosses between your screens, and how Seam lines them up",
         blocks: &[
             Text(
                 "Windows keeps the same pixel row when the pointer crosses to another screen, so between screens of different sizes it jumps. Seam puts it where the screens physically meet instead.",
@@ -94,10 +113,18 @@ pub const TOPICS: &[Topic] = &[
                 "Seam relies on Windows' **Ease cursor movement between displays**, so the pointer can always leave a screen toward its neighbour. When it's off, the Displays page says so, and **Turn it on** turns it on for you and checks that Windows kept it. Seam never turns it off.",
             ),
         ],
+        settings: &[
+            Setting { title: "Remap pointer at borders", page: Page::Displays, section: "Pointer" },
+            Setting { title: "Also align Windows arrangement", page: Page::Displays, section: "Pointer" },
+            Setting { title: "Edge resistance", page: Page::Displays, section: "Pointer" },
+            Setting { title: "Borders", page: Page::Displays, section: "Borders" },
+        ],
+        related: &["Line Up aids", "Glue and Not on my desk", "Layout views"],
         opens: Some(Page::Displays),
     },
     Topic {
         title: "Line Up aids",
+        about: "The stripes and typed measurements that help you line screens up",
         blocks: &[
             Text(
                 "Each step names both screens with their models, such as \"Line up screen 3 (HDMI) with screen 4 (U3477)\", and says which way to move each line, such as straight below or level with the line on the reference screen.",
@@ -109,10 +136,13 @@ pub const TOPICS: &[Topic] = &[
                 "Typing needs both screens to report their size",
             ]),
         ],
+        settings: &[Setting { title: "Type measurements in Line Up", page: Page::Displays, section: "Pointer" }],
+        related: &["Pointer and borders", "Glue and Not on my desk"],
         opens: Some(Page::Displays),
     },
     Topic {
         title: "Glue and Not on my desk",
+        about: "For screens that touch on your desk but not in Windows, and the other way round",
         blocks: &[
             Text("Windows doesn't always have your screens as they stand on your desk. Line Up handles two cases."),
             Text(
@@ -128,10 +158,16 @@ pub const TOPICS: &[Topic] = &[
             ),
             Text("Displays describes these borders as glued or \"Not on your desk\"."),
         ],
+        settings: &[
+            Setting { title: "Glued edge push", page: Page::Displays, section: "Pointer" },
+            Setting { title: "Borders", page: Page::Displays, section: "Borders" },
+        ],
+        related: &["Pointer and borders", "Line Up aids"],
         opens: Some(Page::Displays),
     },
     Topic {
         title: "Layout views",
+        about: "Your desk as it stands, and the arrangement as Windows has it",
         blocks: &[
             Text(
                 "The **Physical layout** card on Displays shows your screens two ways. Switch between them above the map.",
@@ -144,10 +180,16 @@ pub const TOPICS: &[Topic] = &[
                 "Click a screen to flash its number on it. **Show on screens** draws the chosen view on every real screen for a few seconds, with each screen's number and model and a band along each edge that has a neighbour. Esc or a click closes it.",
             ),
         ],
+        settings: &[
+            Setting { title: "Physical layout", page: Page::Displays, section: "Physical layout" },
+            Setting { title: "Show on screens", page: Page::Displays, section: "Physical layout" },
+        ],
+        related: &["Pointer and borders", "Line Up aids"],
         opens: Some(Page::Displays),
     },
     Topic {
         title: "Zones",
+        about: "Hold a key while you drag a window to drop it into a zone",
         blocks: &[
             Text(
                 "Pick a layout for each screen: Columns, Rows, Grid, Priority, Main + stack or Stack + main. Then hold Shift while you drag a window. The zones show on the screen under the pointer, and letting go drops the window into the one that's lit.",
@@ -229,10 +271,20 @@ pub const TOPICS: &[Topic] = &[
             ),
             Text("Layouts belong to the desk, so each set of screens keeps its own."),
         ],
+        settings: &[
+            Setting { title: "Show zones while dragging", page: Page::Zones, section: "Snapping" },
+            Setting { title: "Span zones", page: Page::Zones, section: "Snapping" },
+            Setting { title: "Gap between zones", page: Page::Zones, section: "Snapping" },
+            Setting { title: "Screen margins", page: Page::Zones, section: "Snapping" },
+            Setting { title: "Snap beside a window", page: Page::Zones, section: "Snapping" },
+            Setting { title: "Arrange new windows automatically", page: Page::Windows, section: "Tiling" },
+        ],
+        related: &["Workspaces", "Where apps open", "Moving windows"],
         opens: Some(Page::Zones),
     },
     Topic {
         title: "Moving windows",
+        about: "Move, focus and swap windows by the way your screens stand on your desk",
         blocks: &[
             Text("Left means left on your desk, as the screens physically stand, not in Windows' pixel layout."),
             List(&[
@@ -265,10 +317,26 @@ pub const TOPICS: &[Topic] = &[
                 "If komorebi, GlazeWM or LeopardWM is running, Seam leaves placing windows to it. **Another window manager handles my windows** does the same for any other one.",
             ),
         ],
+        settings: &[
+            Setting {
+                title: "Move and resize from anywhere in a window",
+                page: Page::Windows,
+                section: "Moving and resizing",
+            },
+            Setting {
+                title: "When a window moves to another screen",
+                page: Page::Windows,
+                section: "Moving and resizing",
+            },
+            Setting { title: "Open the overview from a corner", page: Page::Windows, section: "Moving and resizing" },
+            Setting { title: "Move window left", page: Page::Shortcuts, section: "Windows" },
+        ],
+        related: &["Focus and Spotlight", "Zones", "Shortcuts"],
         opens: Some(Page::Shortcuts),
     },
     Topic {
-        title: "Focus and spotlight",
+        title: "Focus and Spotlight",
+        about: "Minimize the rest, or dim everything but the window you use",
         blocks: &[
             List(&[
                 "**Focus on this window** minimizes the other windows on its screen, and pressing it again brings them back. Windows pinned on top or kept out of workspace switches stay, and so do the zones' excluded apps.",
@@ -278,10 +346,16 @@ pub const TOPICS: &[Topic] = &[
                 "Neither has a key until you set one on the Shortcuts page. Focus on this window leaves placing windows to another window manager if one is running, and Spotlight keeps working next to it.",
             ),
         ],
+        settings: &[
+            Setting { title: "Focus on this window", page: Page::Shortcuts, section: "Windows" },
+            Setting { title: "Spotlight", page: Page::Shortcuts, section: "Windows" },
+        ],
+        related: &["Moving windows", "Shortcuts"],
         opens: Some(Page::Shortcuts),
     },
     Topic {
         title: "Apps running as administrator",
+        about: "Why Seam can't move the windows of an elevated app",
         blocks: &[
             Text(
                 "Windows doesn't let an app move the windows of an app that runs with more rights. That's why an elevated app's window can't move with Seam.",
@@ -291,10 +365,13 @@ pub const TOPICS: &[Topic] = &[
                 "Or leave those windows alone. The pointer remap and Line Up work either way.",
             ]),
         ],
+        settings: &[],
+        related: &["Moving windows", "Pause and full-screen apps"],
         opens: None,
     },
     Topic {
         title: "Pins and borders",
+        about: "Keep a window on top, and mark the one with focus",
         blocks: &[
             List(&[
                 "**Pin window on top** keeps the focused window above the others until you press it again",
@@ -312,10 +389,22 @@ pub const TOPICS: &[Topic] = &[
                 "**Pinned windows stay when I switch workspaces** makes a switch leave a window pinned on top alone, like a sticky one.",
             ),
         ],
+        settings: &[
+            Setting { title: "Focus border", page: Page::Windows, section: "Borders" },
+            Setting { title: "Pin border", page: Page::Windows, section: "Borders" },
+            Setting { title: "Tell me when a pinned window closes", page: Page::Windows, section: "Pinned windows" },
+            Setting {
+                title: "Pinned windows stay when I switch workspaces",
+                page: Page::Windows,
+                section: "Pinned windows",
+            },
+        ],
+        related: &["Focus and Spotlight", "Workspaces"],
         opens: Some(Page::Windows),
     },
     Topic {
         title: "Workspaces",
+        about: "Save which app is where, then put them back with one shortcut",
         blocks: &[
             Text(
                 "A workspace saves which app is on which screen and in which zone, how each window shows, and which one had the focus, for the desk you have connected.",
@@ -362,10 +451,25 @@ pub const TOPICS: &[Topic] = &[
                 "The workspace in use shows as Active in the list, and as Active, moved once one of its windows moved. **Set as default**, on a workspace's menu, makes it the one in use when Seam starts and none is remembered.",
             ),
         ],
+        settings: &[
+            Setting { title: "Put apps in place when they open", page: Page::Workspaces, section: "All workspaces" },
+            Setting {
+                title: "Update from screen removes apps that aren't open",
+                page: Page::Workspaces,
+                section: "All workspaces",
+            },
+            Setting {
+                title: "Bring back minimized windows",
+                page: Page::Workspaces,
+                section: "When you switch to a workspace",
+            },
+        ],
+        related: &["Zones", "Where apps open", "When you sign in"],
         opens: Some(Page::Workspaces),
     },
     Topic {
         title: "Where apps open",
+        about: "Send an app to a place whenever it opens",
         blocks: &[
             Text(
                 "**Where apps open**, on the Windows page, sends an app's window to a place whenever it opens, with or without a workspace. **Add an app**, then pick its screen and zone, or the full screen.",
@@ -386,13 +490,20 @@ pub const TOPICS: &[Topic] = &[
                 "**...**, **Edit** and **Leave out of smart tiling** on an app's row keep its windows floating on a screen where **Arrange new windows automatically** is on. Choose **Doesn't move** as its place to only do that.",
             ),
         ],
+        settings: &[
+            Setting { title: "Where apps open", page: Page::Windows, section: "Where apps open" },
+            Setting { title: "Left alone", page: Page::Windows, section: "Where apps open" },
+            Setting { title: "Put apps in place when they open", page: Page::Workspaces, section: "All workspaces" },
+        ],
+        related: &["Workspaces", "Zones", "Pins and borders"],
         opens: Some(Page::Windows),
     },
     Topic {
         title: "When you sign in",
+        about: "What Seam does on this desk when you sign in",
         blocks: &[
             Text(
-                "**When I sign in**, on General, picks what Seam does on this desk when it starts at sign-in: **Do nothing** (the default), **Offer my last session** or **Open a workspace**. Starting Seam by hand does none of them.",
+                "**When I sign in**, on General, picks what Seam does on this desk when it starts at sign-in: **Nothing** (the default), **Offer my last session** or **Open a workspace**. Starting Seam by hand does none of them.",
             ),
             Text(
                 "**Offer my last session** keeps a hidden last session for each desk: which apps are where, and which are pinned. At sign-in Seam asks whether to restore it. A click puts the windows back in their zones and pins them again. Nothing starts without the click.",
@@ -401,13 +512,20 @@ pub const TOPICS: &[Topic] = &[
                 "**Open a workspace** switches to the workspace you pick, like any workspace switch. **Ask first** is on by default: Seam shows \"Open <workspace>? Click to open\" and waits for the click. Off, it switches about 10 seconds after the taskbar is up. If a full-screen app is in front it waits, up to 3 minutes after Seam starts. A pause by hand cancels it. It acts on the desk that is current then.",
             ),
             Text(
-                "**Who reopens the apps** picks **Windows reopens them**, where Seam puts each window back as it appears, or **Seam reopens them**, where Seam starts the missing apps itself.",
+                "**Who reopens the apps** picks **Windows**, where Seam puts each window back as it appears, or **Seam**, where Seam starts the missing apps itself.",
             ),
         ],
+        settings: &[
+            Setting { title: "Start with Windows", page: Page::General, section: "Startup" },
+            Setting { title: "When I sign in", page: Page::General, section: "Startup" },
+            Setting { title: "Who reopens the apps", page: Page::General, section: "Startup" },
+        ],
+        related: &["Workspaces", "Where apps open"],
         opens: Some(Page::General),
     },
     Topic {
         title: "Pause and full-screen apps",
+        about: "When Seam steps aside, and how to pause it yourself",
         blocks: &[
             Text(
                 "**Step aside for games and full-screen apps**, on Windows, is on by default. While a game, a video or a slide show fills a screen, Seam gives its shortcuts back to that app, shows no zones when you drag, and turns Spotlight and the focus border off. Everything comes back when you leave it.",
@@ -416,10 +534,20 @@ pub const TOPICS: &[Topic] = &[
                 "**Pause Seam**, in the tray menu or on a shortcut you set on Shortcuts, does the same by hand and also turns the pointer remap off and leaves new windows where they open. It isn't saved, so Seam is running again after a restart.",
             ),
         ],
+        settings: &[
+            Setting {
+                title: "Step aside for games and full-screen apps",
+                page: Page::Windows,
+                section: "Games and other window managers",
+            },
+            Setting { title: "Pause Seam", page: Page::Shortcuts, section: "Displays" },
+        ],
+        related: &["Shortcuts", "Apps running as administrator"],
         opens: Some(Page::Windows),
     },
     Topic {
         title: "Shortcuts",
+        about: "Keys that work anywhere in Windows, even with this window closed",
         blocks: &[
             Text("Shortcuts work anywhere in Windows, even with the Seam window closed."),
             List(&[
@@ -434,10 +562,16 @@ pub const TOPICS: &[Topic] = &[
             ),
             Text("If another app already holds a shortcut, its keys turn red and Seam keeps running without it."),
         ],
+        settings: &[
+            Setting { title: "Line up screens", page: Page::Shortcuts, section: "Displays" },
+            Setting { title: "Capture current windows", page: Page::Shortcuts, section: "Workspaces" },
+        ],
+        related: &["Moving windows", "Focus and Spotlight", "Workspaces"],
         opens: Some(Page::Shortcuts),
     },
     Topic {
         title: "Stream Deck",
+        about: "Put Seam on Stream Deck keys",
         blocks: &[
             Text(
                 "The Seam plugin puts Seam on Stream Deck keys. It talks to Seam through the local API, so **Let other apps control Seam** on General has to stay on.",
@@ -452,10 +586,17 @@ pub const TOPICS: &[Topic] = &[
                 "To install it, open the co.f3nn3x.seam.streamDeckPlugin file, and the Stream Deck app adds a Seam group to its actions. When Seam isn't running, every key says so and reconnects by itself.",
             ),
         ],
+        settings: &[Setting {
+            title: "Let other apps control Seam",
+            page: Page::General,
+            section: "Other apps and assistants",
+        }],
+        related: &["Local API", "Assistants (MCP)"],
         opens: Some(Page::General),
     },
     Topic {
         title: "Local API",
+        about: "Let tools on this PC read status and switch workspaces",
         blocks: &[
             Text(
                 "Tools on this PC can control Seam through its local API, the way the Stream Deck plugin does. They can read status, switch workspaces, line up screens and move windows.",
@@ -464,10 +605,17 @@ pub const TOPICS: &[Topic] = &[
                 "**Let other apps control Seam**, on General, turns it on or off, and says how many apps are connected. The Seam window has its own connection, so it keeps working either way.",
             ),
         ],
+        settings: &[Setting {
+            title: "Let other apps control Seam",
+            page: Page::General,
+            section: "Other apps and assistants",
+        }],
+        related: &["Stream Deck", "Assistants (MCP)"],
         opens: Some(Page::General),
     },
     Topic {
         title: "Assistants (MCP)",
+        about: "Let an AI assistant read status and switch workspaces",
         blocks: &[
             Text(
                 "An AI assistant that speaks MCP, such as Claude, can use Seam through seam-mcp.exe, which sits next to seam.exe. Add its path to the assistant's MCP settings as a server that runs over stdio. **Copy** on General gives you the path.",
@@ -482,10 +630,25 @@ pub const TOPICS: &[Topic] = &[
                 "It can't change which programs a workspace starts, its shortcut, or what happens to other windows, and it can't close windows or change your settings",
             ]),
         ],
+        settings: &[
+            Setting {
+                title: "Let assistants use Seam (MCP)",
+                page: Page::General,
+                section: "Other apps and assistants",
+            },
+            Setting {
+                title: "Let assistants change workspaces",
+                page: Page::General,
+                section: "Other apps and assistants",
+            },
+            Setting { title: "seam-mcp.exe", page: Page::General, section: "Other apps and assistants" },
+        ],
+        related: &["Local API", "Stream Deck"],
         opens: Some(Page::General),
     },
     Topic {
         title: "Updates",
+        about: "How Seam finds, checks and installs new versions",
         blocks: &[
             Text("About shows your version and the result of each update check."),
             List(&[
@@ -497,6 +660,12 @@ pub const TOPICS: &[Topic] = &[
                 "The updater only installs releases signed with Seam's key. The Store copy is updated by the Microsoft Store.",
             ),
         ],
+        settings: &[
+            Setting { title: "Check for updates every day", page: Page::About, section: "Updates" },
+            Setting { title: "Install updates on their own", page: Page::About, section: "Updates" },
+            Setting { title: "Include pre-releases", page: Page::About, section: "Updates" },
+        ],
+        related: &["Shortcuts"],
         opens: Some(Page::About),
     },
 ];

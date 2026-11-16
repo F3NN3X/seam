@@ -85,8 +85,8 @@ fn ease_alert(p: Palette, cx: &mut Context<Panel>) -> Div {
 pub fn render(panel: &mut Panel, window: &mut Window, cx: &mut Context<Panel>) -> impl IntoElement + use<> {
     let p = palette(cx);
     let one_screen = panel.mons.len() < 2;
-    let header =
-        ui::page_header_with("Displays", desks::desk_menu(panel, cx)).child(header_actions(panel, one_screen, cx));
+    let header = ui::page_header_with("Displays", Some("Pointer and borders"), desks::desk_menu(panel, cx), cx)
+        .child(header_actions(panel, one_screen, cx));
 
     let width = (f64::from(window.viewport_size().width) - 240. - 64. - 34.).min(CONTENT_WIDTH);
     let mut content = vec![];

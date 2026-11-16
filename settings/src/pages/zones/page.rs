@@ -4,7 +4,6 @@ use super::*;
 use crate::pages::app_rules;
 use crate::theme::Palette;
 use crate::ui::{Card, Row, section, switch};
-use gpui_kit::component::slider::Slider;
 use seam::config::{WindowSettings, ZoneSettings};
 use seam::tiling::Family;
 
@@ -14,13 +13,6 @@ pub fn render(panel: &mut Panel, window: &mut Window, cx: &mut Context<Panel>) -
     let view = cx.entity();
 
     let header = header(&zones_cfg, &view, p, window, cx);
-
-    // The slider follows the setting when something else changed it.
-    let gap = zones_cfg.gap.min(32) as f32;
-    if panel.gap.read(cx).value().end() != gap {
-        panel.gap.update(cx, |slider, cx| slider.set_value(gap, window, cx));
-    }
-
     let notice = other_wm_notice(panel);
 
     let mut body = div()
@@ -39,21 +31,22 @@ pub fn render(panel: &mut Panel, window: &mut Window, cx: &mut Context<Panel>) -
         panel.editor = None;
     }
     // Built here, past the early return, so only sections that are drawn count as shown.
-    let snapping = snapping_section(panel, &zones_cfg, &view, p, window, cx);
+    let snapping = snapping_section(panel, &view, p, window, cx);
     let windows = windows_section(panel, &view, p, window, cx);
     let tabs = screen_tabs(panel, &view, window, cx);
 
     let number = panel.zone_screen.min(panel.mons.len() - 1) + 1;
-    let (picker, own) = layout_picker(panel, &mon, saved.as_ref(), number, p, window, cx);
+    let (picker, own) = picker::section_of(panel, &mon, saved.as_ref(), number, p, window, cx);
     let stage = stage(panel, &mon, saved.as_ref(), own, number, window, cx);
     let tiling = tiling_card(panel, number, p, window, cx);
 
+    // Smart tiling, Windows and Where apps open are Windows page rows that haven't moved yet.
     body = body
         .child(div().flex().child(tabs))
         .child(div().flex().flex_col().min_w_0().child(stage))
-        .child(tiling)
         .child(picker)
         .child(snapping)
+        .child(tiling)
         .child(windows)
         .child(app_rules::view(panel, cx));
     body
@@ -67,7 +60,11 @@ fn header(
     window: &mut Window,
     cx: &mut Context<Panel>,
 ) -> Div {
-    let subtitle = format!("Hold {} while you drag a window to drop it into a zone", key_label(&zones_cfg.show_key));
+    let subtitle = if zones_cfg.pause_to_snap {
+        format!("Pause, or hold {}, while you drag a window to drop it into a zone", key_label(&zones_cfg.show_key))
+    } else {
+        format!("Hold {} while you drag a window to drop it into a zone", key_label(&zones_cfg.show_key))
+    };
     let on = switch("zones-on", "Zones", zones_cfg.enabled, window, cx, {
         let view = view.clone();
         move |on, window, cx| {
@@ -87,215 +84,6 @@ fn header(
             }))
             .child(on),
     )
-}
-
-/// The Snapping section: the keys, gap and restore card, then the switches under it.
-fn snapping_section(
-    panel: &Panel,
-    zones_cfg: &ZoneSettings,
-    view: &Entity<Panel>,
-    p: Palette,
-    window: &mut Window,
-    cx: &mut Context<Panel>,
-) -> AnyElement {
-    let snapping = snapping_keys_card(panel, zones_cfg, view, p, window, cx);
-    let rows = snapping_switches(zones_cfg, view, p, window, cx);
-    let keys = ["Show zones", "Span zones", "Gap", "Restore size when dragged out", "Screen margins"];
-    let keys_show = ui::shows_any(&keys);
-    let body = card(rows, p).within(keys_show, |card| {
-        div().flex().flex_col().gap(px(12.)).when(keys_show, |d| d.child(snapping)).child(card)
-    });
-    section("Snapping", body, p)
-}
-
-/// Show and span keys, the gap and restore size.
-fn snapping_keys_card(
-    panel: &Panel,
-    zones_cfg: &ZoneSettings,
-    view: &Entity<Panel>,
-    p: Palette,
-    window: &mut Window,
-    cx: &mut Context<Panel>,
-) -> Div {
-    let show_at = KEYS.iter().position(|(k, _)| *k == zones_cfg.show_key).unwrap_or(0);
-    let span_at = KEYS.iter().position(|(k, _)| *k == zones_cfg.span_key).unwrap_or(1);
-    let show = ui::segmented("zone-show-key", "Show zones", &["Shift", "Ctrl", "Alt"], show_at, window, cx, {
-        let view = view.clone();
-        move |i, window, cx| {
-            // The span key can't be the same key, so it moves to the next one.
-            let mut zones = json!({ "show_key": KEYS[i].0 });
-            if KEYS[i].0 == KEYS[span_at].0 {
-                zones["span_key"] = json!(KEYS[(i + 1) % KEYS.len()].0);
-            }
-            view.update(cx, |panel, cx| panel.patch(json!({ "zones": zones }), window, cx));
-        }
-    });
-    let span_labels = SPAN_ORDER.iter().map(|i| SharedString::from(KEYS[*i].1)).collect();
-    let span_blocked = SPAN_ORDER.iter().position(|i| *i == show_at).map(|at| {
-        let why = [
-            "Ctrl is already used to show zones",
-            "Shift is already used to show zones",
-            "Alt is already used to show zones",
-        ];
-        (at, why[SPAN_ORDER[at]])
-    });
-    let span_selected = SPAN_ORDER.iter().position(|i| *i == span_at).unwrap_or(0);
-    let span = ui::choice("zone-span-key", "Span zones", span_labels, span_blocked, span_selected, window, cx, {
-        let view = view.clone();
-        move |i, window, cx| {
-            let key = KEYS[SPAN_ORDER[i]].0;
-            view.update(cx, |panel, cx| panel.patch(json!({ "zones": { "span_key": key } }), window, cx));
-        }
-    });
-    let ends = |text: &'static str| div().text_size(px(12.)).text_color(p.text_muted).child(text);
-    let slider = div()
-        .flex()
-        .items_center()
-        .gap(px(12.))
-        .child(ends("0"))
-        .child(Slider::new(&panel.gap).horizontal().w(px(160.)))
-        .child(ends("32"));
-    let restore = switch("zone-restore", "Restore size when dragged out", zones_cfg.restore_size, window, cx, {
-        let view = view.clone();
-        move |on, window, cx| {
-            view.update(cx, |panel, cx| panel.patch(json!({ "zones": { "restore_size": on } }), window, cx))
-        }
-    });
-    let cell = |content: AnyElement| div().flex_1().min_w_0().child(content);
-    div()
-        .flex()
-        .flex_col()
-        .bg(p.surface_card)
-        .border_1()
-        .border_color(p.hairline)
-        .rounded(px(12.))
-        .child(
-            div()
-                .flex()
-                .child(cell(row("Show zones", Some("Hold while dragging".into()), show, p).into_any_element()))
-                .child(
-                    cell(row("Span zones", Some("Add this key to cover more".into()), span, p).into_any_element())
-                        .border_l_1()
-                        .border_color(p.hairline),
-                ),
-        )
-        .child(
-            div()
-                .flex()
-                .border_t_1()
-                .border_color(p.hairline)
-                .child(cell(
-                    row("Gap", Some(format!("{} px", zones_cfg.gap.min(32)).into()), slider, p).into_any_element(),
-                ))
-                .child(
-                    cell(
-                        row(
-                            "Restore size when dragged out",
-                            Some("The window gets its old size back".into()),
-                            restore,
-                            p,
-                        )
-                        .into_any_element(),
-                    )
-                    .border_l_1()
-                    .border_color(p.hairline),
-                ),
-        )
-        .child(div().border_t_1().border_color(p.hairline).child(margins::row(panel, p, window, cx)))
-}
-
-/// The switch rows of the Snapping card.
-fn snapping_switches(
-    zones_cfg: &ZoneSettings,
-    view: &Entity<Panel>,
-    p: Palette,
-    window: &mut Window,
-    cx: &mut Context<Panel>,
-) -> Vec<Row> {
-    let refit = switch("zone-refit", "Keep windows in their zones", zones_cfg.refit, window, cx, {
-        let view = view.clone();
-        move |on, window, cx| view.update(cx, |panel, cx| panel.patch(json!({ "zones": { "refit": on } }), window, cx))
-    });
-    let on_screen = switch("zone-on-screen", "Edit layouts on the screen", zones_cfg.edit_on_screen, window, cx, {
-        let view = view.clone();
-        move |on, window, cx| {
-            view.update(cx, |panel, cx| panel.patch(json!({ "zones": { "edit_on_screen": on } }), window, cx))
-        }
-    });
-    let neighbours =
-        switch("zone-neighbours", "Resize neighbours with a window", zones_cfg.resize_neighbours, window, cx, {
-            let view = view.clone();
-            move |on, window, cx| {
-                view.update(cx, |panel, cx| panel.patch(json!({ "zones": { "resize_neighbours": on } }), window, cx))
-            }
-        });
-    let swap = switch("zone-swap", "Swap with the window already in a zone", zones_cfg.swap_on_drop, window, cx, {
-        let view = view.clone();
-        move |on, window, cx| {
-            view.update(cx, |panel, cx| panel.patch(json!({ "zones": { "swap_on_drop": on } }), window, cx))
-        }
-    });
-    let swap_row =
-        row("Swap with the window already in a zone", Some("Off lets windows overlap in a zone".into()), swap, p);
-    let beside = switch("zone-beside", "Snap beside a window", zones_cfg.snap_beside, window, cx, {
-        let view = view.clone();
-        move |on, window, cx| {
-            view.update(cx, |panel, cx| panel.patch(json!({ "zones": { "snap_beside": on } }), window, cx))
-        }
-    });
-    let beside_row =
-        row("Snap beside a window", Some("Drop on a window's edge to put the two side by side".into()), beside, p);
-    let pause = switch("zone-pause", "Pause to snap", zones_cfg.pause_to_snap, window, cx, {
-        let view = view.clone();
-        move |on, window, cx| {
-            view.update(cx, |panel, cx| panel.patch(json!({ "zones": { "pause_to_snap": on } }), window, cx))
-        }
-    });
-    let pause_row =
-        row("Pause to snap", Some("Hold still while dragging to show zones, no key needed".into()), pause, p);
-    let hints = switch("zone-hints", "Show keys while dragging", zones_cfg.drag_hints, window, cx, {
-        let view = view.clone();
-        move |on, window, cx| {
-            view.update(cx, |panel, cx| panel.patch(json!({ "zones": { "drag_hints": on } }), window, cx))
-        }
-    });
-    let hints_row = row(
-        "Show keys while dragging",
-        Some("A strip on the screen names the wheel, right-click and the keys".into()),
-        hints,
-        p,
-    );
-    let neighbours_row = row(
-        "Resize neighbours with a window",
-        Some("Windows in the zones next to it follow its edge".into()),
-        neighbours,
-        p,
-    );
-    let handles = switch("zone-handles", "Handles between snapped windows", zones_cfg.divider_handles, window, cx, {
-        let view = view.clone();
-        move |on, window, cx| {
-            view.update(cx, |panel, cx| panel.patch(json!({ "zones": { "divider_handles": on } }), window, cx))
-        }
-    });
-    let handles_row = row(
-        "Handles between snapped windows",
-        Some("Drag one to resize both sides. Right-click for sizes".into()),
-        handles,
-        p,
-    );
-    let on_screen_row = row(
-        "Edit layouts on the screen",
-        Some("Off shows a live view on the screen, and you edit in the preview here".into()),
-        on_screen,
-        p,
-    );
-    let refit_row = row(
-        "Keep windows in their zones",
-        Some("Experimental. Moves snapped windows back after a screen or resolution change".into()),
-        refit,
-        p,
-    );
-    vec![swap_row, beside_row, pause_row, hints_row, neighbours_row, handles_row, on_screen_row, refit_row]
 }
 
 /// Another window manager places the windows, so snapping steps aside (D110).
@@ -635,86 +423,7 @@ fn screen_tabs(panel: &Panel, view: &Entity<Panel>, window: &mut Window, cx: &mu
     })
 }
 
-/// The layout tiles: built in, then yours. Also gives the tree of a layout that is
-/// none of them, so it can be saved.
-fn layout_picker(
-    panel: &Panel,
-    mon: &Mon,
-    saved: Option<&ZoneLayout>,
-    number: usize,
-    p: Palette,
-    window: &mut Window,
-    cx: &mut Context<Panel>,
-) -> (Div, Option<Node>) {
-    // Built in: the templates. Your layouts: the library layouts for this screen, or
-    // all of them, then New layout. A layout that is none of them shows as Changed,
-    // selected, before New layout.
-    let library = library::entries(&panel.config.custom_layouts);
-    let own = saved.filter(|l| {
-        l.template == Template::Custom && !l.custom.as_ref().is_some_and(|id| library.iter().any(|e| e.id == *id))
-    });
-    let own = own.map(|l| l.tree.clone());
-    let mut built_in = div().flex().flex_wrap().gap(px(TILE_GAP));
-    let templates = Template::ALL.into_iter().filter(|t| *t != Template::Custom).map(Pick::Template);
-    let mut at = 0;
-    for choice in templates {
-        let selected = choice.selected(saved);
-        built_in = built_in.child(tile(at, choice, selected, None, window, cx));
-        at += 1;
-    }
-    // The layout the screen uses always shows, so the picker never hides what's in use.
-    let in_use = saved.and_then(|l| l.custom.clone());
-    let fits: Vec<&str> = library::for_screen(&library, &mon.id).map(|e| e.id.as_str()).collect();
-    let all = panel.all_layouts;
-    let shown: Vec<(library::Entry, Option<SharedString>)> = library
-        .iter()
-        .filter(|e| all || fits.contains(&e.id.as_str()) || in_use.as_ref() == Some(&e.id))
-        .map(|e| (e.clone(), (!fits.contains(&e.id.as_str())).then(|| for_screens(e, panel))))
-        .collect();
-    let mut yours = div().flex().flex_wrap().items_center().gap(px(TILE_GAP));
-    let picks = shown
-        .into_iter()
-        .map(|(e, note)| (Pick::Library(e), note))
-        .chain(own.clone().map(|tree| (Pick::Changed(tree), None)))
-        .chain([(Pick::New, None)]);
-    for (choice, note) in picks {
-        let selected = choice.selected(saved);
-        yours = yours.child(tile(at, choice, selected, note, window, cx));
-        at += 1;
-    }
-    if library.is_empty() && own.is_none() {
-        yours = yours.child(ui::description("Make your own with New layout, or Save from windows", p).ml(px(8.)));
-    }
-    // Only offered when it would show more, or to go back.
-    let toggle = (all || library.len() > fits.len()).then(|| {
-        let label = if all { format!("Only screen {number}") } else { "Show all screens".to_string() };
-        ui::secondary("zone-all-screens", label, cx).ghost().small().on_click(cx.listener(|panel, _, _, cx| {
-            panel.all_layouts = !panel.all_layouts;
-            cx.notify();
-        }))
-    });
-    let label = |text: &'static str| div().text_size(px(13.)).text_color(p.text_secondary).child(text);
-    let picker = div()
-        .flex()
-        .flex_col()
-        .gap(px(8.))
-        .child(label("Built in"))
-        .child(built_in)
-        .child(
-            div()
-                .flex()
-                .items_center()
-                .justify_between()
-                .gap(px(16.))
-                .mt(px(16.))
-                .child(label("Your layouts"))
-                .children(toggle),
-        )
-        .child(yours);
-    (picker, own)
-}
-
-/// The screen preview with its buttons, or the editor in its place.
+/// The screen preview with its footer, or the editor in its place.
 fn stage(
     panel: &mut Panel,
     mon: &Mon,
@@ -726,33 +435,33 @@ fn stage(
 ) -> AnyElement {
     let p = palette(cx);
     let gap_px = panel.config.zones.gap.min(32);
-    let save_as = own.map(|tree| {
-        ui::secondary("save-as-layout", "Save as layout", cx)
-            .on_click(cx.listener(move |panel, _, window, cx| save_as_layout(panel, tree.clone(), window, cx)))
-    });
-    let room = f64::from(window.viewport_size().width) - 240. - 64. - 20.;
-    let height = preview_height(mon, room);
+    if panel.editor.is_some() {
+        let room = f64::from(window.viewport_size().width) - 240. - 64. - 20.;
+        return zone_editor::view(panel, mon, gap_px, room, preview_height(mon, room), window, cx);
+    }
     let caption =
         ui::description("Stored as parts of the screen, so a new resolution keeps the layout", p).flex_1().min_w_0();
-    let from_windows = ui::secondary("save-from-windows", "Save from windows", cx)
-        .tooltip("Make a layout from where the windows on this screen are now")
-        .on_click(cx.listener(move |panel, _, window, cx| {
-            panel.command("zones.from_windows", json!({ "number": number }), window, cx)
-        }));
     let edit_layout = ui::secondary("edit-layout", "Edit layout", cx)
         .on_click(cx.listener(|panel, _, window, cx| zone_editor::open(panel, Opened::Screen, window, cx)));
-    let buttons =
-        div().flex().flex_none().items_center().gap(px(8.)).children(save_as).child(from_windows).child(edit_layout);
-    let below = div().flex().items_center().justify_between().gap(px(16.)).child(caption).child(buttons);
-    if panel.editor.is_some() {
-        zone_editor::view(panel, mon, gap_px, room, height, window, cx)
-    } else {
-        div()
-            .flex()
-            .flex_col()
-            .gap(px(12.))
-            .child(preview(mon, saved, gap_px, room, height, p))
-            .child(below)
-            .into_any_element()
-    }
+    let view = cx.entity().downgrade();
+    let more = ui::secondary("preview-more", "", cx)
+        .ghost()
+        .icon(Icon::new(assets::IconName::Ellipsis))
+        .accessibility_label("More for this layout")
+        .dropdown_menu(move |menu, _, _| {
+            let (saving, windows) = (view.clone(), view.clone());
+            let tree = own.clone();
+            menu.item(PopupMenuItem::new("Save as layout").disabled(tree.is_none()).on_click(move |_, window, cx| {
+                let Some(tree) = tree.clone() else { return };
+                let _ = saving.update(cx, |panel, cx| save_as_layout(panel, tree, window, cx));
+            }))
+            .item(PopupMenuItem::new("Save from windows").on_click(move |_, window, cx| {
+                let _ = windows.update(cx, |panel, cx| {
+                    panel.command("zones.from_windows", json!({ "number": number }), window, cx)
+                });
+            }))
+        });
+    let buttons = div().flex().flex_none().items_center().gap(px(tokens::SPACE_8)).child(edit_layout).child(more);
+    let footer = div().flex().items_center().justify_between().gap(px(tokens::SPACE_16)).child(caption).child(buttons);
+    preview(mon, saved, gap_px, footer, p).into_any_element()
 }

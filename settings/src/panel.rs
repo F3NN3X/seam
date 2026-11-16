@@ -106,6 +106,10 @@ pub struct Panel {
     /// The layout the Displays map shows. It is the panel's memory only, not a setting.
     pub layout_view: seam::api::LayoutView,
     pub ease_on: bool,
+    /// The border the Displays map and its strip show, by the numbers of its two screens.
+    pub border_pick: Option<(u32, u32)>,
+    /// The "More ... options" rows that are open, by title. The panel's memory only.
+    pub disclosed: HashSet<&'static str>,
     /// The screen whose zones the Zones page shows, as an index into `mons`.
     pub zone_screen: usize,
     /// "Show all screens" under Your layouts: every custom layout, not only those for
@@ -250,6 +254,8 @@ impl Panel {
             layout: Vec::new(),
             layout_view: seam::api::LayoutView::Seam,
             ease_on: seam::ease::is_on(),
+            border_pick: None,
+            disclosed: HashSet::new(),
             zone_screen: 0,
             all_layouts: false,
             editor: None,

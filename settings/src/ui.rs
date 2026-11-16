@@ -2,7 +2,9 @@
 
 use crate::theme::tokens::{self, text_style};
 use crate::theme::{Palette, palette};
+use gpui_kit::component::Icon;
 use gpui_kit::component::button::{Button, ButtonVariants};
+use gpui_kit::component::slider::{Slider, SliderState};
 use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
@@ -11,7 +13,7 @@ use std::rc::Rc;
 use std::sync::Arc;
 
 mod only;
-pub use only::{nothing_shown, show_only, shows_any};
+pub use only::{active as filtering, nothing_shown, show_only};
 
 pub const SECTION_GAP: f32 = tokens::SPACE_24;
 /// Room left above a row a search result scrolled to.
@@ -36,6 +38,11 @@ thread_local! {
 /// Scroll the row or section titled `title` into view when its page next draws.
 pub fn reveal(title: &'static str, scroll: &ScrollHandle) {
     REVEAL.with(|r| *r.borrow_mut() = Some(Reveal { title: title.into(), scroll: scroll.clone(), found: false }));
+}
+
+/// A search result is waiting to scroll to one of `titles`, so whatever hides them has to open.
+pub fn revealing(titles: &[&str]) -> bool {
+    REVEAL.with(|r| r.borrow().as_ref().is_some_and(|w| titles.iter().any(|t| w.title == *t)))
 }
 
 /// The page has been built. A result it has no row for stays at the top, and isn't
@@ -131,13 +138,17 @@ pub fn mark(size: f32, p: Palette) -> Div {
         .child(outline(15.5, 4.5, 6., 15.))
 }
 
-pub fn page_title(title: impl Into<SharedString>, subtitle: impl Into<SharedString>, p: Palette) -> Div {
+fn titled(title: impl Into<SharedString>, subtitle: impl IntoElement) -> Div {
     div()
         .flex()
         .flex_col()
         .gap(px(tokens::SPACE_4))
         .child(text_style(div().font_family(tokens::DISPLAY_FONT), tokens::PAGE_TITLE).child(title.into()))
-        .child(description(subtitle, p))
+        .child(subtitle)
+}
+
+pub fn page_title(title: impl Into<SharedString>, subtitle: impl Into<SharedString>, p: Palette) -> Div {
+    titled(title, description(subtitle, p))
 }
 
 /// The second line of anything: 13 px, secondary text.
@@ -147,6 +158,11 @@ pub fn description(text: impl Into<SharedString>, p: Palette) -> Div {
 
 pub fn page_header(title: impl Into<SharedString>, subtitle: impl Into<SharedString>, p: Palette) -> Div {
     div().flex().items_start().justify_between().gap(px(tokens::SPACE_16)).child(page_title(title, subtitle, p))
+}
+
+/// A header whose subtitle is more than text, such as a button that opens a menu.
+pub fn page_header_with(title: impl Into<SharedString>, subtitle: impl IntoElement) -> Div {
+    div().flex().items_start().justify_between().gap(px(tokens::SPACE_16)).child(titled(title, subtitle))
 }
 
 /// What a section holds, and whether anything in it shows while only changed settings do.
@@ -176,18 +192,38 @@ impl From<Div> for Body {
 }
 
 pub fn section(title: impl Into<SharedString>, body: impl Into<Body>, p: Palette) -> AnyElement {
+    section_with(title, None, None, body, p)
+}
+
+/// A section whose label has a hint after it and a button at its right.
+pub fn section_with(
+    title: impl Into<SharedString>,
+    hint: Option<&'static str>,
+    action: Option<AnyElement>,
+    body: impl Into<Body>,
+    p: Palette,
+) -> AnyElement {
     let title = title.into();
     let body = body.into();
     if !body.shows {
         return div().hidden().into_any_element();
     }
     only::drawn(1);
-    let section = div()
+    let label = div()
         .flex()
-        .flex_col()
+        .items_center()
+        .justify_between()
         .gap(px(tokens::SPACE_8))
-        .child(text_style(div(), tokens::LABEL).text_color(p.text_secondary).child(title.clone()))
-        .child(body.element);
+        .child(
+            div()
+                .flex()
+                .items_baseline()
+                .gap(px(tokens::SPACE_8))
+                .child(text_style(div(), tokens::LABEL).text_color(p.text_secondary).child(title.clone()))
+                .children(hint.map(|hint| text_style(div(), tokens::CAPTION).text_color(p.text_muted).child(hint))),
+        )
+        .children(action);
+    let section = div().flex().flex_col().gap(px(tokens::SPACE_8)).child(label).child(body.element);
     anchored(&title, section)
 }
 
@@ -292,6 +328,128 @@ pub fn row_with(title: impl Into<SharedString>, about: Option<AnyElement>, contr
         .child(text)
         .child(div().flex().flex_none().items_center().gap(px(tokens::SPACE_8)).child(control));
     Row { element: anchored(&title, row), title: Some(title) }
+}
+
+/// `row`, dimmed with a tooltip that says why while `why` is `Some`.
+pub fn dimmed(row: Row, id: impl Into<ElementId>, why: Option<&'static str>) -> Row {
+    let id = id.into();
+    row.map(move |element| match why {
+        Some(why) => div()
+            .id(id)
+            .opacity(tokens::OPACITY_DISABLED)
+            .tooltip(move |window, cx| Tooltip::new(why).build(window, cx))
+            .child(element)
+            .into_any_element(),
+        None => element,
+    })
+}
+
+/// `element` as one button that opens and closes what follows it. Tab reaches it, and Space and
+/// Enter press it.
+pub fn disclose(
+    element: impl IntoElement,
+    id: impl Into<ElementId>,
+    label: impl Into<SharedString>,
+    open: bool,
+    window: &mut Window,
+    cx: &mut App,
+    toggle: impl Fn(&mut Window, &mut App) + 'static,
+) -> AnyElement {
+    let p = palette(cx);
+    let id = id.into();
+    let focus = focus_for(&id, window, cx);
+    let toggle = Rc::new(toggle);
+    let (click, key) = (toggle.clone(), toggle);
+    div()
+        .id(id)
+        .track_focus(&focus)
+        .tab_index(0)
+        .role(Role::Button)
+        .aria_label(label)
+        .aria_expanded(open)
+        .cursor_pointer()
+        .when(focused(&focus, window), |d| focus_ring(d, tokens::RADIUS_8, 0., p))
+        .on_click(move |_, window, cx| click(window, cx))
+        .on_key_down(move |e: &KeyDownEvent, window, cx| {
+            if matches!(e.keystroke.key.as_str(), "space" | "enter") {
+                key(window, cx);
+            }
+        })
+        .child(element)
+        .into_any_element()
+}
+
+/// A button that picks something and says whether it's picked. Tab reaches it, and Space and Enter
+/// press it. Give it a size or a place, and its content.
+pub fn selectable(
+    id: impl Into<ElementId>,
+    label: impl Into<SharedString>,
+    selected: bool,
+    window: &mut Window,
+    cx: &mut App,
+    pick: impl Fn(&mut Window, &mut App) + 'static,
+) -> Stateful<Div> {
+    let p = palette(cx);
+    let id = id.into();
+    let focus = focus_for(&id, window, cx);
+    let pick = Rc::new(pick);
+    let (click, key) = (pick.clone(), pick);
+    div()
+        .id(id)
+        .track_focus(&focus)
+        .tab_index(0)
+        .role(Role::Button)
+        .aria_label(label)
+        .aria_selected(selected)
+        .cursor_pointer()
+        .when(focused(&focus, window), |d| focus_ring(d, tokens::RADIUS_4, 0., p))
+        .on_click(move |_, window, cx| click(window, cx))
+        .on_key_down(move |e: &KeyDownEvent, window, cx| {
+            if matches!(e.keystroke.key.as_str(), "space" | "enter") {
+                key(window, cx);
+            }
+        })
+}
+
+/// The chevron of a disclosure: down when closed, turned over when open.
+pub fn chevron(open: bool, p: Palette) -> Icon {
+    let turn = if open { std::f32::consts::PI } else { 0. };
+    Icon::new(assets::IconName::ChevronDown).size(px(tokens::SIZE_ICON)).text_color(p.text_muted).rotate(radians(turn))
+}
+
+/// A "More ... options" row: the whole row is the button, and the rows it hides follow it in the card.
+pub fn disclosure_row(
+    id: impl Into<ElementId>,
+    title: &'static str,
+    about: &'static str,
+    open: bool,
+    window: &mut Window,
+    cx: &mut App,
+    toggle: impl Fn(&mut Window, &mut App) + 'static,
+) -> Row {
+    let p = palette(cx);
+    let id = id.into();
+    row(title, Some(about.into()), chevron(open, p), p)
+        .map(move |element| disclose(element, id, title, open, window, cx, toggle))
+}
+
+/// A slider 160 px long, with its value in a slot of 48 px to its right.
+pub fn slider_with_value(
+    state: &Entity<SliderState>,
+    value: impl Into<SharedString>,
+    enabled: bool,
+    label: &'static str,
+    p: Palette,
+) -> Div {
+    div()
+        .flex()
+        .flex_none()
+        .items_center()
+        .gap(px(tokens::SPACE_12))
+        .child(Slider::new(state).horizontal().w(px(160.)).disabled(!enabled).accessibility_label(label))
+        .child(tabular(
+            text_style(div(), tokens::LABEL).w(px(48.)).text_right().text_color(p.text_secondary).child(value.into()),
+        ))
 }
 
 pub fn secondary(id: impl Into<ElementId>, label: impl Into<SharedString>, cx: &App) -> Button {

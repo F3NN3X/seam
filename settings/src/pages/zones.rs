@@ -2,11 +2,12 @@
 
 use crate::pages::zone_editor::{self, Opened};
 use crate::panel::{Panel, error_text, refusal};
-use crate::theme::{palette, tokens};
+use crate::theme::palette;
+use crate::theme::tokens::{self, text_style};
 use crate::ui::{self, card, row};
 use gpui_kit::component::button::ButtonVariants;
 use gpui_kit::component::menu::{DropdownMenu, PopupMenuItem};
-use gpui_kit::component::{Sizable, WindowExt};
+use gpui_kit::component::{Icon, Sizable, WindowExt};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 use seam::config::WindowSize;
@@ -22,13 +23,16 @@ mod colour_pick;
 mod layouts;
 pub mod margins;
 mod page;
+mod picker;
 mod screen_preview;
+mod snapping;
 
 pub use colour_pick::picked;
 use colour_pick::swatches;
 use layouts::{for_screens, save_as_layout, screen_names, tile};
 pub use page::render;
 use screen_preview::{preview, preview_height};
+use snapping::snapping_section;
 
 /// Config value and label of each key a drag can use.
 const KEYS: [(&str, &str); 3] = [("shift", "Shift"), ("ctrl", "Ctrl"), ("alt", "Alt")];
@@ -42,9 +46,9 @@ const CORNERS: [(&str, &str); 4] = [
     ("bottom_left", "Bottom left"),
     ("bottom_right", "Bottom right"),
 ];
-/// A tile's width and the size of its drawing: your layouts, and the smaller built-in ones.
-const TILE: (f32, (f32, f32)) = (96., (80., 44.));
-const BUILT_IN_TILE: (f32, (f32, f32)) = (76., (68., 38.));
+/// A tile's width and the size of its drawing: your layouts, and the narrower built-in ones.
+const TILE: (f32, (f32, f32)) = (104., (86., 44.));
+const BUILT_IN_TILE: (f32, (f32, f32)) = (88., (70., 44.));
 const TILE_GAP: f32 = 8.;
 /// The preview is as tall as the screen's shape asks, up to this.
 const PREVIEW_MAX_HEIGHT: f32 = 320.;

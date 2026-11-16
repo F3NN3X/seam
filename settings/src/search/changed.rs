@@ -15,9 +15,9 @@ const ROWS: &[(Page, &str, &[&str])] = &[
     (Page::Displays, "Edge resistance", &["/pointer/edge_resistance_px"]),
     (Page::Displays, "Glued edge push", &["/pointer/glue_push_px"]),
     (Page::Zones, "Zones on", &["/zones/enabled"]),
-    (Page::Zones, "Show zones", &["/zones/show_key"]),
+    (Page::Zones, "Show zones while dragging", &["/zones/show_key", "/zones/pause_to_snap"]),
     (Page::Zones, "Span zones", &["/zones/span_key"]),
-    (Page::Zones, "Gap", &["/zones/gap"]),
+    (Page::Zones, "Gap between zones", &["/zones/gap"]),
     (Page::Zones, "Keep windows in their zones", &["/zones/refit"]),
     (Page::Zones, "Restore size when dragged out", &["/zones/restore_size"]),
     (Page::Zones, "Resize neighbours with a window", &["/zones/resize_neighbours"]),
@@ -25,7 +25,6 @@ const ROWS: &[(Page, &str, &[&str])] = &[
     (Page::Zones, "Swap with the window already in a zone", &["/zones/swap_on_drop"]),
     (Page::Zones, "Put windows back when Seam quits", &["/zones/tiling_free_on_quit"]),
     (Page::Zones, "Snap beside a window", &["/zones/snap_beside"]),
-    (Page::Zones, "Pause to snap", &["/zones/pause_to_snap"]),
     (Page::Zones, "Show keys while dragging", &["/zones/drag_hints"]),
     (Page::Zones, "Focus border", &["/windows/focus_border"]),
     (Page::Zones, "Focus border colour", &["/windows/focus_color"]),
@@ -129,7 +128,7 @@ mod tests {
         let mut config = Config::default();
         config.zones.gap += 2;
         config.hotkeys.line_up = None;
-        assert_eq!(titles(Page::Zones, &config), HashSet::from(["Gap"]));
+        assert_eq!(titles(Page::Zones, &config), HashSet::from(["Gap between zones"]));
         assert_eq!(titles(Page::Shortcuts, &config), HashSet::from(["Line up screens"]));
         assert!(titles(Page::Displays, &config).is_empty());
     }

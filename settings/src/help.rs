@@ -85,7 +85,7 @@ pub const TOPICS: &[Topic] = &[
                 "When you finish, Seam saves the borders and turns on **Remap pointer at borders**. Ctrl+Shift+Alt+P pauses and resumes it. With **Also align Windows arrangement** on, Seam also moves your screens in Display settings to match.",
             ),
             Text(
-                "Each set of screens is a desk, with its own borders, zones and workspaces. **Saved desks** lists them, with when each was lined up, in your local time. Each desk's menu has **Rename** and **Forget**.",
+                "Each set of screens is a desk, with its own borders, zones and workspaces. The desk menu under the page title lists them, with when each was last here, in your local time. It has **Rename this desk** and **Forget desks not seen in 30 days**.",
             ),
             Text(
                 "**Edge resistance**, on Displays, holds the pointer at the edge to another screen until you push that many pixels past it, so you can grab a window's edge or corner there. It's off at 0, works at every border, and gives way while a mouse button is down, so dragging a window across is never slowed. It stays off while the remap is paused and during Line Up.",
@@ -121,7 +121,7 @@ pub const TOPICS: &[Topic] = &[
             List(&[
                 "The pointer rests at a glued edge until you push past it, 60 px unless you change **Glued edge push** on Displays, so an auto-hide taskbar there still shows. A quick flick crosses at once.",
                 "Past the end of a glue, the edge is a dead edge, and Seam holds the pointer there",
-                "**Align arrangement** keeps glued screens apart, and refuses a move that would break a glue",
+                "**Match Windows to this layout** keeps glued screens apart, and refuses a move that would break a glue",
             ]),
             Text(
                 "**Not on my desk** is for two screens that touch in Windows but not on your desk. Press N in Line Up, or choose **Not on my desk** in the border's **...** menu on Displays. The pointer stops at that edge both ways, or crosses to a glued screen past it. **On my desk** takes it back.",
@@ -154,8 +154,8 @@ pub const TOPICS: &[Topic] = &[
             ),
             List(&[
                 "Hold Ctrl as well to cover several zones with one window",
-                "**Show zones** and **Span zones** change the two keys",
-                "**Gap** sets the space between zones and the screen edge",
+                "**Show zones while dragging** and **Span zones** change the two keys",
+                "**Gap between zones** sets the space between zones and the screen edge",
                 "**Restore size when dragged out** gives a window its old size back when you drop it outside a zone",
                 "**Swap with the window already in a zone** makes a window you drop on a held zone trade places with it; off lets them overlap",
             ]),
@@ -174,7 +174,7 @@ pub const TOPICS: &[Topic] = &[
                 "Hold Ctrl as you let go outside the zones to take a window out of the layout; the others close the gap. It works for a snapped window that is alone in its zone, and a notification offers Undo for 8 seconds.",
             ),
             Text(
-                "Other keys, clicks and moves reach your apps as usual. **Pause to snap** shows the zones when you hold the pointer still for a moment while dragging, with no key. **Show keys while dragging** puts a strip on the screen that names the wheel, right-click and these keys.",
+                "Other keys, clicks and moves reach your apps as usual. **Pause**, in **Show zones while dragging**, shows the zones when you hold the pointer still for a moment while dragging, with no key. **Show keys while dragging** puts a strip on the screen that names the wheel, right-click and these keys.",
             ),
             Text(
                 "Drag the edge of a window in a zone and the windows in the zones on the other side follow it. No window goes below the smallest size its app allows: the edge beyond it moves instead. When you let go, the window fits its zone again and the screen's layout shows as **Changed**. Esc puts everything back. **Resize neighbours with a window** turns this off.",
@@ -183,7 +183,7 @@ pub const TOPICS: &[Topic] = &[
                 "Between two snapped windows, the gap has a handle you can't see until the pointer is on it, then a slim bar shows. Drag it and the windows on both sides follow, with the same smallest sizes, and the layout is saved as **Changed** when you let go. Esc puts everything back. Right-click it to give the left or top window 1/2, 1/3, 2/3, 1/4 or 3/4 of the two, or to take one of them out: it leaves its zones with its old size, and the others stay. A gap under 4 px has no handles, so **Size menu** on Shortcuts opens the same choices for the focused window. It has no key until you set one. **Handles between snapped windows** turns the handles off.",
             ),
             Text(
-                "**Snap beside a window**: while zones show, or once the pointer rests with **Pause to snap**, point at the edge of another window and the outline shows the dragged window taking half of that window's place on that side, with the other window in the rest. The wheel, or 1, 2 and 3, change the share to 1/2, 1/3 or 2/3. On a screen with zones, the drop splits the zone that window holds, the layout shows as **Changed**, and a notification offers Undo for 8 seconds. On a screen with no zones, the two windows become a group: dragging the edge between them resizes both, the gap has a handle, and dropping a third window beside one of them adds it. A window you drag away, minimize, maximize or close leaves the group. Groups last until Seam restarts. The middle of a held zone still swaps. Turn off **Snap beside a window** on Zones to drop over windows as before.",
+                "**Snap beside a window**: while zones show, or once the pointer rests with **Pause**, point at the edge of another window and the outline shows the dragged window taking half of that window's place on that side, with the other window in the rest. The wheel, or 1, 2 and 3, change the share to 1/2, 1/3 or 2/3. On a screen with zones, the drop splits the zone that window holds, the layout shows as **Changed**, and a notification offers Undo for 8 seconds. On a screen with no zones, the two windows become a group: dragging the edge between them resizes both, the gap has a handle, and dropping a third window beside one of them adds it. A window you drag away, minimize, maximize or close leaves the group. Groups last until Seam restarts. The middle of a held zone still swaps. Turn off **Snap beside a window** on Zones to drop over windows as before.",
             ),
             Text(
                 "**Stacks** put several windows in one zone, one on top of the others. Press **S** while zones show in a drag, and the drop stacks the window on the one in the zone instead of swapping with them; the strip says so, and S again goes back to swapping. While a window of a stack is the one you're using, a slim row of bars at the bottom of its zone shows how many windows the stack has, the one on top brighter. **Next window in stack** and **Previous window in stack** on Shortcuts put another one on top, and a window you click, or pick with Alt+Tab or the taskbar, is on top too. The others stay in the zone behind it. A notification offers Undo for 8 seconds after a drop makes a stack. A window you drag out, close, minimize, maximize or move or swap to another zone with a key leaves its stack, and a swap by dragging, an edge or a handle moves and resizes the whole stack. Windows behind the top are only behind it, so one smaller than the top's zone, or a top that can't fill it, leaves them showing round its edges. A workspace keeps its stacks, and a restart of Seam finds them again.",

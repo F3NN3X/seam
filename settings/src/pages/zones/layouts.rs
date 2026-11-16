@@ -33,10 +33,9 @@ pub(super) fn tile(
     let p = palette(cx);
     let id = ElementId::Name(choice.key().into());
     let focus = window.use_keyed_state(id.clone(), cx, |_, cx| cx.focus_handle()).read(cx).clone();
-    // The built-in tiles are smaller, so their names are a size down to fit.
-    let (width, (art_w, art_h), padding_x, text) =
-        if choice.built_in() { (BUILT_IN_TILE.0, BUILT_IN_TILE.1, 4., 12.) } else { (TILE.0, TILE.1, 8., 13.) };
-    let mut art = div().relative().w(px(art_w)).h(px(art_h));
+    let built_in = choice.built_in();
+    let (width, (art_w, art_h)) = if built_in { BUILT_IN_TILE } else { TILE };
+    let mut art = div().relative().flex_none().w(px(art_w)).h(px(art_h));
     match choice.art() {
         Some(tree) => {
             for r in pieces(&tree, art_w, art_h, 2) {
@@ -47,56 +46,48 @@ pub(super) fn tile(
                         .top(px(r.y as f32))
                         .w(px(r.w as f32))
                         .h(px(r.h as f32))
-                        .rounded(px(2.))
-                        .bg(p.surface_segment),
+                        .rounded(px(tokens::RADIUS_2))
+                        .bg(p.surface_zone),
                 );
             }
         }
         None if matches!(choice, Pick::New) => {
-            let plus = div().size_full().flex().items_center().justify_center().rounded(px(4.)).border_1();
-            art =
-                art.child(plus.border_dashed().border_color(p.hairline_strong).text_color(p.text_secondary).child("+"));
+            let plus = Icon::new(assets::IconName::Plus).size(px(tokens::SIZE_ICON)).text_color(p.text_secondary);
+            art = art.child(div().size_full().flex().items_center().justify_center().child(plus));
         }
-        None => art = art.child(div().size_full().rounded(px(4.)).bg(p.surface_page)),
+        None => art = art.child(div().size_full().rounded(px(tokens::RADIUS_4)).bg(p.surface_page)),
     }
     let title = choice.title();
     let more = match &choice {
         Pick::Library(entry) => Some(library_menu(i, entry, cx)),
         _ => None,
     };
+    let is_new = matches!(choice, Pick::New);
     let choice = Rc::new(choice);
     let (click, key) = (choice.clone(), choice);
+    let name = text_style(div(), if built_in { tokens::CAPTION } else { tokens::LABEL })
+        .truncate()
+        .text_color(if selected { p.text_primary } else { p.text_secondary })
+        .child(title);
     let face = div()
         .id(id)
         .track_focus(&focus)
         .tab_index(0)
         .flex()
         .flex_col()
-        .gap(px(8.))
-        .px(px(padding_x))
-        .py(px(8.))
+        .gap(px(tokens::SPACE_8))
+        // The selected outline is 2 px, so the padding gives a pixel back.
+        .p(px(if selected { tokens::SPACE_8 - 1. } else { tokens::SPACE_8 }))
         .w(px(width))
-        .rounded(px(10.))
-        .bg(p.surface_card)
-        .border_1()
-        .border_color(if selected { p.accent } else { p.hairline })
-        .when(ui::focused(&focus, window), |d| ui::focus_ring(d, tokens::RADIUS_10, 1., p))
+        .rounded(px(tokens::RADIUS_10))
+        .when(selected, |d| d.bg(p.accent_tint).border_2().border_color(p.accent_ink))
+        .when(!selected, |d| d.border_1().border_color(if is_new { p.hairline_strong } else { p.hairline }))
+        .when(is_new, |d| d.border_dashed())
+        .when(ui::focused(&focus, window), |d| ui::focus_ring(d, tokens::RADIUS_10, if selected { 2. } else { 1. }, p))
         .child(art)
-        .child(
-            div()
-                .flex()
-                .flex_col()
-                .gap(px(2.))
-                .min_w_0()
-                .child(
-                    div()
-                        .truncate()
-                        .text_size(px(text))
-                        .text_color(if selected { p.text_primary } else { p.text_secondary })
-                        .child(title),
-                )
-                .children(note.map(|note| div().truncate().text_size(px(12.)).text_color(p.text_muted).child(note))),
-        );
+        .child(div().flex().flex_col().gap(px(tokens::SPACE_2)).min_w_0().child(name).children(
+            note.map(|note| text_style(div(), tokens::CAPTION).truncate().text_color(p.text_muted).child(note)),
+        ));
     let face = face
         .cursor_pointer()
         .on_click(cx.listener(move |panel, _, window, cx| pick(panel, &click, window, cx)))
@@ -105,21 +96,20 @@ pub(super) fn tile(
                 pick(panel, &key, window, cx);
             }
         }));
-    // A second, fainter ring around the chosen tile.
+    // The card ground is the outer element's, so the selected tint sits on it.
     div()
-        .id(("zone-halo", i))
+        .id(("zone-tile", i))
         .relative()
-        .p(px(1.))
-        .rounded(px(12.))
-        .border_1()
-        .border_color(if selected { p.accent.opacity(0.4) } else { hsla(0., 0., 0., 0.) })
+        .rounded(px(tokens::RADIUS_10))
+        .bg(p.surface_card)
+        .when(!selected, |d| d.hover(|d| d.bg(p.surface_raised)))
         .child(face)
         // Over the tile's corner, and a click on it stays there.
         .children(more.map(|more| div().absolute().top(px(4.)).right(px(4.)).occlude().child(more)))
         .into_any_element()
 }
 
-/// The "..." of a library layout's tile: Edit, Rename, Used on, Duplicate and Delete.
+/// The "..." of a library layout's tile: Edit, Rename, Duplicate, Used on and Delete.
 fn library_menu(i: usize, entry: &library::Entry, cx: &mut Context<Panel>) -> AnyElement {
     let view = cx.entity().downgrade();
     let entry = entry.clone();
@@ -145,17 +135,17 @@ fn library_menu(i: usize, entry: &library::Entry, cx: &mut Context<Panel>) -> An
                 let entry = rename.clone();
                 let _ = renaming.update(cx, |_, cx| rename_layout(entry, window, cx));
             }))
-            .item(PopupMenuItem::new("Used on...").on_click(move |_, window, cx| {
-                let entry = tie.clone();
-                let _ = tying.update(cx, |panel, cx| used_on(panel, entry, window, cx));
-            }))
             .item(PopupMenuItem::new("Duplicate").on_click(move |_, window, cx| {
                 let entry = copy.clone();
                 let _ = copying.update(cx, |panel, cx| duplicate(panel, entry, window, cx));
             }))
+            .item(PopupMenuItem::new("Used on…").on_click(move |_, window, cx| {
+                let entry = tie.clone();
+                let _ = tying.update(cx, |panel, cx| used_on(panel, entry, window, cx));
+            }))
             .item(PopupMenuItem::new("Delete").on_click(move |_, window, cx| {
                 let entry = delete.clone();
-                let _ = deleting.update(cx, |_, cx| delete_layout(entry, window, cx));
+                let _ = deleting.update(cx, |panel, cx| delete_layout(panel, entry, window, cx));
             }))
         })
         .into_any_element()
@@ -312,22 +302,49 @@ fn duplicate(panel: &mut Panel, entry: library::Entry, window: &mut Window, cx: 
     });
 }
 
-fn delete_layout(entry: library::Entry, window: &mut Window, cx: &mut Context<Panel>) {
+/// Whether a screen on any desk uses the layout.
+fn in_use(panel: &Panel, id: &str) -> bool {
+    let uses = |v: &Value| zones::layout_of(v).is_some_and(|l| l.custom.as_deref() == Some(id));
+    panel.config.desks.values().any(|d| d.zones.values().any(uses))
+}
+
+/// Take a layout out of the library. Screens using it keep their zones, and Undo puts back
+/// that layout alone, where it was, so edits made since stay.
+fn remove_layout(panel: &mut Panel, entry: library::Entry, window: &mut Window, cx: &mut Context<Panel>) {
+    let Some(at) = position(&panel.config.custom_layouts, &entry.id) else { return };
+    let removed = panel.config.custom_layouts[at].clone();
+    let id = entry.id.clone();
+    edit_library(panel, window, cx, move |list| {
+        list.retain(|v| v.get("id").and_then(Value::as_str) != Some(id.as_str()))
+    });
+    let id = entry.id.clone();
+    let undo = move |panel: &mut Panel, window: &mut Window, cx: &mut Context<Panel>| {
+        let mut list = panel.config.custom_layouts.clone();
+        if position(&list, &id).is_none() {
+            list.insert(at.min(list.len()), removed.clone());
+            panel.patch(json!({ "custom_layouts": list }), window, cx);
+        }
+    };
+    panel.offer_undo(format!("Deleted {}", entry.name), undo, window, cx);
+}
+
+/// Delete a layout. It asks first only when a screen uses it.
+fn delete_layout(panel: &mut Panel, entry: library::Entry, window: &mut Window, cx: &mut Context<Panel>) {
+    if !in_use(panel, &entry.id) {
+        remove_layout(panel, entry, window, cx);
+        return;
+    }
     let view = cx.entity().downgrade();
     window.open_alert_dialog(cx, move |alert, _, _| {
-        let (view, id) = (view.clone(), entry.id.clone());
+        let (view, entry) = (view.clone(), entry.clone());
         alert
             .title(format!("Delete {}?", entry.name))
             .description("Screens using it keep their zones")
-            .ok_text("Delete")
+            .ok_text("Delete layout")
             .cancel_text("Cancel")
             .on_ok(move |_, window, cx| {
-                let id = id.clone();
-                let _ = view.update(cx, |panel, cx| {
-                    edit_library(panel, window, cx, move |list| {
-                        list.retain(|v| v.get("id").and_then(Value::as_str) != Some(id.as_str()))
-                    })
-                });
+                let entry = entry.clone();
+                let _ = view.update(cx, |panel, cx| remove_layout(panel, entry, window, cx));
                 true
             })
     });

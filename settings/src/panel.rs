@@ -1,14 +1,13 @@
 //! The window: the link to the tray, the sidebar, and which page is showing.
 
 use crate::pages::updates::UpdateUi;
-use crate::{pages, search, ui};
-use gpui_kit::component::button::ButtonVariants;
+use crate::{chrome, pages, search, ui};
 use gpui_kit::component::color_picker::{ColorPickerEvent, ColorPickerState};
 use gpui_kit::component::input::{InputEvent, InputState};
 use gpui_kit::component::notification::Notification;
 use gpui_kit::component::scroll::ScrollableElement;
 use gpui_kit::component::slider::{SliderEvent, SliderState};
-use gpui_kit::component::{ActiveTheme, Theme, WindowExt};
+use gpui_kit::component::{ActiveTheme, WindowExt};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 use seam::api::{CallError, Client};
@@ -37,6 +36,7 @@ const UNDO_FOR: Duration = Duration::from_secs(8);
 pub enum Page {
     Displays,
     Zones,
+    Windows,
     Workspaces,
     Shortcuts,
     General,
@@ -49,6 +49,7 @@ impl Page {
         match self {
             Page::Displays => "Displays",
             Page::Zones => "Zones",
+            Page::Windows => "Windows",
             Page::Workspaces => "Workspaces",
             Page::Shortcuts => "Shortcuts",
             Page::General => "General",
@@ -61,6 +62,7 @@ impl Page {
         match self {
             Page::Displays => assets::IconName::Monitor,
             Page::Zones => assets::IconName::LayoutGrid,
+            Page::Windows => assets::IconName::AppWindow,
             Page::Workspaces => assets::IconName::Layers,
             Page::Shortcuts => assets::IconName::Keyboard,
             Page::General => assets::IconName::SlidersHorizontal,
@@ -74,7 +76,7 @@ impl Page {
     }
 
     fn top_group() -> Vec<Page> {
-        vec![Page::Displays, Page::Zones, Page::Workspaces]
+        vec![Page::Displays, Page::Zones, Page::Windows, Page::Workspaces]
     }
 
     fn app_group() -> Vec<Page> {
@@ -168,7 +170,7 @@ impl Panel {
     pub fn new(page: Option<Page>, token: String, window: &mut Window, cx: &mut Context<Self>) -> Panel {
         let saved = std::fs::read_to_string(last_page_file()).ok();
         let page = page.or(saved.and_then(|s| Page::from_arg(s.trim()))).unwrap_or(Page::Displays);
-        let search = cx.new(|cx| InputState::new(window, cx).placeholder("Search"));
+        let search = cx.new(|cx| InputState::new(window, cx).placeholder("Search settings and actions"));
         let name_input = cx.new(|cx| InputState::new(window, cx).placeholder("Workspace name"));
         let focus_picker = cx.new(|cx| ColorPickerState::new(window, cx));
         let pin_picker = cx.new(|cx| ColorPickerState::new(window, cx));
@@ -328,13 +330,14 @@ fn field_subscriptions(
     ]
 }
 
-/// The theme follows Windows, and the Ease setting is looked at again on coming back.
+/// The theme and backdrop follow Windows, and the Ease setting is looked at again on coming back.
 fn window_subscriptions(window: &mut Window, cx: &mut Context<Panel>) -> Vec<Subscription> {
     vec![
-        cx.observe_window_appearance(window, |_, window, cx| Theme::sync_system_appearance(Some(window), cx)),
+        cx.observe_window_appearance(window, |_, window, cx| chrome::follow_system(window, cx)),
         // The Ease setting has no change event, so look again on coming back.
         cx.observe_window_activation(window, |this, window, cx| {
             if window.is_window_active() {
+                chrome::recheck(window, cx);
                 this.ease_on = seam::ease::is_on();
                 if this.screen_window.is_some() {
                     pages::screen_editor::restack();

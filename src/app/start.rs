@@ -120,8 +120,7 @@ unsafe fn new_app(hwnd: HWND, cfg: Config) -> App {
     unsafe {
         App {
             hwnd,
-            icon: make_icon(false),
-            quiet_icon: make_icon(true),
+            tray: TrayIcons::default(),
             cfg,
             mons: Vec::new(),
             sig: String::new(),

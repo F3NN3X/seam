@@ -27,21 +27,24 @@ pub(super) fn refresh(app: &mut App) {
     }
     // New set of screens that's never been lined up: ask once. Only mark it
     // seen if the shell actually showed the prompt (it may not be up at login).
-    if app.links.is_empty()
-        && app.cfg.ask_new_desks
-        && has_neighbours(&app.mons)
-        && !app.cfg.seen.contains(&app.sig)
-        && notify(app, "New screen setup", "Click here to line up your screens.", BalloonAction::LineUp)
+    if new_screen(app) && notify(app, "New screen setup", "Click here to line up your screens.", BalloonAction::LineUp)
     {
         app.cfg.seen.push(app.sig.clone());
         persist(app);
     }
     warn_about_ease(app);
+    update_tip(app);
     publish(app);
     if arrived {
         let name = app.cfg.desks.get(&app.sig).map(|d| d.name.as_str()).unwrap_or_default();
         api_server::broadcast("desk.changed", &json!({ "sig": app.sig, "name": name }));
     }
+}
+
+/// A set of screens Seam hasn't seen and would offer to line up: nothing lined up yet, asking
+/// is on, the screens touch and this set hasn't been seen. The settings panel has the same rule.
+pub(super) fn new_screen(app: &App) -> bool {
+    app.links.is_empty() && app.cfg.ask_new_desks && has_neighbours(&app.mons) && !app.cfg.seen.contains(&app.sig)
 }
 
 pub(super) fn snapshot(app: &App) -> Snapshot {

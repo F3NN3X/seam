@@ -22,6 +22,9 @@ All notable changes to Seam. The format follows [Keep a Changelog](https://keepa
 
 ### Fixed
 
+- **Free all windows offers Undo** for 8 seconds: tiling turns on again on that screen and desktop, and the windows you haven't moved since take their places back.
+- **Smart tiling leftovers.** A window a slow app minimizes just after a workspace switch gives its space up too. A tiled window saved in a workspace is tiled again when restored after minimizing. After Win+D, Seam no longer wakes every 600 ms while every window stays minimized. Undo of a split on a tiled screen puts its splits back at once. A deleted virtual desktop leaves the tiling settings.
+- **Scrolling leftovers.** A slow app can no longer hold Quit past its one second. Windows brought back on a display change move in one step at the new screen's scale. A strip holds up to 32 columns, and a window past that floats.
 - **Undo of Tile or a layout pick maximizes again** the windows that were maximized before. Undo of a split does too.
 - **"When I sign in" with Do nothing on every desk** no longer starts the sign-in timer. Changing a desk's choice later in that start starts it.
 - **A pin the window manager refuses** is no longer tried again on every pass over the open windows. A window gets one more try when it is shown again, then I leave it alone, with one line in the log.

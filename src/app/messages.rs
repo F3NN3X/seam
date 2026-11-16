@@ -535,6 +535,7 @@ unsafe fn on_destroy() {
         altdrag::stop();
         mousewatch::stop();
         spotlight::stop();
+        crate::overview_win::shutdown();
         with_app(|a| {
             let nid = tray_data(a);
             let _ = Shell_NotifyIconW(NIM_DELETE, &nid);

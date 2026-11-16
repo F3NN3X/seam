@@ -9,9 +9,42 @@ fn with_state<R>(f: impl FnOnce(&mut State) -> R) -> Option<R> {
 }
 
 fn redraw(s: &State) {
+    announce(s);
     for p in &s.panes {
         let _ = unsafe { InvalidateRect(Some(p.hwnd), None, false) };
     }
+}
+
+/// Only these windows' tiles, in each screen that shows them.
+fn redraw_tiles(s: &State, wins: &[usize]) {
+    for p in &s.panes {
+        for (_, r) in p.tiles.iter().filter(|(w, _)| wins.contains(w)) {
+            let _ = unsafe { InvalidateRect(Some(p.hwnd), Some(&p.local(*r)), false) };
+        }
+    }
+}
+
+/// Tell a screen reader what is selected, or how many windows are shown: the focused
+/// screen's window takes it as its name, and a name-change event has Narrator read it. Every
+/// screen's window carries the name, so one that takes the focus later reads right.
+fn announce(s: &State) {
+    let selected = s.selected.map(|w| (s.wins[w].app.as_str(), s.wins[w].title.as_str()));
+    let said = overview::spoken(selected, s.shown.len());
+    if *s.spoken.borrow() == said {
+        return;
+    }
+    unsafe {
+        let name = HSTRING::from(&said);
+        for p in &s.panes {
+            let _ = SetWindowTextW(p.hwnd, &name);
+        }
+        // Before focus has landed none is focused: the event comes from WM_SETFOCUS then.
+        let focus = GetFocus();
+        if s.panes.iter().any(|p| p.hwnd == focus) {
+            NotifyWinEvent(EVENT_OBJECT_NAMECHANGE, focus, OBJID_WINDOW.0, CHILDID_SELF as i32);
+        }
+    }
+    *s.spoken.borrow_mut() = said;
 }
 
 fn pane_of(s: &State, hwnd: HWND) -> Option<usize> {
@@ -331,9 +364,23 @@ unsafe fn on_paint(hwnd: HWND) -> LRESULT {
 /// timer tick, so keys, clicks and paints are taken between slices.
 fn on_details(hwnd: HWND) -> LRESULT {
     let done = with_state(|s| {
+        let facts = |s: &State| -> Vec<_> {
+            s.wins.iter().map(|w| (w.app.clone(), w.icon.map(|i| i.0 as isize), w.hung)).collect()
+        };
+        let before = facts(s);
         s.details_next = list::details(&mut s.wins, &mut s.names, s.details_next, DETAILS_SLICE);
-        searched(s);
-        redraw(s);
+        let changed = overview::changed(&before, &facts(s));
+        if !changed.is_empty() {
+            let shown = std::mem::take(&mut s.shown);
+            // A new app name can change what the search keeps, and where.
+            searched(s);
+            match overview::repaint(&shown, &s.shown, &changed) {
+                Repaint::Nothing => {}
+                Repaint::Tiles(wins) => redraw_tiles(s, &wins),
+                Repaint::All => redraw(s),
+            }
+            announce(s);
+        }
         s.details_next >= s.wins.len()
     });
     if done != Some(false) {
@@ -409,6 +456,11 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
             }
             WM_TIMER if matches!(wparam.0, TIMER_FOCUS | TIMER_FOCUS_LAST) => on_focus_timer(hwnd, wparam.0),
             WM_ACTIVATEAPP => on_activate_app(wparam),
+            // A screen's window took the focus: it reads its name, which is the selection's.
+            WM_SETFOCUS => {
+                NotifyWinEvent(EVENT_OBJECT_NAMECHANGE, hwnd, OBJID_WINDOW.0, CHILDID_SELF as i32);
+                DefWindowProcW(hwnd, msg, wparam, lparam)
+            }
             WM_TIMER if wparam.0 == TIMER_DETAILS => on_details(hwnd),
             WM_CLOSE | WM_DISPLAYCHANGE => {
                 quit();
@@ -473,7 +525,18 @@ unsafe fn make_windows(screens: &[Screen]) -> Option<Vec<HWND>> {
     }
 }
 
-fn run(spec: Spec, ready: std::sync::mpsc::Sender<()>) {
+/// Clears this request's `OPENING` when the overview's windows exist or its thread ends
+/// without them, however it ends.
+struct Launch(u64);
+
+impl Drop for Launch {
+    fn drop(&mut self) {
+        OPENING.done(self.0);
+    }
+}
+
+fn run(spec: Spec, token: u64) {
+    let launch = Launch(token);
     if spec.screens.is_empty() {
         return;
     }
@@ -484,7 +547,6 @@ fn run(spec: Spec, ready: std::sync::mpsc::Sender<()>) {
         let mut msg = MSG::default();
         let _ = PeekMessageW(&mut msg, None, 0, 0, PM_NOREMOVE);
         OPEN.store(id, Ordering::SeqCst);
-        let _ = ready.send(());
         let com = list::com_start();
         let started = Instant::now();
         let rects: Vec<Rect> = spec.screens.iter().map(|s| rect_of(&s.rect)).collect();
@@ -540,6 +602,7 @@ fn run(spec: Spec, ready: std::sync::mpsc::Sender<()>) {
             names: HashMap::new(),
             details_next: 0,
             surrogate: None,
+            spoken: RefCell::default(),
             wheel: 0,
         };
         draw::register_thumbs(&mut state);
@@ -557,8 +620,11 @@ fn run(spec: Spec, ready: std::sync::mpsc::Sender<()>) {
             let quiet = if i == main { SWP_SHOWWINDOW } else { SWP_SHOWWINDOW | SWP_NOACTIVATE };
             let _ = SetWindowPos(*hwnd, Some(HWND_TOPMOST), r.x, r.y, r.w, r.h, quiet);
         }
+        // Its windows exist: a request for another overview is no longer dropped.
+        drop(launch);
         let main = shown[main].0;
         wincontrol::focus(main, spec.from_api);
+        with_state(|s| announce(s));
         let _ = SetTimer(Some(main), TIMER_FOCUS, FOCUS_GRACE_MS, None);
         while GetMessageW(&mut msg, None, 0, 0).as_bool() {
             let _ = TranslateMessage(&msg);
@@ -574,19 +640,18 @@ fn run(spec: Spec, ready: std::sync::mpsc::Sender<()>) {
     }
 }
 
-/// Open the overview, replacing one that's up. It runs on a thread of its own, and this
-/// returns once that thread can take a close.
+/// Open the overview, replacing one that's up. It runs on a thread of its own and this
+/// doesn't wait for it: until its windows exist `OPENING` is set, and a request made
+/// meanwhile is dropped (D653).
 pub fn show(spec: Spec) {
-    let _launching = locked(&LAUNCH);
-    close();
-    let (ready, opened) = channel();
-    let spawned = std::thread::Builder::new().name("seam-overview".into()).spawn(move || run(spec, ready));
-    if let Err(e) = spawned {
-        log::info!("overview: couldn't start: {e}");
+    let Some(token) = OPENING.begin(now_ms()) else {
+        log::info!("overview: one is still opening, so this request is dropped");
         return;
+    };
+    close();
+    let spawned = std::thread::Builder::new().name("seam-overview".into()).spawn(move || run(spec, token));
+    if let Err(e) = spawned {
+        OPENING.done(token);
+        log::info!("overview: couldn't start: {e}");
     }
-    // The thread answers once its queue exists, before it reads any window, so this is a
-    // ceiling the normal case never reaches. Long enough that a busy machine doesn't let a
-    // second key start a second overview.
-    let _ = opened.recv_timeout(Duration::from_millis(200));
 }

@@ -154,6 +154,7 @@ A stack puts several windows in one zone, one on top, and a key brings the next 
 - **What it can't move.** Windows on other virtual desktops: Windows only lets an app move its own windows between desktops. Windows running as administrator can't be moved either. The overview says why in place of its hint, and a drop that can't be made changes nothing.
 - **Open it from a corner.** Turn on **Open the overview when the pointer rests in a corner** on Zones and pick the corner. Resting the pointer there a moment, with no button down, opens the overview, once per visit. Only an outer corner of the whole desk counts, never one between two screens, and nothing opens during a drag, while Seam is paused or steps aside, or with a full-screen app in front.
 - **Busy apps.** A window that isn't responding is listed with "Not responding". You can go to it, and the overview never waits on it.
+- **Screen readers.** The overview's window is named "Seam overview: app - title" for the selected window, or with the number of windows shown when none is selected, and Narrator reads it as the selection changes. The tiles themselves aren't separate items for a screen reader.
 - **Closing it.** **Esc**, a click in another app, or Enter on a window that has closed in the meantime closes it, and the focus goes back to the window you were using.
 
 ### Window control

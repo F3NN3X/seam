@@ -25,6 +25,7 @@ const RESERVED: &[(&str, &str)] = &[
     ("Win+Ctrl+D", "a new desktop"),
     ("Win+Ctrl+F4", "closing a desktop"),
     ("Win+Shift+S", "Snipping Tool"),
+    ("Win+Ctrl+Shift+B", "resetting the graphics driver"),
     ("Win+A", "quick settings"),
     ("Win+B", "the notification area"),
     ("Win+C", "Copilot"),
@@ -71,29 +72,54 @@ pub fn conflict(combo: &str, action: &str, items: &[Item]) -> Option<String> {
     if let Some((keys, what)) = reserved(pressed) {
         return Some(format!("Windows uses {keys} for {what}. Press other keys"));
     }
-    let other = items.iter().find(|i| {
-        i.action != action && i.combo.as_deref().and_then(hotkey::parse).is_some_and(|held| held == pressed)
-    })?;
-    Some(format!("Also used by {}", other.title))
+    let held_by = |i: &&Item| {
+        let held = i.combo.as_deref();
+        let own = held.and_then(hotkey::parse) == Some(pressed);
+        // Rotate windows also registers its keys with Shift added.
+        let back =
+            i.action == "rotate" && held.and_then(hotkey::with_shift).and_then(|c| hotkey::parse(&c)) == Some(pressed);
+        i.action != action && (own || back)
+    };
+    if let Some(other) = items.iter().find(held_by) {
+        return Some(format!("Also used by {}", other.title));
+    }
+    // Rotate's Shift variant has to be free too.
+    let back = (action == "rotate").then(|| hotkey::with_shift(combo)).flatten().and_then(|c| hotkey::parse(&c))?;
+    let other =
+        items.iter().find(|i| i.action != action && i.combo.as_deref().and_then(hotkey::parse) == Some(back))?;
+    Some(format!("Its Shift version is used by {}", other.title))
 }
 
-/// Keys to try after a shortcut's own preference, none of them Windows' or Seam's already.
+/// Keys to try after a shortcut's own preference. Ctrl+Shift+Alt only: Win with letters has
+/// meanings Windows may add, and Ctrl+Alt alone is AltGr on many layouts.
 fn pool() -> impl Iterator<Item = String> {
-    ["Ctrl+Shift+Alt", "Ctrl+Shift+Win", "Ctrl+Win+Alt"]
-        .into_iter()
-        .flat_map(|mods| ('A'..='Z').map(move |letter| format!("{mods}+{letter}")))
+    let letters = ('A'..='Z').map(String::from);
+    let digits = ('0'..='9').map(String::from);
+    let functions = (1..=12).map(|n| format!("F{n}"));
+    letters.chain(digits).chain(functions).map(|key| format!("Ctrl+Shift+Alt+{key}"))
 }
 
 /// Keys for every shortcut with none, as (action, keys). None clashes with Windows, with a
 /// shortcut that is set, or with another suggestion.
 pub fn suggest(items: &[Item]) -> Vec<(String, String)> {
     let mut taken: Vec<Combo> = items.iter().filter_map(|i| i.combo.as_deref().and_then(hotkey::parse)).collect();
+    // Rotate windows registers its keys with Shift added too.
+    let back = |keys: &str| hotkey::with_shift(keys).and_then(|c| hotkey::parse(&c));
+    taken.extend(items.iter().filter(|i| i.action == "rotate").filter_map(|i| back(i.combo.as_deref()?)));
     let mut chosen = Vec::new();
     for item in items.iter().filter(|i| i.combo.is_none()) {
+        let rotate = item.action == "rotate";
         let mut free = |keys: &String| {
             let combo = hotkey::parse(keys)?;
-            let usable = !taken.contains(&combo) && reserved(combo).is_none();
-            usable.then(|| taken.push(combo))
+            let shifted = if rotate { Some(back(keys)?) } else { None };
+            let usable = !taken.contains(&combo)
+                && reserved(combo).is_none()
+                && shifted.is_none_or(|s| !taken.contains(&s) && reserved(s).is_none());
+            if usable {
+                taken.push(combo);
+                taken.extend(shifted);
+            }
+            usable.then_some(())
         };
         let pick = item.preferred.iter().cloned().chain(pool()).find(|keys| free(keys).is_some());
         if let Some(keys) = pick {
@@ -154,6 +180,17 @@ mod tests {
             assert_ne!(Some(*combo), hotkey::parse("Ctrl+Shift+Alt+A"));
         }
         assert_eq!(picked[2].1, "Ctrl+Shift+Alt+Z");
+    }
+
+    #[test]
+    fn rotate_keeps_its_shift_variant_free() {
+        let items = [item("rotate", Some("Ctrl+Alt+R"), None), item("grow", None, Some("Ctrl+Alt+Shift+R"))];
+        assert_eq!(conflict("Ctrl+Alt+Shift+R", "grow", &items).as_deref(), Some("Also used by ROTATE"));
+        let picked = suggest(&items);
+        assert_ne!(picked[0].1, "Ctrl+Alt+Shift+R");
+        let items = [item("rotate", None, Some("Ctrl+Shift+Alt+R")), item("grow", None, None)];
+        let picked = suggest(&items);
+        assert_ne!(picked[0].1, "Ctrl+Shift+Alt+R");
     }
 
     #[test]

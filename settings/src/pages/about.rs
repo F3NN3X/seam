@@ -91,8 +91,10 @@ fn update_status(panel: &Panel, p: Palette) -> Option<Div> {
     }
     let (word, color, filled) = match &panel.update_ui {
         UpdateUi::Checking => ("Checking…", p.text_muted, false),
-        UpdateUi::Idle => match (&panel.update_file.available, panel.update_file.ready) {
-            (Some(version), true) if version != env!("CARGO_PKG_VERSION") => ("Update ready", p.accent, true),
+        UpdateUi::Idle => match (&panel.update_file.available, panel.update_file.ready, &panel.update_file.error) {
+            (_, _, Some(_)) => return None,
+            (Some(version), true, _) if version != env!("CARGO_PKG_VERSION") => ("Update ready", p.accent, true),
+            (Some(version), false, _) if version != env!("CARGO_PKG_VERSION") => ("Update available", p.accent, false),
             _ => ("Up to date", p.positive, true),
         },
         _ => return None,

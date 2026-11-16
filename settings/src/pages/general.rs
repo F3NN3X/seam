@@ -286,6 +286,7 @@ fn startup_section(
         }
     });
     let seam_reopens = panel.config.restore_apps == RestoreApps::Seam;
+    let offers_last = sign_in.mode == SignInMode::LastSession;
     let reopen_choice = ui::segmented(
         "restore-apps",
         "Who reopens the apps",
@@ -296,6 +297,10 @@ fn startup_section(
         {
             let view = view.clone();
             move |i, window, cx| {
+                // It only applies when Seam offers the last session, so it does nothing otherwise.
+                if !offers_last {
+                    return;
+                }
                 view.update(cx, |panel, cx| match i {
                     0 => panel.patch(json!({ "restore_apps": "windows" }), window, cx),
                     _ if panel.config.restore_apps != RestoreApps::Seam => confirm_seam_reopens(window, cx),
@@ -360,7 +365,11 @@ fn startup_section(
         ));
     }
     startup_rows.extend([
-        row("Who reopens the apps", Some("Seam puts each window back either way".into()), reopen_choice, p),
+        ui::dimmed(
+            row("Who reopens the apps", Some("Seam puts each window back either way".into()), reopen_choice, p),
+            "restore-apps-row",
+            (!offers_last).then_some("Applies when Seam offers your last session"),
+        ),
         row("Offer to line up new screens", Some("Asks once when a screen Seam hasn't seen connects".into()), offer, p),
         row("Clicking the tray icon", Some("Right-click always shows the menu".into()), tray_click, p),
     ]);

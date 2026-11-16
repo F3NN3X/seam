@@ -67,6 +67,10 @@ impl Panel {
         if page != Page::Help {
             self.help_topic = None;
         }
+        if self.page == Page::Shortcuts && page != Page::Shortcuts {
+            self.all_shortcuts = false;
+            self.shortcut_filter.update(cx, |input, cx| input.set_value("", window, cx));
+        }
         self.page = page;
         self.changed_only = false;
         if page == Page::Workspaces {
@@ -132,12 +136,20 @@ impl Panel {
             .child(Icon::new(page.icon()).size(px(16.)).text_color(if active { p.text_primary } else { p.text_muted }))
             .child(div().flex_1().child(page.title()))
             .when(update_ready, |d| d.child(ui::dot(p.accent, true)))
-            .on_click(cx.listener(move |this, _, window, cx| this.show(page, None, window, cx)))
+            .on_click(cx.listener(move |this, _, window, cx| this.go_to_nav(page, window, cx)))
             .on_key_down(cx.listener(move |this, e: &KeyDownEvent, window, cx| {
                 if matches!(e.keystroke.key.as_str(), "space" | "enter") {
-                    this.show(page, None, window, cx);
+                    this.go_to_nav(page, window, cx);
                 }
             }))
+    }
+
+    /// A sidebar item opens its page. Help's shows the topics, even from inside a topic.
+    fn go_to_nav(&mut self, page: Page, window: &mut Window, cx: &mut Context<Self>) {
+        if page == Page::Help {
+            self.help_topic = None;
+        }
+        self.show(page, None, window, cx);
     }
 
     fn status_row(&self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement + use<> {

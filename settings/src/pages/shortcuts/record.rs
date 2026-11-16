@@ -8,9 +8,9 @@ use gpui_kit::*;
 use seam::hotkey;
 use serde_json::{Map, Value, json};
 
-/// Keys pressed while recording that something else holds.
+/// Keys just saved that something else holds. They work or not, as before, and the row says why.
 pub struct Clash {
-    pub combo: String,
+    pub action: String,
     /// What holds them and what to do, for the line under the row.
     pub message: String,
 }
@@ -64,6 +64,7 @@ pub fn start_recording(panel: &mut Panel, action: String, cx: &mut Context<Panel
     let view = cx.entity().downgrade();
     panel.recording = Some(action.clone());
     panel.clash = None;
+    panel.hotkey_warning = None;
     panel.recorder = Some(cx.intercept_keystrokes(move |event, window, cx| {
         let key = event.keystroke.clone();
         if ["shift", "control", "alt", "platform", "function"].contains(&key.key.as_str()) {
@@ -76,11 +77,9 @@ pub fn start_recording(panel: &mut Panel, action: String, cx: &mut Context<Panel
                 "backspace" => finish(panel, &action, Value::Null, window, cx),
                 _ => {
                     if let Some(combo) = combo_of(&key) {
-                        // Keys something holds aren't saved. The row says what holds them, and keeps listening.
-                        match clash::conflict(&combo, &action, &catalog::items(panel)) {
-                            Some(message) => panel.clash = Some(Clash { combo, message }),
-                            None => finish(panel, &action, json!(combo), window, cx),
-                        }
+                        let message = clash::conflict(&combo, &action, &catalog::items(panel));
+                        finish(panel, &action, json!(combo), window, cx);
+                        panel.clash = message.map(|message| Clash { action: action.clone(), message });
                     }
                 }
             }
@@ -107,14 +106,18 @@ pub fn use_suggested(panel: &mut Panel, window: &mut Window, cx: &mut Context<Pa
     for (action, keys) in chosen.iter().filter(|(action, _)| action.starts_with("workspace:")) {
         save(panel, action, json!(keys), window, cx);
     }
-    let actions: Vec<String> = chosen.into_iter().map(|(action, _)| action).collect();
-    let plural = if actions.len() == 1 { "" } else { "s" };
-    let message = format!("Set {} shortcut{plural}", actions.len());
+    let plural = if chosen.len() == 1 { "" } else { "s" };
+    let message = format!("Set {} shortcut{plural}", chosen.len());
     panel.offer_undo(
         message,
         move |panel, window, cx| {
-            for action in &actions {
-                save(panel, action, Value::Null, window, cx);
+            // A shortcut changed since stays as it is.
+            let now = catalog::items(panel);
+            for (action, keys) in &chosen {
+                let same = now.iter().any(|i| i.action == *action && i.combo.as_ref() == Some(keys));
+                if same {
+                    save(panel, action, Value::Null, window, cx);
+                }
             }
         },
         window,

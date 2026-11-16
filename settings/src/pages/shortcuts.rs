@@ -58,24 +58,20 @@ pub fn shortcut_row(
     let p = palette(cx);
     let note = |text: SharedString, color: Hsla| text_style(div(), tokens::LABEL).text_color(color).child(text);
     if panel.recording.as_deref() == Some(action.as_str()) {
-        let clash = panel.clash.as_ref();
-        let keys = match clash {
-            Some(clash) => keycaps(&clash.combo, true, p).into_any_element(),
-            None => {
-                text_style(div(), tokens::LABEL).text_color(p.text_secondary).child("Press keys").into_any_element()
-            }
-        };
-        let said = clash.map(|clash| note(clash.message.clone().into(), p.negative).into_any_element());
+        let keys = text_style(div(), tokens::LABEL).text_color(p.text_secondary).child("Press keys");
         let cancel = ui::secondary(("cancel", slot), "Cancel", cx).on_click(cx.listener(|panel, _, _, cx| {
             stop_recording(panel);
             cx.notify();
         }));
         let control = div().flex().items_center().gap(px(tokens::SPACE_16)).child(keys).child(cancel);
-        return row_with(title, said, control).map(|row| div().bg(p.surface_raised).child(row).into_any_element());
+        return row_with(title, None, control).map(|row| div().bg(p.surface_raised).child(row).into_any_element());
     }
     let conflict = panel.state.as_ref().is_some_and(|s| s.hotkey_errors.iter().any(|e| e.action == action));
+    let clash = panel.clash.as_ref().filter(|c| c.action == action);
     let about = if conflict {
         Some(note("Another app already uses this shortcut. Choose a different one".into(), p.negative))
+    } else if let Some(clash) = clash {
+        Some(note(clash.message.clone().into(), p.negative))
     } else if panel.hotkey_warning.as_deref() == Some(action.as_str()) {
         Some(note("Ctrl+Alt types characters on many keyboards. Add Shift".into(), p.negative))
     } else {
@@ -83,7 +79,7 @@ pub fn shortcut_row(
         text.map(|text| note(text, p.text_secondary))
     };
     let keys = match combo {
-        Some(combo) => keycaps(combo, conflict, p).into_any_element(),
+        Some(combo) => keycaps(combo, conflict || clash.is_some(), p).into_any_element(),
         None => text_style(div(), tokens::LABEL).text_color(p.text_muted).child("Not set").into_any_element(),
     };
     let label = if combo.is_some() { "Change" } else { "Record" };

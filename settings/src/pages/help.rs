@@ -59,7 +59,8 @@ fn open_button(id: impl Into<ElementId>, page: Page, cx: &mut Context<Panel>) ->
 fn done(panel: &Panel, page: Page) -> bool {
     panel.config.desks.get(&workspaces::desk_sig(panel)).is_some_and(|desk| match page {
         Page::Displays => !desk.borders.is_empty(),
-        Page::Zones => !desk.zones.is_empty(),
+        // A layout chosen for a screen, not the zones a workspace saved.
+        Page::Zones => desk.zones.values().any(|saved| seam::zones::layout_of(saved).is_some()),
         _ => !desk.workspaces.is_empty(),
     })
 }

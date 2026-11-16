@@ -25,8 +25,7 @@ fn patching(view: &Entity<Panel>, patch: fn(bool) -> Value) -> impl Fn(bool, &mu
     }
 }
 
-/// The rows after "Let other apps control Seam": MCP, what it may change, and where its exe is
-/// while it's on.
+/// The rows after "Let other apps control Seam": MCP, what it may change, and where its exe is.
 pub fn rows(panel: &Panel, view: &Entity<Panel>, window: &mut Window, cx: &mut Context<Panel>) -> Vec<Row> {
     let p: Palette = palette(cx);
     let (on, edit) = (panel.config.api.mcp, panel.config.api.assistants_edit);
@@ -65,7 +64,7 @@ pub fn rows(panel: &Panel, view: &Entity<Panel>, window: &mut Window, cx: &mut C
             (!on).then_some("Turn on Let assistants use Seam (MCP) first"),
         ),
     ];
-    if on {
+    {
         let path = mcp_path();
         let shown = text_style(div(), tokens::MONO)
             .font_family(cx.theme().mono_font_family.clone())
@@ -77,7 +76,11 @@ pub fn rows(panel: &Panel, view: &Entity<Panel>, window: &mut Window, cx: &mut C
                 window.push_notification(Notification::new().message("Copied the path to seam-mcp.exe"), cx);
             }))
         });
-        rows.push(row_with("seam-mcp.exe", Some(shown.into_any_element()), div().children(copy)));
+        rows.push(dimmed(
+            row_with("seam-mcp.exe", Some(shown.into_any_element()), div().children(copy)),
+            "mcp-path-row",
+            (!on).then_some("Only used while Let assistants use Seam (MCP) is on"),
+        ));
     }
     rows
 }

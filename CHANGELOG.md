@@ -4,6 +4,8 @@ All notable changes to Seam. The format follows [Keep a Changelog](https://keepa
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-11-16
+
 ### Added
 
 - **A redesigned Seam window.** It has Mica, Windows 11's translucent backdrop, when Transparency effects is on and no contrast theme is, and draws its own title bar with Back, the command bar and the window buttons, which keep Snap Layouts. The sidebar's status card opens its page and reads "Remap on", "Remap paused" or "New screen to line up". Colours, sizes and type follow one set of design tokens, so muted text and the Off switch are easier to see, and Seam's own controls draw a 2 px focus ring outside the control. Every page title has a **?** that opens its Help topic, and pressed and disabled controls look different from rest, and say why when disabled.

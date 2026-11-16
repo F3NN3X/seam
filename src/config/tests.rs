@@ -335,8 +335,8 @@ fn setup_is_done_for_a_file_from_before_it_and_not_for_a_new_install() {
 
 #[test]
 fn a_0_7_0_config_loads_with_its_values_and_counts_as_set_up() {
-    // The shape 0.7.0 wrote: a desk with borders, zones, a workspace and tiling, a hotkey,
-    // an app rule, margins and no `setup_done`.
+    // The shape 0.7.0 wrote: a desk with borders, zones and a workspace, a hotkey, an app
+    // rule and no `setup_done`. Only fields `v0.7.0:src/config.rs` has.
     let file = json!({
         "version": 2,
         "enabled": false,
@@ -353,9 +353,7 @@ fn a_0_7_0_config_loads_with_its_values_and_counts_as_set_up() {
                 "lined_up_at": 1_730_000_000u64,
                 "borders": [{ "a": "mon-a", "b": "mon-b", "side": "Right", "map": { "s": 1.0, "o": 12.5 } }],
                 "zones": { "mon-a": { "id": "two", "name": "Two" } },
-                "workspaces": [{ "id": "w1", "name": "Work", "windows": [] }],
-                "tiling": { "mon-b": { "family": "grid", "desktops": ["d1"] } },
-                "margins": { "mon-a": { "top": 8, "right": 0, "bottom": 8, "left": 0 } }
+                "workspaces": [{ "id": "w1", "name": "Work", "windows": [] }]
             }
         }
     });
@@ -378,6 +376,4 @@ fn a_0_7_0_config_loads_with_its_values_and_counts_as_set_up() {
     assert_eq!((desk.borders[0].side, desk.borders[0].map.o), (Side::Right, 12.5));
     assert!(desk.zones.contains_key("mon-a"));
     assert_eq!(desk.workspaces.len(), 1);
-    assert_eq!(desk.tiling["mon-b"].family, crate::tiling::Family::Grid);
-    assert_eq!(desk.margins["mon-a"].top, 8);
 }

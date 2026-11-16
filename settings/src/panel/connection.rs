@@ -115,7 +115,12 @@ impl Panel {
                         {
                             let same = this.state.as_ref() == Some(&state)
                                 && serde_json::to_value(&this.config).is_ok_and(|now| now == config);
-                            if !same {
+                            if same {
+                                if this.editor.is_some() {
+                                    this.close_editor_if_screens_moved();
+                                    redraw = this.editor.is_none();
+                                }
+                            } else {
                                 redraw = true;
                                 this.apply(state, config);
                             }
@@ -155,13 +160,8 @@ impl Panel {
         self.border_pick = picked;
         // A screen that came, went or changed size leaves the editor's tree meaning
         // something else, so it closes and nothing is saved.
-        if self.editor.is_some() && !screens_changed {
-            let now = monitors::enumerate();
-            let same = now.len() == self.mons.len()
-                && now.iter().zip(&self.mons).all(|(a, b)| a.id == b.id && a.rect == b.rect);
-            if !same {
-                self.editor = None;
-            }
+        if !screens_changed {
+            self.close_editor_if_screens_moved();
         }
         if screens_changed {
             self.editor = None;
@@ -170,6 +170,20 @@ impl Panel {
         pages::zone_editor::reload(self);
         self.relink();
         parsed
+    }
+
+    /// The editor's tree belongs to the screens it was opened on. State carries each screen's
+    /// rect but not its DPI, so this asks Windows on every `state.changed`, changed or not.
+    fn close_editor_if_screens_moved(&mut self) {
+        if self.editor.is_none() {
+            return;
+        }
+        let now = monitors::enumerate();
+        let same =
+            now.len() == self.mons.len() && now.iter().zip(&self.mons).all(|(a, b)| a.id == b.id && a.rect == b.rect);
+        if !same {
+            self.editor = None;
+        }
     }
 
     pub(super) fn read_screens(&mut self) {

@@ -63,7 +63,7 @@ impl Panel {
                     continue;
                 };
                 let client = Arc::new(Mutex::new(client));
-                let accepted = this.update(cx, |this, cx| {
+                let accepted = this.update_in(cx, |this, window, cx| {
                     // A new tray has a new token, so this panel can't change settings.
                     // Ask for a fresh one.
                     if this.was_linked {
@@ -73,6 +73,7 @@ impl Panel {
                     this.was_linked = true;
                     this.client = Some(client.clone());
                     this.apply(state, config);
+                    this.open_setup(window, cx);
                     cx.notify();
                     true
                 });

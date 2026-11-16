@@ -576,6 +576,10 @@ pub struct Config {
     /// Missing in v1 files, so it reads as 0 there rather than the current version.
     #[serde(default)]
     pub version: u32,
+    /// First-run setup was finished or skipped. A new install starts false; a file
+    /// from before the field reads true, so current users never see it.
+    #[serde(default = "setup_done_in_old_files")]
+    pub setup_done: bool,
     /// Remap the pointer at calibrated borders.
     pub enabled: bool,
     /// After lining up, also move monitors in the Windows arrangement so the
@@ -642,10 +646,15 @@ pub struct Config {
     pub layouts: BTreeMap<String, Vec<SavedBorder>>,
 }
 
+fn setup_done_in_old_files() -> bool {
+    true
+}
+
 impl Default for Config {
     fn default() -> Self {
         Config {
             version: CURRENT_VERSION,
+            setup_done: false,
             enabled: true,
             align_arrangement: true,
             lineup_measure: false,

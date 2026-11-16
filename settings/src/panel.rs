@@ -30,6 +30,7 @@ use std::time::Duration;
 mod command_bar;
 mod connection;
 mod new_screen;
+mod setup;
 mod view;
 
 actions!(seam_panel, [FocusSearch, ClearSearch, GoBack]);

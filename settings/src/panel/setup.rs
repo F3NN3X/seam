@@ -35,7 +35,7 @@ pub(super) struct Setup {
 impl Panel {
     /// Offer first-run setup, once, when the first config says it hasn't been done.
     pub(super) fn open_setup(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.config.setup_done {
+        if self.config.setup_done || self.setup.is_some() {
             return;
         }
         let setup = Rc::new(Setup {
@@ -344,6 +344,20 @@ fn draw(dialog: Dialog, setup: &Rc<Setup>, view: &WeakEntity<Panel>, _: &mut Win
         .footer(footer)
         .on_ok(move |_, window, cx| act(&ok_setup, &ok_view, window, cx))
         .on_close(move |_, window, cx| {
-            let _ = done_view.update(cx, |panel, cx| panel.patch(json!({ "setup_done": true }), window, cx));
+            let _ = done_view.update(cx, |panel, cx| {
+                panel.setup = None;
+                panel.patch(json!({ "setup_done": true }), window, cx)
+            });
         })
+}
+
+impl Panel {
+    /// The tray went away, so no answer is coming for a step that was waiting on one.
+    pub(super) fn setup_unlinked(&self, cx: &mut Context<Self>) {
+        if let Some(setup) = &self.setup {
+            setup.busy.set(false);
+            setup.pending.set(0);
+            cx.refresh_windows();
+        }
+    }
 }

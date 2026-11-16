@@ -54,6 +54,7 @@ impl Panel {
                     let linked = this.update(cx, |this, cx| {
                         this.client = None;
                         this.set_state(None);
+                        this.setup_unlinked(cx);
                         cx.notify();
                     });
                     if linked.is_err() {

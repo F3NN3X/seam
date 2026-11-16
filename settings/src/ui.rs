@@ -10,6 +10,9 @@ use std::cell::RefCell;
 use std::rc::Rc;
 use std::sync::Arc;
 
+mod only;
+pub use only::{nothing_shown, show_only, shows_any};
+
 pub const SECTION_GAP: f32 = tokens::SPACE_24;
 /// Room left above a row a search result scrolled to.
 const REVEAL_MARGIN: f32 = 24.;
@@ -146,37 +149,131 @@ pub fn page_header(title: impl Into<SharedString>, subtitle: impl Into<SharedStr
     div().flex().items_start().justify_between().gap(px(tokens::SPACE_16)).child(page_title(title, subtitle, p))
 }
 
-pub fn section(title: impl Into<SharedString>, body: impl IntoElement, p: Palette) -> AnyElement {
+/// What a section holds, and whether anything in it shows while only changed settings do.
+pub struct Body {
+    element: AnyElement,
+    shows: bool,
+}
+
+impl Body {
+    /// A body of rows you drew yourself: it shows when `shows` does.
+    pub fn new(element: impl IntoElement, shows: bool) -> Body {
+        Body { element: element.into_any_element(), shows: shows || !only::active() }
+    }
+}
+
+/// Anything else isn't known to hold a changed row.
+impl From<AnyElement> for Body {
+    fn from(element: AnyElement) -> Body {
+        Body::new(element, false)
+    }
+}
+
+impl From<Div> for Body {
+    fn from(element: Div) -> Body {
+        Body::new(element, false)
+    }
+}
+
+pub fn section(title: impl Into<SharedString>, body: impl Into<Body>, p: Palette) -> AnyElement {
     let title = title.into();
+    let body = body.into();
+    if !body.shows {
+        return div().hidden().into_any_element();
+    }
+    only::drawn(1);
     let section = div()
         .flex()
         .flex_col()
         .gap(px(tokens::SPACE_8))
         .child(text_style(div(), tokens::LABEL).text_color(p.text_secondary).child(title.clone()))
-        .child(body);
+        .child(body.element);
     anchored(&title, section)
 }
 
+/// A row of a card, known by its title so "Show changed settings" can leave it out.
+pub struct Row {
+    title: Option<SharedString>,
+    element: AnyElement,
+}
+
+impl Row {
+    /// The same row, drawn inside something else.
+    pub fn map(self, wrap: impl FnOnce(AnyElement) -> AnyElement) -> Row {
+        Row { title: self.title, element: wrap(self.element) }
+    }
+
+    /// Whether it's drawn while only changed settings are.
+    pub fn shows(&self) -> bool {
+        only::row_shows(self.title.as_deref())
+    }
+}
+
+/// Anything else in a card has no title, so it isn't known to have changed.
+impl From<AnyElement> for Row {
+    fn from(element: AnyElement) -> Row {
+        Row { title: None, element }
+    }
+}
+
+impl IntoElement for Row {
+    type Element = AnyElement;
+
+    fn into_element(self) -> AnyElement {
+        if self.shows() { self.element } else { div().hidden().into_any_element() }
+    }
+}
+
+/// Rows in a group, and whether any of them shows.
+pub struct Card {
+    group: Div,
+    shows: bool,
+}
+
+impl Card {
+    /// The card inside something else. A section around it still knows what the card holds, and
+    /// `also` says whether the rest of what's around it shows.
+    pub fn within(self, also: bool, wrap: impl FnOnce(Div) -> Div) -> Body {
+        Body { element: wrap(self.group).into_any_element(), shows: self.shows || also }
+    }
+}
+
+impl IntoElement for Card {
+    type Element = Div;
+
+    fn into_element(self) -> Div {
+        self.group
+    }
+}
+
+impl From<Card> for Body {
+    fn from(card: Card) -> Body {
+        Body { element: card.group.into_any_element(), shows: card.shows }
+    }
+}
+
 /// Rows in a group, with a hairline between them.
-pub fn card(rows: Vec<AnyElement>, p: Palette) -> Div {
+pub fn card<R: Into<Row>>(rows: Vec<R>, p: Palette) -> Card {
+    let rows: Vec<Row> = rows.into_iter().map(Into::into).filter(Row::shows).collect();
+    if only::active() {
+        if rows.is_empty() {
+            return Card { group: div().hidden(), shows: false };
+        }
+        only::drawn(rows.len());
+    }
     let mut group =
         div().flex().flex_col().bg(p.surface_card).border_1().border_color(p.hairline).rounded(px(tokens::RADIUS_12));
     for (i, row) in rows.into_iter().enumerate() {
-        group = group.child(div().when(i > 0, |d| d.border_t_1().border_color(p.hairline)).child(row));
+        group = group.child(div().when(i > 0, |d| d.border_t_1().border_color(p.hairline)).child(row.element));
     }
-    group
+    Card { group, shows: true }
 }
 
-pub fn row(
-    title: impl Into<SharedString>,
-    about: Option<SharedString>,
-    control: impl IntoElement,
-    p: Palette,
-) -> AnyElement {
+pub fn row(title: impl Into<SharedString>, about: Option<SharedString>, control: impl IntoElement, p: Palette) -> Row {
     row_with(title, about.map(|a| description(a, p).into_any_element()), control)
 }
 
-pub fn row_with(title: impl Into<SharedString>, about: Option<AnyElement>, control: impl IntoElement) -> AnyElement {
+pub fn row_with(title: impl Into<SharedString>, about: Option<AnyElement>, control: impl IntoElement) -> Row {
     let height = if about.is_some() { px(tokens::SIZE_ROW_2) } else { px(tokens::SIZE_ROW) };
     let title = title.into();
     let name = text_style(div(), tokens::BODY).child(title.clone());
@@ -194,7 +291,7 @@ pub fn row_with(title: impl Into<SharedString>, about: Option<AnyElement>, contr
         .py(px(tokens::SPACE_8))
         .child(text)
         .child(div().flex().flex_none().items_center().gap(px(tokens::SPACE_8)).child(control));
-    anchored(&title, row)
+    Row { element: anchored(&title, row), title: Some(title) }
 }
 
 pub fn secondary(id: impl Into<ElementId>, label: impl Into<SharedString>, cx: &App) -> Button {

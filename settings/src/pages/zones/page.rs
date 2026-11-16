@@ -3,7 +3,7 @@
 use super::*;
 use crate::pages::app_rules;
 use crate::theme::Palette;
-use crate::ui::{section, switch};
+use crate::ui::{Card, Row, section, switch};
 use gpui_kit::component::slider::Slider;
 use seam::config::{WindowSettings, ZoneSettings};
 use seam::tiling::Family;
@@ -21,9 +21,7 @@ pub fn render(panel: &mut Panel, window: &mut Window, cx: &mut Context<Panel>) -
         panel.gap.update(cx, |slider, cx| slider.set_value(gap, window, cx));
     }
 
-    let snapping = snapping_section(panel, &zones_cfg, &view, p, window, cx);
     let notice = other_wm_notice(panel);
-    let windows = windows_section(panel, &view, p, window, cx);
 
     let mut body = div()
         .flex()
@@ -40,6 +38,9 @@ pub fn render(panel: &mut Panel, window: &mut Window, cx: &mut Context<Panel>) -
     if panel.editor.as_ref().is_some_and(|e| Some(&e.sig) != sig.as_ref() || e.screen != mon.id) {
         panel.editor = None;
     }
+    // Built here, past the early return, so only sections that are drawn count as shown.
+    let snapping = snapping_section(panel, &zones_cfg, &view, p, window, cx);
+    let windows = windows_section(panel, &view, p, window, cx);
     let tabs = screen_tabs(panel, &view, window, cx);
 
     let number = panel.zone_screen.min(panel.mons.len() - 1) + 1;
@@ -99,7 +100,12 @@ fn snapping_section(
 ) -> AnyElement {
     let snapping = snapping_keys_card(panel, zones_cfg, view, p, window, cx);
     let rows = snapping_switches(zones_cfg, view, p, window, cx);
-    section("Snapping", div().flex().flex_col().gap(px(12.)).child(snapping).child(card(rows, p)), p)
+    let keys = ["Show zones", "Span zones", "Gap", "Restore size when dragged out", "Screen margins"];
+    let keys_show = ui::shows_any(&keys);
+    let body = card(rows, p).within(keys_show, |card| {
+        div().flex().flex_col().gap(px(12.)).when(keys_show, |d| d.child(snapping)).child(card)
+    });
+    section("Snapping", body, p)
 }
 
 /// Show and span keys, the gap and restore size.
@@ -164,25 +170,33 @@ fn snapping_keys_card(
         .border_color(p.hairline)
         .rounded(px(12.))
         .child(
-            div().flex().child(cell(row("Show zones", Some("Hold while dragging".into()), show, p))).child(
-                cell(row("Span zones", Some("Add this key to cover more".into()), span, p))
-                    .border_l_1()
-                    .border_color(p.hairline),
-            ),
+            div()
+                .flex()
+                .child(cell(row("Show zones", Some("Hold while dragging".into()), show, p).into_any_element()))
+                .child(
+                    cell(row("Span zones", Some("Add this key to cover more".into()), span, p).into_any_element())
+                        .border_l_1()
+                        .border_color(p.hairline),
+                ),
         )
         .child(
             div()
                 .flex()
                 .border_t_1()
                 .border_color(p.hairline)
-                .child(cell(row("Gap", Some(format!("{} px", zones_cfg.gap.min(32)).into()), slider, p)))
+                .child(cell(
+                    row("Gap", Some(format!("{} px", zones_cfg.gap.min(32)).into()), slider, p).into_any_element(),
+                ))
                 .child(
-                    cell(row(
-                        "Restore size when dragged out",
-                        Some("The window gets its old size back".into()),
-                        restore,
-                        p,
-                    ))
+                    cell(
+                        row(
+                            "Restore size when dragged out",
+                            Some("The window gets its old size back".into()),
+                            restore,
+                            p,
+                        )
+                        .into_any_element(),
+                    )
                     .border_l_1()
                     .border_color(p.hairline),
                 ),
@@ -197,7 +211,7 @@ fn snapping_switches(
     p: Palette,
     window: &mut Window,
     cx: &mut Context<Panel>,
-) -> Vec<AnyElement> {
+) -> Vec<Row> {
     let refit = switch("zone-refit", "Keep windows in their zones", zones_cfg.refit, window, cx, {
         let view = view.clone();
         move |on, window, cx| view.update(cx, |panel, cx| panel.patch(json!({ "zones": { "refit": on } }), window, cx))
@@ -390,7 +404,8 @@ fn windows_section(
     let windows_card = card(
         vec![
             row("Focus border", Some("Colour the border of the window that has focus".into()), border, p),
-            div().when(border_off.is_some(), |d| d.opacity(0.4)).child(focus_colour_row).into_any_element(),
+            focus_colour_row
+                .map(|el| div().when(border_off.is_some(), |d| d.opacity(0.4)).child(el).into_any_element()),
             pin_colour_row,
             row(
                 "Tell me when a pinned window closes",
@@ -422,7 +437,7 @@ fn alt_drag_row(
     p: Palette,
     window: &mut Window,
     cx: &mut Context<Panel>,
-) -> AnyElement {
+) -> Row {
     let alt_drag = windows_cfg.alt_drag.clone();
     let drag_key = DRAG_KEYS.iter().find(|(k, _)| *k == alt_drag.key).map_or("Alt", |(_, label)| label);
     let drag_switch = switch("alt-drag", "Move and resize from anywhere in a window", alt_drag.on, window, cx, {
@@ -464,7 +479,7 @@ fn corner_overview_row(
     p: Palette,
     window: &mut Window,
     cx: &mut Context<Panel>,
-) -> AnyElement {
+) -> Row {
     let corner = windows_cfg.corner_overview.clone();
     let title = "Open the overview when the pointer rests in a corner";
     let label = CORNERS.iter().find(|(k, _)| *k == corner.corner).map_or("Top left", |(_, label)| label);
@@ -507,7 +522,7 @@ fn size_rows(
     p: Palette,
     window: &mut Window,
     cx: &mut Context<Panel>,
-) -> (AnyElement, AnyElement) {
+) -> (Row, Row) {
     let size_at = SIZE_MODES.iter().position(|m| *m == size_mode).unwrap_or(0);
     let size_choice = ui::segmented(
         "window-size-on-move",
@@ -543,16 +558,14 @@ fn size_rows(
     );
     (
         row("When a window moves to another screen", size_caption(panel, size_mode), size_choice, p),
-        div()
-            .when(scaled, |d| d.opacity(0.4))
-            .child(row("Also when I drag a window to another screen", None, on_drag, p))
-            .into_any_element(),
+        row("Also when I drag a window to another screen", None, on_drag, p)
+            .map(|el| div().when(scaled, |d| d.opacity(0.4)).child(el).into_any_element()),
     )
 }
 
 /// Smart tiling on the chosen screen, for the virtual desktop in front: the switch,
 /// and while it is on, the family. The tray keeps it per desktop, so the state says.
-fn tiling_card(panel: &Panel, number: usize, p: Palette, window: &mut Window, cx: &mut Context<Panel>) -> Div {
+fn tiling_card(panel: &Panel, number: usize, p: Palette, window: &mut Window, cx: &mut Context<Panel>) -> Card {
     let now = panel.state.as_ref().and_then(|s| s.tiling.iter().find(|t| t.screen as usize == number).cloned());
     let (on, family) = now.map_or((false, Family::Smart), |t| (t.on, t.family));
     let view = cx.entity();

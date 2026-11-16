@@ -2,6 +2,7 @@
 
 use super::*;
 use crate::theme::Palette;
+use crate::ui::Row;
 use gpui_kit::component::slider::{Slider, SliderEvent, SliderState};
 use seam::margins::{MAX_PX, Margins};
 
@@ -23,7 +24,7 @@ fn changed(panel: &mut Panel, side: usize, px: u32, release: bool, window: &mut 
     if release {
         panel.patch(json!({ "desks": { sig: { "margins": { id: next } } } }), window, cx);
     } else {
-        panel.config.desks.entry(sig).or_default().margins.insert(id, next);
+        panel.config_mut().desks.entry(sig).or_default().margins.insert(id, next);
         cx.notify();
     }
 }
@@ -43,7 +44,7 @@ pub fn subscriptions(
 }
 
 /// The "Screen margins" row for the chosen screen, with its four sliders.
-pub fn row(panel: &Panel, p: Palette, window: &mut Window, cx: &mut Context<Panel>) -> AnyElement {
+pub fn row(panel: &Panel, p: Palette, window: &mut Window, cx: &mut Context<Panel>) -> Row {
     let now = current(panel);
     // The sliders follow the setting when something else changed it, or another screen was chosen.
     for (slider, px) in panel.margins.iter().zip(now.sides()) {

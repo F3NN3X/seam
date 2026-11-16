@@ -8,7 +8,7 @@ const THEMES: &str = r##"{"name":"Seam","themes":[
   "mono_font.family":"Cascadia Mono","mono_font.size":13,"radius":8,"radius.lg":12,"shadow":false,
   "colors":{"background":"#F3F3F3","foreground":"#1A1A1A","border":"#1A1A1A14","ring":"#1A1A1A","input.border":"#1A1A1A14",
    "muted.background":"#FBFBFB","muted.foreground":"#666666","popover.background":"#FFFFFF","popover.foreground":"#1A1A1A",
-   "accent.background":"#FFFFFF","accent.foreground":"#1A1A1A","primary.background":"#1A1A1A","primary.foreground":"#FFFFFF",
+   "accent.background":"#EBEBEB","accent.foreground":"#1A1A1A","primary.background":"#1A1A1A","primary.foreground":"#FFFFFF",
    "primary.hover.background":"#333333","primary.active.background":"#333333","secondary.background":"#FFFFFF",
    "secondary.foreground":"#1A1A1A","secondary.hover.background":"#FBFBFB","secondary.active.background":"#FBFBFB",
    "button.primary.background":"#1A1A1A","button.primary.foreground":"#FFFFFF","button.primary.hover.background":"#333333",
@@ -19,7 +19,7 @@ const THEMES: &str = r##"{"name":"Seam","themes":[
   "mono_font.family":"Cascadia Mono","mono_font.size":13,"radius":8,"radius.lg":12,"shadow":false,
   "colors":{"background":"#202020","foreground":"#F3F3F3","border":"#F3F3F314","ring":"#F3F3F3","input.border":"#F3F3F314",
    "muted.background":"#2A2A2A","muted.foreground":"#A0A0A0","popover.background":"#333333","popover.foreground":"#F3F3F3",
-   "accent.background":"#333333","accent.foreground":"#F3F3F3","primary.background":"#F3F3F3","primary.foreground":"#1A1A1A",
+   "accent.background":"#3A3A3A","accent.foreground":"#F3F3F3","primary.background":"#F3F3F3","primary.foreground":"#1A1A1A",
    "primary.hover.background":"#FFFFFF","primary.active.background":"#FFFFFF","secondary.background":"#333333",
    "secondary.foreground":"#F3F3F3","secondary.hover.background":"#3A3A3A","secondary.active.background":"#3A3A3A",
    "button.primary.background":"#F3F3F3","button.primary.foreground":"#1A1A1A","button.primary.hover.background":"#FFFFFF",
@@ -150,6 +150,11 @@ pub struct Palette {
     pub surface_raised: Hsla,
     /// surface-segment: chosen segment, secondary hover, menu hover.
     pub surface_segment: Hsla,
+    /// menu-hover (D675): the highlighted row of a menu or the command bar, which the kit reads as
+    /// `accent.background` in `THEMES`. surface-segment in dark, a step darker than the menu in
+    /// light, where surface-segment is the menu's own white.
+    #[allow(dead_code)] // The kit reads it from `THEMES`.
+    pub menu_hover: Hsla,
     /// surface-input: inputs, search.
     pub surface_input: Hsla,
     /// surface-zone: zone blocks, icon placeholders.
@@ -251,6 +256,7 @@ fn base_palette(cx: &App) -> Palette {
             surface_card: c(0x2A2A2A),
             surface_raised: c(0x333333),
             surface_segment: c(0x3A3A3A),
+            menu_hover: c(0x3A3A3A),
             surface_input: c(0x262626),
             surface_zone: c(0x3A3A3A),
             surface_card_mica: a(0xFFFFFF0D),
@@ -282,6 +288,7 @@ fn base_palette(cx: &App) -> Palette {
             surface_card: c(0xFBFBFB),
             surface_raised: c(0xFFFFFF),
             surface_segment: c(0xFFFFFF),
+            menu_hover: c(0xEBEBEB),
             surface_input: c(0xFFFFFF),
             surface_zone: c(0xE0E0E0),
             surface_card_mica: a(0xFFFFFFB3),

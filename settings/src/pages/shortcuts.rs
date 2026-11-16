@@ -3,7 +3,7 @@
 use crate::pages::workspaces;
 use crate::panel::Panel;
 use crate::theme::palette;
-use crate::ui::{self, card, keycaps, row_with, section};
+use crate::ui::{self, Row, card, keycaps, row_with, section};
 use gpui_kit::*;
 use seam::hotkey;
 use serde_json::{Value, json};
@@ -127,7 +127,7 @@ fn shortcut_row(
     combo: Option<&String>,
     slot: usize,
     cx: &mut Context<Panel>,
-) -> AnyElement {
+) -> Row {
     let p = palette(cx);
     if panel.recording.as_deref() == Some(action.as_str()) {
         let field = div()
@@ -183,7 +183,7 @@ pub fn render(panel: &mut Panel, _: &mut Window, cx: &mut Context<Panel>) -> imp
         row("Move window to previous zone", "prev_zone", keys.prev_zone.as_ref(), 3),
     ];
     // Move, focus and swap in each direction on the desk.
-    let mut window_rows: Vec<AnyElement> = keys
+    let mut window_rows: Vec<Row> = keys
         .directional()
         .into_iter()
         .zip(WINDOW_TITLES)
@@ -221,7 +221,7 @@ pub fn render(panel: &mut Panel, _: &mut Window, cx: &mut Context<Panel>) -> imp
     ]);
     // One row for each workspace on this desk, then the capture shortcut.
     let on_desk = workspaces::on_desk(panel);
-    let mut workspace_rows: Vec<AnyElement> = on_desk
+    let mut workspace_rows: Vec<Row> = on_desk
         .iter()
         .enumerate()
         .map(|(i, ws)| row(&ws.name, &format!("workspace:{}", ws.id), ws.hotkey.as_ref(), 20 + i))

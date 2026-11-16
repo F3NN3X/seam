@@ -4,6 +4,8 @@ use crate::help;
 use crate::panel::Page;
 use std::sync::LazyLock;
 
+pub mod changed;
+
 pub struct Entry {
     pub page: Page,
     pub title: &'static str,

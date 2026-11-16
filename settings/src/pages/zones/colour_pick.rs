@@ -169,7 +169,7 @@ pub fn picked(
     let Some(colour) = colour else { return };
     let patch = json!({ "windows": { field: format!("#{:06X}", hex_of(colour)) } });
     if let Ok(config) = panel.config.patched(&patch) {
-        panel.config = config;
+        panel.set_config(config);
     }
     panel.colour_generation += 1;
     let generation = panel.colour_generation;

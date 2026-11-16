@@ -262,7 +262,7 @@ fn left_alone_row(i: usize, name: String, p: Palette, cx: &mut Context<Panel>) -
                 panel.offer_undo(format!("Removed {name}"), undo, window, cx);
             }
         }));
-    ui::row(name, None, remove, p)
+    ui::row(name, None, remove, p).into_any_element()
 }
 
 /// The card: a row for each rule, "Add an app", then the apps left alone.
@@ -277,7 +277,7 @@ pub fn view(panel: &mut Panel, cx: &mut Context<Panel>) -> AnyElement {
         known.iter().map(|(at, rule)| rule_row(panel, *at, rule, &screens, p, cx)).collect();
     if rows.is_empty() {
         let about = "Add an app to have its windows open in a place you choose, or stay on top";
-        rows.push(ui::row("No apps yet", Some(about.into()), div(), p));
+        rows.push(ui::row("No apps yet", Some(about.into()), div(), p).into_any_element());
     }
     let adding: app_picker::Add = Rc::new(|panel, rule, _, window, cx| add(panel, rule, window, cx));
     let button = app_picker::button(panel, &apps, "Already has a place", adding, cx);
@@ -287,7 +287,7 @@ pub fn view(panel: &mut Panel, cx: &mut Context<Panel>) -> AnyElement {
     let excluded = panel.config.zones.exclude.clone();
     if excluded.is_empty() {
         let about = "Choose Never include this app on a workspace's app to add one";
-        rows.push(ui::row("No apps yet", Some(about.into()), div(), p));
+        rows.push(ui::row("No apps yet", Some(about.into()), div(), p).into_any_element());
     }
     rows.extend(excluded.into_iter().enumerate().map(|(i, name)| left_alone_row(i, name, p, cx)));
 

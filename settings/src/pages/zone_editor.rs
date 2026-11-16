@@ -293,7 +293,7 @@ pub fn with_latest(
             window.push_notification(note, cx);
             return;
         };
-        panel.config = config;
+        panel.set_config(config);
         then(panel, window, cx);
     });
 }

@@ -3,6 +3,7 @@
 use crate::pages::updates::UpdateUi;
 use crate::{chrome, pages, search, ui};
 use gpui_kit::component::color_picker::{ColorPickerEvent, ColorPickerState};
+use gpui_kit::component::command::CommandState;
 use gpui_kit::component::input::{InputEvent, InputState};
 use gpui_kit::component::notification::Notification;
 use gpui_kit::component::scroll::ScrollableElement;
@@ -19,10 +20,14 @@ use seam::state::State;
 use seam::updates::{self, UpdateFile};
 use seam::workspace::RowStatus;
 use serde_json::json;
+use std::cell::Cell;
+use std::collections::HashSet;
 use std::path::PathBuf;
+use std::rc::Rc;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+mod command_bar;
 mod connection;
 mod view;
 
@@ -140,6 +145,22 @@ pub struct Panel {
     pub edge_resistance: Entity<SliderState>,
     pub glue_push: Entity<SliderState>,
     pub search: Entity<InputState>,
+    /// The command bar's results list, driven from the search field.
+    command_list: Entity<CommandState>,
+    /// The result Enter would run. `None`, or one a newer query dropped, is the first.
+    selected: Option<command_bar::Key>,
+    /// What the query found, kept until the query, the config or the state changes.
+    found: Option<Rc<command_bar::Results>>,
+    /// Counts changes to the config and the state, for what is worked out from them.
+    pub revision: u64,
+    /// The rows "Show changed settings" keeps, for the page and revision they were worked out for.
+    changed: Option<(Page, u64, Rc<HashSet<&'static str>>)>,
+    /// Where focus was when Ctrl+F took it, so Esc can give it back.
+    return_focus: Option<FocusHandle>,
+    /// Where the search field was last drawn, for the results to sit under.
+    field_bounds: Rc<Cell<Bounds<Pixels>>>,
+    /// "Show changed settings": the page shows only the rows that differ from their default.
+    changed_only: bool,
     /// The page's scroll, which opening a search result moves to the row it found.
     page_scroll: ScrollHandle,
     /// Holds focus when no control does, so Tab and Ctrl+F always reach a binding.
@@ -167,10 +188,27 @@ pub struct Panel {
 }
 
 impl Panel {
+    /// Every write to the config goes through here, so what is worked out from it is found again.
+    pub fn config_mut(&mut self) -> &mut Config {
+        self.revision += 1;
+        &mut self.config
+    }
+
+    pub fn set_config(&mut self, config: Config) {
+        *self.config_mut() = config;
+    }
+
+    /// The same for the state.
+    pub fn set_state(&mut self, state: Option<State>) {
+        self.revision += 1;
+        self.state = state;
+    }
+
     pub fn new(page: Option<Page>, token: String, window: &mut Window, cx: &mut Context<Self>) -> Panel {
         let saved = std::fs::read_to_string(last_page_file()).ok();
         let page = page.or(saved.and_then(|s| Page::from_arg(s.trim()))).unwrap_or(Page::Displays);
         let search = cx.new(|cx| InputState::new(window, cx).placeholder("Search settings and actions"));
+        let command_list = cx.new(|cx| CommandState::new(window, cx));
         let name_input = cx.new(|cx| InputState::new(window, cx).placeholder("Workspace name"));
         let focus_picker = cx.new(|cx| ColorPickerState::new(window, cx));
         let pin_picker = cx.new(|cx| ColorPickerState::new(window, cx));
@@ -234,6 +272,14 @@ impl Panel {
             edge_resistance,
             glue_push,
             search,
+            command_list,
+            selected: None,
+            found: None,
+            revision: 0,
+            changed: None,
+            return_focus: None,
+            field_bounds: Rc::default(),
+            changed_only: false,
             page_scroll: ScrollHandle::new(),
             focus,
             query: SharedString::default(),
@@ -270,7 +316,7 @@ fn slider_subscriptions(
     vec![
         cx.subscribe_in(edge_resistance, window, |this, _, event: &SliderEvent, window, cx| match event {
             SliderEvent::Change(value) => {
-                this.config.pointer.edge_resistance_px = value.end() as u32;
+                this.config_mut().pointer.edge_resistance_px = value.end() as u32;
                 cx.notify();
             }
             SliderEvent::Release(value) => {
@@ -279,7 +325,7 @@ fn slider_subscriptions(
         }),
         cx.subscribe_in(glue_push, window, |this, _, event: &SliderEvent, window, cx| match event {
             SliderEvent::Change(value) => {
-                this.config.pointer.glue_push_px = value.end() as u32;
+                this.config_mut().pointer.glue_push_px = value.end() as u32;
                 cx.notify();
             }
             SliderEvent::Release(value) => {
@@ -288,7 +334,7 @@ fn slider_subscriptions(
         }),
         cx.subscribe_in(gap, window, |this, _, event: &SliderEvent, window, cx| match event {
             SliderEvent::Change(value) => {
-                this.config.zones.gap = value.end() as u32;
+                this.config_mut().zones.gap = value.end() as u32;
                 cx.notify();
             }
             SliderEvent::Release(value) => {
@@ -321,11 +367,17 @@ fn field_subscriptions(
             let ColorPickerEvent::Change(colour) = event;
             pages::zones::picked("pin_color", *colour, this, window, cx);
         }),
-        cx.subscribe_in(search, window, |this, input, event: &InputEvent, _, cx| {
-            if matches!(event, InputEvent::Change) {
+        cx.subscribe_in(search, window, |this, input, event: &InputEvent, window, cx| match event {
+            InputEvent::Change => {
                 this.query = input.read(cx).value();
+                this.selected = None;
+                // A new query hands the highlight back to the first result.
+                let query = this.query.clone();
+                this.command_list.update(cx, |list, cx| list.set_query(query, window, cx));
                 cx.notify();
             }
+            InputEvent::PressEnter { .. } => this.run_selected(window, cx),
+            _ => {}
         }),
     ]
 }

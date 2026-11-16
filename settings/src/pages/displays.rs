@@ -2,7 +2,7 @@
 
 use crate::panel::{Panel, error_text, refusal};
 use crate::theme::{Palette, palette};
-use crate::ui::{self, card, row, section, switch};
+use crate::ui::{self, Card, card, row, section, switch};
 use gpui_kit::component::button::ButtonVariants;
 use gpui_kit::component::dialog::{DialogAction, DialogClose, DialogFooter};
 use gpui_kit::component::input::{Input, InputState};
@@ -212,7 +212,10 @@ pub fn render(panel: &mut Panel, window: &mut Window, cx: &mut Context<Panel>) -
     let pointer = pointer_card(panel, p, window, cx);
     let mut rows = desk_rows(panel, window, cx);
     if rows.is_empty() {
-        rows.push(ui::row("No saved desks yet", Some("Line up your screens to save this one".into()), div(), p));
+        rows.push(
+            ui::row("No saved desks yet", Some("Line up your screens to save this one".into()), div(), p)
+                .into_any_element(),
+        );
     }
     let desks = card(rows, p);
 
@@ -315,7 +318,7 @@ fn layout_card(
 }
 
 /// The Pointer card: the remap switch, the two sliders and the Line Up switches.
-fn pointer_card(panel: &Panel, p: Palette, window: &mut Window, cx: &mut Context<Panel>) -> Div {
+fn pointer_card(panel: &Panel, p: Palette, window: &mut Window, cx: &mut Context<Panel>) -> Card {
     let view = cx.entity();
     let remap = switch("remap", "Remap pointer at borders", panel.config.enabled, window, cx, {
         let view = view.clone();

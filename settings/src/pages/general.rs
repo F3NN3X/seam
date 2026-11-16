@@ -358,7 +358,12 @@ fn startup_section(
             ));
         }
     }
-    section("Startup", div().flex().flex_col().gap(px(8.)).child(card(startup_rows, p)).children(restart_note), p)
+    section(
+        "Startup",
+        card(startup_rows, p)
+            .within(false, |card| div().flex().flex_col().gap(px(8.)).child(card).children(restart_note)),
+        p,
+    )
 }
 
 /// The menu that picks the workspace to open at sign-in.

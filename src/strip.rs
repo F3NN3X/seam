@@ -486,6 +486,42 @@ pub fn unpack(v: u64) -> (i32, i32) {
     ((v >> 32) as u32 as i32, v as u32 as i32)
 }
 
+/// Where a window goes back to on the screens there are, each as (bounds, work area): the
+/// first of `choices` on one of them (`way_back`), else the middle of its own screen's
+/// work area while `own` is still there as it was, or else of the screen nearest `at`
+/// (where it is now, or was). None with no screen to go to.
+pub fn home(
+    choices: &[Option<Rect>],
+    screens: &[(Rect, Rect)],
+    own: Option<Rect>,
+    at: Option<Rect>,
+    size: (i32, i32),
+) -> Option<Rect> {
+    let bounds: Vec<Rect> = screens.iter().map(|s| s.0).collect();
+    let mine = own.and_then(|o| screens.iter().find(|s| s.0 == o)).map(|s| s.1);
+    let area = match mine {
+        Some(work) => work,
+        None => screens[nearest(&bounds, at.or_else(|| choices.iter().flatten().next().copied())?)?].1,
+    };
+    Some(way_back(choices, &bounds, area, size))
+}
+
+/// Where a window at `frame` must land so it is on a screen again, by `home`, or None when
+/// it is on one of `screens` already.
+pub fn land(
+    frame: Rect,
+    choices: &[Option<Rect>],
+    screens: &[(Rect, Rect)],
+    own: Option<Rect>,
+    size: (i32, i32),
+) -> Option<Rect> {
+    let bounds: Vec<Rect> = screens.iter().map(|s| s.0).collect();
+    if !stranded(&bounds, frame) {
+        return None;
+    }
+    home(choices, screens, own, Some(frame), size)
+}
+
 /// Which way a Win+wheel turn scrolls, and what is left of a notch, from what was left
 /// (`turned`) and this event's `delta`: up on a wheel and left on a tilt are left. A turn
 /// the other way starts again. Returns the columns to scroll, left ones as negative.
@@ -751,6 +787,44 @@ mod tests {
         assert!(stranded(&[MAIN], Rect { x: -1500, y: 10, w: 800, h: 600 }));
         assert!(!stranded(&desk, Rect { x: -10, y: 10, w: 800, h: 600 }));
         assert!(stranded(&desk, Rect { x: 3640, y: 0, w: 10, h: 10 }), "touching an edge isn't on it");
+    }
+
+    /// A screen and its work area, the taskbar along the bottom.
+    fn with_work(r: Rect) -> (Rect, Rect) {
+        (r, Rect { h: r.h - 48, ..r })
+    }
+
+    #[test]
+    fn a_window_of_a_screen_that_went_lands_on_one_still_there() {
+        let before: [(Rect, Rect); 3] = [with_work(LEFT), with_work(MAIN), with_work(RIGHT)];
+        // Screen LEFT unplugged: a window on it, its place before tiling there too.
+        let after = [with_work(MAIN), with_work(RIGHT)];
+        let on_left = Rect { x: -1500, y: 100, w: 800, h: 600 };
+        let target = land(on_left, &[Some(on_left), None], &after, Some(LEFT), (800, 600)).unwrap();
+        assert!(!stranded(&[MAIN, RIGHT], target));
+        assert_eq!(target, Rect { x: 880, y: 396, w: 800, h: 600 }, "the middle of the nearest screen still there");
+        // A place before on a screen still there wins.
+        let kept = Rect { x: 100, y: 100, w: 800, h: 600 };
+        assert_eq!(land(on_left, &[Some(kept)], &after, Some(LEFT), (800, 600)), Some(kept));
+        // A window on a screen still there doesn't move.
+        assert_eq!(land(kept, &[None], &after, Some(MAIN), (800, 600)), None);
+        // Nothing to land on.
+        assert_eq!(land(on_left, &[None], &[], Some(LEFT), (800, 600)), None);
+        // On the old screens, the same place was fine: a stale list can't decide this.
+        assert_eq!(land(on_left, &[Some(on_left)], &before, Some(LEFT), (800, 600)), None);
+    }
+
+    #[test]
+    fn a_window_of_a_screen_that_moved_lands_on_the_screens_as_they_are() {
+        // RIGHT moved from the right of MAIN to its left.
+        let moved = Rect { x: -1080, y: 0, w: 1080, h: 1920 };
+        let after = [with_work(moved), with_work(MAIN)];
+        let at_old = Rect { x: 2700, y: 300, w: 900, h: 900 };
+        let target = land(at_old, &[Some(at_old)], &after, Some(RIGHT), (900, 900)).unwrap();
+        assert!(!stranded(&[moved, MAIN], target));
+        // Its own screen, as it is now, holds it when it is still where it was.
+        let home_now = home(&[None], &after, Some(moved), Some(at_old), (900, 900)).unwrap();
+        assert!(home_now.x >= moved.x && home_now.x + home_now.w <= moved.x + moved.w);
     }
 
     #[test]

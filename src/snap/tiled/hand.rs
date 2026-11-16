@@ -198,20 +198,21 @@ impl Engine {
 
     pub(in crate::snap) fn tiling_free(&mut self, screen: &str) -> usize {
         let desktop = self.tiling.desktop.clone();
-        self.free_screen(screen, &desktop, false).0
+        self.free_screen(screen, &desktop, None).0
     }
 
     /// Seam quits and was asked to put windows back: every tiled screen on every desktop is
     /// freed, and its moves are posted at once, since no timer will run them. Returns where
     /// the windows are going, and the (screen, desktop) pairs freed.
-    pub(in crate::snap) fn tiling_free_for_quit(&mut self) -> (Vec<(isize, Rect)>, Vec<Freed>) {
+    pub(in crate::snap) fn tiling_free_for_quit(&mut self, until: Instant) -> (Vec<(isize, Rect)>, Vec<Freed>) {
         let freed: Vec<Freed> = self.tiling.trees.iter().map(|t| (t.screen.clone(), t.desktop.clone())).collect();
-        let landing = freed.iter().flat_map(|(s, d)| self.free_screen(s, d, true).1).collect();
+        let landing = freed.iter().flat_map(|(s, d)| self.free_screen(s, d, Some(until)).1).collect();
         (landing, freed)
     }
 
-    /// Free one screen. With `now` the moves are posted here rather than queued.
-    fn free_screen(&mut self, screen: &str, desktop: &str, now: bool) -> (usize, Vec<(isize, Rect)>) {
+    /// Free one screen. When Seam quits (`until`) the moves are posted here rather than queued.
+    fn free_screen(&mut self, screen: &str, desktop: &str, until: Option<Instant>) -> (usize, Vec<(isize, Rect)>) {
+        let now = until.is_some();
         let front = desktop == self.tiling.desktop;
         let Some(i) = self.tiling.trees.iter().position(|t| t.screen == screen && t.desktop == desktop) else {
             return (0, Vec::new());
@@ -224,7 +225,8 @@ impl Engine {
         // place to restore to; the columns come back with the others below.
         let columns: Vec<isize> =
             windows.iter().copied().filter(|k| parked(k) && !winutil::is_minimized(hwnd_of(*k))).collect();
-        self.unpark(&t, now, &columns);
+        let shown = self.screens_now();
+        self.unpark(&t, until, &columns, &shown);
         let screens: Vec<Rect> = self.screens.iter().map(|s| s.bounds).collect();
         let mut moves = Vec::new();
         for k in &windows {

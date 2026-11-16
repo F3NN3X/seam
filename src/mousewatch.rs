@@ -42,8 +42,8 @@ const MSG_CHECK: u32 = WM_APP + 3;
 const MSG_TAP: u32 = WM_APP + 4;
 /// One notch of a wheel. A touchpad's smaller steps add up to one.
 const NOTCH: i32 = 120;
-/// At most one tap this often, so a Win pressed again gets its own.
-const TAP_EVERY_MS: u32 = 300;
+/// How often the hook's thread looks whether Win came up after a tap, so the next press gets its own.
+const WIN_UP_MS: u32 = 30;
 /// How often the hook's thread looks, while it is in.
 const CHECK_MS: u32 = 60_000;
 /// Corners kept for the hook, one per screen at most. Past this many screens, the rest are left out.
@@ -74,8 +74,8 @@ thread_local! {
     static CALLS: Cell<u64> = const { Cell::new(0) };
     /// The wheel turned with Win held and not yet a notch, so a touchpad scrolls a column a notch.
     static TURNED: Cell<i32> = const { Cell::new(0) };
-    /// When the last Start-suppressing tap was asked for, by the hook's clock.
-    static TAPPED: Cell<u32> = const { Cell::new(0) };
+    /// A Start-suppressing tap was asked for while Win is down; it clears when Win comes up.
+    static TAPPED: Cell<bool> = const { Cell::new(false) };
 }
 
 /// The spots of the chosen corner on this desk: the screens' outer corners only, each
@@ -189,11 +189,20 @@ fn run(generation: u64) {
                     let check = SetTimer(None, 0, CHECK_MS, None);
                     // The rest's timer, or 0 while none runs.
                     let mut wait = 0;
+                    // The timer that watches for Win coming up after a tap, or 0.
+                    let mut win_up = 0;
                     let mut seen = (CALLS.get(), cursor());
                     while WANTED.load(Ordering::SeqCst) == generation && GetMessageW(&mut msg, None, 0, 0).as_bool() {
                         let timer = msg.message == WM_TIMER && msg.hwnd.is_invalid();
                         if msg.message == MSG_TAP {
                             crate::altdrag::tap();
+                            win_up = SetTimer(None, win_up, WIN_UP_MS, None);
+                        } else if timer && win_up != 0 && msg.wParam.0 == win_up {
+                            if !win_held() {
+                                let _ = KillTimer(None, win_up);
+                                win_up = 0;
+                                TAPPED.set(false);
+                            }
                         } else if msg.message == MSG_WAIT {
                             // The same id puts the timer back rather than start another.
                             wait = SetTimer(None, wait, msg.wParam.0 as u32, None);
@@ -305,9 +314,9 @@ fn wheel(msg: u32, info: &MSLLHOOKSTRUCT) -> bool {
             let _ = PostMessageW(Some(owner), WM_APP_WHEEL, WPARAM(wheel_param(steps < 0, info.time)), LPARAM(point));
         }
     }
-    // One tap is enough while Win is held; a touchpad's swipe sends dozens of events.
-    if info.time.wrapping_sub(TAPPED.get()) >= TAP_EVERY_MS {
-        TAPPED.set(info.time);
+    // One tap per Win press: a touchpad's swipe sends dozens of events.
+    if !TAPPED.get() {
+        TAPPED.set(true);
         unsafe {
             let _ = PostThreadMessageW(GetCurrentThreadId(), MSG_TAP, WPARAM(0), LPARAM(0));
         }

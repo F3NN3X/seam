@@ -30,14 +30,24 @@ pub fn tiling_column(focused: isize, left: Option<bool>) -> Result<(), String> {
 /// Seam is quitting: every parked window comes back onto its screen, a minimized one
 /// given that place to restore to, so none is left outside every monitor. Free all for
 /// quit has put them back already when it ran.
-pub fn tiling_unpark_for_quit() {
+pub fn tiling_unpark_for_quit(until: Instant) {
     with_engine(|e| {
+        let screens = e.screens_now();
         let trees = std::mem::take(&mut e.tiling.trees);
         for t in &trees {
-            e.unpark(t, true, &[]);
+            e.unpark(t, Some(until), &[], &screens);
         }
         e.tiling.trees = trees;
     });
+}
+
+/// The display changed: every parked window comes back at once, onto the screens there
+/// are now (`mons`, read fresh), not the ones the snapping knew, which may be gone. The
+/// strips park them again once `update` has the new screens.
+pub fn tiling_display_changed(mons: &[Mon]) {
+    let screens: Vec<(Rect, Rect)> =
+        mons.iter().filter_map(|m| Some((rect_of(&m.rect), work_area(rect_of(&m.rect))?.0))).collect();
+    with_engine(|e| e.scroll_unpark_all(&screens));
 }
 
 /// Seam starts: a window a Seam that crashed left parked, by its park stamp, or a tiled
@@ -57,8 +67,12 @@ pub fn tiling_unstrand(mons: &[Mon]) {
         if !(stamp.is_some() || winutil::tile_stamp(h) != 0 && lost) {
             continue;
         }
+        // A hung or administrator window keeps its stamp, so a later start tries again.
+        if lost && (winutil::is_hung(h) || winutil::is_elevated_over_us(h)) {
+            continue;
+        }
         winutil::set_park_stamp(h, None);
-        if !lost || winutil::is_hung(h) {
+        if !lost {
             continue;
         }
         let Some(near) = strip::nearest(&screens, frame) else { continue };
@@ -343,35 +357,67 @@ impl Engine {
         strip::nearest(&screens, frame).map(|i| self.screens[i].id.clone())
     }
 
-    /// Where a window of `t` comes back to when it leaves the strip parked, by
-    /// `strip::way_back`: its place before tiling, then its park stamp's, when on a
-    /// screen; else the middle of its screen's work area, or the nearest screen's when
-    /// its own is gone. None with no screen at all.
+    /// The screens the snapping knows, each as (bounds, work area), for `strip::home`.
+    pub(super) fn screens_now(&self) -> Vec<(Rect, Rect)> {
+        self.screens.iter().filter_map(|s| Some((s.bounds, work_area(s.bounds)?.0))).collect()
+    }
+
+    /// Where a window of `t` comes back to when it leaves the strip parked, by `home_on`
+    /// on the screens the snapping knows.
     pub(super) fn home_of(&self, t: &Tiled, key: isize) -> Option<Rect> {
+        self.home_on(t, key, &self.screens_now())
+    }
+
+    /// Where a window of `t` comes back to on `screens`, by `strip::home`: its place
+    /// before tiling, then its park stamp's, when on one of them; else the middle of its
+    /// own screen, or the nearest one when its own is gone or moved. None with no screen.
+    fn home_on(&self, t: &Tiled, key: isize, screens: &[(Rect, Rect)]) -> Option<Rect> {
         let h = hwnd_of(key);
-        let screens: Vec<Rect> = self.screens.iter().map(|s| s.bounds).collect();
         let now = if winutil::is_minimized(h) { winutil::normal_rect(h) } else { winutil::visible_rect(h) };
         let before = t.before.get(&key).copied();
-        let stamp = winutil::park_stamp(h);
         let size = now.or(before).map_or((800, 600), |r| (r.w, r.h));
-        let area = match self.tile_area(&t.screen) {
-            Some((work, ..)) => work,
-            None => {
-                let near = strip::nearest(&screens, now.or(before)?)?;
-                work_area(screens[near])?.0
-            }
-        };
-        Some(strip::way_back(&[before, stamp], &screens, area, size))
+        let own = self.screens.iter().find(|s| s.id == t.screen).map(|s| s.bounds);
+        strip::home(&[before, winutil::park_stamp(h)], screens, own, now.or(before), size)
+    }
+
+    /// The DPI of the screen a place is on, for its move.
+    fn dpi_at(&self, r: Rect) -> u32 {
+        let on = self.screens.iter().find(|s| s.bounds.contains(r.x + r.w / 2, r.y + r.h / 2));
+        on.and_then(|s| work_area(s.bounds)).map_or(96, |(_, dpi)| dpi)
     }
 
     /// Moves queued or under way for these windows are dropped, so a park posted a moment
-    /// ago can't send a window back off the screen after it came back.
+    /// ago can't send a window back off the screen after it came back. The queue goes on
+    /// with the next window's move.
     fn cancel_moves(&mut self, keys: &[isize]) {
         self.queued.retain(|p| !keys.contains(&p.hwnd));
         if let Some(p) = self.pending.take_if(|p| keys.contains(&p.hwnd)) {
             unsafe {
                 let _ = KillTimer(None, p.timer);
             }
+            self.window_pump();
+        }
+    }
+
+    /// Every window `t` holds or parked that is off every screen of `screens` lands on one
+    /// of them, by `strip::land`. A minimized one is left to restore where Windows puts it.
+    fn land_lost(&mut self, t: &Tiled, screens: &[(Rect, Rect)]) {
+        let mut keys = t.all();
+        keys.extend(t.offscreen.keys().filter(|k| !keys.contains(k)).copied().collect::<Vec<_>>());
+        let own = self.screens.iter().find(|s| s.id == t.screen).map(|s| s.bounds);
+        for key in keys {
+            let h = hwnd_of(key);
+            if !unsafe { IsWindow(Some(h)) }.as_bool() || winutil::is_minimized(h) {
+                continue;
+            }
+            let Some(frame) = winutil::visible_rect(h) else { continue };
+            let choices = [t.before.get(&key).copied(), winutil::park_stamp(h)];
+            let Some(target) = strip::land(frame, &choices, screens, own, (frame.w, frame.h)) else { continue };
+            log::info!("scrolling: a tiled window was off every screen after a display change, so it comes back");
+            winutil::set_park_stamp(h, None);
+            self.cancel_moves(&[key]);
+            let dpi = self.dpi_at(target);
+            self.land_now(Placement { hwnd: key, target, zone: None, dpi, maximize: false });
         }
     }
 
@@ -400,7 +446,8 @@ impl Engine {
     /// back first, a strip whose screen is gone ends, and the rest park again for the
     /// screens there are now. A window of a strip left off every screen is brought back too.
     pub(in crate::snap) fn scroll_screens_changed(&mut self) {
-        self.scroll_unpark_all();
+        let screens = self.screens_now();
+        self.scroll_unpark_all(&screens);
         // A moment with no screen at all, mid-change, ends nothing.
         if self.screens.is_empty() {
             return;
@@ -411,30 +458,24 @@ impl Engine {
         for i in gone.into_iter().rev() {
             let t = self.tiling.trees.remove(i);
             log::info!("scrolling: a tiled screen went, so its tiling ends there");
+            // Its windows, parked a moment ago included, land on a screen still there.
+            self.land_lost(&t, &screens);
             self.tiled_release(t);
         }
-        let screens: Vec<Rect> = self.screens.iter().map(|s| s.bounds).collect();
-        for i in 0..self.tiling.trees.len() {
-            if self.tiling.trees[i].strip.is_none() {
-                continue;
-            }
-            for key in self.tiling.trees[i].all() {
-                let lost = winutil::visible_rect(hwnd_of(key)).is_some_and(|r| strip::stranded(&screens, r));
-                let dpi = self.tile_area(&self.tiling.trees[i].screen).map_or(96, |(_, dpi, _)| dpi);
-                if let (true, Some(target)) = (lost, self.home_of(&self.tiling.trees[i], key)) {
-                    self.land_now(Placement { hwnd: key, target, zone: None, dpi, maximize: false });
-                }
-            }
+        let trees = std::mem::take(&mut self.tiling.trees);
+        for t in &trees {
+            self.land_lost(t, &screens);
         }
+        self.tiling.trees = trees;
         self.tiled_sync();
     }
 
-    /// Every parked window on every strip comes back onto its screen at once, as a display
+    /// Every parked window on every strip comes back onto `screens` at once, as a display
     /// change starts, and the strips park them again once the screens are known.
-    pub(in crate::snap) fn scroll_unpark_all(&mut self) {
+    pub(in crate::snap) fn scroll_unpark_all(&mut self, screens: &[(Rect, Rect)]) {
         let trees = std::mem::take(&mut self.tiling.trees);
         for t in &trees {
-            self.unpark(t, false, &[]);
+            self.unpark(t, None, &[], screens);
         }
         self.tiling.trees = trees;
         for t in &mut self.tiling.trees {
@@ -463,41 +504,46 @@ impl Engine {
         self.land_now(Placement { hwnd: key, target, zone: None, dpi, maximize: false });
     }
 
-    /// Every parked window of `t` but `skip` comes back onto its screen, by `home_of`, and
-    /// any move still queued for it is dropped. A minimized one is given that place to
-    /// restore to without showing it: at once when Seam quits (`now`), else on a thread of
-    /// its own, since that waits on its app.
-    pub(super) fn unpark(&mut self, t: &Tiled, now: bool, skip: &[isize]) {
+    /// Every parked window of `t` but `skip` comes back onto one of `screens`, by `home_on`,
+    /// and any move still queued for it is dropped. A minimized one is given that place to
+    /// restore to without showing it: at once when Seam quits, until `until`, else on a
+    /// thread of its own, since that waits on its app.
+    pub(super) fn unpark(&mut self, t: &Tiled, until: Option<Instant>, skip: &[isize], screens: &[(Rect, Rect)]) {
         let keys: Vec<isize> = t.offscreen.keys().copied().filter(|k| !skip.contains(k)).collect();
         if keys.is_empty() {
             return;
         }
         self.cancel_moves(&keys);
-        let dpi = self.tile_area(&t.screen).map_or(96, |(_, dpi, _)| dpi);
         let mut minimized = Vec::new();
         for &key in &keys {
             let h = hwnd_of(key);
             if !unsafe { IsWindow(Some(h)) }.as_bool() {
                 continue;
             }
-            let Some(target) = self.home_of(t, key) else { continue };
+            let Some(target) = self.home_on(t, key, screens) else { continue };
+            let dpi = self.dpi_at(target);
             winutil::set_park_stamp(h, None);
             if winutil::is_minimized(h) {
-                minimized.push((key, target));
+                minimized.push((key, target, dpi));
             } else {
                 self.land_now(Placement { hwnd: key, target, zone: None, dpi, maximize: false });
             }
         }
         log::info!("scrolling: {} parked windows come back onto the screen", keys.len());
-        if now {
-            for (key, target) in minimized {
+        if let Some(until) = until {
+            // The quit's one second, shared with the pins and Free all: a slow app never holds it up.
+            for (key, target, dpi) in minimized {
+                if Instant::now() >= until {
+                    log::info!("scrolling: out of time on quit, a minimized parked window keeps its place");
+                    break;
+                }
                 if !winutil::is_hung(hwnd_of(key)) {
                     winutil::place_minimized(hwnd_of(key), target, dpi);
                 }
             }
         } else if !minimized.is_empty() {
             let spawned = std::thread::Builder::new().name("seam-unpark".into()).spawn(move || {
-                for (key, target) in minimized {
+                for (key, target, dpi) in minimized {
                     let h = hwnd_of(key);
                     if !winutil::is_hung(h) {
                         winutil::place_minimized(h, target, dpi);
@@ -523,6 +569,7 @@ impl Engine {
     /// every parked window comes onto its screen, and the strips park them again once
     /// tiling is back.
     fn scroll_stand_down(&mut self) {
-        self.scroll_unpark_all();
+        let screens = self.screens_now();
+        self.scroll_unpark_all(&screens);
     }
 }

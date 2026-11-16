@@ -24,7 +24,7 @@ mod hand;
 mod scroll;
 mod turn;
 
-pub use scroll::{tiling_column, tiling_scroll, tiling_unpark_for_quit, tiling_unstrand};
+pub use scroll::{tiling_column, tiling_display_changed, tiling_scroll, tiling_unpark_for_quit, tiling_unstrand};
 pub use turn::Turned;
 
 /// One screen's tree on one virtual desktop.
@@ -163,7 +163,7 @@ pub fn tiling_restore(screen: &str, before: Node, after: Node) -> bool {
 /// desktop is freed, and the moves are posted. Waits for them to land, but not past `until`
 /// (a hung window never holds the quit). Returns the (screen, desktop) pairs freed.
 pub fn tiling_free_for_quit(until: Instant) -> Vec<(String, String)> {
-    let (landing, freed) = with_engine(|e| e.tiling_free_for_quit()).unwrap_or_default();
+    let (landing, freed) = with_engine(|e| e.tiling_free_for_quit(until)).unwrap_or_default();
     let started = Instant::now();
     // A window that can't take its place (a minimum size) stops changing, so it counts as landed,
     // but not before an app has had a moment to start on a move already posted.
@@ -422,7 +422,8 @@ impl Engine {
     /// A tree ends: its windows stay where they are, out of tiling and out of zones, except
     /// parked ones, which come back onto the screen.
     fn tiled_release(&mut self, t: Tiled) {
-        self.unpark(&t, false, &[]);
+        let screens = self.screens_now();
+        self.unpark(&t, None, &[], &screens);
         for k in t.all() {
             winutil::set_tile_stamp(hwnd_of(k), 0);
             if t.desktop == self.tiling.desktop {

@@ -510,9 +510,9 @@ unsafe fn on_display_change(hwnd: HWND, lparam: LPARAM) {
 unsafe fn on_destroy() {
     unsafe {
         hook::enable(false);
+        // One second for the whole quit: the pins, the tiled windows and the parked ones share it.
+        let until = Instant::now() + Duration::from_secs(1);
         if with_app(|a| a.release_on_exit).unwrap_or(false) {
-            // One second for the whole quit: the pins and the tiled windows share it.
-            let until = Instant::now() + Duration::from_secs(1);
             wm::release_before_exit();
             // A quit the user asked for, the same signal as pins: not an update, a crash or a sign-out.
             if with_app(|a| a.cfg.zones.tiling_free_on_quit).unwrap_or(false) {
@@ -527,7 +527,7 @@ unsafe fn on_destroy() {
             }
         }
         // No window stays parked off every screen once Seam is gone, whatever the quit.
-        snap::tiling_unpark_for_quit();
+        snap::tiling_unpark_for_quit(until);
         snap::shutdown();
         altdrag::stop();
         mousewatch::stop();

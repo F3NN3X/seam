@@ -4,7 +4,6 @@ use super::*;
 use crate::theme::Palette;
 use crate::ui::{Row, section_with, switch};
 use seam::config::ZoneSettings;
-use seam::margins::Margins;
 
 /// The row "More snapping options" opens, and the rows behind it.
 const MORE: &str = "More snapping options";
@@ -16,7 +15,7 @@ const HIDDEN: [&str; 6] = [
     "Edit layouts on the screen",
     "Keep windows in their zones",
 ];
-/// The settings Reset to default puts back: every row of the section but the margins.
+/// The settings Reset to default puts back. Screen margins are per screen, so they stay.
 const RESET: [&str; 12] = [
     "show_key",
     "span_key",
@@ -85,7 +84,13 @@ fn show_row(
             }
         },
     );
-    row("Show zones while dragging", Some("Hold a key, or pause with the window still".into()), show, p)
+    // Pause adds to the key in the tray, so a config with both says so.
+    let about = if zones_cfg.pause_to_snap {
+        format!("Pause, or hold {}, to show zones", KEYS[key_at].1)
+    } else {
+        "Hold a key, or pause with the window still".to_string()
+    };
+    row("Show zones while dragging", Some(about.into()), show, p)
 }
 
 /// "Span zones": the key that covers more than one zone. It can't be the one that shows them.
@@ -202,16 +207,9 @@ fn reset(panel: &mut Panel, window: &mut Window, cx: &mut Context<Panel>) {
         RESET.iter().filter_map(|key| from.get(*key).map(|v| (key.to_string(), v.clone()))).collect()
     };
     let (before, after) = (pick(&now), pick(&default));
-    let margins = margins::saved(panel).filter(|(.., was)| !was.is_zero());
     panel.patch(json!({ "zones": after }), window, cx);
-    if let Some((sig, id, _)) = &margins {
-        panel.patch(json!({ "desks": { sig: { "margins": { id: Margins::default() } } } }), window, cx);
-    }
     let undo = move |panel: &mut Panel, window: &mut Window, cx: &mut Context<Panel>| {
         panel.patch(json!({ "zones": before.clone() }), window, cx);
-        if let Some((sig, id, was)) = &margins {
-            panel.patch(json!({ "desks": { sig: { "margins": { id: was } } } }), window, cx);
-        }
     };
     panel.offer_undo("Snapping is back to its defaults".to_string(), undo, window, cx);
 }

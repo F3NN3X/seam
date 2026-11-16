@@ -92,7 +92,7 @@ pub(super) fn card_of(
         let text = "Only one screen is connected, so there's nothing to line up";
         return card(vec![body.child(ui::description(text, p)).into_any_element()], p).into_any_element();
     }
-    body = body.child(map(panel, state, width, p, cx));
+    body = body.child(map(panel, state, width, p, window, cx));
     if desk_view {
         body = body.children(borders::strip(panel, state, p, cx)).child(legend(p));
     }

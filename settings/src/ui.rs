@@ -379,6 +379,38 @@ pub fn disclose(
         .into_any_element()
 }
 
+/// A button that picks something and says whether it's picked. Tab reaches it, and Space and Enter
+/// press it. Give it a size or a place, and its content.
+pub fn selectable(
+    id: impl Into<ElementId>,
+    label: impl Into<SharedString>,
+    selected: bool,
+    window: &mut Window,
+    cx: &mut App,
+    pick: impl Fn(&mut Window, &mut App) + 'static,
+) -> Stateful<Div> {
+    let p = palette(cx);
+    let id = id.into();
+    let focus = focus_for(&id, window, cx);
+    let pick = Rc::new(pick);
+    let (click, key) = (pick.clone(), pick);
+    div()
+        .id(id)
+        .track_focus(&focus)
+        .tab_index(0)
+        .role(Role::Button)
+        .aria_label(label)
+        .aria_selected(selected)
+        .cursor_pointer()
+        .when(focused(&focus, window), |d| focus_ring(d, tokens::RADIUS_4, 0., p))
+        .on_click(move |_, window, cx| click(window, cx))
+        .on_key_down(move |e: &KeyDownEvent, window, cx| {
+            if matches!(e.keystroke.key.as_str(), "space" | "enter") {
+                key(window, cx);
+            }
+        })
+}
+
 /// The chevron of a disclosure: down when closed, turned over when open.
 pub fn chevron(open: bool, p: Palette) -> Icon {
     let turn = if open { std::f32::consts::PI } else { 0. };

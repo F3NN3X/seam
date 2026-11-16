@@ -325,9 +325,9 @@ fn border_row(
     panel: &Panel,
     state: &State,
     b: &Border,
-    i: usize,
-    last: bool,
+    (i, last): (usize, bool),
     p: Palette,
+    window: &mut Window,
     cx: &mut Context<Panel>,
 ) -> Row {
     let selected = panel.border_pick == Some((b.a, b.b));
@@ -356,17 +356,19 @@ fn border_row(
         .child(status)
         .child(border_menu(panel, b, i, cx));
     let (a, other) = (b.a, b.b);
-    ui::row_with(title(b), Some(ui::description(plain(b), p).into_any_element()), control).map(move |row| {
-        div()
-            .id(("border-row", i))
-            .cursor_pointer()
-            .when(selected, |d| d.bg(p.accent_tint))
-            .when(selected && last, |d| d.rounded_b(px(tokens::RADIUS_12 - 1.)))
-            .on_click(cx.listener(move |panel, _, _, cx| {
+    let heading = title(b);
+    let view = cx.entity();
+    ui::row_with(heading.clone(), Some(ui::description(plain(b), p).into_any_element()), control).map(move |row| {
+        let pick = move |_: &mut Window, cx: &mut App| {
+            view.update(cx, |panel, cx| {
                 panel.border_pick = Some((a, other));
                 panel.layout_view = LayoutView::Seam;
                 cx.notify();
-            }))
+            })
+        };
+        ui::selectable(("border-row", i), heading, selected, window, cx, pick)
+            .when(selected, |d| d.bg(p.accent_tint))
+            .when(selected && last, |d| d.rounded_b(px(tokens::RADIUS_12 - 1.)))
             .child(row)
             .into_any_element()
     })
@@ -388,7 +390,9 @@ pub(super) fn section(
     let mut rows = vec![summary_row(panel, state, open, p, window, cx)];
     if open {
         let last = state.borders.len() - 1;
-        rows.extend(state.borders.iter().enumerate().map(|(i, b)| border_row(panel, state, b, i, i == last, p, cx)));
+        rows.extend(
+            state.borders.iter().enumerate().map(|(i, b)| border_row(panel, state, b, (i, i == last), p, window, cx)),
+        );
     }
     ui::section(BORDERS, card(rows, p), p)
 }

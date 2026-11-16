@@ -204,10 +204,10 @@ fn chip_at(x: f64, y: f64, text: String, p: Palette) -> Div {
 fn desk_border(
     panel: &Panel,
     at: usize,
-    (a, other): (&Placed, &Placed),
-    b: &Border,
+    (a, other, b): (&Placed, &Placed, &Border),
     view: &View,
     p: Palette,
+    window: &mut Window,
     cx: &mut Context<Panel>,
 ) -> Vec<AnyElement> {
     let which = kind(b);
@@ -220,16 +220,15 @@ fn desk_border(
         .map(IntoElement::into_any_element)
         .collect();
     let (from, to) = (b.a, b.b);
-    let hit = div()
-        .id(("border", at))
-        .absolute()
-        .cursor_pointer()
-        .role(Role::Button)
-        .aria_label(format!("Border between screen {from} and screen {to}"))
-        .on_click(cx.listener(move |panel, _, _, cx| {
+    let view = cx.entity();
+    let pick = move |_: &mut Window, cx: &mut App| {
+        view.update(cx, |panel, cx| {
             panel.border_pick = Some((from, to));
             cx.notify();
-        }));
+        })
+    };
+    let label = format!("Border between screen {from} and screen {to}");
+    let hit = ui::selectable(("border", at), label, selected, window, cx, pick).absolute();
     let (start, length) = (run.start as f32, (run.end - run.start) as f32);
     let across = run.across as f32 - HIT_WIDTH / 2.;
     parts.push(
@@ -244,7 +243,7 @@ fn desk_border(
 }
 
 /// Where each screen sits on the desk, joined where you lined them up.
-fn desk_map(panel: &Panel, state: &State, width: f64, p: Palette, cx: &mut Context<Panel>) -> Div {
+fn desk_map(panel: &Panel, state: &State, width: f64, p: Palette, window: &mut Window, cx: &mut Context<Panel>) -> Div {
     let frames: Vec<Frame> = panel.layout.iter().map(|s| (s.x, s.y, s.w, s.h)).collect();
     let view = fit(&frames, width);
     let mut surface = div().relative().w_full().h(px(MAP_HEIGHT)).bg(p.well()).rounded(px(tokens::RADIUS_8));
@@ -255,7 +254,7 @@ fn desk_map(panel: &Panel, state: &State, width: f64, p: Palette, cx: &mut Conte
     for (at, b) in state.borders.iter().enumerate() {
         let find = |number: u32| panel.layout.iter().find(|s| s.index + 1 == number as usize);
         if let (Some(a), Some(other)) = (find(b.a), find(b.b)) {
-            surface = surface.children(desk_border(panel, at, (a, other), b, &view, p, cx));
+            surface = surface.children(desk_border(panel, at, (a, other, b), &view, p, window, cx));
         }
     }
     surface.child(
@@ -328,9 +327,16 @@ fn windows_map(panel: &Panel, state: &State, width: f64, p: Palette, cx: &mut Co
     surface
 }
 
-pub(super) fn map(panel: &Panel, state: &State, width: f64, p: Palette, cx: &mut Context<Panel>) -> Div {
+pub(super) fn map(
+    panel: &Panel,
+    state: &State,
+    width: f64,
+    p: Palette,
+    window: &mut Window,
+    cx: &mut Context<Panel>,
+) -> Div {
     match panel.layout_view {
-        LayoutView::Seam => desk_map(panel, state, width, p, cx),
+        LayoutView::Seam => desk_map(panel, state, width, p, window, cx),
         LayoutView::Windows => windows_map(panel, state, width, p, cx),
     }
 }

@@ -130,6 +130,12 @@ impl Panel {
             self.update_file = updates::read();
         }
         self.set_state(Some(state));
+        // The selected border belongs to this set of screens, and has to still be one of them.
+        let picked = self.border_pick.filter(|pick| {
+            let borders = self.state.as_ref().map(|s| s.borders.as_slice()).unwrap_or_default();
+            !screens_changed && borders.iter().any(|b| (b.a, b.b) == *pick)
+        });
+        self.border_pick = picked;
         // A screen that came, went or changed size leaves the editor's tree meaning
         // something else, so it closes and nothing is saved.
         if self.editor.is_some() && !screens_changed {

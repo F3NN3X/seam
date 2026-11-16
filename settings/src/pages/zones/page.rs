@@ -61,7 +61,7 @@ fn header(
     cx: &mut Context<Panel>,
 ) -> Div {
     let subtitle = if zones_cfg.pause_to_snap {
-        "Pause while you drag a window to drop it into a zone".to_string()
+        format!("Pause, or hold {}, while you drag a window to drop it into a zone", key_label(&zones_cfg.show_key))
     } else {
         format!("Hold {} while you drag a window to drop it into a zone", key_label(&zones_cfg.show_key))
     };

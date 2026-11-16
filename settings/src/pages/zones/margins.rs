@@ -17,13 +17,6 @@ fn current(panel: &Panel) -> Margins {
     sig.and_then(|sig| panel.config.desks.get(sig)).and_then(|d| d.margins.get(&mon.id)).copied().unwrap_or_default()
 }
 
-/// The desk, the screen and the margins of the chosen screen, to put them back.
-pub fn saved(panel: &Panel) -> Option<(String, String, Margins)> {
-    let sig = panel.state.as_ref().map(|s| s.desk.sig.clone())?;
-    let id = chosen(panel).map(|(mon, _)| mon.id.clone())?;
-    Some((sig, id, current(panel)))
-}
-
 /// Side `side` is now `px`: shown at once while the slider moves, sent when it is let go.
 fn changed(panel: &mut Panel, side: usize, px: u32, release: bool, window: &mut Window, cx: &mut Context<Panel>) {
     let Some(sig) = panel.state.as_ref().map(|s| s.desk.sig.clone()) else { return };

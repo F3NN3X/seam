@@ -308,15 +308,22 @@ fn in_use(panel: &Panel, id: &str) -> bool {
     panel.config.desks.values().any(|d| d.zones.values().any(uses))
 }
 
-/// Take a layout out of the library. Screens using it keep their zones, and Undo brings it back.
+/// Take a layout out of the library. Screens using it keep their zones, and Undo puts back
+/// that layout alone, where it was, so edits made since stay.
 fn remove_layout(panel: &mut Panel, entry: library::Entry, window: &mut Window, cx: &mut Context<Panel>) {
-    let before = panel.config.custom_layouts.clone();
+    let Some(at) = position(&panel.config.custom_layouts, &entry.id) else { return };
+    let removed = panel.config.custom_layouts[at].clone();
     let id = entry.id.clone();
     edit_library(panel, window, cx, move |list| {
         list.retain(|v| v.get("id").and_then(Value::as_str) != Some(id.as_str()))
     });
+    let id = entry.id.clone();
     let undo = move |panel: &mut Panel, window: &mut Window, cx: &mut Context<Panel>| {
-        panel.patch(json!({ "custom_layouts": before.clone() }), window, cx)
+        let mut list = panel.config.custom_layouts.clone();
+        if position(&list, &id).is_none() {
+            list.insert(at.min(list.len()), removed.clone());
+            panel.patch(json!({ "custom_layouts": list }), window, cx);
+        }
     };
     panel.offer_undo(format!("Deleted {}", entry.name), undo, window, cx);
 }

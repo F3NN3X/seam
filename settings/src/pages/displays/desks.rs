@@ -48,21 +48,31 @@ fn rename(sig: String, current: String, window: &mut Window, cx: &mut Context<Pa
 }
 
 /// The desks not seen for `STALE_DAYS`, other than the one in use. A desk the tray never saw
-/// connected has no date, so it stays.
-fn stale(panel: &Panel) -> Vec<String> {
-    let active = panel.state.as_ref().map(|s| s.desk.sig.as_str());
+/// connected has no date, so it stays. Without the desk in use there's nothing safe to forget.
+fn stale(panel: &Panel) -> Vec<(String, Desk)> {
+    let Some(active) = panel.state.as_ref().map(|s| s.desk.sig.as_str()) else { return vec![] };
     let before = now().saturating_sub(STALE_DAYS * 24 * 60 * 60);
     let old = |d: &Desk| d.last_seen != 0 && d.last_seen < before;
     panel
         .config
         .desks
         .iter()
-        .filter(|(sig, d)| Some(sig.as_str()) != active && old(d))
-        .map(|(s, _)| s.clone())
+        .filter(|(sig, d)| sig.as_str() != active && old(d))
+        .map(|(s, d)| (s.clone(), d.clone()))
         .collect()
 }
 
-/// Ask first, because forgetting a desk can't be undone.
+/// "Home", "Home and Office" or "Home, Office and Den".
+fn named(desks: &[(String, Desk)]) -> String {
+    let names: Vec<&str> = desks.iter().map(|(_, d)| d.name.as_str()).collect();
+    match names.as_slice() {
+        [] => String::new(),
+        [only] => (*only).to_string(),
+        [first @ .., last] => format!("{} and {last}", first.join(", ")),
+    }
+}
+
+/// Ask first, then forget them. Undo puts the desks back exactly as they were.
 fn forget_old(panel: &Panel, window: &mut Window, cx: &mut Context<Panel>) {
     let old = stale(panel);
     if old.is_empty() {
@@ -70,21 +80,28 @@ fn forget_old(panel: &Panel, window: &mut Window, cx: &mut Context<Panel>) {
         return;
     }
     let view = cx.entity().downgrade();
-    let what = if old.len() == 1 { "1 desk".to_string() } else { format!("{} desks", old.len()) };
+    let names = named(&old);
     window.open_alert_dialog(cx, move |alert, _, _| {
         let (view, old) = (view.clone(), old.clone());
         alert
-            .title(format!("Forget {what}?"))
-            .description(
-                "Seam last saw them more than 30 days ago. Their borders and zones are lost, and this can't be undone",
-            )
-            .ok_text(format!("Forget {what}"))
+            .title(format!("Forget {names}?"))
+            .description("Seam stops recognising them, and their borders and zones go with them")
+            .ok_text("Forget desks")
             .cancel_text("Cancel")
             .on_ok(move |_, window, cx| {
-                let forgotten: serde_json::Map<String, serde_json::Value> =
-                    old.iter().map(|sig| (sig.clone(), serde_json::Value::Null)).collect();
-                let patch = json!({ "desks": forgotten });
-                let _ = view.update(cx, |panel, cx| panel.patch(patch, window, cx));
+                let old = old.clone();
+                let _ = view.update(cx, |panel, cx| {
+                    let gone: serde_json::Map<String, serde_json::Value> =
+                        old.iter().map(|(sig, _)| (sig.clone(), serde_json::Value::Null)).collect();
+                    panel.patch(json!({ "desks": gone }), window, cx);
+                    let message = format!("Forgot {}", named(&old));
+                    let undo = move |panel: &mut Panel, window: &mut Window, cx: &mut Context<Panel>| {
+                        let back: serde_json::Map<String, serde_json::Value> =
+                            old.iter().map(|(sig, desk)| (sig.clone(), json!(desk))).collect();
+                        panel.patch(json!({ "desks": back }), window, cx);
+                    };
+                    panel.offer_undo(message, undo, window, cx);
+                });
                 true
             })
     });
@@ -122,6 +139,7 @@ fn desk_item(name: String, meta: String, in_use: bool) -> PopupMenuItem {
 pub(super) fn desk_menu(panel: &Panel, cx: &mut Context<Panel>) -> impl IntoElement + use<> {
     let active = panel.state.as_ref().map(|s| s.desk.sig.clone()).unwrap_or_default();
     let label = format!("{} desk, {}", panel.desk_name(), count(panel.mons.len()));
+    let accessible = label.clone();
     let mut desks: Vec<(String, Desk)> = panel.config.desks.iter().map(|(s, d)| (s.clone(), d.clone())).collect();
     desks.sort_by_key(|(sig, d)| (*sig != active, std::cmp::Reverse(d.last_seen)));
     let (current, name) = (active.clone(), panel.desk_name());
@@ -131,7 +149,7 @@ pub(super) fn desk_menu(panel: &Panel, cx: &mut Context<Panel>) -> impl IntoElem
         .label(label)
         .dropdown_caret(true)
         .tooltip("Desks Seam knows")
-        .accessibility_label("Desks")
+        .accessibility_label(accessible)
         .dropdown_menu(move |menu, _, _| {
             let mut menu = menu
                 .min_w(px(300.))

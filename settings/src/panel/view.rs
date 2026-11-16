@@ -112,10 +112,18 @@ impl Panel {
         let p = palette(cx);
         let active = self.page == page;
         let id = ElementId::Name(format!("nav-{}", page.title()).into());
-        let focus = window.use_keyed_state(id.clone(), cx, |_, cx| cx.focus_handle()).read(cx).clone();
+        let focus = self.nav_handle(page);
+        // A contrast theme shows the page you're on as a Highlight block, as Windows does.
+        let (chosen, chosen_text) =
+            if p.contrast { (p.accent, p.text_on_accent) } else { (p.surface_raised, p.text_primary) };
         let update_ready =
             page == Page::About && self.state.as_ref().is_some_and(|s| s.update.as_ref().is_some_and(|u| u.ready));
-        div()
+        // Up and Down walk the sidebar's items, top group first.
+        let order: Vec<Page> = Page::top_group().into_iter().chain(Page::app_group()).collect();
+        let at = order.iter().position(|p| *p == page).unwrap_or_default();
+        let before = at.checked_sub(1).map(|at| self.nav_handle(order[at]));
+        let after = order.get(at + 1).map(|next| self.nav_handle(*next));
+        let item = div()
             .id(id)
             .track_focus(&focus)
             .tab_index(0)
@@ -125,17 +133,17 @@ impl Panel {
             .flex()
             .items_center()
             .gap(px(10.))
-            .h(px(32.))
+            .min_h(px(32.))
             .px(px(8.))
             .rounded(px(6.))
-            .text_size(px(14.))
+            .text_size(crate::theme::scaled(14.))
             .cursor_pointer()
-            .when(active, |d| d.bg(p.surface_raised).text_color(p.text_primary).active(|d| d.bg(p.surface_sidebar)))
+            .when(active, |d| d.bg(chosen).text_color(chosen_text).active(|d| d.bg(p.surface_sidebar)))
             .when(!active, |d| {
                 d.text_color(p.text_secondary).hover(|d| d.bg(p.surface_card)).active(|d| d.bg(p.hairline_strong))
             })
             .when(ui::focused(&focus, window), |d| ui::focus_ring(d, tokens::RADIUS_6, 0., p))
-            .child(Icon::new(page.icon()).size(px(16.)).text_color(if active { p.text_primary } else { p.text_muted }))
+            .child(Icon::new(page.icon()).size(px(16.)).text_color(if active { chosen_text } else { p.text_muted }))
             .child(div().flex_1().child(page.title()))
             .when(update_ready, |d| d.child(ui::dot(p.accent, true)))
             .on_click(cx.listener(move |this, _, window, cx| this.go_to_nav(page, window, cx)))
@@ -143,7 +151,8 @@ impl Panel {
                 if matches!(e.keystroke.key.as_str(), "space" | "enter") {
                     this.go_to_nav(page, window, cx);
                 }
-            }))
+            }));
+        ui::arrow_keys(item, before, after)
     }
 
     /// A sidebar item opens its page. Help's shows the topics, even from inside a topic.
@@ -296,6 +305,7 @@ impl Panel {
             .flex_none()
             .w(px(tokens::SIZE_SIDEBAR))
             .h_full()
+            .track_focus(&self.sidebar_focus)
             .p(px(tokens::SPACE_12))
             .bg(p.sidebar_ground())
             // Over Mica the sidebar has no edge of its own.
@@ -398,6 +408,13 @@ impl Render for Panel {
             .on_action(cx.listener(|this, _: &FocusSearch, window, cx| this.focus_search(window, cx)))
             .on_action(cx.listener(|this, _: &ClearSearch, window, cx| this.dismiss(window, cx)))
             .on_action(cx.listener(|this, _: &GoBack, _, cx| this.go_back(cx)))
+            .on_action(cx.listener(|this, _: &NextRegion, window, cx| this.cycle_region(false, window, cx)))
+            .on_action(cx.listener(|this, _: &PreviousRegion, window, cx| this.cycle_region(true, window, cx)))
+            // The mouse's back button goes back wherever Back is enabled.
+            .on_mouse_down(
+                MouseButton::Navigate(NavigationDirection::Back),
+                cx.listener(|this, _, _, cx| this.go_back(cx)),
+            )
             .flex()
             .flex_col()
             .size_full()
@@ -414,16 +431,25 @@ impl Render for Panel {
                         .min_w_0()
                         .h_full()
                         .child(
-                            div().id("page").size_full().overflow_y_scroll().track_scroll(&self.page_scroll).child(
-                                div()
-                                    .flex()
-                                    .flex_col()
-                                    .gap(px(ui::SECTION_GAP))
-                                    .px(px(tokens::SPACE_32))
-                                    .py(px(tokens::SPACE_24))
-                                    .children(banners)
-                                    .child(body),
-                            ),
+                            div()
+                                .id("page")
+                                .size_full()
+                                // Not a stop of its own: F6 focuses it, then moves on to the first control inside.
+                                .track_focus(&self.page_focus)
+                                .tab_index(0)
+                                .tab_stop(false)
+                                .overflow_y_scroll()
+                                .track_scroll(&self.page_scroll)
+                                .child(
+                                    div()
+                                        .flex()
+                                        .flex_col()
+                                        .gap(px(ui::SECTION_GAP))
+                                        .px(px(tokens::SPACE_32))
+                                        .py(px(tokens::SPACE_24))
+                                        .children(banners)
+                                        .child(body),
+                                ),
                         )
                         .vertical_scrollbar(&self.page_scroll),
                 ),

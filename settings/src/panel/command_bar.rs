@@ -219,7 +219,7 @@ impl Panel {
             .flex_shrink(1.)
             .w(px(tokens::SIZE_COMMAND_BAR))
             .min_w(px(200.))
-            .h(px(32.))
+            .min_h(px(32.))
             .on_children_prepainted(move |at, _, _| bounds.set(at[0]))
             // The field's own Up and Down go nowhere in one line, so the bar takes them first.
             .capture_key_down(cx.listener(|this, e: &KeyDownEvent, window, cx| {

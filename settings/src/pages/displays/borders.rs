@@ -366,7 +366,9 @@ fn border_row(
                 cx.notify();
             })
         };
-        ui::selectable(("border-row", i), heading, selected, window, cx, pick)
+        let before = (i > 0).then(|| ui::item_focus(("border-row", i - 1), window, cx));
+        let after = (!last).then(|| ui::item_focus(("border-row", i + 1), window, cx));
+        ui::arrow_keys(ui::selectable(("border-row", i), heading, selected, window, cx, pick), before, after)
             .when(selected, |d| d.bg(p.accent_tint))
             .when(!selected, |d| d.hover(|d| d.bg(p.surface_raised)).active(|d| d.bg(p.surface_sidebar)))
             .when(last, |d| d.rounded_b(px(tokens::RADIUS_12 - 1.)))

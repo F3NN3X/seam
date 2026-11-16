@@ -93,14 +93,23 @@ fn active_status(moved: Moved, p: Palette) -> AnyElement {
 }
 
 pub(super) fn item(
-    i: usize,
+    (i, count): (usize, usize),
     ws: &Workspace,
     icons: &Icons,
     marks: Marks,
     p: Palette,
+    window: &mut Window,
     cx: &mut Context<Panel>,
 ) -> AnyElement {
     let id = ws.id.clone();
+    let view = cx.entity();
+    // Up and Down walk the list, which ends with "New empty workspace".
+    let before = (i > 0).then(|| ui::item_focus(("workspace", i - 1), window, cx));
+    let after = if i + 1 < count {
+        ui::item_focus(("workspace", i + 1), window, cx)
+    } else {
+        ui::item_focus("new-workspace", window, cx)
+    };
     let picked = marks.picked;
     let default =
         marks.default.then(|| text_style(div(), tokens::CAPTION).text_color(p.text_secondary).child("Default"));
@@ -122,11 +131,19 @@ pub(super) fn item(
     }
     let name =
         text_style(div().min_w_0(), tokens::BODY).font_weight(FontWeight::MEDIUM).truncate().child(ws.name.clone());
-    div()
-        .id(("workspace", i))
-        .role(Role::ListItem)
-        .aria_label(label.join(", "))
-        .aria_selected(picked)
+    let pick = move |_: &mut Window, cx: &mut App| {
+        view.update(cx, |panel, cx| {
+            shortcuts::stop_recording(panel);
+            panel.workspace = Some(id.clone());
+            panel.naming = false;
+            panel.editing.expanded = None;
+            cx.notify();
+        })
+    };
+    let item =
+        ui::selectable_ringed(("workspace", i), label.join(", "), picked, (tokens::RADIUS_10, 1.), window, cx, pick)
+            .role(Role::ListItem);
+    ui::arrow_keys(item, before, Some(after))
         .flex()
         .flex_col()
         .gap(px(tokens::SPACE_4))
@@ -144,35 +161,39 @@ pub(super) fn item(
         .child(name)
         .children(meta)
         .child(icon_strip(i, ws, icons, p))
-        .on_click(cx.listener(move |panel, _, _, cx| {
-            shortcuts::stop_recording(panel);
-            panel.workspace = Some(id.clone());
-            panel.naming = false;
-            panel.editing.expanded = None;
-            cx.notify();
-        }))
         .into_any_element()
 }
 
 /// "New empty workspace": a dashed box, 48 px high.
-pub(super) fn new_empty(p: Palette, cx: &mut Context<Panel>) -> Div {
-    // The dashed frame has nothing else on it, so the hover fill sits on the button inside.
-    let button = div()
-        .id("new-workspace")
+pub(super) fn new_empty(
+    last: Option<usize>,
+    p: Palette,
+    window: &mut Window,
+    cx: &mut Context<Panel>,
+) -> Stateful<Div> {
+    let view = cx.entity();
+    let before = last.map(|i| ui::item_focus(("workspace", i), window, cx));
+    let button = ui::selectable_ringed(
+        "new-workspace",
+        "New empty workspace",
+        false,
+        (tokens::RADIUS_10, 1.),
+        window,
+        cx,
+        move |window, cx| {
+            view.update(cx, |panel, cx| super::create_empty(panel, window, cx));
+        },
+    );
+    ui::arrow_keys(button, before, None)
         .flex()
         .items_center()
         .justify_center()
-        .size_full()
-        .rounded(px(tokens::RADIUS_10 - 1.))
-        .cursor_pointer()
-        .hover(|d| d.bg(p.surface_card))
-        .child(text_style(div(), tokens::BODY).text_color(p.text_secondary).child("New empty workspace"))
-        .on_click(cx.listener(|panel, _, window, cx| super::create_empty(panel, window, cx)));
-    div()
-        .h(px(tokens::SIZE_ROW))
+        .min_h(px(tokens::SIZE_ROW))
         .border_1()
         .border_dashed()
         .border_color(p.hairline_strong)
         .rounded(px(tokens::RADIUS_10))
-        .child(button)
+        .hover(|d| d.bg(p.surface_card))
+        .active(|d| d.bg(p.surface_sidebar))
+        .child(text_style(div(), tokens::BODY).text_color(p.text_secondary).child("New empty workspace"))
 }

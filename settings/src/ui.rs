@@ -442,6 +442,19 @@ pub fn selectable(
     cx: &mut App,
     pick: impl Fn(&mut Window, &mut App) + 'static,
 ) -> Stateful<Div> {
+    selectable_ringed(id, label, selected, (tokens::RADIUS_4, 0.), window, cx, pick)
+}
+
+/// `selectable` for something with a radius and a border of its own, which the focus ring goes round.
+pub fn selectable_ringed(
+    id: impl Into<ElementId>,
+    label: impl Into<SharedString>,
+    selected: bool,
+    (radius, border): (f32, f32),
+    window: &mut Window,
+    cx: &mut App,
+    pick: impl Fn(&mut Window, &mut App) + 'static,
+) -> Stateful<Div> {
     let p = palette(cx);
     let id = id.into();
     let focus = focus_for(&id, window, cx);
@@ -455,13 +468,33 @@ pub fn selectable(
         .aria_label(label)
         .aria_selected(selected)
         .cursor_pointer()
-        .when(focused(&focus, window), |d| focus_ring(d, tokens::RADIUS_4, 0., p))
+        .when(focused(&focus, window), |d| focus_ring(d, radius, border, p))
         .on_click(move |_, window, cx| click(window, cx))
         .on_key_down(move |e: &KeyDownEvent, window, cx| {
             if matches!(e.keystroke.key.as_str(), "space" | "enter") {
                 key(window, cx);
             }
         })
+}
+
+/// The focus handle of the list item `id`, drawn this frame, for its neighbours' Up and Down.
+pub fn item_focus(id: impl Into<ElementId>, window: &mut Window, cx: &mut App) -> FocusHandle {
+    focus_for(&id.into(), window, cx)
+}
+
+/// Up and Down on `item` move focus to the item before or after it in a list we drew ourselves.
+pub fn arrow_keys<E: InteractiveElement>(item: E, before: Option<FocusHandle>, after: Option<FocusHandle>) -> E {
+    item.on_key_down(move |e: &KeyDownEvent, window, cx| {
+        let to = match e.keystroke.key.as_str() {
+            "up" => &before,
+            "down" => &after,
+            _ => return,
+        };
+        if let Some(to) = to {
+            to.focus(window, cx);
+            cx.stop_propagation();
+        }
+    })
 }
 
 /// The chevron of a disclosure: down when closed, turned over when open.
@@ -679,7 +712,9 @@ pub fn choice(
             .py(px(tokens::SPACE_4))
             .rounded(px(tokens::RADIUS_6))
             .when(i == selected, |d| {
-                d.bg(p.surface_segment).text_color(p.text_primary).active(|d| d.bg(p.surface_sidebar))
+                let (ground, text) =
+                    if p.contrast { (p.accent, p.text_on_accent) } else { (p.surface_segment, p.text_primary) };
+                d.bg(ground).text_color(text).active(|d| d.bg(p.surface_sidebar))
             })
             .when(i != selected, |d| {
                 d.text_color(p.text_secondary).hover(|d| d.bg(p.surface_card)).active(|d| d.bg(p.hairline_strong))

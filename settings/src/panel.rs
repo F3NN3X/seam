@@ -30,10 +30,11 @@ use std::time::Duration;
 mod command_bar;
 mod connection;
 mod new_screen;
+mod regions;
 mod setup;
 mod view;
 
-actions!(seam_panel, [FocusSearch, ClearSearch, GoBack]);
+actions!(seam_panel, [FocusSearch, ClearSearch, GoBack, NextRegion, PreviousRegion]);
 
 const CONTEXT: &str = "SeamPanel";
 /// How long Undo stays offered after a change.
@@ -173,6 +174,11 @@ pub struct Panel {
     page_scroll: ScrollHandle,
     /// Holds focus when no control does, so Tab and Ctrl+F always reach a binding.
     focus: FocusHandle,
+    /// The page and the sidebar, so F6 knows where focus is and where to put it.
+    page_focus: FocusHandle,
+    sidebar_focus: FocusHandle,
+    /// The sidebar's items, which keep their focus between frames.
+    nav_focus: Vec<(Page, FocusHandle)>,
     pub query: SharedString,
     /// The shortcut being recorded, and what stops recording it.
     pub recording: Option<String>,
@@ -259,6 +265,8 @@ impl Panel {
         subscriptions.extend(window_subscriptions(window, cx));
         let focus = cx.focus_handle();
         focus.focus(window, cx);
+        let nav_focus =
+            Page::top_group().into_iter().chain(Page::app_group()).map(|p| (p, cx.focus_handle())).collect();
         // The editor's window is the panel's, so it goes with it.
         let release = cx.on_release(|panel, cx| pages::screen_editor::close_all(panel.screen_window.as_ref(), cx));
         let (editing, editing_subscriptions) = pages::workspace_editor::Editing::new(window, cx);
@@ -310,6 +318,9 @@ impl Panel {
             changed_only: false,
             page_scroll: ScrollHandle::new(),
             focus,
+            page_focus: cx.focus_handle().tab_stop(false),
+            sidebar_focus: cx.focus_handle(),
+            nav_focus,
             query: SharedString::default(),
             recording: None,
             recorder: None,

@@ -2,6 +2,10 @@
 
 use gpui_kit::component::{ActiveTheme, Theme, ThemeRegistry};
 use gpui_kit::*;
+use std::sync::atomic::{AtomicU32, Ordering};
+
+mod contrast;
+pub use contrast::{Contrast, theme as contrast_theme};
 
 const THEMES: &str = r##"{"name":"Seam","themes":[
  {"name":"Seam Light","mode":"light","font.family":"Segoe UI Variable Text","font.size":14,
@@ -131,10 +135,32 @@ pub mod tokens {
     #[allow(dead_code)]
     pub const MONO: TextStyle = text(13., 18., FontWeight::NORMAL);
 
-    /// Size, line height and weight of `s` on `e`.
+    /// Size, line height and weight of `s` on `e`, scaled by Windows' Text size.
     pub fn text_style<E: Styled>(e: E, s: TextStyle) -> E {
-        e.text_size(px(s.size)).line_height(px(s.line)).font_weight(s.weight)
+        e.text_size(super::scaled(s.size)).line_height(super::scaled(s.line)).font_weight(s.weight)
     }
+}
+
+/// Windows' Text size as a percentage, 100 to 225, which `chrome` keeps up to date.
+static TEXT_SCALE: AtomicU32 = AtomicU32::new(100);
+
+/// Take Windows' Text size. Whether it differs from what was kept.
+pub fn set_text_scale(percent: u32) -> bool {
+    TEXT_SCALE.swap(percent, Ordering::Relaxed) != percent
+}
+
+pub fn text_scale() -> u32 {
+    TEXT_SCALE.load(Ordering::Relaxed)
+}
+
+/// `size` px at a text size of `percent`.
+fn scale_by(size: f32, percent: u32) -> f32 {
+    size * percent as f32 / 100.
+}
+
+/// A text size or line height, scaled by Windows' Text size.
+pub fn scaled(size: f32) -> Pixels {
+    px(scale_by(size, text_scale()))
 }
 
 /// The design system's colour tokens that have no kit equivalent.
@@ -169,6 +195,8 @@ pub struct Palette {
     /// Mica shows through, so `surface_card`, `surface_input` and `surface_sidebar` (the
     /// track) already hold their Mica grounds and the window's grounds are clear.
     pub mica: bool,
+    /// A contrast theme is on, so the colours are the system's.
+    pub contrast: bool,
     /// hairline: card borders, row dividers (decorative).
     pub hairline: Hsla,
     /// hairline-strong: dashed notes, keycaps (decorative).
@@ -242,6 +270,9 @@ impl Palette {
 }
 
 pub fn palette(cx: &App) -> Palette {
+    if let Some(colours) = cx.try_global::<Contrast>().and_then(|c| c.0) {
+        return contrast::palette(colours);
+    }
     let base = base_palette(cx);
     if !cx.try_global::<MicaOn>().is_some_and(|m| m.0) {
         return base;
@@ -272,6 +303,7 @@ fn base_palette(cx: &App) -> Palette {
             surface_input_mica: a(0xFFFFFF0F),
             surface_track_mica: a(0x0000004D),
             mica: false,
+            contrast: false,
             hairline: a(0xF3F3F314),
             hairline_strong: a(0xF3F3F329),
             control_stroke: c(0x8A8A8A),
@@ -304,6 +336,7 @@ fn base_palette(cx: &App) -> Palette {
             surface_input_mica: a(0xFFFFFFCC),
             surface_track_mica: a(0x0000000F),
             mica: false,
+            contrast: false,
             hairline: a(0x1A1A1A14),
             hairline_strong: a(0x1A1A1A29),
             control_stroke: c(0x868686),
@@ -322,5 +355,22 @@ fn base_palette(cx: &App) -> Palette {
             positive: c(0x15803D),
             negative: c(0xB91C1C),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::scale_by;
+
+    #[test]
+    fn text_at_100_percent_is_unchanged() {
+        assert_eq!(scale_by(14., 100), 14.);
+        assert_eq!(scale_by(20., 100), 20.);
+    }
+
+    #[test]
+    fn type_scales_with_the_percentage() {
+        assert_eq!(scale_by(14., 150), 21.);
+        assert_eq!(scale_by(16., 225), 36.);
     }
 }

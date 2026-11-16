@@ -254,9 +254,12 @@ impl ScreenEditor {
                 .rounded(px(8.))
                 .bg(p.surface_raised.opacity(0.85))
                 .text_color(p.text_primary)
-                .child(div().text_size(px(24.)).child((i + 1).to_string()))
+                .child(div().text_size(crate::theme::scaled(24.)).child((i + 1).to_string()))
                 .child(ui::tabular(
-                    div().text_size(px(13.)).text_color(p.text_secondary).child(format!("{} px", cell.w)),
+                    div()
+                        .text_size(crate::theme::scaled(13.))
+                        .text_color(p.text_secondary)
+                        .child(format!("{} px", cell.w)),
                 ));
             root = root.child(
                 div()
@@ -342,7 +345,7 @@ impl ScreenEditor {
                     .border_1()
                     .border_color(p.hairline_strong)
                     .rounded(px(6.))
-                    .text_size(px(12.))
+                    .text_size(crate::theme::scaled(12.))
                     .text_color(p.text_primary)
                     .child(ui::tabular(div().child(format!("{} px and {} px", first, along - first))));
                 root = root.child(tag);

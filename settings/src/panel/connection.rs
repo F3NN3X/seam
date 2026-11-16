@@ -37,6 +37,8 @@ impl Panel {
             KeyBinding::new("ctrl-f", FocusSearch, Some(CONTEXT)),
             KeyBinding::new("escape", ClearSearch, Some(CONTEXT)),
             KeyBinding::new("alt-left", GoBack, Some(CONTEXT)),
+            KeyBinding::new("f6", NextRegion, Some(CONTEXT)),
+            KeyBinding::new("shift-f6", PreviousRegion, Some(CONTEXT)),
         ]);
         pages::zone_editor::bind_keys(cx);
     }

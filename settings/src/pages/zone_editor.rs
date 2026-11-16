@@ -503,9 +503,12 @@ fn zone_tiles(
                         .border_color(p.hairline_strong)
                         .hover(|d| d.bg(p.accent.opacity(0.1)).border_color(p.accent))
                 })
-                .child(div().text_size(px(24.)).child((i + 1).to_string()))
+                .child(div().text_size(crate::theme::scaled(24.)).child((i + 1).to_string()))
                 .child(ui::tabular(
-                    div().text_size(px(13.)).text_color(p.text_secondary).child(format!("{} px", cell.w)),
+                    div()
+                        .text_size(crate::theme::scaled(13.))
+                        .text_color(p.text_secondary)
+                        .child(format!("{} px", cell.w)),
                 ))
                 .on_click(cx.listener(move |panel, _, window, cx| {
                     select(panel, i, cx);
@@ -571,7 +574,7 @@ fn divider_handles(
                 .border_1()
                 .border_color(p.hairline_strong)
                 .rounded(px(6.))
-                .text_size(px(12.))
+                .text_size(crate::theme::scaled(12.))
                 .child(ui::tabular(div().child(format!("{a} px and {b} px"))));
             surface = surface.child(tag);
         }

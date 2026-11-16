@@ -36,7 +36,7 @@ pub(super) fn details(
         panel.editing.delay.update(cx, |slider, cx| slider.set_value(saved, window, cx));
     }
     let value = (panel.editing.delay.read(cx).value().end() * 1000.).round() as u32;
-    let ends = |text: &'static str| div().text_size(px(12.)).text_color(p.text_muted).child(text);
+    let ends = |text: &'static str| div().text_size(crate::theme::scaled(12.)).text_color(p.text_muted).child(text);
     let slider = div()
         .flex()
         .items_center()

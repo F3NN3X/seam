@@ -126,7 +126,7 @@ fn toolbar(panel: &Panel, (set, total): (usize, usize), window: &mut Window, cx:
         .flex()
         .items_center()
         .w(px(280.))
-        .h(px(32.))
+        .min_h(px(32.))
         .px(px(tokens::SPACE_8))
         .rounded(px(tokens::RADIUS_8))
         .bg(p.surface_input)

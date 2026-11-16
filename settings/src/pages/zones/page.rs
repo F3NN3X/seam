@@ -69,11 +69,13 @@ fn header(
             .flex_none()
             .items_center()
             .gap(px(12.))
-            .child(div().text_size(px(14.)).text_color(p.text_secondary).child(if zones_cfg.enabled {
-                "Zones on"
-            } else {
-                "Zones off"
-            }))
+            .child(
+                div().text_size(crate::theme::scaled(14.)).text_color(p.text_secondary).child(if zones_cfg.enabled {
+                    "Zones on"
+                } else {
+                    "Zones off"
+                }),
+            )
             .child(on),
     )
 }

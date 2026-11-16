@@ -139,7 +139,7 @@ pub fn button(panel: &mut Panel, taken: &[Rule], there: &'static str, add: Add, 
     let focus = search.read(cx).focus_handle(cx);
     let view = cx.entity();
     let p = palette(cx);
-    let content = move |_: &mut _, _: &mut Window, _: &mut Context<_>| {
+    let content = move |_: &mut _, window: &mut Window, cx: &mut Context<_>| {
         let installed = tab == 1;
         let tabs = TabBar::new("picker-tabs")
             .child(Tab::new().label("Open now"))
@@ -163,9 +163,20 @@ pub fn button(panel: &mut Panel, taken: &[Rule], there: &'static str, add: Add, 
             Some(found) if found.is_empty() && !installed => note("No app windows are open".into()).into_any_element(),
             Some(found) if found.is_empty() => note("No apps found in the Start menu".into()).into_any_element(),
             Some(found) => {
+                let last = found.len() - 1;
                 let items = found.iter().enumerate().map(|(n, (rule, already, icon, hwnd))| {
                     let (view, add, rule, hwnd) = (view.clone(), add.clone(), rule.clone(), *hwnd);
                     let name = label(&rule, installed);
+                    let before = (n > 0).then(|| ui::item_focus(("pick", n - 1), window, cx));
+                    let after = (n < last).then(|| ui::item_focus(("pick", n + 1), window, cx));
+                    let target = rule.clone();
+                    let pick = move |window: &mut Window, cx: &mut App| {
+                        let (rule, add) = (target.clone(), add.clone());
+                        view.update(cx, |panel, cx| {
+                            panel.editing.picker.open = false;
+                            add(panel, Rule { launch: true, ..rule }, hwnd, window, cx);
+                        });
+                    };
                     // A window says which one it is. An app already there can be added again, for a second window.
                     let detail = match (already, installed) {
                         (true, _) => Some(there.to_string()),
@@ -176,8 +187,8 @@ pub fn button(panel: &mut Panel, taken: &[Rule], there: &'static str, add: Add, 
                         Some(image) => div().flex_none().size(px(16.)).child(img(image.clone()).size(px(16.))),
                         None => div().flex_none().size(px(16.)).rounded(px(4.)).bg(p.text_muted),
                     };
-                    div()
-                        .id(("pick", n))
+                    let row = ui::selectable_ringed(("pick", n), name.clone(), false, (6., 0.), window, cx, pick);
+                    ui::arrow_keys(row, before, after)
                         .flex()
                         .items_center()
                         .gap(px(8.))
@@ -192,19 +203,15 @@ pub fn button(panel: &mut Panel, taken: &[Rule], there: &'static str, add: Add, 
                                 .flex()
                                 .flex_col()
                                 .min_w_0()
-                                .child(div().text_size(px(14.)).truncate().child(name))
-                                .children(
-                                    detail
-                                        .map(|d| div().text_size(px(12.)).text_color(p.text_muted).truncate().child(d)),
-                                ),
+                                .child(div().text_size(crate::theme::scaled(14.)).truncate().child(name))
+                                .children(detail.map(|d| {
+                                    div()
+                                        .text_size(crate::theme::scaled(12.))
+                                        .text_color(p.text_muted)
+                                        .truncate()
+                                        .child(d)
+                                })),
                         )
-                        .on_click(move |_, window, cx| {
-                            let (rule, add) = (rule.clone(), add.clone());
-                            view.update(cx, |panel, cx| {
-                                panel.editing.picker.open = false;
-                                add(panel, Rule { launch: true, ..rule }, hwnd, window, cx);
-                            });
-                        })
                         .into_any_element()
                 });
                 div()

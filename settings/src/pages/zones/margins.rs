@@ -1,9 +1,10 @@
-//! Screen margins: four sliders on the Zones page for the chosen screen, sent when let go.
+//! Screen margins: four sliders behind a select, for the chosen screen, sent when let go.
 
 use super::*;
 use crate::theme::Palette;
 use crate::ui::Row;
-use gpui_kit::component::slider::{Slider, SliderEvent, SliderState};
+use gpui_kit::component::popover::{Popover, PopoverState};
+use gpui_kit::component::slider::{SliderEvent, SliderState};
 use seam::margins::{MAX_PX, Margins};
 
 /// Top, right, bottom and left: the order of `Margins::sides` and of the sliders.
@@ -14,6 +15,13 @@ fn current(panel: &Panel) -> Margins {
     let sig = panel.state.as_ref().map(|s| s.desk.sig.as_str());
     let Some((mon, _)) = chosen(panel) else { return Margins::default() };
     sig.and_then(|sig| panel.config.desks.get(sig)).and_then(|d| d.margins.get(&mon.id)).copied().unwrap_or_default()
+}
+
+/// The desk, the screen and the margins of the chosen screen, to put them back.
+pub fn saved(panel: &Panel) -> Option<(String, String, Margins)> {
+    let sig = panel.state.as_ref().map(|s| s.desk.sig.clone())?;
+    let id = chosen(panel).map(|(mon, _)| mon.id.clone())?;
+    Some((sig, id, current(panel)))
 }
 
 /// Side `side` is now `px`: shown at once while the slider moves, sent when it is let go.
@@ -43,7 +51,17 @@ pub fn subscriptions(
     sliders.iter().enumerate().map(|(side, slider)| one(side, slider, window, cx)).collect()
 }
 
-/// The "Screen margins" row for the chosen screen, with its four sliders.
+/// What the select shows: one number when every side has it.
+fn summary(now: Margins) -> String {
+    let [t, r, b, l] = now.sides();
+    if t == r && r == b && b == l {
+        format!("{t} px on every side")
+    } else {
+        format!("Top {t}, right {r}, bottom {b}, left {l} px")
+    }
+}
+
+/// The "Screen margins" row for the chosen screen: a select that opens a slider for each side.
 pub fn row(panel: &Panel, p: Palette, window: &mut Window, cx: &mut Context<Panel>) -> Row {
     let now = current(panel);
     // The sliders follow the setting when something else changed it, or another screen was chosen.
@@ -53,27 +71,24 @@ pub fn row(panel: &Panel, p: Palette, window: &mut Window, cx: &mut Context<Pane
             slider.update(cx, |slider, cx| slider.set_value(px, window, cx));
         }
     }
-    let about = if now.is_zero() {
-        "Room kept free around the zones on this screen".to_string()
-    } else {
-        let [t, r, b, l] = now.sides();
-        format!("Top {t}, right {r}, bottom {b}, left {l} px")
-    };
-    let sliders = |range: std::ops::Range<usize>| {
-        let mut column = div().flex().flex_col().gap(px(4.));
-        for i in range {
-            let label = div().w(px(48.)).text_size(px(12.)).text_color(p.text_muted).child(SIDES[i]);
+    let sliders = panel.margins.clone();
+    let sides = move |_: &mut PopoverState, _: &mut Window, cx: &mut Context<PopoverState>| {
+        let mut column = div().flex().flex_col().gap(px(tokens::SPACE_8));
+        for (side, slider) in SIDES.iter().zip(&sliders) {
+            let value = format!("{} px", slider.read(cx).value().end() as u32);
             column = column.child(
                 div()
                     .flex()
                     .items_center()
-                    .gap(px(8.))
-                    .child(label)
-                    .child(Slider::new(&panel.margins[i]).horizontal().w(px(120.))),
+                    .gap(px(tokens::SPACE_12))
+                    .child(text_style(div(), tokens::LABEL).w(px(48.)).child(*side))
+                    .child(ui::slider_with_value(slider, value, true, side, p)),
             );
         }
         column
     };
-    let control = div().flex().items_center().gap(px(24.)).child(sliders(0..2)).child(sliders(2..4));
-    ui::row_with("Screen margins", Some(ui::description(about, p).into_any_element()), control)
+    let select = Popover::new("screen-margins")
+        .trigger(ui::secondary("screen-margins-select", summary(now), cx).dropdown_caret(true))
+        .content(sides);
+    ui::row("Screen margins", Some("Room kept free around the zones on this screen".into()), select, p)
 }

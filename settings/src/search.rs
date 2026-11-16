@@ -35,10 +35,26 @@ const fn support(title: &'static str, about: &'static str, keywords: &'static st
 
 const ENTRIES: &[Entry] = &[
     entry(Page::Displays, "Line up screens", "Line up where your screens physically meet", "calibrate border"),
-    entry(Page::Displays, "Align arrangement", "Move screens in Display settings to match", "windows"),
+    entry(
+        Page::Displays,
+        "Match Windows to this layout",
+        "Move screens in Display settings to match",
+        "align arrangement windows",
+    ),
     entry(Page::Displays, "Physical layout", "Real sizes from each screen's EDID", "map identify"),
     entry(Page::Displays, "Show on screens", "Draw the layout on each screen for a few seconds", "windows seam view"),
-    entry(Page::Displays, "Saved desks", "Rename or forget a desk", "layouts"),
+    entry(
+        Page::Displays,
+        "Desks",
+        "Rename this desk, or forget the ones not seen in 30 days",
+        "saved desks layouts rename forget",
+    ),
+    entry(
+        Page::Displays,
+        "Borders",
+        "Which screens meet where, and which of them the pointer crosses",
+        "border glued unglue lined up not on desk stops pointer",
+    ),
     entry(Page::Displays, "Remap pointer at borders", "Cross where the screens physically meet", "pause mouse"),
     entry(Page::Displays, "Also align Windows arrangement", "Move screens in Display settings to match", ""),
     entry(
@@ -50,7 +66,7 @@ const ENTRIES: &[Entry] = &[
     entry(
         Page::Displays,
         "Edge resistance",
-        "Push this many pixels past a screen's edge before the pointer crosses",
+        "Push this far past a screen's edge before the pointer crosses",
         "resistance edge grab corner push",
     ),
     entry(
@@ -109,14 +125,19 @@ const ENTRIES: &[Entry] = &[
         "Seam doesn't snap, move or capture their windows",
         "exclude never manage never include ignore",
     ),
-    entry(Page::Zones, "Show zones", "Hold while dragging", "shift ctrl alt key"),
+    entry(
+        Page::Zones,
+        "Show zones while dragging",
+        "Hold a key, or pause with the window still",
+        "shift ctrl alt key pause",
+    ),
     entry(
         Page::Zones,
         "Span zones",
-        "Add this key to cover more",
+        "Add this key to cover more than one zone",
         "shift ctrl alt key pull out take out of layout close gap",
     ),
-    entry(Page::Zones, "Gap", "Space between zones and the screen edge", "padding"),
+    entry(Page::Zones, "Gap between zones", "Space between zones and the screen edge", "gap padding"),
     entry(
         Page::Zones,
         "Screen margins",
@@ -195,12 +216,15 @@ const ENTRIES: &[Entry] = &[
         "Drop on a window's edge to put the two side by side",
         "beside next to edge pair group split half side by side ad-hoc",
     ),
-    entry(
-        Page::Zones,
-        "Pause to snap",
-        "Hold still while dragging to show zones, no key needed",
-        "pause rest hold still wait drag show zones without key",
-    ),
+    // The fourth choice of "Show zones while dragging".
+    Entry {
+        page: Page::Zones,
+        title: "Pause to snap",
+        about: "Hold still while dragging to show zones, no key needed",
+        keywords: "pause rest hold still wait drag show zones without key",
+        within: Some("Show zones while dragging"),
+        topic: None,
+    },
     entry(
         Page::Zones,
         "Show keys while dragging",

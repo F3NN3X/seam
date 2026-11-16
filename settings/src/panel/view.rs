@@ -20,6 +20,29 @@ impl Panel {
         self.show_now(page, reveal, window, cx);
     }
 
+    /// Whether the "More ... options" row `key` is open. A search result for one of the rows
+    /// `hidden` behind it opens it, and so does Show changed settings.
+    pub fn disclosure_open(&mut self, key: &'static str, hidden: &[&str]) -> bool {
+        if ui::revealing(hidden) {
+            self.disclosed.insert(key);
+        }
+        self.disclosed.contains(key) || ui::filtering()
+    }
+
+    pub fn toggle_disclosure(&mut self, key: &'static str) {
+        if !self.disclosed.remove(key) {
+            self.disclosed.insert(key);
+        }
+    }
+
+    /// Open the Help topic titled `title`.
+    pub fn open_topic(&mut self, title: &str, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(at) = crate::help::TOPICS.iter().position(|t| t.title == title) {
+            self.help_topic = at;
+        }
+        self.show(Page::Help, None, window, cx);
+    }
+
     fn show_now(&mut self, page: Page, reveal: Option<&'static str>, window: &mut Window, cx: &mut Context<Self>) {
         self.page = page;
         self.changed_only = false;

@@ -27,11 +27,6 @@ pub fn row_shows(title: Option<&str>) -> bool {
     ONLY.with(|o| o.borrow().as_ref().is_none_or(|only| title.is_some_and(|t| only.titles.contains(t))))
 }
 
-/// Whether any of the rows titled `titles` is drawn.
-pub fn shows_any(titles: &[&str]) -> bool {
-    titles.iter().any(|title| row_shows(Some(title)))
-}
-
 /// Whether rows are being left out.
 pub fn active() -> bool {
     ONLY.with(|o| o.borrow().is_some())

@@ -1,5 +1,6 @@
-//! The physical map: screens and the lines between them, in the Seam and Windows views.
+//! The physical map: screens and the lines between them, in the desk and Windows views.
 
+use super::borders::{Kind, kind, off_desk};
 use super::*;
 
 struct View {
@@ -27,11 +28,12 @@ fn fit(frames: &[Frame], width: f64) -> View {
     }
 }
 
+/// One screen. `on_desk` is false for a screen the desk has no place for: no fill, a dashed edge.
 fn screen_tile(
     panel: &Panel,
     index: usize,
     (x, y, w, h): Frame,
-    sized: bool,
+    (sized, on_desk): (bool, bool),
     view: &View,
     p: Palette,
     cx: &mut Context<Panel>,
@@ -39,7 +41,11 @@ fn screen_tile(
     let number = index + 1;
     let name = panel.mons.get(index).map_or("", |m| m.name.as_str()).to_string();
     let primary = panel.mons.get(index).is_some_and(|m| m.primary);
-    let label = if primary { format!("{name}, main") } else { name };
+    let label = match (on_desk, primary) {
+        (false, _) => format!("{name}, not on your desk"),
+        (true, true) => format!("{name}, main"),
+        (true, false) => name,
+    };
     let height = h * view.scale;
     div()
         .id(("screen", index))
@@ -50,32 +56,47 @@ fn screen_tile(
         .h(px(height as f32))
         .flex()
         .when(height >= SHORT_TILE, |d| d.flex_col())
-        .when(height < SHORT_TILE, |d| d.gap(px(8.)))
+        .when(height < SHORT_TILE, |d| d.gap(px(tokens::SPACE_8)))
         .items_center()
         .justify_center()
         .overflow_hidden()
-        .bg(p.surface_card)
+        .when(on_desk, |d| d.bg(p.surface_card))
         .border_1()
         .border_color(p.hairline_strong)
-        .when(!sized, |d| d.border_dashed())
-        .rounded(px(4.))
+        .when(!sized || !on_desk, |d| d.border_dashed())
+        .rounded(px(tokens::RADIUS_2))
         .cursor_pointer()
-        .child(div().text_size(px(16.)).child(number.to_string()))
-        .child(div().text_size(px(11.)).text_color(p.text_secondary).truncate().child(label))
+        .child(text_style(div(), tokens::CARD_TITLE).child(number.to_string()))
+        .child(
+            text_style(div(), tokens::MICRO)
+                .text_color(if on_desk { p.text_secondary } else { p.text_muted })
+                .truncate()
+                .child(label),
+        )
         .on_click(cx.listener(move |panel, _, window, cx| {
             panel.command("screen.identify", json!({ "number": number }), window, cx);
         }))
 }
 
 #[derive(Clone, Copy, PartialEq)]
-enum Line {
+pub(super) enum Line {
     Solid,
     Dashed,
     Dotted,
 }
 
+/// How a kind of border is drawn: its line, and its colour.
+pub(super) fn look(kind: Kind, p: Palette) -> (Line, Hsla) {
+    match kind {
+        Kind::LinedUp => (Line::Solid, p.accent_ink),
+        Kind::Glued => (Line::Dashed, p.accent_ink),
+        Kind::NotOnDesk => (Line::Dotted, p.text_muted),
+        Kind::Loose => (Line::Dashed, p.text_muted),
+    }
+}
+
 /// Where a line runs on the map, in map pixels.
-struct Run {
+pub(super) struct Run {
     along_y: bool,
     start: f64,
     end: f64,
@@ -125,10 +146,10 @@ fn windows_run(panel: &Panel, a: &Placed, b: &Placed, side: Side, view: &View) -
 }
 
 /// A line along one axis, solid or in dashes or dots.
-fn stroke(run: &Run, width: f32, style: Line, color: Hsla) -> Vec<Div> {
+pub(super) fn stroke(run: &Run, width: f32, style: Line, color: Hsla) -> Vec<Div> {
     let (on, off) = match style {
         Line::Solid => (run.end - run.start, 0.),
-        Line::Dashed => (8., 5.),
+        Line::Dashed => (6., 4.),
         Line::Dotted => (2., 4.),
     };
     let half = width / 2.;
@@ -147,8 +168,16 @@ fn stroke(run: &Run, width: f32, style: Line, color: Hsla) -> Vec<Div> {
     parts
 }
 
-/// A small note centred on a point of the map.
-fn note_at(x: f64, y: f64, text: String, p: Palette) -> Div {
+/// A short sample of how a kind of border is drawn, for the strip and the legend.
+pub(super) fn sample(kind: Kind, p: Palette) -> Div {
+    const WIDTH: f64 = 24.;
+    let (style, color) = look(kind, p);
+    let run = Run { along_y: false, start: 0., end: WIDTH, across: 2. };
+    div().relative().flex_none().w(px(WIDTH as f32)).h(px(4.)).children(stroke(&run, 2., style, color))
+}
+
+/// A small chip centred on a point of the map.
+fn chip_at(x: f64, y: f64, text: String, p: Palette) -> Div {
     const WIDTH: f32 = 120.;
     const HEIGHT: f32 = 16.;
     div()
@@ -161,94 +190,116 @@ fn note_at(x: f64, y: f64, text: String, p: Palette) -> Div {
         .items_center()
         .justify_center()
         .child(
-            div().px(px(4.)).bg(p.surface_page).rounded(px(4.)).text_size(px(11.)).text_color(p.text_muted).child(text),
+            text_style(div(), tokens::MICRO)
+                .px(px(tokens::SPACE_4))
+                .bg(p.well())
+                .rounded(px(tokens::RADIUS_4))
+                .text_color(p.text_muted)
+                .child(text),
         )
 }
 
-/// The line, and its note if it fits, for one border on the Seam view.
-fn seam_border(panel: &Panel, a: &Placed, other: &Placed, b: &Border, view: &View, p: Palette) -> Vec<Div> {
-    let lined_up = b.state == BorderState::LinedUp;
-    let (style, color) = match (b.not_on_desk, b.glued, lined_up) {
-        (true, ..) => (Line::Dotted, p.text_muted),
-        (_, true, _) => (Line::Dashed, p.accent),
-        (_, _, true) => (Line::Solid, p.accent),
-        _ => (Line::Dashed, p.text_muted),
-    };
+/// The line for one border on the desk view, and the 16 px strip that selects it. The line is
+/// 4 px while its border is the selected one.
+fn desk_border(
+    panel: &Panel,
+    at: usize,
+    (a, other): (&Placed, &Placed),
+    b: &Border,
+    view: &View,
+    p: Palette,
+    cx: &mut Context<Panel>,
+) -> Vec<AnyElement> {
+    let which = kind(b);
+    let (style, color) = look(which, p);
     let run = if b.not_on_desk { windows_run(panel, a, other, b.side, view) } else { seam_run(a, other, b.side, view) };
     let Some(run) = run else { return vec![] };
-    let mut parts = stroke(&run, SEAM_WIDTH, style, color);
-    if b.not_on_desk && run.end - run.start >= NOTE_FITS {
-        let mid = (run.start + run.end) / 2.;
-        let (x, y) = if run.along_y { (run.across, mid) } else { (mid, run.across) };
-        parts.push(note_at(x, y, "Not on your desk".into(), p));
-    }
+    let selected = panel.border_pick == Some((b.a, b.b));
+    let mut parts: Vec<AnyElement> = stroke(&run, if selected { 4. } else { SEAM_WIDTH }, style, color)
+        .into_iter()
+        .map(IntoElement::into_any_element)
+        .collect();
+    let (from, to) = (b.a, b.b);
+    let hit = div()
+        .id(("border", at))
+        .absolute()
+        .cursor_pointer()
+        .role(Role::Button)
+        .aria_label(format!("Border between screen {from} and screen {to}"))
+        .on_click(cx.listener(move |panel, _, _, cx| {
+            panel.border_pick = Some((from, to));
+            cx.notify();
+        }));
+    let (start, length) = (run.start as f32, (run.end - run.start) as f32);
+    let across = run.across as f32 - HIT_WIDTH / 2.;
+    parts.push(
+        if run.along_y {
+            hit.left(px(across)).top(px(start)).w(px(HIT_WIDTH)).h(px(length))
+        } else {
+            hit.top(px(across)).left(px(start)).h(px(HIT_WIDTH)).w(px(length))
+        }
+        .into_any_element(),
+    );
     parts
 }
 
 /// Where each screen sits on the desk, joined where you lined them up.
-fn seam_map(panel: &Panel, state: &State, width: f64, p: Palette, cx: &mut Context<Panel>) -> Div {
+fn desk_map(panel: &Panel, state: &State, width: f64, p: Palette, cx: &mut Context<Panel>) -> Div {
     let frames: Vec<Frame> = panel.layout.iter().map(|s| (s.x, s.y, s.w, s.h)).collect();
     let view = fit(&frames, width);
-    let mut surface = div().relative().w_full().h(px(MAP_HEIGHT)).bg(p.well()).rounded(px(8.));
+    let mut surface = div().relative().w_full().h(px(MAP_HEIGHT)).bg(p.well()).rounded(px(tokens::RADIUS_8));
     for (s, frame) in panel.layout.iter().zip(&frames) {
-        surface = surface.child(screen_tile(panel, s.index, *frame, s.sized, &view, p, cx));
+        let on_desk = !off_desk(state, s.index + 1);
+        surface = surface.child(screen_tile(panel, s.index, *frame, (s.sized, on_desk), &view, p, cx));
     }
-    for b in &state.borders {
+    for (at, b) in state.borders.iter().enumerate() {
         let find = |number: u32| panel.layout.iter().find(|s| s.index + 1 == number as usize);
         if let (Some(a), Some(other)) = (find(b.a), find(b.b)) {
-            surface = surface.children(seam_border(panel, a, other, b, &view, p));
+            surface = surface.children(desk_border(panel, at, (a, other), b, &view, p, cx));
         }
     }
     surface.child(
         div()
             .absolute()
-            .left(px(16.))
-            .bottom(px(8.))
+            .left(px(tokens::SPACE_16))
+            .bottom(px(tokens::SPACE_8))
             .flex()
             .flex_col()
-            .gap(px(2.))
-            .text_size(px(11.))
+            .gap(px(tokens::SPACE_2))
             .text_color(p.text_muted)
             .child(div().w(px((SCALE_BAR_MM * view.scale) as f32)).h(px(1.)).bg(p.text_muted))
-            .child("20 cm"),
+            .child(text_style(div(), tokens::MICRO).child("20 cm")),
     )
 }
 
-/// What the Windows view draws between two screens: a line where they touch, or
-/// a note where they face each other across a gap or overlap.
-enum Between {
-    Touch { side: Side, from: i32, to: i32, edge: i32 },
-    Note { x: i32, y: i32, text: String },
+/// A chip for where two screens face each other across a gap or overlap in Windows.
+struct Chip {
+    x: i32,
+    y: i32,
+    text: String,
 }
 
-fn windows_between(rects: &[Rect]) -> Vec<Between> {
+fn windows_chips(rects: &[Rect]) -> Vec<Chip> {
     let mut found = vec![];
     for (i, a) in rects.iter().enumerate() {
         for b in &rects[i + 1..] {
-            if let Some(side) = touching(a, b) {
-                let (from, to) = if side.along_is_y() {
-                    (a.top.max(b.top), a.bottom.min(b.bottom))
-                } else {
-                    (a.left.max(b.left), a.right.min(b.right))
-                };
-                let edge = match side {
-                    Side::Right => a.right,
-                    Side::Left => a.left,
-                    Side::Bottom => a.bottom,
-                    Side::Top => a.top,
-                };
-                found.push(Between::Touch { side, from, to, edge });
-            } else if let Some((side, gap)) = facing_gap(a, b) {
+            if touching(a, b).is_some() {
+                continue;
+            }
+            if let Some((side, gap)) = facing_gap(a, b) {
                 let c = corridor(a, b, side);
-                let text = format!("{gap} px gap");
-                found.push(Between::Note { x: (c.left + c.right) / 2, y: (c.top + c.bottom) / 2, text });
+                found.push(Chip {
+                    x: (c.left + c.right) / 2,
+                    y: (c.top + c.bottom) / 2,
+                    text: format!("{gap} px gap"),
+                });
             } else if a.intersects(b) {
                 let (left, right) = (a.left.max(b.left), a.right.min(b.right));
                 let (top, bottom) = (a.top.max(b.top), a.bottom.min(b.bottom));
                 let overlap = (right - left).min(bottom - top);
                 if (1..=LABEL_PX).contains(&overlap) {
                     let text = format!("{overlap} px overlap");
-                    found.push(Between::Note { x: (left + right) / 2, y: (top + bottom) / 2, text });
+                    found.push(Chip { x: (left + right) / 2, y: (top + bottom) / 2, text });
                 }
             }
         }
@@ -256,7 +307,7 @@ fn windows_between(rects: &[Rect]) -> Vec<Between> {
     found
 }
 
-/// The screens as Windows arranges them, in pixels.
+/// The screens as Windows arranges them, in pixels, with a chip where they don't meet.
 fn windows_map(panel: &Panel, state: &State, width: f64, p: Palette, cx: &mut Context<Panel>) -> Div {
     let frames: Vec<Frame> = state
         .screens
@@ -266,30 +317,20 @@ fn windows_map(panel: &Panel, state: &State, width: f64, p: Palette, cx: &mut Co
     let rects: Vec<Rect> = state.screens.iter().map(|s| Rect::new(s.rect.x, s.rect.y, s.rect.w, s.rect.h)).collect();
     let view = fit(&frames, width);
     let (x_at, y_at) = (|v: i32| f64::from(v) * view.scale + view.left, |v: i32| f64::from(v) * view.scale + view.top);
-    let mut surface = div().relative().w_full().h(px(MAP_HEIGHT)).bg(p.well()).rounded(px(8.));
+    let mut surface = div().relative().w_full().h(px(MAP_HEIGHT)).bg(p.well()).rounded(px(tokens::RADIUS_8));
     for (s, frame) in state.screens.iter().zip(&frames) {
-        surface = surface.child(screen_tile(panel, (s.number as usize).saturating_sub(1), *frame, true, &view, p, cx));
+        let index = (s.number as usize).saturating_sub(1);
+        surface = surface.child(screen_tile(panel, index, *frame, (true, true), &view, p, cx));
     }
-    for between in windows_between(&rects) {
-        match between {
-            Between::Touch { side, from, to, edge } => {
-                let along_y = side.along_is_y();
-                let run = if along_y {
-                    Run { along_y, start: y_at(from), end: y_at(to), across: x_at(edge) }
-                } else {
-                    Run { along_y, start: x_at(from), end: x_at(to), across: y_at(edge) }
-                };
-                surface = surface.children(stroke(&run, 2., Line::Solid, p.text_secondary));
-            }
-            Between::Note { x, y, text } => surface = surface.child(note_at(x_at(x), y_at(y), text, p)),
-        }
+    for chip in windows_chips(&rects) {
+        surface = surface.child(chip_at(x_at(chip.x), y_at(chip.y), chip.text, p));
     }
     surface
 }
 
 pub(super) fn map(panel: &Panel, state: &State, width: f64, p: Palette, cx: &mut Context<Panel>) -> Div {
     match panel.layout_view {
-        LayoutView::Seam => seam_map(panel, state, width, p, cx),
+        LayoutView::Seam => desk_map(panel, state, width, p, cx),
         LayoutView::Windows => windows_map(panel, state, width, p, cx),
     }
 }

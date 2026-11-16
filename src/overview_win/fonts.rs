@@ -44,6 +44,10 @@ fn font(px: i32) -> HFONT {
         }
     }
     let f = made(px);
+    // A font that couldn't be made is tried again next time.
+    if f.is_invalid() {
+        return f;
+    }
     kept.push((px, f.0 as isize));
     f
 }

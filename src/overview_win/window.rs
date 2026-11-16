@@ -25,7 +25,8 @@ fn redraw_tiles(s: &State, wins: &[usize]) {
 }
 
 /// Tell a screen reader what is selected, or how many windows are shown: the focused
-/// screen's window takes it as its name, and a name-change event has Narrator read it.
+/// screen's window takes it as its name, and a name-change event has Narrator read it. Every
+/// screen's window carries the name, so one that takes the focus later reads right.
 fn announce(s: &State) {
     let selected = s.selected.map(|w| (s.wins[w].app.as_str(), s.wins[w].title.as_str()));
     let said = overview::spoken(selected, s.shown.len());
@@ -33,10 +34,15 @@ fn announce(s: &State) {
         return;
     }
     unsafe {
+        let name = HSTRING::from(&said);
+        for p in &s.panes {
+            let _ = SetWindowTextW(p.hwnd, &name);
+        }
+        // Before focus has landed none is focused: the event comes from WM_SETFOCUS then.
         let focus = GetFocus();
-        let Some(p) = s.panes.iter().find(|p| p.hwnd == focus).or(s.panes.first()) else { return };
-        let _ = SetWindowTextW(p.hwnd, &HSTRING::from(&said));
-        NotifyWinEvent(EVENT_OBJECT_NAMECHANGE, p.hwnd, OBJID_WINDOW.0, CHILDID_SELF as i32);
+        if s.panes.iter().any(|p| p.hwnd == focus) {
+            NotifyWinEvent(EVENT_OBJECT_NAMECHANGE, focus, OBJID_WINDOW.0, CHILDID_SELF as i32);
+        }
     }
     *s.spoken.borrow_mut() = said;
 }
@@ -450,6 +456,11 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
             }
             WM_TIMER if matches!(wparam.0, TIMER_FOCUS | TIMER_FOCUS_LAST) => on_focus_timer(hwnd, wparam.0),
             WM_ACTIVATEAPP => on_activate_app(wparam),
+            // A screen's window took the focus: it reads its name, which is the selection's.
+            WM_SETFOCUS => {
+                NotifyWinEvent(EVENT_OBJECT_NAMECHANGE, hwnd, OBJID_WINDOW.0, CHILDID_SELF as i32);
+                DefWindowProcW(hwnd, msg, wparam, lparam)
+            }
             WM_TIMER if wparam.0 == TIMER_DETAILS => on_details(hwnd),
             WM_CLOSE | WM_DISPLAYCHANGE => {
                 quit();
@@ -514,9 +525,19 @@ unsafe fn make_windows(screens: &[Screen]) -> Option<Vec<HWND>> {
     }
 }
 
-fn run(spec: Spec) {
+/// Clears this request's `OPENING` when the overview's windows exist or its thread ends
+/// without them, however it ends.
+struct Launch(u64);
+
+impl Drop for Launch {
+    fn drop(&mut self) {
+        OPENING.done(self.0);
+    }
+}
+
+fn run(spec: Spec, token: u64) {
+    let launch = Launch(token);
     if spec.screens.is_empty() {
-        OPENING.done();
         return;
     }
     unsafe {
@@ -533,7 +554,6 @@ fn run(spec: Spec) {
         let listed_ms = started.elapsed().as_millis();
         let Some(hwnds) = make_windows(&spec.screens) else {
             log::info!("overview: couldn't make its windows");
-            OPENING.done();
             list::com_end(com);
             return;
         };
@@ -601,7 +621,7 @@ fn run(spec: Spec) {
             let _ = SetWindowPos(*hwnd, Some(HWND_TOPMOST), r.x, r.y, r.w, r.h, quiet);
         }
         // Its windows exist: a request for another overview is no longer dropped.
-        OPENING.done();
+        drop(launch);
         let main = shown[main].0;
         wincontrol::focus(main, spec.from_api);
         with_state(|s| announce(s));
@@ -624,14 +644,14 @@ fn run(spec: Spec) {
 /// doesn't wait for it: until its windows exist `OPENING` is set, and a request made
 /// meanwhile is dropped (D653).
 pub fn show(spec: Spec) {
-    if !OPENING.begin(now_ms()) {
+    let Some(token) = OPENING.begin(now_ms()) else {
         log::info!("overview: one is still opening, so this request is dropped");
         return;
-    }
+    };
     close();
-    let spawned = std::thread::Builder::new().name("seam-overview".into()).spawn(move || run(spec));
+    let spawned = std::thread::Builder::new().name("seam-overview".into()).spawn(move || run(spec, token));
     if let Err(e) = spawned {
-        OPENING.done();
+        OPENING.done(token);
         log::info!("overview: couldn't start: {e}");
     }
 }

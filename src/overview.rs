@@ -285,8 +285,10 @@ pub fn desktop_label(current: bool, name: Option<&str>, place: Option<usize>) ->
 /// What a screen reader hears of the overview: the selected window by app and title, or
 /// how many windows are shown when nothing is selected.
 pub fn spoken(selected: Option<(&str, &str)>, shown: usize) -> String {
+    // One line and no longer than a reader should be made to listen to.
+    let line = |s: &str| s.split_whitespace().collect::<Vec<_>>().join(" ").chars().take(200).collect::<String>();
     match selected {
-        Some((app, title)) => match (app.trim(), title.trim()) {
+        Some((app, title)) => match (line(app).as_str(), line(title).as_str()) {
             ("", "") => "Seam overview".to_string(),
             (app, "") => format!("Seam overview: {app}"),
             ("", title) => format!("Seam overview: {title}"),
@@ -301,6 +303,7 @@ pub fn spoken(selected: Option<(&str, &str)>, shown: usize) -> String {
 
 /// The places where two lists of the same length differ.
 pub fn changed<T: PartialEq>(before: &[T], after: &[T]) -> Vec<usize> {
+    debug_assert_eq!(before.len(), after.len());
     before.iter().zip(after).enumerate().filter(|(_, (a, b))| a != b).map(|(i, _)| i).collect()
 }
 
@@ -339,18 +342,21 @@ impl Opening {
         Self(AtomicU64::new(0))
     }
 
-    /// Ask to open at `now`. False when a request is already out and not yet past the limit.
-    pub fn begin(&self, now: u64) -> bool {
+    /// Ask to open at `now`. None when a request is already out and not yet past the limit,
+    /// else the token to give `done`.
+    pub fn begin(&self, now: u64) -> Option<u64> {
         let out = self.0.load(Ordering::SeqCst);
         if out != 0 && now.saturating_sub(out - 1) < OPENING_LIMIT_MS {
-            return false;
+            return None;
         }
-        self.0.compare_exchange(out, now + 1, Ordering::SeqCst, Ordering::SeqCst).is_ok()
+        let token = now + 1;
+        self.0.compare_exchange(out, token, Ordering::SeqCst, Ordering::SeqCst).ok().map(|_| token)
     }
 
-    /// The windows exist, or the thread ended without them.
-    pub fn done(&self) {
-        self.0.store(0, Ordering::SeqCst);
+    /// The windows exist, or the thread ended without them. A late call for a request that
+    /// timed out leaves a newer request's flag alone.
+    pub fn done(&self, token: u64) {
+        let _ = self.0.compare_exchange(token, 0, Ordering::SeqCst, Ordering::SeqCst);
     }
 
     pub fn is_out(&self) -> bool {
@@ -678,21 +684,34 @@ mod tests {
     fn a_second_request_while_one_is_opening_is_dropped() {
         let o = Opening::new();
         assert!(!o.is_out());
-        assert!(o.begin(0));
+        let first = o.begin(0).unwrap();
         assert!(o.is_out());
-        assert!(!o.begin(1));
-        assert!(!o.begin(OPENING_LIMIT_MS - 1));
-        o.done();
+        assert!(o.begin(1).is_none());
+        assert!(o.begin(OPENING_LIMIT_MS - 1).is_none());
+        o.done(first);
         assert!(!o.is_out());
-        assert!(o.begin(2));
+        assert!(o.begin(2).is_some());
     }
 
     #[test]
     fn a_request_older_than_the_limit_is_let_past_in_case_the_thread_died() {
         let o = Opening::new();
-        assert!(o.begin(100));
-        assert!(!o.begin(100 + OPENING_LIMIT_MS - 1));
-        assert!(o.begin(100 + OPENING_LIMIT_MS));
-        assert!(!o.begin(100 + OPENING_LIMIT_MS + 1));
+        let stale = o.begin(100).unwrap();
+        assert!(o.begin(100 + OPENING_LIMIT_MS - 1).is_none());
+        let newer = o.begin(100 + OPENING_LIMIT_MS).unwrap();
+        assert!(o.begin(100 + OPENING_LIMIT_MS + 1).is_none());
+        // The first thread, back late, doesn't clear the newer request.
+        o.done(stale);
+        assert!(o.is_out());
+        assert!(o.begin(100 + OPENING_LIMIT_MS + 2).is_none());
+        o.done(newer);
+        assert!(!o.is_out());
+    }
+
+    #[test]
+    fn a_long_or_many_lined_title_is_read_as_one_short_line() {
+        assert_eq!(spoken(Some(("App", "a\n  b\tc")), 1), "Seam overview: App - a b c");
+        let said = spoken(Some(("App", &"x".repeat(500))), 1);
+        assert_eq!(said.chars().count(), "Seam overview: App - ".len() + 200);
     }
 }

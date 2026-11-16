@@ -38,7 +38,7 @@ All notable changes to Seam. The format follows [Keep a Changelog](https://keepa
 - **A workspace row no longer keeps a window that isn't its own** when Windows reuses a window handle for another program's window.
 - **Alt+drag** forgets an app's verdict the moment the app exits, so a new program that gets its process id isn't judged by it.
 - **The overview tells a screen reader what is selected.** Narrator reads "Seam overview: app - title" as the selection moves, and how many windows are shown when none is selected.
-- **The overview opens quicker and repaints less.** Its fonts are made once and kept, and while the app names and icons fill in, only the tiles that changed are painted again.
+- **The overview makes its fonts once and keeps them,** and while the app names and icons fill in, only the tiles that changed are put on screen again.
 - **A second request to open the overview while it is still opening is dropped** instead of waiting up to 200 ms for the first, so Seam's tray no longer waits on it and two overviews can't start.
 
 ### Changed

@@ -6,6 +6,7 @@ use crate::ui;
 use gpui_kit::component::button::Button;
 use gpui_kit::component::notification::Notification;
 use gpui_kit::*;
+use std::cell::Cell;
 use std::rc::Rc;
 use std::time::Duration;
 
@@ -20,7 +21,14 @@ pub fn notice<T: 'static>(
     undo: impl Fn(&mut Window, &mut App) + 'static,
     cx: &App,
 ) -> Notification {
-    let (undo, p) = (Rc::new(undo), palette(cx));
+    // A second click while the notice is still leaving mustn't undo twice.
+    let used = Rc::new(Cell::new(false));
+    let undo: Undo = Rc::new(move |window, cx| {
+        if !used.replace(true) {
+            undo(window, cx);
+        }
+    });
+    let p = palette(cx);
     Notification::new()
         .id::<T>()
         .message(message)

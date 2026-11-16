@@ -132,7 +132,9 @@ impl Panel {
             .cursor_pointer()
             .when(active, |d| d.bg(p.surface_raised).text_color(p.text_primary).active(|d| d.bg(p.surface_card)))
             .when(!active, |d| {
-                d.text_color(p.text_secondary).hover(|d| d.bg(p.surface_card)).active(|d| d.bg(p.sidebar_ground()))
+                d.text_color(p.text_secondary)
+                    .hover(|d| d.bg(p.surface_card))
+                    .active(|d| d.bg(p.surface_card.opacity(0.6)))
             })
             .when(ui::focused(&focus, window), |d| ui::focus_ring(d, tokens::RADIUS_6, 0., p))
             .child(Icon::new(page.icon()).size(px(16.)).text_color(if active { p.text_primary } else { p.text_muted }))
@@ -208,7 +210,7 @@ impl Panel {
             .rounded(px(tokens::RADIUS_6))
             .cursor_pointer()
             .hover(|d| d.bg(p.surface_raised))
-            .active(|d| d.bg(p.surface_card))
+            .active(|d| d.bg(p.surface_sidebar))
             .when(ui::focused(&focus, window), |d| ui::focus_ring(d, tokens::RADIUS_6, 0., p))
             .child(ui::dot(color, filled))
             .child(

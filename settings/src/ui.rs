@@ -420,7 +420,7 @@ pub fn disclose(
         .cursor_pointer()
         .rounded(px(tokens::RADIUS_8))
         .hover(|d| d.bg(p.surface_raised))
-        .active(|d| d.bg(p.surface_card))
+        .active(|d| d.bg(p.surface_sidebar))
         .when(focused(&focus, window), |d| focus_ring(d, tokens::RADIUS_8, 0., p))
         .on_click(move |_, window, cx| click(window, cx))
         .on_key_down(move |e: &KeyDownEvent, window, cx| {
@@ -679,10 +679,12 @@ pub fn choice(
             .py(px(tokens::SPACE_4))
             .rounded(px(tokens::RADIUS_6))
             .when(i == selected, |d| {
-                d.bg(p.surface_segment).text_color(p.text_primary).active(|d| d.bg(p.surface_raised))
+                d.bg(p.surface_segment).text_color(p.text_primary).active(|d| d.bg(p.surface_card))
             })
             .when(i != selected, |d| {
-                d.text_color(p.text_secondary).hover(|d| d.bg(p.surface_card)).active(|d| d.bg(p.surface_sidebar))
+                d.text_color(p.text_secondary)
+                    .hover(|d| d.bg(p.surface_card))
+                    .active(|d| d.bg(p.surface_card.opacity(0.6)))
             })
             .child(label);
         let segment = text_style(segment, tokens::LABEL);

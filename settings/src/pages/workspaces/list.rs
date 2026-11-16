@@ -139,7 +139,7 @@ pub(super) fn item(
             d.bg(p.surface_card)
                 .border_color(p.hairline)
                 .hover(|d| d.bg(p.surface_raised))
-                .active(|d| d.bg(p.surface_card))
+                .active(|d| d.bg(p.surface_sidebar))
         })
         .child(name)
         .children(meta)

@@ -368,7 +368,7 @@ fn border_row(
         };
         ui::selectable(("border-row", i), heading, selected, window, cx, pick)
             .when(selected, |d| d.bg(p.accent_tint))
-            .when(!selected, |d| d.hover(|d| d.bg(p.surface_raised)).active(|d| d.bg(p.surface_card)))
+            .when(!selected, |d| d.hover(|d| d.bg(p.surface_raised)).active(|d| d.bg(p.surface_sidebar)))
             .when(last, |d| d.rounded_b(px(tokens::RADIUS_12 - 1.)))
             .child(row)
             .into_any_element()

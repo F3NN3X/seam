@@ -39,6 +39,8 @@ pub fn follow_system(window: &mut Window, cx: &mut App) {
     let on = wanted();
     set(on, cx);
     window.set_background_appearance(appearance(on));
+    // Every ground is read from the palette, so draw them all again.
+    window.refresh();
 }
 
 /// Transparency effects and contrast themes have no event of their own, so look again on coming back.

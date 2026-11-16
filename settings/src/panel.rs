@@ -90,8 +90,6 @@ fn last_page_file() -> PathBuf {
 
 pub struct Panel {
     pub page: Page,
-    /// The page shown before this one, which the title bar's Back returns to.
-    pub previous: Option<Page>,
     /// Requests go here. `None` while the tray isn't reachable.
     pub client: Option<Arc<Mutex<Client>>>,
     pub token: String,
@@ -205,7 +203,6 @@ impl Panel {
         subscriptions.extend(editing_subscriptions);
         let mut panel = Panel {
             page,
-            previous: None,
             client: None,
             token,
             state: None,

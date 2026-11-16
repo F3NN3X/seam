@@ -1,6 +1,6 @@
 //! Which Windows this is, for About and diagnostics.
 
-use windows::Win32::Foundation::ERROR_SUCCESS;
+use windows::Win32::Foundation::{ERROR_FILE_NOT_FOUND, ERROR_SUCCESS};
 use windows::Win32::System::Registry::{
     HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE, RRF_RT_REG_DWORD, RRF_RT_REG_SZ, RegGetValueW,
 };
@@ -53,7 +53,8 @@ pub fn transparency_enabled() -> bool {
             Some(&mut size),
         )
     };
-    read == ERROR_SUCCESS && value == 1
+    // Windows has it on until someone turns it off, so a missing value is on.
+    read == ERROR_FILE_NOT_FOUND || (read == ERROR_SUCCESS && value != 0)
 }
 
 /// A contrast theme is on.

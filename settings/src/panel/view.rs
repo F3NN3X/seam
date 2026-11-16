@@ -22,9 +22,6 @@ impl Panel {
     }
 
     fn show_now(&mut self, page: Page, reveal: Option<&'static str>, window: &mut Window, cx: &mut Context<Self>) {
-        if self.page != page {
-            self.previous = Some(self.page);
-        }
         self.page = page;
         if page == Page::Workspaces {
             self.icons.retry_failed();
@@ -163,28 +160,21 @@ impl Panel {
         base.child(link).child(toggle)
     }
 
-    /// Where Back goes: only inside a help topic or a workspace's detail, back to the page before.
-    fn back_to(&self) -> Option<Page> {
-        self.previous.filter(|_| matches!(self.page, Page::Help | Page::Workspaces))
-    }
-
     /// The window's own title bar: Back, the mark, and the command bar slot between the kit's controls.
     fn title_bar(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let p = palette(cx);
-        let back_to = self.back_to();
+        // Back closes a help topic or a workspace's detail. Neither is a view of its own yet
+        // (Help always shows a topic, Workspaces always its editor), so it stays disabled until
+        // the Help and Workspaces pages bring them.
+        let can_go_back = false;
         let back = Button::new("back")
             .ghost()
             .icon(Icon::new(assets::IconName::ChevronLeft).size(px(tokens::SIZE_ICON)).text_color(p.text_muted))
             .w(px(32.))
             .h(px(32.))
-            .tooltip(if back_to.is_some() { "Back" } else { "Back, inside a help topic or a workspace" })
+            .tooltip(if can_go_back { "Back" } else { "Back works inside a help topic or a workspace" })
             .accessibility_label("Back")
-            .disabled(back_to.is_none())
-            .on_click(cx.listener(move |this, _, window, cx| {
-                if let Some(page) = back_to {
-                    this.show(page, None, window, cx);
-                }
-            }));
+            .disabled(!can_go_back);
         let search = Input::new(&self.search)
             .appearance(false)
             .prefix(Icon::new(assets::IconName::Search).size(px(tokens::SIZE_ICON)).text_color(p.text_muted))

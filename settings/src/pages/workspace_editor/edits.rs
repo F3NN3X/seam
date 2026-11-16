@@ -1,5 +1,6 @@
 //! Changing a workspace's rows and sending it to the tray.
 
+use super::groups::reorder;
 use super::*;
 use crate::pages::workspaces::all;
 use crate::panel::{error_text, refusal};
@@ -80,6 +81,26 @@ pub(super) fn update_row(
     });
 }
 
+/// Change the rows' windows together, with Undo. The note names the first one's app.
+pub(super) fn update_rows(
+    panel: &mut Panel,
+    id: &str,
+    windows: &[usize],
+    note: impl FnOnce(&str) -> String,
+    window: &mut Window,
+    cx: &mut Context<Panel>,
+    change: impl Fn(&mut Rule),
+) {
+    let Some(title) = windows.first().and_then(|i| by_id(panel, id)?.windows.get(*i).map(app_title)) else { return };
+    update(panel, id, Some(note(&title)), window, cx, |ws| {
+        for i in windows {
+            if let Some(rule) = ws.windows.get_mut(*i) {
+                change(rule);
+            }
+        }
+    });
+}
+
 pub(super) fn seconds(ms: u32) -> String {
     match ms % 1000 {
         0 => format!("{} s", ms / 1000),
@@ -121,35 +142,70 @@ pub(super) fn set_open_with(panel: &mut Panel, window: &mut Window, cx: &mut Con
     update_row(panel, &id, i, note, window, cx, |rule| rule.open_with = open.clone());
 }
 
-/// Move a row to another place in the start order.
-pub(super) fn move_row(
+/// Move the windows of a row next to the window at `target`, in the start order.
+pub(super) fn move_rows(
     panel: &mut Panel,
     id: &str,
-    from: usize,
-    to: usize,
+    moving: &[usize],
+    (target, after): (usize, bool),
     window: &mut Window,
     cx: &mut Context<Panel>,
 ) {
     let Some(ws) = by_id(panel, id) else { return };
-    if from == to || from >= ws.windows.len() || to >= ws.windows.len() {
+    let Some(title) = moving.first().and_then(|i| ws.windows.get(*i)).map(app_title) else { return };
+    let mut moved = ws.windows.clone();
+    reorder(&mut moved, moving, target, after);
+    if moved == ws.windows {
         return;
     }
-    let title = app_title(&ws.windows[from]);
-    if panel.editing.expanded.as_ref().is_some_and(|(e, row)| e == id && *row == from) {
-        panel.editing.expanded = Some((id.to_string(), to));
-    }
-    update(panel, id, Some(format!("Moved {title} to place {}", to + 1)), window, cx, |ws| {
-        let rule = ws.windows.remove(from);
-        ws.windows.insert(to, rule);
+    panel.editing.expanded = None;
+    update(panel, id, Some(format!("Moved {title}")), window, cx, |ws| ws.windows = moved);
+}
+
+/// Send the windows of a row to another screen. A zone the screen doesn't have becomes its full size.
+pub(super) fn send_to_screen(
+    panel: &mut Panel,
+    id: &str,
+    moving: &[usize],
+    screen: &Screen,
+    window: &mut Window,
+    cx: &mut Context<Panel>,
+) {
+    let sig = desk_sig(panel);
+    let layout = panel.config.desks.get(&sig).and_then(|d| d.zones.get(&screen.id)).and_then(zones::layout_of);
+    let zones = layout.map_or(0, |l| zones::leaf_count(&l.tree) as u32);
+    let note = |title: &str| format!("{title} goes to screen {}", screen.number);
+    update_rows(panel, id, moving, note, window, cx, |rule| {
+        let target = match &rule.target {
+            Target::Zone { zone, span_to } if *zone <= zones && span_to.is_none_or(|to| to <= zones) => {
+                rule.target.clone()
+            }
+            Target::Zone { .. } => Target::State { state: WinState::Max },
+            other => other.clone(),
+        };
+        rule.monitor = screen.id.clone();
+        rule.set_target(target);
     });
 }
 
-pub(super) fn remove_row(panel: &mut Panel, id: &str, i: usize, window: &mut Window, cx: &mut Context<Panel>) {
-    let Some(title) = by_id(panel, id).and_then(|ws| ws.windows.get(i).map(app_title)) else { return };
+/// The workspace without the windows at `taken`.
+fn without(ws: &Workspace, taken: &[usize]) -> Workspace {
+    let windows = ws.windows.iter().enumerate().filter(|(i, _)| !taken.contains(i)).map(|(_, r)| r.clone());
+    Workspace { windows: windows.collect(), ..ws.clone() }
+}
+
+/// Take the windows of a row out of the workspace.
+pub(super) fn remove_rows(
+    panel: &mut Panel,
+    id: &str,
+    windows: &[usize],
+    window: &mut Window,
+    cx: &mut Context<Panel>,
+) {
+    let Some(ws) = by_id(panel, id) else { return };
+    let Some(title) = windows.first().and_then(|i| ws.windows.get(*i)).map(app_title) else { return };
     panel.editing.expanded = None;
-    update(panel, id, Some(format!("Removed {title}")), window, cx, |ws| {
-        ws.windows.remove(i);
-    });
+    update(panel, id, Some(format!("Removed {title}")), window, cx, |ws| *ws = without(&ws.clone(), windows));
 }
 
 /// Add an app the picker offered, at the end of the start order. One picked from the
@@ -191,14 +247,20 @@ pub(super) fn exe_name(rule: &Rule) -> Option<String> {
     (!name.is_empty()).then_some(name)
 }
 
-/// Remove the row and add its app to the list the zones and capture leave alone.
+/// Remove the rows of this app and add it to the list the zones and capture leave alone.
 /// Undo puts both back.
-pub(super) fn never_include(panel: &mut Panel, id: &str, i: usize, window: &mut Window, cx: &mut Context<Panel>) {
+pub(super) fn never_include(
+    panel: &mut Panel,
+    id: &str,
+    windows: &[usize],
+    window: &mut Window,
+    cx: &mut Context<Panel>,
+) {
     let Some(before) = by_id(panel, id) else { return };
-    let Some((rule, name)) = before.windows.get(i).and_then(|r| Some((r, exe_name(r)?))) else { return };
+    let Some(rule) = windows.first().and_then(|i| before.windows.get(*i)) else { return };
+    let Some(name) = exe_name(rule) else { return };
     let title = app_title(rule);
-    let mut after = before.clone();
-    after.windows.remove(i);
+    let after = without(&before, windows);
     let old_list = panel.config.zones.exclude.clone();
     let mut list = old_list.clone();
     if !list.iter().any(|x| x.eq_ignore_ascii_case(&name)) {

@@ -13,7 +13,9 @@ use std::rc::Rc;
 use std::sync::Arc;
 
 mod only;
+mod select;
 pub use only::{active as filtering, nothing_shown, show_only};
+pub use select::{Choice, select};
 
 pub const SECTION_GAP: f32 = tokens::SPACE_24;
 /// Room left above a row a search result scrolled to.

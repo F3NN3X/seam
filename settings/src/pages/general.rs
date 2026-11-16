@@ -130,14 +130,6 @@ pub fn render(panel: &mut Panel, window: &mut Window, cx: &mut Context<Panel>) -
 
     let startup = startup_section(panel, &view, p, window, cx);
     let tray_icon = tray_icon_section(panel, &view, p, window, cx);
-    let step_aside = switch(
-        "step-aside-fullscreen",
-        "Step aside for games and full-screen apps",
-        panel.config.step_aside_fullscreen,
-        window,
-        cx,
-        setter(&view, |on| json!({ "step_aside_fullscreen": on })),
-    );
     let standing_by = standing_by_note(panel, p, cx);
     let connected = panel
         .state
@@ -172,19 +164,6 @@ pub fn render(panel: &mut Panel, window: &mut Window, cx: &mut Context<Panel>) -
         .children(standing_by)
         .child(startup)
         .child(tray_icon)
-        .child(section(
-            "Full-screen apps",
-            card(
-                vec![row(
-                    "Step aside for games and full-screen apps",
-                    Some("Shortcuts, snapping and Spotlight wait until you leave it".into()),
-                    step_aside,
-                    p,
-                )],
-                p,
-            ),
-            p,
-        ))
         .child(section(
             "Other apps",
             card(vec![row("Let other apps control Seam", Some(api_about.into()), api, p)], p),

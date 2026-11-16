@@ -23,19 +23,18 @@ const ROWS: &[(Page, &str, &[&str])] = &[
     (Page::Zones, "Resize neighbours with a window", &["/zones/resize_neighbours"]),
     (Page::Zones, "Handles between snapped windows", &["/zones/divider_handles"]),
     (Page::Zones, "Swap with the window already in a zone", &["/zones/swap_on_drop"]),
-    (Page::Zones, "Put windows back when Seam quits", &["/zones/tiling_free_on_quit"]),
+    (Page::Windows, "Put windows back when Seam quits", &["/zones/tiling_free_on_quit"]),
     (Page::Zones, "Snap beside a window", &["/zones/snap_beside"]),
     (Page::Zones, "Show keys while dragging", &["/zones/drag_hints"]),
-    (Page::Zones, "Focus border", &["/windows/focus_border"]),
-    (Page::Zones, "Focus border colour", &["/windows/focus_color"]),
-    (Page::Zones, "Pin border colour", &["/windows/pin_color"]),
-    (Page::Zones, "Tell me when a pinned window closes", &["/windows/notify_pinned_close"]),
-    (Page::Zones, "Pinned windows stay when I switch workspaces", &["/windows/pins_stay_on_switch"]),
-    (Page::Zones, "Move and resize from anywhere in a window", &["/windows/alt_drag"]),
-    (Page::Zones, "Open the overview when the pointer rests in a corner", &["/windows/corner_overview"]),
-    (Page::Zones, "When a window moves to another screen", &["/window_size_on_move"]),
-    (Page::Zones, "Also when I drag a window to another screen", &["/window_size_on_drag"]),
-    (Page::Zones, "Another window manager handles my windows", &["/windows/other_wm"]),
+    (Page::Windows, "Focus border", &["/windows/focus_border", "/windows/focus_color"]),
+    (Page::Windows, "Pin border", &["/windows/pin_color"]),
+    (Page::Windows, "Tell me when a pinned window closes", &["/windows/notify_pinned_close"]),
+    (Page::Windows, "Pinned windows stay when I switch workspaces", &["/windows/pins_stay_on_switch"]),
+    (Page::Windows, "Move and resize from anywhere in a window", &["/windows/alt_drag"]),
+    (Page::Windows, "Open the overview from a corner", &["/windows/corner_overview"]),
+    (Page::Windows, "When a window moves to another screen", &["/window_size_on_move"]),
+    (Page::Windows, "Also when I drag a window to another screen", &["/window_size_on_drag"]),
+    (Page::Windows, "Another window manager handles my windows", &["/windows/other_wm"]),
     (Page::Workspaces, "Put apps in place when they open", &["/auto_apply"]),
     (Page::Workspaces, "Update from screen removes apps that aren't open", &["/workspaces_update_removes_closed"]),
     (Page::Shortcuts, "Line up screens", &["/hotkeys/line_up"]),
@@ -86,7 +85,7 @@ const ROWS: &[(Page, &str, &[&str])] = &[
     (Page::General, "Offer to line up new screens", &["/ask_new_desks"]),
     (Page::General, "Who reopens the apps", &["/restore_apps"]),
     (Page::General, "Left-click", &["/tray_click"]),
-    (Page::General, "Step aside for games and full-screen apps", &["/step_aside_fullscreen"]),
+    (Page::Windows, "Step aside for games and full-screen apps", &["/step_aside_fullscreen"]),
     (Page::General, "Let other apps control Seam", &["/api/enabled"]),
     (Page::General, "Let assistants use Seam (MCP)", &["/api/mcp"]),
     (Page::General, "Let assistants change workspaces", &["/api/assistants_edit"]),
@@ -118,7 +117,9 @@ mod tests {
 
     #[test]
     fn a_default_config_has_nothing_changed() {
-        for page in [Page::Displays, Page::Zones, Page::Workspaces, Page::Shortcuts, Page::General, Page::About] {
+        for page in
+            [Page::Displays, Page::Zones, Page::Windows, Page::Workspaces, Page::Shortcuts, Page::General, Page::About]
+        {
             assert!(titles(page, &Config::default()).is_empty());
         }
     }

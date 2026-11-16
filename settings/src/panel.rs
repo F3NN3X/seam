@@ -112,6 +112,8 @@ pub struct Panel {
     pub disclosed: HashSet<&'static str>,
     /// The screen whose zones the Zones page shows, as an index into `mons`.
     pub zone_screen: usize,
+    /// The Where apps open rule whose details are open, by the app's identity.
+    pub rule_open: Option<String>,
     /// "Show all screens" under Your layouts: every custom layout, not only those for
     /// the screen. Kept while the panel is open, not saved.
     pub all_layouts: bool,
@@ -257,6 +259,7 @@ impl Panel {
             border_pick: None,
             disclosed: HashSet::new(),
             zone_screen: 0,
+            rule_open: None,
             all_layouts: false,
             editor: None,
             screen_window: None,
@@ -367,11 +370,11 @@ fn field_subscriptions(
         }),
         cx.subscribe_in(focus_picker, window, |this, _, event: &ColorPickerEvent, window, cx| {
             let ColorPickerEvent::Change(colour) = event;
-            pages::zones::picked("focus_color", *colour, this, window, cx);
+            pages::windows::picked("focus_color", *colour, this, window, cx);
         }),
         cx.subscribe_in(pin_picker, window, |this, _, event: &ColorPickerEvent, window, cx| {
             let ColorPickerEvent::Change(colour) = event;
-            pages::zones::picked("pin_color", *colour, this, window, cx);
+            pages::windows::picked("pin_color", *colour, this, window, cx);
         }),
         cx.subscribe_in(search, window, |this, input, event: &InputEvent, window, cx| match event {
             InputEvent::Change => {

@@ -3,7 +3,7 @@
 use super::*;
 use crate::search::Entry;
 use crate::theme::tokens::{self, text_style};
-use crate::theme::{Palette, palette};
+use crate::theme::{Palette, motion, palette};
 use gpui_kit::component::command::{Command, CommandGroup, CommandItem};
 use gpui_kit::component::input::Input;
 use gpui_kit::component::{Icon, IndexPath};
@@ -287,23 +287,35 @@ impl Panel {
             });
         let outside = cx.entity().downgrade();
         let field = self.field_bounds.clone();
+        let shown = div()
+            .occlude()
+            .w(at.size.width)
+            // A click that isn't on the field or the results puts the bar away.
+            .on_mouse_down_out(move |e, window, cx| {
+                if !field.get().contains(&e.position) {
+                    let _ = outside.update(cx, |panel, cx| panel.clear_search(window, cx));
+                }
+            })
+            .child(list);
+        // They fade in once as the bar opens, not again as the query changes, and not at all
+        // while Windows' Animation effects is off.
+        let shown = if motion(cx) {
+            shown
+                .with_animation(
+                    "results-fade",
+                    Animation::new(Duration::from_millis(tokens::MOTION_FADE_MS)),
+                    |shown, fade| shown.opacity(fade),
+                )
+                .into_any_element()
+        } else {
+            shown.into_any_element()
+        };
         deferred(
             anchored()
                 .position(point(at.left(), at.bottom() + px(tokens::SPACE_4)))
                 .anchor(Anchor::TopLeft)
                 .snap_to_window_with_margin(px(8.))
-                .child(
-                    div()
-                        .occlude()
-                        .w(at.size.width)
-                        // A click that isn't on the field or the results puts the bar away.
-                        .on_mouse_down_out(move |e, window, cx| {
-                            if !field.get().contains(&e.position) {
-                                let _ = outside.update(cx, |panel, cx| panel.clear_search(window, cx));
-                            }
-                        })
-                        .child(list),
-                ),
+                .child(shown),
         )
         .with_priority(gpui_kit::base::POPUP_PRIORITY)
     }

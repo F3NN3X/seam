@@ -82,6 +82,17 @@ fn ease_alert(p: Palette, cx: &mut Context<Panel>) -> Div {
         )
 }
 
+/// A set of screens Seam hasn't seen: lining it up makes the Note go.
+fn new_screen_note(p: Palette, cx: &mut Context<Panel>) -> Div {
+    let line_up = ui::secondary("line-up-new-screen", "Line up the new screen", cx)
+        .on_click(cx.listener(|panel, _, window, cx| panel.command("lineup.start", json!({}), window, cx)));
+    ui::note(
+        "A screen Seam hasn't seen is connected. Line it up so the pointer crosses where it meets the others",
+        Some(line_up),
+        p,
+    )
+}
+
 pub fn render(panel: &mut Panel, window: &mut Window, cx: &mut Context<Panel>) -> impl IntoElement + use<> {
     let p = palette(cx);
     let one_screen = panel.mons.len() < 2;
@@ -101,6 +112,7 @@ pub fn render(panel: &mut Panel, window: &mut Window, cx: &mut Context<Panel>) -
         .flex_col()
         .gap(px(ui::SECTION_GAP))
         .child(header)
+        .when(panel.new_screen(), |d| d.child(new_screen_note(p, cx)))
         .when(!panel.ease_on, |d| d.child(ease_alert(p, cx)))
         .children(content)
         .child(section("Pointer", pointer, p))

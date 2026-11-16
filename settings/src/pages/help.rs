@@ -109,6 +109,7 @@ fn topic_row(at: usize, p: Palette, window: &mut Window, cx: &mut Context<Panel>
     .h(px(tokens::SIZE_ROW))
     .px(px(tokens::SPACE_16))
     .hover(|d| d.bg(p.surface_raised))
+    .active(|d| d.bg(p.surface_card))
     .child(text_style(div(), tokens::BODY).child(title))
     .child(Icon::new(assets::IconName::ChevronRight).size(px(tokens::SIZE_ICON)).text_color(p.text_muted))
     .into_any_element()

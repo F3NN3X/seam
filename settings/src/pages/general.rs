@@ -61,34 +61,27 @@ fn import(window: &mut Window, cx: &mut Context<Panel>) {
         let read = std::fs::read(path).map_err(|e| e.to_string());
         let parsed = read.and_then(|bytes| Config::from_import(&bytes));
         let _ = this.update_in(cx, move |this, window, cx| match parsed {
-            Ok(next) => confirm_import(this, next, window, cx),
+            Ok(next) => apply_import(this, next, window, cx),
             Err(e) => window.push_notification(refusal("That file can't be imported", &e), cx),
         });
     })
     .detach();
 }
 
-fn confirm_import(panel: &Panel, next: Config, window: &mut Window, cx: &mut Context<Panel>) {
-    let view = cx.entity().downgrade();
-    let current = serde_json::to_string_pretty(&panel.config).unwrap_or_default();
-    window.open_alert_dialog(cx, move |alert, _, _| {
-        let (view, next, current) = (view.clone(), next.clone(), current.clone());
-        alert
-            .title("Replace your settings?")
-            .description("A copy of your current settings stays in the settings folder")
-            .ok_text("Import")
-            .on_ok(move |_, window, cx| {
-                let backup = Config::path().with_file_name("config.before-import.json");
-                if let Err(e) = std::fs::write(backup, &current) {
-                    window.push_notification(refusal("Nothing imported", &e.to_string()), cx);
-                    return true;
-                }
-                let next = next.clone();
-                let _ = view.update(cx, |panel, cx| panel.replace_config(&next, window, cx));
-                window.push_notification(Notification::new().message("Imported your settings"), cx);
-                true
-            })
-    });
+/// Replace the settings with the file's. The old ones stay in a file too, and Undo puts them back.
+fn apply_import(panel: &mut Panel, next: Config, window: &mut Window, cx: &mut Context<Panel>) {
+    let before = panel.config.clone();
+    let current = serde_json::to_string_pretty(&before).unwrap_or_default();
+    let backup = Config::path().with_file_name("config.before-import.json");
+    if let Err(e) = std::fs::write(backup, current) {
+        window.push_notification(refusal("Nothing imported", &e.to_string()), cx);
+        return;
+    }
+    panel.replace_config(&next, window, cx);
+    let undo = move |panel: &mut Panel, window: &mut Window, cx: &mut Context<Panel>| {
+        panel.replace_config(&before, window, cx)
+    };
+    panel.offer_undo("Imported your settings".to_string(), undo, window, cx);
 }
 
 /// Seam reopening the apps turns Windows' Restart apps off, so ask first (D128).

@@ -145,10 +145,18 @@ fn stage(
         .dropdown_menu(move |menu, _, _| {
             let (saving, windows) = (view.clone(), view.clone());
             let tree = own.clone();
-            menu.item(PopupMenuItem::new("Save as layout").disabled(tree.is_none()).on_click(move |_, window, cx| {
-                let Some(tree) = tree.clone() else { return };
-                let _ = saving.update(cx, |panel, cx| save_as_layout(panel, tree, window, cx));
-            }))
+            menu.item(
+                PopupMenuItem::new(if tree.is_some() {
+                    "Save as layout"
+                } else {
+                    "Save as layout (needs this screen's own layout)"
+                })
+                .disabled(tree.is_none())
+                .on_click(move |_, window, cx| {
+                    let Some(tree) = tree.clone() else { return };
+                    let _ = saving.update(cx, |panel, cx| save_as_layout(panel, tree, window, cx));
+                }),
+            )
             .item(PopupMenuItem::new("Save from windows").on_click(move |_, window, cx| {
                 let _ = windows.update(cx, |panel, cx| {
                     panel.command("zones.from_windows", json!({ "number": number }), window, cx)

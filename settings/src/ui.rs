@@ -15,8 +15,10 @@ use std::sync::Arc;
 
 mod only;
 mod select;
+mod undo;
 pub use only::{active as filtering, nothing_shown, show_only};
 pub use select::{Choice, select};
+pub use undo::notice as undo_notice;
 
 pub const SECTION_GAP: f32 = tokens::SPACE_24;
 /// Room left above a row a search result scrolled to.
@@ -416,6 +418,9 @@ pub fn disclose(
         .aria_label(label)
         .aria_expanded(open)
         .cursor_pointer()
+        .rounded(px(tokens::RADIUS_8))
+        .hover(|d| d.bg(p.surface_raised))
+        .active(|d| d.bg(p.surface_card))
         .when(focused(&focus, window), |d| focus_ring(d, tokens::RADIUS_8, 0., p))
         .on_click(move |_, window, cx| click(window, cx))
         .on_key_down(move |e: &KeyDownEvent, window, cx| {
@@ -673,8 +678,12 @@ pub fn choice(
             .px(px(tokens::SPACE_12))
             .py(px(tokens::SPACE_4))
             .rounded(px(tokens::RADIUS_6))
-            .when(i == selected, |d| d.bg(p.surface_segment).text_color(p.text_primary))
-            .when(i != selected, |d| d.text_color(p.text_secondary))
+            .when(i == selected, |d| {
+                d.bg(p.surface_segment).text_color(p.text_primary).active(|d| d.bg(p.surface_raised))
+            })
+            .when(i != selected, |d| {
+                d.text_color(p.text_secondary).hover(|d| d.bg(p.surface_card)).active(|d| d.bg(p.surface_sidebar))
+            })
             .child(label);
         let segment = text_style(segment, tokens::LABEL);
         track = track.child(match why {

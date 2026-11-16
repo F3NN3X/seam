@@ -102,7 +102,7 @@ pub(super) fn tile(
         .relative()
         .rounded(px(tokens::RADIUS_10))
         .bg(p.surface_card)
-        .when(!selected, |d| d.hover(|d| d.bg(p.surface_raised)))
+        .when(!selected, |d| d.hover(|d| d.bg(p.surface_raised)).active(|d| d.bg(p.surface_card)))
         .child(face)
         // Over the tile's corner, and a click on it stays there.
         .children(more.map(|more| div().absolute().top(px(4.)).right(px(4.)).occlude().child(more)))

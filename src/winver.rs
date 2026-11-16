@@ -6,9 +6,9 @@ use windows::Win32::System::Registry::{
 };
 use windows::Win32::UI::Accessibility::{HCF_HIGHCONTRASTON, HIGHCONTRASTW};
 use windows::Win32::UI::WindowsAndMessaging::{
-    SPI_GETHIGHCONTRAST, SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS, SystemParametersInfoW,
+    SPI_GETCLIENTAREAANIMATION, SPI_GETHIGHCONTRAST, SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS, SystemParametersInfoW,
 };
-use windows::core::{PCWSTR, w};
+use windows::core::{BOOL, PCWSTR, w};
 
 fn read(name: PCWSTR) -> String {
     let mut buf = [0u16; 64];
@@ -69,4 +69,19 @@ pub fn high_contrast() -> bool {
         )
     };
     read.is_ok() && hc.dwFlags.contains(HCF_HIGHCONTRASTON)
+}
+
+/// Settings > Accessibility > Visual effects > Animation effects.
+pub fn animation_effects() -> bool {
+    let mut on = BOOL(1);
+    let read = unsafe {
+        SystemParametersInfoW(
+            SPI_GETCLIENTAREAANIMATION,
+            0,
+            Some(&mut on as *mut _ as _),
+            SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS(0),
+        )
+    };
+    // Windows has them on until someone turns them off.
+    read.is_err() || on.as_bool()
 }

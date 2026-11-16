@@ -130,8 +130,10 @@ impl Panel {
             .rounded(px(6.))
             .text_size(px(14.))
             .cursor_pointer()
-            .when(active, |d| d.bg(p.surface_raised).text_color(p.text_primary))
-            .when(!active, |d| d.text_color(p.text_secondary).hover(|d| d.bg(p.surface_card)))
+            .when(active, |d| d.bg(p.surface_raised).text_color(p.text_primary).active(|d| d.bg(p.surface_card)))
+            .when(!active, |d| {
+                d.text_color(p.text_secondary).hover(|d| d.bg(p.surface_card)).active(|d| d.bg(p.sidebar_ground()))
+            })
             .when(ui::focused(&focus, window), |d| ui::focus_ring(d, tokens::RADIUS_6, 0., p))
             .child(Icon::new(page.icon()).size(px(16.)).text_color(if active { p.text_primary } else { p.text_muted }))
             .child(div().flex_1().child(page.title()))
@@ -169,17 +171,20 @@ impl Panel {
                     ui::primary("start-seam", "Start").on_click(cx.listener(|_, _, _, cx| crate::restart_panel(cx))),
                 );
         };
-        // A screen Seam hasn't lined up yet ("New screen to line up", a hollow negative dot,
-        // linking to Displays) joins this match with the Note on Displays.
+        // A screen Seam hasn't lined up yet joins the Note on Displays.
+        let new_screen = self.new_screen();
         let (title, color, filled) = match state.remap {
             _ if state.paused => ("Remap paused", p.text_muted, true),
+            _ if new_screen => ("New screen to line up", p.negative, false),
             _ if state.stepped_aside => ("Stepped aside", p.text_muted, false),
             Remap::On => ("Remap on", p.positive, true),
             Remap::Paused => ("Remap paused", p.text_muted, true),
             Remap::OffNoBorders => ("Not lined up", p.text_muted, false),
         };
         let screens = state.screens.len();
-        let (page, detail) = if state.stepped_aside && !state.paused {
+        let (page, detail) = if new_screen && !state.paused {
+            (Page::Displays, "The pointer may jump at its edges".to_string())
+        } else if state.stepped_aside && !state.paused {
             (Page::Windows, "An app is full screen".to_string())
         } else {
             let plural = if screens == 1 { "" } else { "s" };
@@ -198,8 +203,12 @@ impl Panel {
             .flex_1()
             .min_w_0()
             .gap(px(tokens::SPACE_8))
+            .p(px(tokens::SPACE_4))
+            .m(px(-tokens::SPACE_4))
             .rounded(px(tokens::RADIUS_6))
             .cursor_pointer()
+            .hover(|d| d.bg(p.surface_raised))
+            .active(|d| d.bg(p.surface_card))
             .when(ui::focused(&focus, window), |d| ui::focus_ring(d, tokens::RADIUS_6, 0., p))
             .child(ui::dot(color, filled))
             .child(

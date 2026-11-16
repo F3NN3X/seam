@@ -21,9 +21,7 @@ pub fn render(panel: &mut Panel, window: &mut Window, cx: &mut Context<Panel>) -
         panel.gap.update(cx, |slider, cx| slider.set_value(gap, window, cx));
     }
 
-    let snapping = snapping_section(panel, &zones_cfg, &view, p, window, cx);
     let notice = other_wm_notice(panel);
-    let windows = windows_section(panel, &view, p, window, cx);
 
     let mut body = div()
         .flex()
@@ -40,6 +38,9 @@ pub fn render(panel: &mut Panel, window: &mut Window, cx: &mut Context<Panel>) -
     if panel.editor.as_ref().is_some_and(|e| Some(&e.sig) != sig.as_ref() || e.screen != mon.id) {
         panel.editor = None;
     }
+    // Built here, past the early return, so only sections that are drawn count as shown.
+    let snapping = snapping_section(panel, &zones_cfg, &view, p, window, cx);
+    let windows = windows_section(panel, &view, p, window, cx);
     let tabs = screen_tabs(panel, &view, window, cx);
 
     let number = panel.zone_screen.min(panel.mons.len() - 1) + 1;

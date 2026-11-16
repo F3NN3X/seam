@@ -3,7 +3,7 @@
 use super::*;
 use crate::pages::app_rules;
 use crate::theme::Palette;
-use crate::ui::{Row, section, switch};
+use crate::ui::{Card, Row, section, switch};
 use gpui_kit::component::slider::Slider;
 use seam::config::{WindowSettings, ZoneSettings};
 use seam::tiling::Family;
@@ -99,7 +99,12 @@ fn snapping_section(
 ) -> AnyElement {
     let snapping = snapping_keys_card(panel, zones_cfg, view, p, window, cx);
     let rows = snapping_switches(zones_cfg, view, p, window, cx);
-    section("Snapping", div().flex().flex_col().gap(px(12.)).child(snapping).child(card(rows, p)), p)
+    let keys = ["Show zones", "Span zones", "Gap", "Restore size when dragged out", "Screen margins"];
+    let keys_show = ui::shows_any(&keys);
+    let body = card(rows, p).within(keys_show, |card| {
+        div().flex().flex_col().gap(px(12.)).when(keys_show, |d| d.child(snapping)).child(card)
+    });
+    section("Snapping", body, p)
 }
 
 /// Show and span keys, the gap and restore size.
@@ -559,7 +564,7 @@ fn size_rows(
 
 /// Smart tiling on the chosen screen, for the virtual desktop in front: the switch,
 /// and while it is on, the family. The tray keeps it per desktop, so the state says.
-fn tiling_card(panel: &Panel, number: usize, p: Palette, window: &mut Window, cx: &mut Context<Panel>) -> Div {
+fn tiling_card(panel: &Panel, number: usize, p: Palette, window: &mut Window, cx: &mut Context<Panel>) -> Card {
     let now = panel.state.as_ref().and_then(|s| s.tiling.iter().find(|t| t.screen as usize == number).cloned());
     let (on, family) = now.map_or((false, Family::Smart), |t| (t.on, t.family));
     let view = cx.entity();

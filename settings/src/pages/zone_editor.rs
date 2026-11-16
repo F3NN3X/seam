@@ -293,8 +293,7 @@ pub fn with_latest(
             window.push_notification(note, cx);
             return;
         };
-        panel.config = config;
-        panel.revision += 1;
+        panel.set_config(config);
         then(panel, window, cx);
     });
 }

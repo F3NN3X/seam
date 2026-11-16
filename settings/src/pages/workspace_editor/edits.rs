@@ -14,7 +14,7 @@ fn by_id(panel: &Panel, id: &str) -> Option<Workspace> {
 /// Show the workspace as it will be saved, before the tray answers.
 fn show_locally(panel: &mut Panel, ws: &Workspace) {
     let sig = desk_sig(panel);
-    let Some(desk) = panel.config.desks.get_mut(&sig) else { return };
+    let Some(desk) = panel.config_mut().desks.get_mut(&sig) else { return };
     if let Some(slot) = desk.workspaces.iter_mut().find(|v| workspace::parse(v).is_some_and(|w| w.id == ws.id)) {
         *slot = workspace::to_value(ws);
     }

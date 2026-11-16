@@ -2,7 +2,7 @@
 
 use crate::panel::{Panel, error_text, refusal};
 use crate::theme::{Palette, palette};
-use crate::ui::{self, card, row, section, switch};
+use crate::ui::{self, Card, card, row, section, switch};
 use gpui_kit::component::button::ButtonVariants;
 use gpui_kit::component::dialog::{DialogAction, DialogClose, DialogFooter};
 use gpui_kit::component::input::{Input, InputState};
@@ -318,7 +318,7 @@ fn layout_card(
 }
 
 /// The Pointer card: the remap switch, the two sliders and the Line Up switches.
-fn pointer_card(panel: &Panel, p: Palette, window: &mut Window, cx: &mut Context<Panel>) -> Div {
+fn pointer_card(panel: &Panel, p: Palette, window: &mut Window, cx: &mut Context<Panel>) -> Card {
     let view = cx.entity();
     let remap = switch("remap", "Remap pointer at borders", panel.config.enabled, window, cx, {
         let view = view.clone();

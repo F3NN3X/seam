@@ -188,6 +188,22 @@ pub struct Panel {
 }
 
 impl Panel {
+    /// Every write to the config goes through here, so what is worked out from it is found again.
+    pub fn config_mut(&mut self) -> &mut Config {
+        self.revision += 1;
+        &mut self.config
+    }
+
+    pub fn set_config(&mut self, config: Config) {
+        *self.config_mut() = config;
+    }
+
+    /// The same for the state.
+    pub fn set_state(&mut self, state: Option<State>) {
+        self.revision += 1;
+        self.state = state;
+    }
+
     pub fn new(page: Option<Page>, token: String, window: &mut Window, cx: &mut Context<Self>) -> Panel {
         let saved = std::fs::read_to_string(last_page_file()).ok();
         let page = page.or(saved.and_then(|s| Page::from_arg(s.trim()))).unwrap_or(Page::Displays);
@@ -300,8 +316,7 @@ fn slider_subscriptions(
     vec![
         cx.subscribe_in(edge_resistance, window, |this, _, event: &SliderEvent, window, cx| match event {
             SliderEvent::Change(value) => {
-                this.config.pointer.edge_resistance_px = value.end() as u32;
-                this.revision += 1;
+                this.config_mut().pointer.edge_resistance_px = value.end() as u32;
                 cx.notify();
             }
             SliderEvent::Release(value) => {
@@ -310,8 +325,7 @@ fn slider_subscriptions(
         }),
         cx.subscribe_in(glue_push, window, |this, _, event: &SliderEvent, window, cx| match event {
             SliderEvent::Change(value) => {
-                this.config.pointer.glue_push_px = value.end() as u32;
-                this.revision += 1;
+                this.config_mut().pointer.glue_push_px = value.end() as u32;
                 cx.notify();
             }
             SliderEvent::Release(value) => {
@@ -320,8 +334,7 @@ fn slider_subscriptions(
         }),
         cx.subscribe_in(gap, window, |this, _, event: &SliderEvent, window, cx| match event {
             SliderEvent::Change(value) => {
-                this.config.zones.gap = value.end() as u32;
-                this.revision += 1;
+                this.config_mut().zones.gap = value.end() as u32;
                 cx.notify();
             }
             SliderEvent::Release(value) => {

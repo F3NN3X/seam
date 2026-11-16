@@ -422,7 +422,7 @@ fn auto_apply_row(panel: &Panel, window: &mut Window, cx: &mut Context<Panel>) -
     let on = panel.config.auto_apply;
     let toggle = switch("auto-apply", "Put apps in place when they open", on, window, cx, move |on, window, cx| {
         view.update(cx, |panel, cx| {
-            panel.config.auto_apply = on;
+            panel.config_mut().auto_apply = on;
             cx.notify();
             panel.call("autoapply.set", json!({ "on": on }), window, cx, |panel, result, window, cx| {
                 if let Err(e) = result {

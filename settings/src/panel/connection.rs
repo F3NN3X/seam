@@ -52,7 +52,7 @@ impl Panel {
                 let Ok((client, events, state, config)) = session else {
                     let linked = this.update(cx, |this, cx| {
                         this.client = None;
-                        this.state = None;
+                        this.set_state(None);
                         cx.notify();
                     });
                     if linked.is_err() {
@@ -123,14 +123,13 @@ impl Panel {
     fn apply(&mut self, state: State, config: Value) {
         let screens_changed = self.state.as_ref().map(|s| &s.desk.sig) != Some(&state.desk.sig);
         if let Ok(config) = serde_json::from_value(config) {
-            self.config = config;
+            self.set_config(config);
         }
-        self.revision += 1;
         // The tray reads the updater's file and says so in the state.
         if self.state.as_ref().map(|s| &s.update) != Some(&state.update) {
             self.update_file = updates::read();
         }
-        self.state = Some(state);
+        self.set_state(Some(state));
         // A screen that came, went or changed size leaves the editor's tree meaning
         // something else, so it closes and nothing is saved.
         if self.editor.is_some() && !screens_changed {
@@ -203,9 +202,8 @@ impl Panel {
     /// Change settings. They show at once, and the tray has the last word.
     pub fn patch(&mut self, patch: Value, window: &mut Window, cx: &mut Context<Self>) {
         if let Ok(config) = self.config.patched(&patch) {
-            self.config = config;
+            self.set_config(config);
         }
-        self.revision += 1;
         self.relink();
         cx.notify();
         self.call("config.patch", json!({ "patch": patch }), window, cx, |this, result, window, cx| {
@@ -219,8 +217,7 @@ impl Panel {
     pub fn reload_config(&self, window: &mut Window, cx: &mut Context<Self>) {
         self.call("config.get", json!({}), window, cx, |this, result, _, cx| {
             if let Some(config) = result.ok().and_then(|c| serde_json::from_value(c).ok()) {
-                this.config = config;
-                this.revision += 1;
+                this.set_config(config);
                 this.relink();
                 cx.notify();
             }

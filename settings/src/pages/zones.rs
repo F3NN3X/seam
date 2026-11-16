@@ -150,8 +150,7 @@ fn set_layout(panel: &mut Panel, layout: Option<ZoneLayout>, window: &mut Window
     // No entry means no zones, and a patch's null removes the entry.
     let shown = layout.as_ref().and_then(library::screen_patch).unwrap_or(Value::Null);
     if let Ok(config) = panel.config.patched(&json!({ "desks": { sig: { "zones": { mon.id.clone(): shown } } } })) {
-        panel.config = config;
-        panel.revision += 1;
+        panel.set_config(config);
     }
     cx.notify();
     let sent = layout.and_then(|l| serde_json::to_value(l).ok()).unwrap_or(Value::Null);

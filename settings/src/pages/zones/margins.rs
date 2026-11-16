@@ -24,7 +24,7 @@ fn changed(panel: &mut Panel, side: usize, px: u32, release: bool, window: &mut 
     if release {
         panel.patch(json!({ "desks": { sig: { "margins": { id: next } } } }), window, cx);
     } else {
-        panel.config.desks.entry(sig).or_default().margins.insert(id, next);
+        panel.config_mut().desks.entry(sig).or_default().margins.insert(id, next);
         cx.notify();
     }
 }

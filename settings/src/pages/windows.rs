@@ -141,7 +141,13 @@ fn others_section(
 pub fn render(panel: &mut Panel, window: &mut Window, cx: &mut Context<Panel>) -> impl IntoElement + use<> {
     let p = palette(cx);
     let view = cx.entity();
-    let header = ui::page_header("Windows", "How Seam tiles, moves and marks the windows on your screens", p);
+    let header = ui::page_header(
+        "Windows",
+        "How Seam tiles, moves and marks the windows on your screens",
+        Some("Moving windows"),
+        p,
+        cx,
+    );
     div()
         .flex()
         .flex_col()

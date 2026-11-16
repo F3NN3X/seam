@@ -530,7 +530,13 @@ fn empty_state(panel: &Panel, p: Palette, cx: &mut Context<Panel>) -> Div {
 pub fn render(panel: &mut Panel, window: &mut Window, cx: &mut Context<Panel>) -> impl IntoElement + use<> {
     let p = palette(cx);
     let list = all(panel);
-    let header = ui::page_header("Workspaces", "Save which apps go in which zone, then switch with one shortcut", p);
+    let header = ui::page_header(
+        "Workspaces",
+        "Save which apps go in which zone, then switch with one shortcut",
+        Some("Workspaces"),
+        p,
+        cx,
+    );
     if list.is_empty() {
         return div().flex().flex_col().gap(px(ui::SECTION_GAP)).child(header).child(empty_state(panel, p, cx));
     }

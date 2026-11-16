@@ -1,31 +1,41 @@
-//! Help: a list of topics, and the text of the one picked with a button to its page.
+//! Help: Getting started, the topics grouped by page, and the text of the one that's open.
 
-use crate::help::{self, Block, TOPICS, Topic};
+use crate::help::{self, Block, CARDS, GETTING_STARTED, TOPICS, Topic};
+use crate::pages::workspaces;
 use crate::panel::{Page, Panel};
+use crate::theme::tokens::{self, text_style};
 use crate::theme::{Palette, palette};
-use crate::ui::{self, card};
-use gpui_kit::prelude::FluentBuilder as _;
+use crate::ui::{self, Row, card, section};
+use gpui_kit::component::Icon;
+use gpui_kit::component::breadcrumb::{Breadcrumb, BreadcrumbItem};
 use gpui_kit::*;
 
-const LIST_WIDTH: f32 = 200.;
+/// How wide the text of a topic runs.
+const TEXT_WIDTH: f32 = 680.;
+/// The narrowest a card of topics gets before the grid puts it on a row of its own.
+const CARD_WIDTH: f32 = 320.;
 
 /// The text with its `**` labels in bold.
-fn rich(text: &str) -> StyledText {
+fn rich(text: &str, p: Palette) -> StyledText {
     let mut plain = String::new();
     let mut bold = Vec::new();
     for (i, part) in text.split("**").enumerate() {
         let start = plain.len();
         plain.push_str(part);
         if i % 2 == 1 {
-            let style = HighlightStyle { font_weight: Some(FontWeight::SEMIBOLD), ..Default::default() };
+            let style = HighlightStyle {
+                font_weight: Some(FontWeight::SEMIBOLD),
+                color: Some(p.text_primary),
+                ..Default::default()
+            };
             bold.push((start..plain.len(), style));
         }
     }
     StyledText::new(plain).with_highlights(bold)
 }
 
-fn paragraph(text: &str) -> Div {
-    div().text_size(px(14.)).line_height(px(20.)).child(rich(text))
+fn paragraph(text: &str, p: Palette) -> Div {
+    text_style(div(), tokens::BODY).text_color(p.text_secondary).child(rich(text, p))
 }
 
 fn bullets(items: &[&str], p: Palette) -> Div {
@@ -33,11 +43,11 @@ fn bullets(items: &[&str], p: Palette) -> Div {
         div()
             .flex()
             .items_start()
-            .gap(px(8.))
+            .gap(px(tokens::SPACE_8))
             .child(div().flex_none().mt(px(8.)).size(px(4.)).rounded_full().bg(p.text_muted))
-            .child(paragraph(text).flex_1().min_w_0())
+            .child(paragraph(text, p).flex_1().min_w_0())
     };
-    div().flex().flex_col().gap(px(4.)).children(items.iter().map(item))
+    div().flex().flex_col().gap(px(tokens::SPACE_4)).children(items.iter().map(item))
 }
 
 fn open_button(id: impl Into<ElementId>, page: Page, cx: &mut Context<Panel>) -> impl IntoElement {
@@ -45,59 +55,179 @@ fn open_button(id: impl Into<ElementId>, page: Page, cx: &mut Context<Panel>) ->
         .on_click(cx.listener(move |panel, _, window, cx| panel.show(page, None, window, cx)))
 }
 
-fn list_card(i: usize, topic: &Topic, picked: bool, p: Palette, cx: &mut Context<Panel>) -> AnyElement {
+/// Whether the desk has what the step makes: borders, zones or a workspace.
+fn done(panel: &Panel, page: Page) -> bool {
+    panel.config.desks.get(&workspaces::desk_sig(panel)).is_some_and(|desk| match page {
+        Page::Displays => !desk.borders.is_empty(),
+        Page::Zones => !desk.zones.is_empty(),
+        _ => !desk.workspaces.is_empty(),
+    })
+}
+
+/// The three steps, each with where it stands. Gone once they're all done.
+fn getting_started(panel: &Panel, p: Palette, cx: &mut Context<Panel>) -> Option<AnyElement> {
+    let steps: Vec<_> =
+        GETTING_STARTED.iter().map(|&(title, about, page)| (title, about, page, done(panel, page))).collect();
+    if steps.iter().all(|(.., finished)| *finished) {
+        return None;
+    }
+    let rows: Vec<Row> = steps
+        .into_iter()
+        .enumerate()
+        .map(|(i, (title, about, page, finished))| {
+            let status = finished.then(|| {
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(px(tokens::SPACE_8))
+                    .child(ui::dot(p.positive, true))
+                    .child(text_style(div(), tokens::LABEL).text_color(p.text_secondary).child("Done"))
+            });
+            let control = div().flex().items_center().gap(px(tokens::SPACE_16)).children(status).child(open_button(
+                ("help-step", i),
+                page,
+                cx,
+            ));
+            ui::row(title, Some(about.into()), control, p)
+        })
+        .collect();
+    Some(section("Getting started", card(rows, p), p))
+}
+
+/// A topic as a row of 48 px: its name and a chevron. It opens in place.
+fn topic_row(at: usize, p: Palette, window: &mut Window, cx: &mut Context<Panel>) -> AnyElement {
+    let title = TOPICS[at].title;
+    let view = cx.entity();
+    ui::selectable(("help-topic", at), title, false, window, cx, move |_, cx| {
+        view.update(cx, |panel, cx| panel.open_help_topic(at, cx));
+    })
+    .flex()
+    .items_center()
+    .justify_between()
+    .gap(px(tokens::SPACE_16))
+    .h(px(tokens::SIZE_ROW))
+    .px(px(tokens::SPACE_16))
+    .hover(|d| d.bg(p.surface_raised))
+    .child(text_style(div(), tokens::BODY).child(title))
+    .child(Icon::new(assets::IconName::ChevronRight).size(px(tokens::SIZE_ICON)).text_color(p.text_muted))
+    .into_any_element()
+}
+
+/// The topics of one page, under its name.
+fn topic_card(name: &str, titles: &[&str], p: Palette, window: &mut Window, cx: &mut Context<Panel>) -> Div {
+    let heading = text_style(div(), tokens::CARD_TITLE_STRONG)
+        .px(px(tokens::SPACE_16))
+        .pt(px(tokens::SPACE_12))
+        .pb(px(tokens::SPACE_8))
+        .child(name.to_string());
+    let rows = titles.iter().filter_map(|title| help::position(title)).map(|at| topic_row(at, p, window, cx));
+    let list = rows.map(|row| div().border_t_1().border_color(p.hairline).child(row));
     div()
-        .id(("help-topic", i))
-        .px(px(12.))
-        .py(px(8.))
-        .rounded(px(8.))
+        .flex()
+        .flex_col()
+        .flex_1()
+        .min_w(px(CARD_WIDTH))
+        .bg(p.surface_card)
         .border_1()
-        .cursor_pointer()
-        .text_size(px(14.))
-        .when(picked, |d| d.bg(p.surface_raised).border_color(p.hairline_strong))
-        .when(!picked, |d| d.bg(p.surface_card).border_color(p.hairline).hover(|d| d.bg(p.surface_raised)))
-        .child(topic.title)
-        .on_click(cx.listener(move |panel, _, _, cx| {
-            panel.help_topic = i;
-            cx.notify();
-        }))
-        .into_any_element()
+        .border_color(p.hairline)
+        .rounded(px(tokens::RADIUS_12))
+        .child(heading)
+        .children(list)
 }
 
-/// The topic's text, then its steps, then the button to its page.
-fn detail(topic: &Topic, p: Palette, cx: &mut Context<Panel>) -> Div {
-    let title = div().text_size(px(16.)).font_weight(FontWeight::MEDIUM).child(topic.title);
-    let mut text = div().flex().flex_col().gap(px(12.)).p(px(16.)).child(title);
-    let mut steps = Vec::new();
-    for (i, block) in topic.blocks.iter().enumerate() {
-        match block {
-            Block::Text(t) => text = text.child(paragraph(t)),
-            Block::List(items) => text = text.child(bullets(items, p)),
-            Block::Step { title, text: about, page } => {
-                let open = open_button(("help-step", i), *page, cx);
-                steps.push(ui::row(*title, Some(help::plain(about).into()), open, p).into_any_element());
-            }
-        }
-    }
-    let mut rows = vec![text.into_any_element()];
-    rows.extend(steps);
-    if let Some(page) = topic.opens {
-        rows.push(div().flex().px(px(16.)).py(px(12.)).child(open_button("help-open", page, cx)).into_any_element());
-    }
-    div().flex_1().min_w_0().child(card(rows, p))
+/// "Something not working?", with About as a link.
+fn footnote(p: Palette, window: &mut Window, cx: &mut Context<Panel>) -> Div {
+    let view = cx.entity();
+    let about = ui::selectable("help-about", "About", false, window, cx, move |window, cx| {
+        view.update(cx, |panel, cx| panel.show(Page::About, None, window, cx));
+    })
+    .text_color(p.text_secondary)
+    .underline()
+    .child("About");
+    text_style(div(), tokens::LABEL)
+        .flex()
+        .flex_wrap()
+        .gap_x(px(tokens::SPACE_4))
+        .text_color(p.text_muted)
+        .child("Something not working? Copy diagnostics or report a problem from")
+        .child(about)
 }
 
-pub fn render(panel: &mut Panel, cx: &mut Context<Panel>) -> impl IntoElement + use<> {
+/// Every topic, grouped by the page it's about.
+fn topics(panel: &Panel, window: &mut Window, cx: &mut Context<Panel>) -> Div {
     let p = palette(cx);
-    let header = ui::page_header("Help", "What each part of Seam does, and where to find it", p);
-    let picked = panel.help_topic.min(TOPICS.len() - 1);
-    let cards: Vec<AnyElement> =
-        TOPICS.iter().enumerate().map(|(i, topic)| list_card(i, topic, i == picked, p, cx)).collect();
-    let list = div().flex().flex_col().flex_none().gap(px(8.)).w(px(LIST_WIDTH)).children(cards);
+    let header = ui::page_header("Help", "What each part of Seam does, and where to find it", None, p, cx);
+    let cards: Vec<Div> = CARDS.iter().map(|(name, titles)| topic_card(name, titles, p, window, cx)).collect();
+    let grid = div().flex().flex_wrap().gap(px(tokens::SPACE_16)).children(cards);
     div()
         .flex()
         .flex_col()
         .gap(px(ui::SECTION_GAP))
         .child(header)
-        .child(div().flex().items_start().gap(px(16.)).child(list).child(detail(&TOPICS[picked], p, cx)))
+        .children(getting_started(panel, p, cx))
+        .child(section("Topics", grid, p))
+        .child(footnote(p, window, cx))
+}
+
+/// "Help / Displays": the way back, and the page the topic is under.
+fn breadcrumb(topic: &Topic, cx: &mut Context<Panel>) -> Breadcrumb {
+    let page = CARDS.iter().find(|(_, titles)| titles.contains(&topic.title)).map_or("Topics", |(name, _)| name);
+    let back = cx.listener(|panel, _, _, cx| panel.go_back(cx));
+    Breadcrumb::new().child(BreadcrumbItem::new("Help").on_click(back)).child(page)
+}
+
+/// "Settings in this topic": each with where it is, and a button that opens its page at its row.
+fn settings(topic: &Topic, p: Palette, cx: &mut Context<Panel>) -> Option<AnyElement> {
+    if topic.settings.is_empty() {
+        return None;
+    }
+    let rows: Vec<AnyElement> = topic
+        .settings
+        .iter()
+        .enumerate()
+        .map(|(i, setting)| {
+            let (page, title) = (setting.page, setting.title);
+            let go = ui::secondary(("help-setting", i), "Go to setting", cx)
+                .on_click(cx.listener(move |panel, _, window, cx| panel.show(page, Some(title), window, cx)));
+            ui::row(title, Some(format!("{}, {}", page.title(), setting.section).into()), go, p).into_any_element()
+        })
+        .collect();
+    Some(section("Settings in this topic", card(rows, p), p))
+}
+
+/// "Related": the topics to read next.
+fn related(topic: &Topic, p: Palette, window: &mut Window, cx: &mut Context<Panel>) -> Option<AnyElement> {
+    let rows: Vec<AnyElement> =
+        topic.related.iter().filter_map(|title| help::position(title)).map(|at| topic_row(at, p, window, cx)).collect();
+    (!rows.is_empty()).then(|| section("Related", card(rows, p), p))
+}
+
+/// One topic in place of the page: its text, the settings it's about and the topics next to it.
+fn topic_view(topic: &Topic, window: &mut Window, cx: &mut Context<Panel>) -> Div {
+    let p = palette(cx);
+    let mut text = div().flex().flex_col().gap(px(tokens::SPACE_12)).max_w(px(TEXT_WIDTH));
+    for block in topic.blocks {
+        text = match block {
+            Block::Text(t) => text.child(paragraph(t, p)),
+            Block::List(items) => text.child(bullets(items, p)),
+        };
+    }
+    let header = ui::page_header(topic.title, topic.about, None, p, cx)
+        .children(topic.opens.map(|page| open_button("help-open", page, cx)));
+    div()
+        .flex()
+        .flex_col()
+        .gap(px(ui::SECTION_GAP))
+        .child(breadcrumb(topic, cx))
+        .child(header)
+        .child(text)
+        .children(settings(topic, p, cx))
+        .children(related(topic, p, window, cx))
+}
+
+pub fn render(panel: &mut Panel, window: &mut Window, cx: &mut Context<Panel>) -> impl IntoElement + use<> {
+    match panel.help_topic.and_then(|at| TOPICS.get(at)) {
+        Some(topic) => topic_view(topic, window, cx),
+        None => topics(panel, window, cx),
+    }
 }

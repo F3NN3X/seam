@@ -36,6 +36,7 @@ impl Panel {
         cx.bind_keys([
             KeyBinding::new("ctrl-f", FocusSearch, Some(CONTEXT)),
             KeyBinding::new("escape", ClearSearch, Some(CONTEXT)),
+            KeyBinding::new("alt-left", GoBack, Some(CONTEXT)),
         ]);
         pages::zone_editor::bind_keys(cx);
     }

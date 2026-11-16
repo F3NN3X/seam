@@ -1,5 +1,6 @@
 //! The small set of parts every page is built from.
 
+use crate::panel::Panel;
 use crate::theme::tokens::{self, text_style};
 use crate::theme::{Palette, palette};
 use gpui_kit::component::Icon;
@@ -140,17 +141,46 @@ pub fn mark(size: f32, p: Palette) -> Div {
         .child(outline(15.5, 4.5, 6., 15.))
 }
 
-fn titled(title: impl Into<SharedString>, subtitle: impl IntoElement) -> Div {
+/// The `?` after a page title: it opens the Help topic named `topic`.
+fn help_button(title: &str, topic: &'static str, cx: &mut Context<Panel>) -> Button {
+    let p = palette(cx);
+    let label = format!("Help for {title}");
+    Button::new(ElementId::Name(format!("help-{title}").into()))
+        .ghost()
+        .icon(Icon::new(assets::IconName::CircleQuestionMark).size(px(tokens::SIZE_ICON)).text_color(p.text_muted))
+        .w(px(32.))
+        .h(px(32.))
+        .tooltip(label.clone())
+        .accessibility_label(label)
+        .on_click(cx.listener(move |panel, _, window, cx| panel.open_topic(topic, window, cx)))
+}
+
+/// The title, with the `?` for its Help topic after it, and `subtitle` under them.
+fn titled(
+    title: impl Into<SharedString>,
+    topic: Option<&'static str>,
+    subtitle: impl IntoElement,
+    cx: &mut Context<Panel>,
+) -> Div {
+    let title = title.into();
+    let help = topic.map(|topic| help_button(&title, topic, cx));
+    let name = text_style(div().font_family(tokens::DISPLAY_FONT), tokens::PAGE_TITLE).child(title);
     div()
         .flex()
         .flex_col()
         .gap(px(tokens::SPACE_4))
-        .child(text_style(div().font_family(tokens::DISPLAY_FONT), tokens::PAGE_TITLE).child(title.into()))
+        .child(div().flex().items_center().gap(px(tokens::SPACE_4)).child(name).children(help))
         .child(subtitle)
 }
 
-pub fn page_title(title: impl Into<SharedString>, subtitle: impl Into<SharedString>, p: Palette) -> Div {
-    titled(title, description(subtitle, p))
+pub fn page_title(
+    title: impl Into<SharedString>,
+    subtitle: impl Into<SharedString>,
+    topic: Option<&'static str>,
+    p: Palette,
+    cx: &mut Context<Panel>,
+) -> Div {
+    titled(title, topic, description(subtitle, p), cx)
 }
 
 /// The second line of anything: 13 px, secondary text.
@@ -158,13 +188,29 @@ pub fn description(text: impl Into<SharedString>, p: Palette) -> Div {
     text_style(div(), tokens::LABEL).text_color(p.text_secondary).child(text.into())
 }
 
-pub fn page_header(title: impl Into<SharedString>, subtitle: impl Into<SharedString>, p: Palette) -> Div {
-    div().flex().items_start().justify_between().gap(px(tokens::SPACE_16)).child(page_title(title, subtitle, p))
+pub fn page_header(
+    title: impl Into<SharedString>,
+    subtitle: impl Into<SharedString>,
+    topic: Option<&'static str>,
+    p: Palette,
+    cx: &mut Context<Panel>,
+) -> Div {
+    div()
+        .flex()
+        .items_start()
+        .justify_between()
+        .gap(px(tokens::SPACE_16))
+        .child(page_title(title, subtitle, topic, p, cx))
 }
 
 /// A header whose subtitle is more than text, such as a button that opens a menu.
-pub fn page_header_with(title: impl Into<SharedString>, subtitle: impl IntoElement) -> Div {
-    div().flex().items_start().justify_between().gap(px(tokens::SPACE_16)).child(titled(title, subtitle))
+pub fn page_header_with(
+    title: impl Into<SharedString>,
+    topic: Option<&'static str>,
+    subtitle: impl IntoElement,
+    cx: &mut Context<Panel>,
+) -> Div {
+    div().flex().items_start().justify_between().gap(px(tokens::SPACE_16)).child(titled(title, topic, subtitle, cx))
 }
 
 /// What a section holds, and whether anything in it shows while only changed settings do.
@@ -432,6 +478,23 @@ pub fn disclosure_row(
     let p = palette(cx);
     let id = id.into();
     row(title, Some(about.into()), chevron(open, p), p)
+        .map(move |element| disclose(element, id, title, open, window, cx, toggle))
+}
+
+/// A disclosure row with `aside`, such as a count, before its chevron.
+pub fn disclosure_row_with(
+    id: impl Into<ElementId>,
+    (title, about): (&'static str, &'static str),
+    aside: impl IntoElement,
+    open: bool,
+    window: &mut Window,
+    cx: &mut App,
+    toggle: impl Fn(&mut Window, &mut App) + 'static,
+) -> Row {
+    let p = palette(cx);
+    let id = id.into();
+    let control = div().flex().items_center().gap(px(tokens::SPACE_8)).child(aside).child(chevron(open, p));
+    row(title, Some(about.into()), control, p)
         .map(move |element| disclose(element, id, title, open, window, cx, toggle))
 }
 

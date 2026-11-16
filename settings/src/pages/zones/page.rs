@@ -63,7 +63,7 @@ fn header(
             view.update(cx, |panel, cx| panel.patch(json!({ "zones": { "enabled": on } }), window, cx))
         }
     });
-    ui::page_header("Zones", subtitle, p).child(
+    ui::page_header("Zones", subtitle, Some("Zones"), p, cx).child(
         div()
             .flex()
             .flex_none()

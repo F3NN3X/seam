@@ -383,8 +383,8 @@ impl Panel {
             }
             Key::Setting(..) => {
                 let entry = found.settings[at - found.actions.len()];
-                if let Some(topic) = entry.topic {
-                    self.help_topic = topic;
+                if entry.page == Page::Help {
+                    self.help_topic = entry.topic;
                 }
                 self.show(entry.page, Some(entry.anchor()), window, cx);
                 // The page it opened keeps focus, not what had it before.

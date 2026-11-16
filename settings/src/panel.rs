@@ -31,7 +31,7 @@ mod command_bar;
 mod connection;
 mod view;
 
-actions!(seam_panel, [FocusSearch, ClearSearch]);
+actions!(seam_panel, [FocusSearch, ClearSearch, GoBack]);
 
 const CONTEXT: &str = "SeamPanel";
 /// How long Undo stays offered after a change.
@@ -136,8 +136,8 @@ pub struct Panel {
     pub status: Option<(String, Vec<RowStatus>)>,
     pub asking_status: Option<String>,
     status_again: bool,
-    /// The topic the Help page shows, as an index into `help::TOPICS`.
-    pub help_topic: usize,
+    /// The topic the Help page shows, as an index into `help::TOPICS`. `None` shows the topic grid.
+    pub help_topic: Option<usize>,
     /// The pickers behind the Custom swatch of the focus and pin colour rows, and a
     /// counter so only the last colour picked in a burst is sent.
     pub focus_picker: Entity<ColorPickerState>,
@@ -175,6 +175,12 @@ pub struct Panel {
     /// The shortcut being recorded, and what stops recording it.
     pub recording: Option<String>,
     pub recorder: Option<Subscription>,
+    /// Keys pressed while recording that something already holds, and what holds them. Not saved.
+    pub clash: Option<pages::shortcuts::Clash>,
+    /// The Shortcuts page lists every shortcut, not only those with keys.
+    pub all_shortcuts: bool,
+    /// The Shortcuts page's filter.
+    pub shortcut_filter: Entity<InputState>,
     /// A shortcut that works but types characters on some keyboards.
     pub hotkey_warning: Option<String>,
     pub toast_generation: u64,
@@ -216,6 +222,7 @@ impl Panel {
         let search = cx.new(|cx| InputState::new(window, cx).placeholder("Search settings and actions"));
         let command_list = cx.new(|cx| CommandState::new(window, cx));
         let name_input = cx.new(|cx| InputState::new(window, cx).placeholder("Workspace name"));
+        let shortcut_filter = cx.new(|cx| InputState::new(window, cx).placeholder("Find a shortcut or a key"));
         let focus_picker = cx.new(|cx| ColorPickerState::new(window, cx));
         let pin_picker = cx.new(|cx| ColorPickerState::new(window, cx));
         let gap =
@@ -236,7 +243,15 @@ impl Panel {
         });
         let mut subscriptions = slider_subscriptions(&edge_resistance, &glue_push, &gap, window, cx);
         subscriptions.extend(pages::zones::margins::subscriptions(&margins, window, cx));
-        subscriptions.extend(field_subscriptions(&name_input, &focus_picker, &pin_picker, &search, window, cx));
+        subscriptions.extend(field_subscriptions(
+            &name_input,
+            &focus_picker,
+            &pin_picker,
+            &search,
+            &shortcut_filter,
+            window,
+            cx,
+        ));
         subscriptions.extend(window_subscriptions(window, cx));
         let focus = cx.focus_handle();
         focus.focus(window, cx);
@@ -272,7 +287,7 @@ impl Panel {
             status: None,
             asking_status: None,
             status_again: false,
-            help_topic: 0,
+            help_topic: None,
             focus_picker,
             pin_picker,
             colour_generation: 0,
@@ -294,6 +309,9 @@ impl Panel {
             query: SharedString::default(),
             recording: None,
             recorder: None,
+            clash: None,
+            all_shortcuts: false,
+            shortcut_filter,
             hotkey_warning: None,
             toast_generation: 0,
             update_file: updates::read(),
@@ -359,10 +377,16 @@ fn field_subscriptions(
     focus_picker: &Entity<ColorPickerState>,
     pin_picker: &Entity<ColorPickerState>,
     search: &Entity<InputState>,
+    shortcut_filter: &Entity<InputState>,
     window: &mut Window,
     cx: &mut Context<Panel>,
 ) -> Vec<Subscription> {
     vec![
+        cx.subscribe_in(shortcut_filter, window, |_, _, event: &InputEvent, _, cx| {
+            if matches!(event, InputEvent::Change) {
+                cx.notify();
+            }
+        }),
         cx.subscribe_in(name_input, window, |this, _, event: &InputEvent, window, cx| {
             if matches!(event, InputEvent::PressEnter { .. } | InputEvent::Blur) {
                 pages::workspaces::finish_naming(this, window, cx);

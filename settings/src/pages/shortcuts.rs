@@ -1,93 +1,19 @@
-//! Global shortcuts, and recording a new one.
+//! Global shortcuts: the ones in use, the ones with no keys yet, and recording a new one.
 
-use crate::pages::workspaces;
 use crate::panel::Panel;
 use crate::theme::palette;
+use crate::theme::tokens::{self, text_style};
 use crate::ui::{self, Row, card, keycaps, row_with, section};
+use catalog::{Group, Item, Section};
+use gpui_kit::component::Icon;
+use gpui_kit::component::input::Input;
 use gpui_kit::*;
-use seam::hotkey;
-use serde_json::{Value, json};
 
-/// The config form of a keystroke, or `None` for a key Seam can't register.
-fn combo_of(k: &Keystroke) -> Option<String> {
-    let key = match k.key.as_str() {
-        "left" | "right" | "up" | "down" | "space" | "tab" | "enter" | "home" | "end" | "delete" | "insert" => {
-            let mut c = k.key.chars();
-            c.next().map(|first| first.to_ascii_uppercase().to_string() + c.as_str())?
-        }
-        "pageup" => "PageUp".to_string(),
-        "pagedown" => "PageDown".to_string(),
-        key => key.to_ascii_uppercase(),
-    };
-    let m = &k.modifiers;
-    let parts = [(m.control, "Ctrl"), (m.shift, "Shift"), (m.alt, "Alt"), (m.platform, "Win")];
-    let held = parts.iter().filter(|(on, _)| *on).map(|(_, name)| name.to_string());
-    let combo = held.chain([key]).collect::<Vec<_>>().join("+");
-    hotkey::parse(&combo).map(|_| combo)
-}
+mod catalog;
+mod clash;
+mod record;
 
-/// The Windows rows, in `Hotkeys::directional` order. Search lists the same titles.
-const WINDOW_TITLES: [&str; 12] = [
-    "Move window left",
-    "Move window right",
-    "Move window up",
-    "Move window down",
-    "Focus window to the left",
-    "Focus window to the right",
-    "Focus window above",
-    "Focus window below",
-    "Swap with window to the left",
-    "Swap with window to the right",
-    "Swap with window above",
-    "Swap with window below",
-];
-
-/// Ctrl+Alt is AltGr on many layouts, so it can eat a typed character.
-fn types_characters(combo: &str) -> bool {
-    let printable = combo.rsplit('+').next().is_some_and(|key| key.chars().count() == 1);
-    combo.contains("Ctrl") && combo.contains("Alt") && !combo.contains("Shift") && printable
-}
-
-pub fn stop_recording(panel: &mut Panel) {
-    panel.recording = None;
-    panel.recorder = None;
-}
-
-fn finish(panel: &mut Panel, action: &str, value: Value, window: &mut Window, cx: &mut Context<Panel>) {
-    stop_recording(panel);
-    panel.hotkey_warning = value.as_str().is_some_and(types_characters).then(|| action.to_string());
-    // A workspace's shortcut is saved with the workspace, the rest with the settings.
-    match action.strip_prefix("workspace:") {
-        Some(id) => workspaces::set_hotkey(panel, id, value.as_str().map(String::from), window, cx),
-        None => panel.patch(json!({ "hotkeys": { action: value } }), window, cx),
-    }
-}
-
-/// Listens ahead of every key binding, so Tab and Ctrl+C can be recorded too.
-fn start_recording(panel: &mut Panel, action: String, cx: &mut Context<Panel>) {
-    let view = cx.entity().downgrade();
-    panel.recording = Some(action.clone());
-    panel.recorder = Some(cx.intercept_keystrokes(move |event, window, cx| {
-        let key = event.keystroke.clone();
-        if ["shift", "control", "alt", "platform", "function"].contains(&key.key.as_str()) {
-            return;
-        }
-        cx.stop_propagation();
-        let _ = view.update(cx, |panel, cx| {
-            match key.key.as_str() {
-                "escape" => stop_recording(panel),
-                "backspace" => finish(panel, &action, Value::Null, window, cx),
-                _ => {
-                    if let Some(combo) = combo_of(&key) {
-                        finish(panel, &action, json!(combo), window, cx);
-                    }
-                }
-            }
-            cx.notify();
-        });
-    }));
-    cx.notify();
-}
+pub use record::{Clash, stop_recording};
 
 /// A line under a row's title, for the shortcuts whose name doesn't say enough.
 fn caption(action: &str) -> Option<&'static str> {
@@ -130,27 +56,24 @@ pub fn shortcut_row(
     cx: &mut Context<Panel>,
 ) -> Row {
     let p = palette(cx);
+    let note = |text: SharedString, color: Hsla| text_style(div(), tokens::LABEL).text_color(color).child(text);
     if panel.recording.as_deref() == Some(action.as_str()) {
-        let field = div()
-            .flex()
-            .items_center()
-            .justify_center()
-            .w(px(160.))
-            .h(px(32.))
-            .border_1()
-            .border_color(p.accent)
-            .rounded(px(8.))
-            .text_size(px(13.))
-            .child("Press the keys…");
+        let clash = panel.clash.as_ref();
+        let keys = match clash {
+            Some(clash) => keycaps(&clash.combo, true, p).into_any_element(),
+            None => {
+                text_style(div(), tokens::LABEL).text_color(p.text_secondary).child("Press keys").into_any_element()
+            }
+        };
+        let said = clash.map(|clash| note(clash.message.clone().into(), p.negative).into_any_element());
         let cancel = ui::secondary(("cancel", slot), "Cancel", cx).on_click(cx.listener(|panel, _, _, cx| {
             stop_recording(panel);
             cx.notify();
         }));
-        return row_with(title, None, div().flex().items_center().gap(px(16.)).child(field).child(cancel));
+        let control = div().flex().items_center().gap(px(tokens::SPACE_16)).child(keys).child(cancel);
+        return row_with(title, said, control).map(|row| div().bg(p.surface_raised).child(row).into_any_element());
     }
     let conflict = panel.state.as_ref().is_some_and(|s| s.hotkey_errors.iter().any(|e| e.action == action));
-    let note =
-        |text: SharedString, color: Hsla| div().text_size(px(13.)).text_color(color).child(text).into_any_element();
     let about = if conflict {
         Some(note("Another app already uses this shortcut. Choose a different one".into(), p.negative))
     } else if panel.hotkey_warning.as_deref() == Some(action.as_str()) {
@@ -161,103 +84,141 @@ pub fn shortcut_row(
     };
     let keys = match combo {
         Some(combo) => keycaps(combo, conflict, p).into_any_element(),
-        None => div().text_size(px(13.)).text_color(p.text_muted).child("Not set").into_any_element(),
+        None => text_style(div(), tokens::LABEL).text_color(p.text_muted).child("Not set").into_any_element(),
     };
     let label = if combo.is_some() { "Change" } else { "Record" };
     let button = ui::secondary(("change", slot), label, cx)
-        .on_click(cx.listener(move |panel, _, _, cx| start_recording(panel, action.clone(), cx)));
-    row_with(title, about, div().flex().items_center().gap(px(16.)).child(keys).child(button))
+        .on_click(cx.listener(move |panel, _, _, cx| record::start_recording(panel, action.clone(), cx)));
+    row_with(
+        title,
+        about.map(IntoElement::into_any_element),
+        div().flex().items_center().gap(px(16.)).child(keys).child(button),
+    )
 }
 
-pub fn render(panel: &mut Panel, _: &mut Window, cx: &mut Context<Panel>) -> impl IntoElement + use<> {
+/// A row for each of `items`.
+fn rows(panel: &Panel, items: &[&Item], cx: &mut Context<Panel>) -> Vec<Row> {
+    let row = |i: &&Item| shortcut_row(panel, i.title.clone(), i.action.clone(), i.combo.as_ref(), (i.slot, None), cx);
+    items.iter().map(row).collect()
+}
+
+/// "In use" and "All" with how many each lists, and the filter.
+fn toolbar(panel: &Panel, (set, total): (usize, usize), window: &mut Window, cx: &mut Context<Panel>) -> Div {
     let p = palette(cx);
-    let keys = panel.config.hotkeys.clone();
-    let mut row = |title: &str, action: &str, combo: Option<&String>, slot: usize| {
-        shortcut_row(panel, title.to_string(), action.to_string(), combo, (slot, None), cx)
-    };
-    let rows = vec![
-        row("Line up screens", "line_up", keys.line_up.as_ref(), 0),
-        row("Pause or resume pointer remap", "pause", keys.pause.as_ref(), 1),
-        row("Pause Seam", "pause_seam", keys.pause_seam.as_ref(), 950),
-    ];
-    let zone_rows = vec![
-        row("Move window to next zone", "next_zone", keys.next_zone.as_ref(), 2),
-        row("Move window to previous zone", "prev_zone", keys.prev_zone.as_ref(), 3),
-    ];
-    // Move, focus and swap in each direction on the desk.
-    let mut window_rows: Vec<Row> = keys
-        .directional()
-        .into_iter()
-        .zip(WINDOW_TITLES)
-        .enumerate()
-        .map(|(i, ((verb, dir, combo), title))| row(title, &format!("{verb}_{dir}"), combo, 5 + i))
-        .collect();
-    // Slots far past the workspace rows, which count up from 20.
-    window_rows.extend([
-        row("Focus on this window", "focus_only", keys.focus_only.as_ref(), 910),
-        row("Spotlight", "spotlight", keys.spotlight.as_ref(), 911),
-        row("Grow window into its neighbour", "grow", keys.grow.as_ref(), 900),
-        row("Shrink window", "shrink", keys.shrink.as_ref(), 901),
-        row("Give window two thirds of its group", "priority", keys.priority.as_ref(), 902),
-        row("Tile this screen's windows", "tile_screen", keys.tile_screen.as_ref(), 920),
-        row("Quick layout", "quick_layout", keys.quick_layout.as_ref(), 930),
-        row("Size menu", "divider_menu", keys.divider_menu.as_ref(), 940),
-        row("Fit group to screen", "fit_group", keys.fit_group.as_ref(), 960),
-        row("Next window in stack", "stack_next", keys.stack_next.as_ref(), 970),
-        row("Previous window in stack", "stack_prev", keys.stack_prev.as_ref(), 971),
-        row("Float or tile this window", "float_tile", keys.float_tile.as_ref(), 980),
-        row("Free all windows", "free_tiling", keys.free_tiling.as_ref(), 981),
-        row("Show overview", "overview", keys.overview.as_ref(), 990),
-        row("Rotate windows", "rotate", keys.rotate.as_ref(), 991),
-        row("Reset sizes", "reset_sizes", keys.reset_sizes.as_ref(), 992),
-        row("Scroll left", "scroll_left", keys.scroll_left.as_ref(), 993),
-        row("Scroll right", "scroll_right", keys.scroll_right.as_ref(), 994),
-        row("Move column left", "column_left", keys.column_left.as_ref(), 995),
-        row("Move column right", "column_right", keys.column_right.as_ref(), 996),
-        row("Column width", "column_width", keys.column_width.as_ref(), 997),
-    ]);
-    window_rows.extend([
-        row("Pin window on top", "pin_top", keys.pin_top.as_ref(), 17),
-        row("Keep window out of workspace switches", "pin_sticky", keys.pin_sticky.as_ref(), 18),
-        row("Release pinned windows", "release_all", keys.release_all.as_ref(), 19),
-    ]);
-    // One row for each workspace on this desk, then the capture shortcut.
-    let on_desk = workspaces::on_desk(panel);
-    let mut workspace_rows: Vec<Row> = on_desk
-        .iter()
-        .enumerate()
-        .map(|(i, ws)| row(&ws.name, &format!("workspace:{}", ws.id), ws.hotkey.as_ref(), 20 + i))
-        .collect();
-    workspace_rows.push(row("Capture current windows", "capture_workspace", keys.capture_workspace.as_ref(), 4));
-    // Slots past the other workspace rows, which stop before 100.
-    for (n, combo) in keys.add_to_workspace().into_iter().enumerate() {
-        workspace_rows.push(row(
-            &format!("Add window to workspace {}", n + 1),
-            &format!("add_to_{}", n + 1),
-            combo,
-            1000 + n,
-        ));
-    }
-    workspace_rows.push(row("Snap back to this workspace", "snap_back", keys.snap_back.as_ref(), 20 + on_desk.len()));
-    workspace_rows.push(row(
-        "Save windows to the active workspace",
-        "quick_save",
-        keys.quick_save.as_ref(),
-        21 + on_desk.len(),
-    ));
-    workspace_rows.push(row(
-        "Switch back to the previous workspace",
-        "switch_back",
-        keys.switch_back.as_ref(),
-        22 + on_desk.len(),
-    ));
-    div()
+    let view = cx.entity();
+    let labels = vec![format!("In use {set}").into(), format!("All {total}").into()];
+    let tabs = ui::choice(
+        "shortcuts-shown",
+        "Shortcuts shown",
+        labels,
+        None,
+        usize::from(panel.all_shortcuts),
+        window,
+        cx,
+        move |i, _, cx| {
+            view.update(cx, |panel, cx| {
+                panel.all_shortcuts = i == 1;
+                cx.notify();
+            })
+        },
+    );
+    let search = Input::new(&panel.shortcut_filter)
+        .appearance(false)
+        .aria_label("Find a shortcut or a key")
+        .prefix(Icon::new(assets::IconName::Search).size(px(tokens::SIZE_ICON)).text_color(p.text_muted));
+    let filter = div()
         .flex()
-        .flex_col()
-        .gap(px(ui::SECTION_GAP))
-        .child(ui::page_title("Shortcuts", "These work anywhere in Windows, even with this window closed", p))
-        .child(section("Displays", card(rows, p), p))
-        .child(section("Windows", card(window_rows, p), p))
-        .child(section("Zones", card(zone_rows, p), p))
-        .child(section("Workspaces", card(workspace_rows, p), p))
+        .items_center()
+        .w(px(280.))
+        .h(px(32.))
+        .px(px(tokens::SPACE_8))
+        .rounded(px(tokens::RADIUS_8))
+        .bg(p.surface_input)
+        .border_1()
+        .border_color(p.hairline)
+        .child(search);
+    div().flex().items_center().gap(px(tokens::SPACE_16)).child(tabs).child(filter)
+}
+
+/// A group of "Not set yet": its name, what's in it, and how many of them have no keys.
+fn group_row(group: Group, count: usize, open: bool, window: &mut Window, cx: &mut Context<Panel>) -> Row {
+    let p = palette(cx);
+    let view = cx.entity();
+    let count = text_style(div(), tokens::LABEL).text_color(p.text_secondary).child(count.to_string());
+    ui::disclosure_row_with(
+        ElementId::Name(format!("shortcut-group-{}", group.title()).into()),
+        (group.title(), group.names()),
+        count,
+        open,
+        window,
+        cx,
+        move |_, cx| {
+            view.update(cx, |panel, cx| {
+                panel.toggle_disclosure(group.title());
+                cx.notify();
+            })
+        },
+    )
+}
+
+/// "Not set yet": the way to give them all keys at once, then a row for each group that opens its shortcuts.
+fn not_set_yet(panel: &mut Panel, items: &[Item], window: &mut Window, cx: &mut Context<Panel>) -> Option<AnyElement> {
+    let p = palette(cx);
+    let unset: Vec<&Item> = items.iter().filter(|i| i.combo.is_none()).collect();
+    if unset.is_empty() {
+        return None;
+    }
+    let suggest = ui::secondary("use-suggested", "Use suggested keys", cx)
+        .on_click(cx.listener(|panel, _, window, cx| record::use_suggested(panel, window, cx)));
+    let about = format!(
+        "Seam picks keys for all {} that don't clash with Windows or your other shortcuts. You can change any of them after",
+        unset.len()
+    );
+    let mut list = vec![ui::row("Use suggested keys", Some(about.into()), suggest, p)];
+    for group in Group::ALL {
+        let inside: Vec<&Item> = unset.iter().copied().filter(|i| i.group == group).collect();
+        if inside.is_empty() {
+            continue;
+        }
+        let titles: Vec<&str> = inside.iter().map(|i| i.title.as_str()).collect();
+        let open = panel.disclosure_open(group.title(), &titles);
+        list.push(group_row(group, inside.len(), open, window, cx));
+        if open {
+            list.extend(rows(panel, &inside, cx));
+        }
+    }
+    Some(section("Not set yet", card(list, p), p))
+}
+
+pub fn render(panel: &mut Panel, window: &mut Window, cx: &mut Context<Panel>) -> impl IntoElement + use<> {
+    let p = palette(cx);
+    let items = catalog::items(panel);
+    let query = panel.shortcut_filter.read(cx).value();
+    let finding = !query.trim().is_empty();
+    // A filter looks in the shortcuts with no keys too.
+    let all = panel.all_shortcuts || finding;
+    let set = items.iter().filter(|i| i.combo.is_some()).count();
+    let header = ui::page_title(
+        "Shortcuts",
+        "These work anywhere in Windows, even with this window closed",
+        Some("Shortcuts"),
+        p,
+        cx,
+    );
+    let toolbar = toolbar(panel, (set, items.len()), window, cx);
+    let shown: Vec<&Item> = items.iter().filter(|i| i.matches(&query) && (all || i.combo.is_some())).collect();
+    let mut page = div().flex().flex_col().gap(px(ui::SECTION_GAP)).child(header).child(toolbar);
+    for which in Section::ALL {
+        let of: Vec<&Item> = shown.iter().copied().filter(|i| i.section == which).collect();
+        if !of.is_empty() {
+            page = page.child(section(which.title(), card(rows(panel, &of, cx), p), p));
+        }
+    }
+    if finding && shown.is_empty() {
+        page = page.child(ui::description("No shortcut matches", p));
+    }
+    if !all {
+        page = page.children(not_set_yet(panel, &items, window, cx));
+    }
+    page
 }

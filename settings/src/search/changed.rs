@@ -84,7 +84,7 @@ const ROWS: &[(Page, &str, &[&str])] = &[
     (Page::Shortcuts, "Save windows to the active workspace", &["/hotkeys/quick_save"]),
     (Page::General, "Offer to line up new screens", &["/ask_new_desks"]),
     (Page::General, "Who reopens the apps", &["/restore_apps"]),
-    (Page::General, "Left-click", &["/tray_click"]),
+    (Page::General, "Clicking the tray icon", &["/tray_click"]),
     (Page::Windows, "Step aside for games and full-screen apps", &["/step_aside_fullscreen"]),
     (Page::General, "Let other apps control Seam", &["/api/enabled"]),
     (Page::General, "Let assistants use Seam (MCP)", &["/api/mcp"]),

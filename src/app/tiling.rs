@@ -68,6 +68,10 @@ pub(super) fn tiling_events(app: &mut App) -> bool {
     if let Some(why) = snap::take_tiling_refused() {
         notify(app, "Float or tile this window", &format!("That window can't be tiled: {why}"), BalloonAction::None);
     }
+    if snap::take_tiling_capped() {
+        let body = format!("The strip holds {} columns already, so the window floats", seam::strip::MAX_COLUMNS);
+        notify(app, "Scrolling", &body, BalloonAction::None);
+    }
     if !app.tiling_wait.is_empty() {
         let looked = crate::tiler::take_looked();
         match snap::tiling_desktop() {
@@ -136,10 +140,16 @@ pub(super) fn free_tiling(app: &mut App, number: Option<u32>, reply: Option<Send
         }
         return answer(reply, refused(why));
     }
-    let freed = snap::tiling_free(&screen);
+    let (freed, undo) = snap::tiling_free(&screen);
     if reply.is_none() {
         let windows = if freed == 1 { "window" } else { "windows" };
-        notify(app, "Free all windows", &format!("{freed} {windows} on screen {n} went back"), BalloonAction::None);
+        let body = format!("{freed} {windows} on screen {n} went back");
+        app.free_undo =
+            undo.map(|undo| FreeNote { sig: app.sig.clone(), undo, until: Instant::now() + QUICK_UNDO_FOR });
+        match app.free_undo {
+            Some(_) => notify(app, "Free all windows", &format!("{body}. Click to undo"), BalloonAction::UndoFree),
+            None => notify(app, "Free all windows", &body, BalloonAction::None),
+        };
     }
     let (tx, rx) = channel();
     set_tiling(app, Some(n as u32), Some(false), None, Some(tx));
@@ -149,6 +159,42 @@ pub(super) fn free_tiling(app: &mut App, number: Option<u32>, reply: Option<Send
         _ => Ok(json!({ "ok": true, "freed": freed })),
     };
     answer(reply, result);
+}
+
+/// Free all's Undo, while its notice may be clicked.
+pub(super) struct FreeNote {
+    sig: String,
+    undo: snap::FreeUndo,
+    until: Instant,
+}
+
+/// The Free all notice was clicked within 8 s: tiling is on again for that screen and
+/// desktop, and the windows still where Free all left them take their tiles back. Those
+/// moved by hand since stay where they are.
+pub(super) fn undo_free(app: &mut App) {
+    let Some(FreeNote { sig, undo, until }) = app.free_undo.take() else { return };
+    if Instant::now() > until || sig != app.sig {
+        log::info!("free all: too late to undo");
+        return;
+    }
+    if !app.cfg.zones.enabled || !snap::tiling_can_unfree(&undo) {
+        log::info!("free all: zones are off, or the desktop, the family or the screen's tiling changed since");
+        notify(app, "Free all windows", "Nothing to undo: things changed since", BalloonAction::None);
+        return;
+    }
+    let (screen, desktop) = (undo.screen().to_string(), undo.desktop().to_string());
+    let was_on = app.cfg.desks.get(&app.sig).and_then(|d| d.tiling.get(&screen)).is_some_and(|t| t.on(&desktop));
+    let wait = |on| TilingWait { screen: screen.clone(), on: Some(on), family: None, reply: None };
+    apply(app, wait(true), &desktop);
+    let n = snap::tiling_unfree(undo);
+    log::info!("free all: undone, {n} windows tiled again");
+    if n == 0 {
+        // Nothing came back, so the setting goes back to how Undo found it.
+        if !was_on {
+            apply(app, wait(false), &desktop);
+        }
+        notify(app, "Free all windows", "Nothing to undo: the windows moved since", BalloonAction::None);
+    }
 }
 
 /// Scroll left or right on a Scrolling screen, from the keys or `tiling.scroll`: the

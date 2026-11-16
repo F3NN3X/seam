@@ -14,6 +14,9 @@ const SCREEN: u8 = 6;
 /// How far outside the desk a parked window waits, in pixels, so no shadow or resize
 /// border of it touches a screen.
 pub const PARK_PX: i32 = 200;
+/// The most columns a strip holds. A window past it floats, so no app that opens window
+/// after window parks them without end.
+pub const MAX_COLUMNS: usize = 32;
 
 /// A column's width, as a share of the screen.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -169,6 +172,11 @@ pub fn park(own: Rect, screens: &[Rect], size: (i32, i32), left: bool) -> Rect {
 impl Strip {
     pub fn is_empty(&self) -> bool {
         self.cols.is_empty()
+    }
+
+    /// Whether the strip holds `MAX_COLUMNS` already, and takes no new column.
+    pub fn is_full(&self) -> bool {
+        self.cols.len() >= MAX_COLUMNS
     }
 
     pub fn has(&self, hwnd: isize) -> bool {
@@ -564,6 +572,14 @@ mod tests {
         assert_eq!((shown(&mid), mid.focus), (vec![1, 9], Some(9)));
         let rects = two.tree().rects(AREA, 0);
         assert_eq!(rects, vec![Rect { x: 0, y: 0, w: 960, h: 1080 }, Rect { x: 960, y: 0, w: 960, h: 1080 }]);
+    }
+
+    #[test]
+    fn a_strip_takes_no_column_past_the_cap() {
+        assert!(!grow(MAX_COLUMNS as isize - 1).is_full());
+        assert!(grow(MAX_COLUMNS as isize).is_full());
+        // A column that goes makes room again.
+        assert!(!grow(MAX_COLUMNS as isize).remove(1).is_full());
     }
 
     #[test]

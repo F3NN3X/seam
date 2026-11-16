@@ -55,6 +55,8 @@ pub enum Event {
     Desktop(Option<String>),
     /// A tiled window took the focus, which scrolls a Scrolling screen to show it.
     Focused(isize),
+    /// A virtual desktop whose trees are stale (`tiling::stale`): it was deleted.
+    Stale(String),
 }
 
 enum Job {
@@ -72,6 +74,8 @@ enum Job {
     Retile,
     /// Say which desktop is in front, even when it is the one said last.
     Look,
+    /// Whether these desktops, each with the windows of its trees, were deleted.
+    Stale(Vec<(String, Vec<isize>)>),
 }
 
 static OWNER: AtomicIsize = AtomicIsize::new(0);
@@ -81,13 +85,15 @@ static ON: AtomicBool = AtomicBool::new(false);
 static EXCLUDE: Mutex<Vec<String>> = Mutex::new(Vec::new());
 /// Windows in a tree, so the seam-wm thread passes over every other close and minimize.
 static TILED: Mutex<Option<HashSet<isize>>> = Mutex::new(None);
+/// Of those, the windows resting minimized, which a restore tiles again whatever their stamp.
+static RESTING: Mutex<Option<HashSet<isize>>> = Mutex::new(None);
 static EVENTS: Mutex<Vec<Event>> = Mutex::new(Vec::new());
 /// The shell's virtual desktop manager was there when the worker started.
 static DESKTOPS: AtomicBool = AtomicBool::new(false);
 /// When the last workspace switch ended, so a late minimize of its own isn't taken for mine.
 static SWITCH_END: Mutex<Option<Instant>> = Mutex::new(None);
 /// How long after a switch its minimizes still count as its own.
-const SWITCH_GRACE: std::time::Duration = std::time::Duration::from_millis(500);
+pub const SWITCH_GRACE: std::time::Duration = std::time::Duration::from_millis(500);
 /// A `look` was answered since the last `take_looked`.
 static LOOKED: AtomicBool = AtomicBool::new(false);
 static WORKER: OnceLock<Option<Sender<Job>>> = OnceLock::new();
@@ -100,8 +106,13 @@ pub fn configure(owner: isize, exclude: Vec<String>, on: bool) {
 }
 
 /// The windows in a tree now, and those resting minimized. Called by the snapping on the tray thread.
-pub fn set_tiled(list: HashSet<isize>) {
+pub fn set_tiled(list: HashSet<isize>, resting: HashSet<isize>) {
     *TILED.lock().unwrap_or_else(|e| e.into_inner()) = Some(list);
+    *RESTING.lock().unwrap_or_else(|e| e.into_inner()) = Some(resting);
+}
+
+fn is_resting(hwnd: isize) -> bool {
+    RESTING.lock().unwrap_or_else(|e| e.into_inner()).as_ref().is_some_and(|set| set.contains(&hwnd))
 }
 
 /// Whether a window is tiled. Cheap, for the seam-wm thread's every close and minimize.
@@ -142,6 +153,14 @@ pub fn foreground(hwnd: isize) {
 /// Tiling turned on: tile again what a tray that ran before had tiled, and learn the desktop in front.
 pub fn retile() {
     let _ = send(Job::Retile);
+}
+
+/// The desktop in front changed: look whether the other desktops with trees, each with
+/// the windows of its trees, are still there. From the tray thread.
+pub fn check_stale(desktops: Vec<(String, Vec<isize>)>) {
+    if !desktops.is_empty() {
+        let _ = send(Job::Stale(desktops));
+    }
 }
 
 /// A workspace switch ended. From the tray thread.
@@ -280,6 +299,21 @@ fn work(jobs: Receiver<Job>) {
                     LOOKED.store(true, Ordering::SeqCst);
                     said = true;
                 }
+                Job::Stale(list) => {
+                    for (desktop, windows) in list {
+                        // A window the shell won't place, as one on every desktop, counts as still there.
+                        let found = |k: &isize| {
+                            let h = hwnd_of(*k);
+                            unsafe { IsWindow(Some(h)) }
+                                .as_bool()
+                                .then(|| desktops.of(h).unwrap_or_else(|| desktop.clone()))
+                        };
+                        let found: Vec<Option<String>> = windows.iter().map(found).collect();
+                        if seam::tiling::stale(&desktop, &found) {
+                            events.push(Event::Stale(desktop));
+                        }
+                    }
+                }
                 Job::Retile => {
                     events.extend(stamped(&mut desktops).into_iter().map(Event::Arrived));
                     front = desktops.front(unsafe { GetForegroundWindow() });
@@ -322,8 +356,11 @@ fn arrival(desktops: &mut Desktops, hwnd: isize, restored: bool, asked: bool) ->
     if winutil::is_floated(h) && !asked {
         return Err("floated by hand");
     }
-    // A restore too: a window a workspace switch placed is the workspace's (D564).
-    if winutil::ws_stamp(h).is_some() && !asked {
+    // A restore too: a window a workspace switch placed is the workspace's (D564). One
+    // tiling held before it was minimized is tiling's still, captured or not.
+    if winutil::ws_stamp(h).is_some()
+        && !seam::tiling::stamped_may_tile(asked, restored, is_resting(hwnd), switch_settling())
+    {
         return Err("placed by a workspace or an app rule");
     }
     if winutil::is_maximized(h) || winutil::is_minimized(h) {

@@ -38,6 +38,7 @@ pub fn tiling_unpark_for_quit(until: Instant) {
             e.unpark(t, Some(until), &[], &screens);
         }
         e.tiling.trees = trees;
+        e.window_pump();
     });
 }
 
@@ -380,22 +381,24 @@ impl Engine {
         strip::home(&[before, winutil::park_stamp(h)], screens, own, now.or(before), size)
     }
 
-    /// The DPI of the screen a place is on, for its move.
-    fn dpi_at(&self, r: Rect) -> u32 {
-        let on = self.screens.iter().find(|s| s.bounds.contains(r.x + r.w / 2, r.y + r.h / 2));
-        on.and_then(|s| work_area(s.bounds)).map_or(96, |(_, dpi)| dpi)
+    /// The DPI of the screen of `screens` a place is on, for its move: the list the move
+    /// lands on, read fresh on a display change, so the move never takes the stepped path
+    /// for an old screen's DPI.
+    fn dpi_at(r: Rect, screens: &[(Rect, Rect)]) -> u32 {
+        let on = screens.iter().find(|(bounds, _)| bounds.contains(r.x + r.w / 2, r.y + r.h / 2));
+        on.and_then(|(bounds, _)| work_area(*bounds)).map_or(96, |(_, dpi)| dpi)
     }
 
     /// Moves queued or under way for these windows are dropped, so a park posted a moment
     /// ago can't send a window back off the screen after it came back. The queue goes on
-    /// with the next window's move.
+    /// with the next window's move once the caller has its trees in place (`window_pump`),
+    /// so no queued move runs against trees taken out.
     fn cancel_moves(&mut self, keys: &[isize]) {
         self.queued.retain(|p| !keys.contains(&p.hwnd));
         if let Some(p) = self.pending.take_if(|p| keys.contains(&p.hwnd)) {
             unsafe {
                 let _ = KillTimer(None, p.timer);
             }
-            self.window_pump();
         }
     }
 
@@ -416,7 +419,7 @@ impl Engine {
             log::info!("scrolling: a tiled window was off every screen after a display change, so it comes back");
             winutil::set_park_stamp(h, None);
             self.cancel_moves(&[key]);
-            let dpi = self.dpi_at(target);
+            let dpi = Self::dpi_at(target, screens);
             self.land_now(Placement { hwnd: key, target, zone: None, dpi, maximize: false });
         }
     }
@@ -439,6 +442,7 @@ impl Engine {
             log::info!("scrolling: a parked window left the strip off every screen, so it comes back onto one");
             self.cancel_moves(&[key]);
             self.land_now(Placement { hwnd: key, target, zone: None, dpi, maximize: false });
+            self.window_pump();
         }
     }
 
@@ -467,6 +471,7 @@ impl Engine {
             self.land_lost(t, &screens);
         }
         self.tiling.trees = trees;
+        self.window_pump();
         self.tiled_sync();
     }
 
@@ -484,6 +489,7 @@ impl Engine {
                 t.dirty = true;
             }
         }
+        self.window_pump();
     }
 
     /// A window off every screen that tiling knows, which nothing tiles now: it comes
@@ -506,8 +512,8 @@ impl Engine {
 
     /// Every parked window of `t` but `skip` comes back onto one of `screens`, by `home_on`,
     /// and any move still queued for it is dropped. A minimized one is given that place to
-    /// restore to without showing it: at once when Seam quits, until `until`, else on a
-    /// thread of its own, since that waits on its app.
+    /// restore to without showing it, on a thread of its own, since that waits on its app.
+    /// When Seam quits, the quit waits for that thread until `until`, and no longer.
     pub(super) fn unpark(&mut self, t: &Tiled, until: Option<Instant>, skip: &[isize], screens: &[(Rect, Rect)]) {
         let keys: Vec<isize> = t.offscreen.keys().copied().filter(|k| !skip.contains(k)).collect();
         if keys.is_empty() {
@@ -521,7 +527,7 @@ impl Engine {
                 continue;
             }
             let Some(target) = self.home_on(t, key, screens) else { continue };
-            let dpi = self.dpi_at(target);
+            let dpi = Self::dpi_at(target, screens);
             winutil::set_park_stamp(h, None);
             if winutil::is_minimized(h) {
                 minimized.push((key, target, dpi));
@@ -530,29 +536,36 @@ impl Engine {
             }
         }
         log::info!("scrolling: {} parked windows come back onto the screen", keys.len());
-        if let Some(until) = until {
-            // The quit's one second, shared with the pins and Free all: a slow app never holds it up.
+        if minimized.is_empty() {
+            return;
+        }
+        let (done, finished) = std::sync::mpsc::channel();
+        let spawned = std::thread::Builder::new().name("seam-unpark".into()).spawn(move || {
             for (key, target, dpi) in minimized {
-                if Instant::now() >= until {
+                if until.is_some_and(|u| Instant::now() >= u) {
                     log::info!("scrolling: out of time on quit, a minimized parked window keeps its place");
                     break;
                 }
-                if !winutil::is_hung(hwnd_of(key)) {
-                    winutil::place_minimized(hwnd_of(key), target, dpi);
+                let h = hwnd_of(key);
+                if !winutil::is_hung(h) {
+                    winutil::place_minimized(h, target, dpi);
                 }
             }
-        } else if !minimized.is_empty() {
-            let spawned = std::thread::Builder::new().name("seam-unpark".into()).spawn(move || {
-                for (key, target, dpi) in minimized {
-                    let h = hwnd_of(key);
-                    if !winutil::is_hung(h) {
-                        winutil::place_minimized(h, target, dpi);
-                    }
+            let _ = done.send(());
+        });
+        match (spawned, until) {
+            (Err(_), _) => log::info!("scrolling: couldn't start the thread for minimized parked windows"),
+            // The quit's one second, shared with the pins and Free all: a slow app, hung or not,
+            // never holds it up, as its call waits on the worker and the quit doesn't.
+            (Ok(_), Some(until)) => {
+                let waited = finished.recv_timeout(until.saturating_duration_since(Instant::now()));
+                if waited == Err(std::sync::mpsc::RecvTimeoutError::Timeout) {
+                    log::info!(
+                        "scrolling: out of time on quit, a slow app's minimized parked window may keep its place"
+                    );
                 }
-            });
-            if spawned.is_err() {
-                log::info!("scrolling: couldn't start the thread for minimized parked windows");
             }
+            (Ok(_), None) => {}
         }
     }
 

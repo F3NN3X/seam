@@ -15,17 +15,24 @@ use super::*;
 use crate::tiler::{Arrival, Event};
 use seam::config::TileScreen;
 use seam::strip::{Strip, Width};
-use seam::tiling::{self, Family, GAP_AFTER, Put, Seen, Tree};
+use seam::tiling::{self, Family, Put, Seen, Tree};
 use seam::zones::{LeafTag, Node, Template};
 use std::collections::BTreeMap;
 use std::time::Duration;
 
+mod arrive;
+mod gaps;
 mod hand;
 mod scroll;
 mod turn;
 
+pub use gaps::tiling_switch_ended;
+pub use hand::FreeUndo;
 pub use scroll::{tiling_column, tiling_display_changed, tiling_scroll, tiling_unpark_for_quit, tiling_unstrand};
 pub use turn::Turned;
+
+/// How long Undo of a split waits for its resync before the splits it keeps are dropped.
+const UNSPLIT_FOR: Duration = Duration::from_secs(10);
 
 /// One screen's tree on one virtual desktop.
 pub(super) struct Tiled {
@@ -74,6 +81,8 @@ pub(super) struct Tiling {
     looked: bool,
     /// Wakes to close the tiles minimized windows left (`GAP_AFTER`).
     gap_timer: usize,
+    /// Wakes once a switch's grace is over, for its late minimizes (D564).
+    grace_timer: usize,
     /// Arrivals and restores that came during a workspace switch, taken once it ends.
     paused: Vec<Arrival>,
     /// Why the Float or tile key's window wasn't tiled, for the tray's notice.
@@ -85,6 +94,11 @@ pub(super) struct Tiling {
     focus_wait: Option<isize>,
     /// Seam is paused, stepped aside or has zones off, so no window stays parked.
     stood_down: bool,
+    /// A screen whose split was undone, its splits before it, and when, for the next
+    /// resync within `UNSPLIT_FOR`.
+    unsplit: Option<(String, Node, Instant)>,
+    /// A drop past the strip's column cap floated a window, for the tray's notice.
+    capped: bool,
 }
 
 /// A tiled screen as the state shows it.
@@ -109,6 +123,7 @@ pub fn tiling_events() -> bool {
                 Event::Desktop(id) => e.tiled_desktop(id),
                 Event::Focused(hwnd) => e.tiled_focused(hwnd),
                 Event::Refused(why) => e.tiling.refused = Some(why.to_string()),
+                Event::Stale(desktop) => e.tiled_end_desktop(&desktop),
             }
         }
         if log::enabled() {
@@ -137,9 +152,23 @@ pub fn tiled_dragged(screen: &str, tree: &Node) -> bool {
 }
 
 /// Free all windows: tiling ends on the screen for the desktop in front, and every
-/// window it tiled goes back to where it was before. Returns how many.
-pub fn tiling_free(screen: &str) -> usize {
-    with_engine(|e| e.tiling_free(screen)).unwrap_or(0)
+/// window it tiled goes back to where it was before. Returns how many, and what its Undo
+/// needs.
+pub fn tiling_free(screen: &str) -> (usize, Option<FreeUndo>) {
+    with_engine(|e| e.tiling_free(screen)).unwrap_or((0, None))
+}
+
+/// Whether Undo of Free all can still tile its windows: its desktop is in front, the
+/// screen's family is the same, and nothing is tiled there since. Asked before tiling is
+/// turned on for it.
+pub fn tiling_can_unfree(undo: &FreeUndo) -> bool {
+    with_engine(|e| e.free_undoable(undo)).unwrap_or(false)
+}
+
+/// The Undo of Free all itself: the windows still where it left them take their tiles
+/// back. Returns how many.
+pub fn tiling_unfree(undo: FreeUndo) -> usize {
+    with_engine(|e| e.tiling_unfree(undo)).unwrap_or(0)
 }
 
 /// Rotate windows on a tiled screen: its tiles' windows step to the next tile in zone
@@ -157,6 +186,17 @@ pub fn tiling_reset(screen: &str) -> Result<Turned, String> {
 /// False when they aren't the evened ones any more, and nothing changed.
 pub fn tiling_restore(screen: &str, before: Node, after: Node) -> bool {
     with_engine(|e| e.tiled_restore(screen, before, after)).unwrap_or(false)
+}
+
+/// Undo of a split on a tiled screen: its tree takes back the splits it had before, once
+/// Undo's windows land (`tiling_resync`). False when they aren't the split's any more.
+pub fn tiling_unsplit(screen: &str, before: Node, after: &Node) -> bool {
+    with_engine(|e| e.tiled_unsplit(screen, before, after)).unwrap_or(false)
+}
+
+/// The tiled screens follow where the windows are, now or once the moves under way land.
+pub fn tiling_resync() {
+    with_engine(|e| e.tiled_resync(None));
 }
 
 /// Seam is quitting and the user wants the windows back: every tiled screen on every virtual
@@ -194,19 +234,9 @@ pub fn tiling_float(hwnd: HWND) -> Result<bool, String> {
     with_engine(|e| e.tiling_float(hwnd.0 as isize)).unwrap_or_else(|| Err("Seam is busy, try again".into()))
 }
 
-/// A workspace switch ended: the arrivals kept meanwhile are taken, except the windows
-/// the switch placed (D564).
-pub fn tiling_switch_ended() {
-    crate::tiler::switch_ended();
-    with_engine(|e| {
-        e.tiled_rest_after_switch();
-        let kept = std::mem::take(&mut e.tiling.paused).into_iter().map(|a| (a.hwnd, a)).collect();
-        let placed = |h: isize| winutil::ws_stamp(hwnd_of(h)).is_some();
-        for (_, a) in tiling::after_pause(kept, placed) {
-            e.tile_arrived(a);
-        }
-        e.scroll_focus_waited();
-    });
+/// Whether a drop past a strip's column cap floated a window since this was last asked.
+pub fn take_tiling_capped() -> bool {
+    with_engine(|e| std::mem::take(&mut e.tiling.capped)).unwrap_or(false)
 }
 
 /// Why the Float or tile key's window wasn't tiled, once.
@@ -231,21 +261,6 @@ pub fn tiled() -> Vec<TiledInfo> {
         here.map(|t| TiledInfo { screen: t.screen.clone(), windows: t.all().len() }).collect()
     };
     with_engine(|e| info(e)).unwrap_or_default()
-}
-
-/// The timer repeats until the engine is free to take it, so a busy moment drops nothing.
-unsafe extern "system" fn on_gaps(_: HWND, _: u32, id: usize, _: u32) {
-    let taken = with_engine(|e| {
-        if e.tiling.gap_timer == id {
-            e.tiling.gap_timer = 0;
-            e.tiled_gaps();
-        }
-    });
-    if taken.is_some() {
-        unsafe {
-            let _ = KillTimer(None, id);
-        }
-    }
 }
 
 impl Tiled {
@@ -330,11 +345,10 @@ impl Engine {
             self.sync_overlay();
         }
         self.sync_dividers();
-        let tiled = |t: &Tiled| {
-            let resting = t.resting.iter().map(|(h, ..)| *h);
-            t.all().into_iter().chain(resting).collect::<Vec<_>>()
-        };
-        crate::tiler::set_tiled(self.tiling.trees.iter().flat_map(tiled).collect());
+        let resting: HashSet<isize> =
+            self.tiling.trees.iter().flat_map(|t| t.resting.iter().map(|(h, ..)| *h)).collect();
+        let tiled = self.tiling.trees.iter().flat_map(Tiled::all).chain(resting.iter().copied()).collect();
+        crate::tiler::set_tiled(tiled, resting);
     }
 
     /// This desk's tiling settings, from `update`. Trees whose screen is off on their
@@ -424,6 +438,7 @@ impl Engine {
     fn tiled_release(&mut self, t: Tiled) {
         let screens = self.screens_now();
         self.unpark(&t, None, &[], &screens);
+        self.tiling.unsplit.take_if(|(s, ..)| *s == t.screen);
         for k in t.all() {
             winutil::set_tile_stamp(hwnd_of(k), 0);
             if t.desktop == self.tiling.desktop {
@@ -433,6 +448,8 @@ impl Engine {
                 winutil::clear_zone_stamp(hwnd_of(k));
             }
         }
+        // The unpark dropped moves for its windows; the rest go on.
+        self.window_pump();
     }
 
     /// The tree of a screen on a desktop, made when there is none.
@@ -479,256 +496,6 @@ impl Engine {
         let (work, dpi) = work_area(s.bounds)?;
         let gap = (self.settings.gap.min(MAX_GAP) as f32 * dpi as f32 / 96.0).round() as i32;
         Some((work, dpi, gap))
-    }
-
-    /// A window opened, was restored or asked for: it takes back the tile it left by
-    /// minimizing, or a share of the largest tile, or a stack in it when it can't shrink
-    /// to that. Waits for a drag to end; never during a workspace switch (D564).
-    fn tile_arrived(&mut self, a: Arrival) {
-        if !self.active() {
-            return;
-        }
-        // Kept for the end of the switch, as for a drag.
-        if crate::switcher::switching() {
-            self.tiling.paused.push(a);
-            return;
-        }
-        if self.drag.is_some() {
-            self.tiling.waiting.push(a);
-            return;
-        }
-        // It may have closed, minimized or maximized since the worker looked.
-        let h = hwnd_of(a.hwnd);
-        if !unsafe { IsWindow(Some(h)) }.as_bool() || winutil::is_minimized(h) || winutil::is_maximized(h) {
-            return;
-        }
-        // It just showed, so its desktop is the one in front.
-        if !a.desktop.is_empty() {
-            self.tiled_desktop(Some(a.desktop.clone()));
-        } else if !crate::tiler::has_desktops() {
-            self.tiled_desktop(Some(String::new()));
-        }
-        let (x, y) = (a.frame.x + a.frame.w / 2, a.frame.y + a.frame.h / 2);
-        let on = self.screens.iter().find(|s| s.bounds.contains(x, y)).map(|s| s.id.clone());
-        // A parked window that comes back off every screen, restored or tiled again after a
-        // crash, belongs to the screen it is nearest, as Windows has it.
-        let known = a.order > 0 || self.tiling.trees.iter().any(|t| t.resting.iter().any(|(k, ..)| *k == a.hwnd));
-        let Some(screen) = on.or_else(|| self.parked_home(a.frame).filter(|_| known)) else { return };
-        if !self.tiling_on(&screen) {
-            if known {
-                self.rescue(a.hwnd, &screen, a.frame);
-            }
-            return;
-        }
-        if self.tree_of(a.hwnd).is_some() {
-            // Restored where it still has its tile, as after a switch: nothing to do.
-            if !a.restored {
-                // The desk gate: a window is never placed twice.
-                log::info!("tiling desk gate: placed twice refused, the window is tiled already");
-            }
-            return;
-        }
-        let desktop = self.tiling.desktop.clone();
-        let i = self.tree_index(&screen, &desktop);
-        let rested = self.tiling.trees.iter().enumerate().find_map(|(t, x)| {
-            let (_, zone, ..) = x.resting.iter().find(|(k, ..)| *k == a.hwnd)?;
-            Some((t, *zone))
-        });
-        if a.restored && rested.is_none() {
-            return;
-        }
-        for t in &mut self.tiling.trees {
-            t.resting.retain(|(k, ..)| *k != a.hwnd);
-            t.offscreen.remove(&a.hwnd);
-        }
-        let Some((work, _, gap)) = self.tile_area(&screen) else { return };
-        self.tiled_check(i);
-        let tree = &self.tiling.trees[i].tree;
-        let back = rested.filter(|(t, _)| *t == i).and_then(|(_, zone)| tree.back_to(zone, a.hwnd, a.min));
-        let placed = match (back, &self.tiling.trees[i].strip) {
-            // A new column after the focused one, wide enough for it, and in view.
-            (_, Some(strip)) => {
-                let strip = strip.insert(a.hwnd, a.min, Width::fitting(a.min.0, work.w));
-                let tree = strip.tree();
-                self.tiling.trees[i].strip = Some(strip);
-                Some((tree.clone(), Put::Tile(tree.zone_of(a.hwnd).unwrap_or(0))))
-            }
-            (Some(tree), None) => Some((tree.clone(), Put::Tile(tree.zone_of(a.hwnd).unwrap_or(0)))),
-            (None, None) => tree.insert(work, gap, a.hwnd, a.min),
-        };
-        let Some((tree, put)) = placed else { return };
-        let order = if a.order > 0 { a.order } else { self.tiling.seq + 1 };
-        self.tiling.seq = self.tiling.seq.max(order);
-        winutil::set_tile_stamp(h, order);
-        winutil::set_floated(h, false);
-        // Its place before tiling: a parked window's stamp keeps it, and a frame off every
-        // screen (a window a crash left parked) is never one.
-        let screens: Vec<Rect> = self.screens.iter().map(|s| s.bounds).collect();
-        let before = winutil::park_stamp(h).or(Some(a.frame).filter(|f| !seam::strip::stranded(&screens, *f)));
-        let t = &mut self.tiling.trees[i];
-        if let Some(before) = before {
-            t.before.entry(a.hwnd).or_insert(before);
-        }
-        if a.restored {
-            t.back = Some(Instant::now());
-        }
-        let app = if log::enabled() { winutil::exe_name(h).unwrap_or_default() } else { String::new() };
-        match put {
-            Put::Tile(zone) => {
-                log::info!("tiling: {app} takes zone {} of {}", zone + 1, tree.tiles.len());
-                self.tiling.trees[i].tree = tree;
-                self.tiled_apply(i);
-            }
-            Put::Stack(onto) => {
-                log::info!("tiling: {app} can't shrink to a share, so it joins a stack");
-                self.tiled_stack(i, a.hwnd, a.min, onto);
-            }
-        }
-        // A window back from minimize all: the tiles of those still minimized close soon.
-        self.tiled_arm_gaps();
-    }
-
-    /// A tiled window closed or was minimized: another window of its stack takes its
-    /// tile, or its neighbours fill the gap and a stacked window that fits now leaves
-    /// its stack. A minimized window's tile waits for it a moment first (`GAP_AFTER`).
-    fn tile_left(&mut self, key: isize, minimized: bool) {
-        if !minimized {
-            for t in &mut self.tiling.trees {
-                t.resting.retain(|(k, ..)| *k != key);
-                t.before.remove(&key);
-            }
-        }
-        let Some(i) = self.tree_of(key) else { return };
-        if !minimized {
-            winutil::set_tile_stamp(hwnd_of(key), 0);
-        }
-        if self.tiling.trees[i].strip.is_some() {
-            return self.scroll_left(i, key, minimized);
-        }
-        let t = &mut self.tiling.trees[i];
-        if let Some(at) = t.overflow.iter().position(|(k, _)| *k == key) {
-            t.overflow.remove(at);
-            self.tiled_sync();
-            return;
-        }
-        if self.here(i) {
-            self.snapped.remove(&key);
-        }
-        if self.tiled_heir(i, key) {
-            self.tiled_sync();
-            return;
-        }
-        let t = &mut self.tiling.trees[i];
-        if minimized && let (Some(zone), Some(tree)) = (t.tree.zone_of(key), t.tree.vacate(key)) {
-            t.tree = tree;
-            t.resting.push((key, zone, Instant::now(), true));
-            self.tiled_arm_gaps();
-            self.tiled_sync();
-            return;
-        }
-        self.tiled_check(i);
-        if !self.tiling.trees[i].remove(key) {
-            return;
-        }
-        self.tiled_unstack(i);
-        self.tiled_apply(i);
-    }
-
-    /// `key` leaves its tile, and a window stacked in it takes the tile instead: its
-    /// stack's next window, or one tiling stacked there. Whether one did.
-    fn tiled_heir(&mut self, i: usize, key: isize) -> bool {
-        let Some(zone) = self.tiling.trees[i].tree.zone_of(key) else { return false };
-        let Some((heir, min)) = self.heir_of(i, key) else { return false };
-        let t = &mut self.tiling.trees[i];
-        t.overflow.retain(|(k, _)| *k != heir);
-        t.tree.tiles[zone] = tiling::Tile { hwnd: Some(heir), min };
-        true
-    }
-
-    /// The window stacked in `key`'s tile that would take it, and its smallest size.
-    fn heir_of(&self, i: usize, key: isize) -> Option<(isize, tiling::Min)> {
-        let zone = self.tiling.trees[i].tree.zone_of(key)?;
-        let live = |m: &isize| {
-            *m != key && unsafe { IsWindow(Some(hwnd_of(*m))) }.as_bool() && !winutil::is_minimized(hwnd_of(*m))
-        };
-        let t = &self.tiling.trees[i];
-        let same_zone = |k: &isize| self.snapped.get(k).is_some_and(|s| s.screen == t.screen && s.from == zone);
-        let stacked: Vec<isize> = t.overflow.iter().map(|(k, _)| *k).filter(same_zone).collect();
-        let heir = self.stacks.of(key).and_then(|s| s.members.iter().copied().find(live));
-        let heir = heir.or_else(|| stacked.into_iter().find(live))?;
-        Some((heir, t.overflow.iter().find(|(k, _)| *k == heir).map_or((0, 0), |(_, m)| *m)))
-    }
-
-    /// A switch has ended: a tiled window it left minimized rests, as one minimized by
-    /// hand does, so its tile closes after the usual wait and a restore takes it back.
-    /// It never counts in a burst (D564, D567).
-    fn tiled_rest_after_switch(&mut self) {
-        let now = Instant::now();
-        for i in 0..self.tiling.trees.len() {
-            if !self.here(i) {
-                continue;
-            }
-            if self.tiling.trees[i].strip.is_some() {
-                self.scroll_rest_after_switch(i, now);
-                continue;
-            }
-            let windows: Vec<isize> = self.tiling.trees[i].tree.windows().collect();
-            for key in windows.into_iter().filter(|k| winutil::is_minimized(hwnd_of(*k))) {
-                let t = &mut self.tiling.trees[i];
-                let (Some(zone), Some(tree)) = (t.tree.zone_of(key), t.tree.vacate(key)) else { continue };
-                t.tree = tree;
-                t.resting.retain(|(k, ..)| *k != key);
-                t.resting.push((key, zone, now, false));
-                self.snapped.remove(&key);
-                log::info!("tiling: a switch left a tiled window minimized, so its tile closes soon");
-            }
-        }
-        self.tiled_arm_gaps();
-        self.tiled_sync();
-    }
-
-    /// The tiles of tree `i`'s minimized windows that are still empty, for `tiling::gaps_due`.
-    fn resting_tiles(&self, i: usize) -> Vec<tiling::Resting> {
-        let t = &self.tiling.trees[i];
-        let empty = |z: usize| t.tree.tiles.get(z).is_some_and(|x| x.hwnd.is_none());
-        t.resting.iter().filter(|(_, z, ..)| *z != usize::MAX && empty(*z)).map(|(_, z, at, b)| (*z, *at, *b)).collect()
-    }
-
-    /// Wake once a minimized window's tile may close; a burst's wait is longer (`BURST_KEEPS`).
-    fn tiled_arm_gaps(&mut self) {
-        let later = Instant::now() + Duration::from_secs(3600);
-        let waiting = (0..self.tiling.trees.len())
-            .any(|i| !tiling::gaps_due(&self.resting_tiles(i), self.tiling.trees[i].back, later).is_empty());
-        if waiting && self.tiling.gap_timer == 0 {
-            let ms = GAP_AFTER.as_millis() as u32;
-            self.tiling.gap_timer = unsafe { SetTimer(None, 0, ms, Some(on_gaps)) };
-        }
-    }
-
-    /// The tiles minimized windows left close once `tiling::gaps_due` says, so the
-    /// others fill the gap; a burst such as Win+D keeps them up to `BURST_KEEPS` for the windows to come
-    /// back to (D567). The move goes through `tiled_apply`, so its rule holds.
-    fn tiled_gaps(&mut self) {
-        let now = Instant::now();
-        for i in 0..self.tiling.trees.len() {
-            if self.tiling.trees[i].tree.windows().next().is_none() {
-                continue;
-            }
-            let due = tiling::gaps_due(&self.resting_tiles(i), self.tiling.trees[i].back, now);
-            if due.is_empty() {
-                continue;
-            }
-            let t = &mut self.tiling.trees[i];
-            for zone in due {
-                let Some(tree) = t.tree.remove_zone(zone) else { continue };
-                t.tree = tree;
-                t.closed_zone(zone);
-            }
-            self.tiled_unstack(i);
-            self.tiled_apply(i);
-        }
-        // Those that weren't due yet.
-        self.tiled_arm_gaps();
     }
 
     /// Stacked windows that fit a share now take one, and leave their stacks.
@@ -894,25 +661,6 @@ impl Engine {
             self.queued.extend(moves);
             self.window_pump();
         }
-    }
-
-    /// A window that can't shrink to a share joins `onto`'s stack, in its zone.
-    fn tiled_stack(&mut self, i: usize, key: isize, min: tiling::Min, onto: isize) {
-        let t = &self.tiling.trees[i];
-        let Some((work, dpi, gap)) = self.tile_area(&t.screen) else { return };
-        let Some(zone) = t.tree.zone_of(onto) else { return };
-        let (screen, target) = (t.screen.clone(), t.tree.rects(work, gap)[zone]);
-        let h = hwnd_of(key);
-        // In the zone before it lands, so its move doesn't take it out of the stack it joins.
-        let old = winutil::window_rect(h).map(|r| (r.w, r.h, winutil::monitor_dpi(h)));
-        self.snapped.insert(key, Snapped { old, screen: screen.clone(), from: zone, to: zone, at: target });
-        let (out, id) = self.stacks.join(onto, key);
-        self.stack_stamps(&out, Some(id));
-        self.tiling.trees[i].overflow.push((key, min));
-        self.stacks_changed();
-        self.tiled_sync();
-        self.queued.push_back(Placement { hwnd: key, target, zone: Some((screen, zone, zone)), dpi, maximize: false });
-        self.window_pump();
     }
 
     /// Lay tree `i`'s windows out in another family. A window moved by hand floats

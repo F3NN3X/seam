@@ -353,6 +353,9 @@ unsafe fn on_balloon_click(hwnd: HWND) {
             Some(BalloonAction::UndoTile) => {
                 with_app(undo_tile);
             }
+            Some(BalloonAction::UndoFree) => {
+                with_app(tiling::undo_free);
+            }
             Some(BalloonAction::OpenWorkspace) => {
                 with_app(open_offered);
             }

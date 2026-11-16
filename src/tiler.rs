@@ -53,6 +53,8 @@ pub enum Event {
     /// The virtual desktop in front, by id, or None when the shell can't tell, as on a
     /// desktop with no windows. An empty id is a Windows with no desktop manager.
     Desktop(Option<String>),
+    /// A tiled window took the focus, which scrolls a Scrolling screen to show it.
+    Focused(isize),
 }
 
 enum Job {
@@ -285,6 +287,10 @@ fn work(jobs: Receiver<Job>) {
                     said = true;
                 }
             }
+        }
+        // The last focus of a batch, when it is a tiled window: a parked column comes into view.
+        if let Some(h) = focus.filter(|h| is_tiled(*h)) {
+            events.push(Event::Focused(h));
         }
         if let Some(h) = focus.filter(|_| !said) {
             let now = desktops.front(hwnd_of(h));

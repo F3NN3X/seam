@@ -78,6 +78,32 @@ fn an_older_file_tiles_nothing_and_an_empty_tiling_isnt_written() {
 }
 
 #[test]
+fn scrolling_is_saved_so_an_older_seam_reads_smart() {
+    let scrolling = TileScreen { family: crate::tiling::Family::Scrolling, desktops: vec!["x".into()] };
+    let saved = serde_json::to_value(&scrolling).unwrap();
+    assert_eq!((saved["family"].as_str(), saved["scrolling"].as_bool()), (Some("smart"), Some(true)));
+    let back: TileScreen = serde_json::from_value(saved.clone()).unwrap();
+    assert_eq!(back, scrolling);
+    // An older Seam's own type, which ignores the field it doesn't know.
+    #[derive(serde::Deserialize)]
+    struct Older {
+        family: String,
+    }
+    let older: Older = serde_json::from_value(saved).unwrap();
+    assert_eq!(older.family, "smart");
+    // Another family writes no `scrolling`, and the keys and hooks of Scrolling are unset in an older file.
+    let grid = TileScreen { family: crate::tiling::Family::Grid, desktops: Vec::new() };
+    assert!(serde_json::to_value(&grid).unwrap().get("scrolling").is_none());
+    let c: Config = serde_json::from_str(r#"{"hotkeys": {"overview": "Ctrl+Alt+O"}}"#).unwrap();
+    let keys = &c.hotkeys;
+    assert!(
+        [&keys.scroll_left, &keys.scroll_right, &keys.column_left, &keys.column_right, &keys.column_width]
+            .iter()
+            .all(|k| k.is_none())
+    );
+}
+
+#[test]
 fn old_files_get_defaults() {
     let c: Config = serde_json::from_str("{}").unwrap();
     assert!(c.enabled && c.align_arrangement && c.desks.is_empty());

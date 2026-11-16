@@ -31,7 +31,7 @@ impl Engine {
         for i in 0..self.tiling.trees.len() {
             let t = &self.tiling.trees[i];
             if t.desktop == before && !first {
-                let windows: Vec<isize> = t.tree.windows().chain(t.overflow.iter().map(|(k, _)| *k)).collect();
+                let windows = t.all();
                 let parked: Vec<(isize, Snapped)> =
                     windows.into_iter().filter_map(|k| Some((k, self.snapped.remove(&k)?))).collect();
                 self.tiling.trees[i].parked = parked;
@@ -152,7 +152,8 @@ impl Engine {
             let t = &mut self.tiling.trees[i];
             t.overflow.retain(|(k, _)| stacked.contains(k));
             t.tree = tree;
-            if close {
+            // Scrolling: the view's columns follow the drag, and the strip settles around them.
+            if close || t.strip.is_some() {
                 self.tiled_unstack(i);
                 self.tiled_apply(i);
             }
@@ -171,6 +172,11 @@ impl Engine {
         }
         let desktop = self.tiling.desktop.clone();
         let i = self.tree_index(screen, &desktop);
+        if self.tiling.trees[i].strip.is_some() {
+            // A column takes the width nearest the one the handle gave it.
+            self.scroll_dragged(i, tree);
+            return true;
+        }
         if zones::leaf_count(tree) == self.tiling.trees[i].tree.tiles.len() {
             self.tiling.trees[i].tree.node = Some(tree.clone());
         }
@@ -185,6 +191,7 @@ impl Engine {
         for a in std::mem::take(&mut self.tiling.waiting) {
             self.tile_arrived(a);
         }
+        self.scroll_focus_waited();
     }
 
     pub(in crate::snap) fn tiling_free(&mut self, screen: &str) -> usize {
@@ -209,7 +216,7 @@ impl Engine {
         };
         let t = self.tiling.trees.remove(i);
         let dpi = self.tile_area(screen).map_or(96, |(_, dpi, _)| dpi);
-        let windows: Vec<isize> = t.tree.windows().chain(t.overflow.iter().map(|(k, _)| *k)).collect();
+        let windows = t.all();
         let mut moves = Vec::new();
         for k in &windows {
             let h = hwnd_of(*k);
@@ -222,8 +229,10 @@ impl Engine {
             let away = if front { gone(*k) } else { !unsafe { IsWindow(Some(h)) }.as_bool() }
                 || winutil::is_minimized(h)
                 || winutil::is_maximized(h);
-            if let Some(r) = t.before.get(k).filter(|_| !away) {
-                moves.push(Placement { hwnd: *k, target: *r, zone: None, dpi, maximize: false });
+            // A parked window always comes back, to where it was before or onto its screen.
+            let back = t.before.get(k).copied().or_else(|| self.unpark_target(&t, *k));
+            if let Some(r) = back.filter(|_| !away || t.offscreen.contains_key(k)) {
+                moves.push(Placement { hwnd: *k, target: r, zone: None, dpi, maximize: false });
             } else if self.snapped.contains_key(k) {
                 self.unsnap(h, true);
             }
@@ -248,7 +257,12 @@ impl Engine {
             winutil::set_floated(h, true);
             let t = &mut self.tiling.trees[i];
             t.before.remove(&key);
-            if t.overflow.iter().any(|(k, _)| *k == key) {
+            if let Some(strip) = &t.strip {
+                let strip = strip.remove(key);
+                t.tree = strip.tree();
+                t.strip = Some(strip);
+                t.offscreen.remove(&key);
+            } else if t.overflow.iter().any(|(k, _)| *k == key) {
                 t.overflow.retain(|(k, _)| *k != key);
             } else if t.remove(key) {
                 self.tiled_unstack(i);

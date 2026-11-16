@@ -106,7 +106,11 @@ fn screen_of(screens: &[Rect], r: Rect) -> usize {
         let h = (s.y + s.h).min(r.y + r.h) - s.y.max(r.y);
         i64::from(w.max(0)) * i64::from(h.max(0))
     };
-    (0..screens.len()).max_by_key(|&i| overlap(&screens[i])).unwrap_or(0)
+    match (0..screens.len()).max_by_key(|&i| overlap(&screens[i])) {
+        Some(i) if overlap(&screens[i]) > 0 => i,
+        // Off every screen, as a Scrolling screen's parked columns are: the nearest, as Windows has it.
+        _ => seam::strip::nearest(screens, r).unwrap_or(0),
+    }
 }
 
 /// The window's title from Windows' own copy, which never waits on its app.

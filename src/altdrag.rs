@@ -702,7 +702,7 @@ fn tell(hwnd: HWND, started: bool) {
 
 /// A key no app uses, pressed and released while the drag's key is held, so letting
 /// go of Alt opens no menu bar and letting go of Win opens no Start (as AltSnap does).
-fn tap() {
+pub(crate) fn tap() {
     let key = |flags: KEYBD_EVENT_FLAGS| INPUT {
         r#type: INPUT_KEYBOARD,
         Anonymous: INPUT_0 {

@@ -191,6 +191,12 @@ const HOTKEY_ROTATE_BACK: i32 = 77;
 /// "Add window to workspace" 1 to 9, from here up.
 const HOTKEY_ADD_TO: i32 = 80;
 const ADD_TO_KEYS: i32 = 9;
+/// Scrolling: Scroll left and right, Move column left and right, and Column width.
+const HOTKEY_SCROLL_LEFT: i32 = 89;
+const HOTKEY_SCROLL_RIGHT: i32 = 90;
+const HOTKEY_COLUMN_LEFT: i32 = 91;
+const HOTKEY_COLUMN_RIGHT: i32 = 92;
+const HOTKEY_COLUMN_WIDTH: i32 = 93;
 /// One hotkey id per workspace on the desk, from here up.
 const HOTKEY_WORKSPACE: i32 = 100;
 const NIN_KEYSELECT: u32 = NIN_SELECT | NINF_KEY;
@@ -460,19 +466,25 @@ fn relink(app: &mut App) {
     // The hook is in only while it's wanted, and not while Seam stands by or steps aside.
     let alt_drag = windows.alt_drag.on && standby::reason().is_none() && aside(app).is_none();
     altdrag::configure(owner, alt_drag, &windows.alt_drag.key, &app.cfg.zones.exclude);
-    // The corner's hook is in only while it's wanted, and not while Seam stands by. Its
-    // corners come from the screens, so a display change gets new ones here.
-    let corner = &windows.corner_overview;
+    pointer_watch(app);
+    sync_live(app);
+    arm_hook(app);
+    update_tip(app);
+}
+
+/// The pointer's hook is in only while it's wanted, and not while Seam stands by: for the
+/// corner that opens the overview, and for Win+wheel while any screen scrolls. Its corners
+/// and screens come from the screens, so a display change gets new ones here.
+fn pointer_watch(app: &App) {
+    let corner = &app.cfg.windows.corner_overview;
     let spots = if corner.on && standby::reason().is_none() {
         mousewatch::corner_spots(&app.mons, &corner.corner)
     } else {
         Vec::new()
     };
-    mousewatch::configure(owner, &spots);
-    sync_live(app);
-    arm_hook(app);
-    update_tip(app);
+    mousewatch::configure(app.hwnd.0 as isize, &spots, &tiling::wheel_screens(app));
 }
+
 /// Start the panel, which raises the open one if there is one.
 fn open_panel(app: &mut App, page: Option<&str>) -> bool {
     let panel = std::env::current_exe().map(|exe| exe.with_file_name("seam-settings.exe"));

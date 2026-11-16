@@ -233,6 +233,13 @@ pub enum Command {
     },
     /// `tiling.free`: Free all windows on a screen, by Line Up number or under the pointer.
     TilingFree(Option<u32>),
+    /// `tiling.scroll`: on a Scrolling screen, the column left or right of the focused one
+    /// takes the focus and comes into view. The screen's Line Up number, or else the
+    /// focused window's strip, or the screen under the pointer.
+    TilingScroll {
+        number: Option<u32>,
+        left: bool,
+    },
     /// `on` is None to toggle.
     WindowPin {
         kind: PinKind,

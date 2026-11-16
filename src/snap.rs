@@ -50,8 +50,9 @@ pub use stacks::{
 };
 pub use swap::{WM_APP_SWAP_LOOK, look_ready};
 pub use tiled::{
-    Turned, is_tiled, take_tiling_refused, tiled, tiled_dragged, tiling_desktop, tiling_events, tiling_float,
-    tiling_free, tiling_free_for_quit, tiling_reset, tiling_restore, tiling_rotate, tiling_switch_ended,
+    Turned, is_tiled, take_tiling_refused, tiled, tiled_dragged, tiling_column, tiling_desktop, tiling_events,
+    tiling_float, tiling_free, tiling_free_for_quit, tiling_reset, tiling_restore, tiling_rotate, tiling_scroll,
+    tiling_switch_ended, tiling_unpark_for_quit,
 };
 
 /// A window the tray couldn't move, probably because it runs as administrator.
@@ -347,9 +348,13 @@ pub fn update(owner: HWND, cfg: &Config, sig: &str, mons: &[Mon], aside: Option<
     // The worker reads opens and restores only while they can be tiled.
     crate::tiler::configure(owner.0 as isize, exclude.to_vec(), tiles && cfg.zones.enabled);
     crate::wm::tiling(tiles);
+    // Paused, stepped aside or zones off, nothing would scroll a parked window back into view.
+    let paused = matches!(crate::standby::reason(), Some(crate::standby::Standby::Paused));
+    let stood_down = !cfg.zones.enabled || aside.is_some() || paused;
     with_engine(|e| {
         // A tiled screen's zones are its tree, in place of its own layout.
         e.tiling_config(tiling);
+        e.scroll_standing(stood_down);
         let screens = e.with_tiled(screens);
         // A change that isn't about zones mustn't cut a drag short.
         let same = e.owner == owner.0 as isize

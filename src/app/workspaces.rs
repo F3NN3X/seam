@@ -71,6 +71,11 @@ pub(super) fn apply_hotkeys(app: &mut App) {
         (HOTKEY_ROTATE, "rotate".to_string(), keys.rotate.clone()),
         (HOTKEY_RESET_SIZES, "reset_sizes".to_string(), keys.reset_sizes.clone()),
         (HOTKEY_ROTATE_BACK, "rotate".to_string(), keys.rotate.as_deref().and_then(hotkey::with_shift)),
+        (HOTKEY_SCROLL_LEFT, "scroll_left".to_string(), keys.scroll_left.clone()),
+        (HOTKEY_SCROLL_RIGHT, "scroll_right".to_string(), keys.scroll_right.clone()),
+        (HOTKEY_COLUMN_LEFT, "column_left".to_string(), keys.column_left.clone()),
+        (HOTKEY_COLUMN_RIGHT, "column_right".to_string(), keys.column_right.clone()),
+        (HOTKEY_COLUMN_WIDTH, "column_width".to_string(), keys.column_width.clone()),
     ];
     for (n, (id, combo)) in (HOTKEY_ADD_TO..).zip(keys.add_to_workspace()).enumerate() {
         wanted.push((id, format!("add_to_{}", n + 1), combo.cloned()));

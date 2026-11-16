@@ -107,6 +107,11 @@ fn caption(action: &str) -> Option<&'static str> {
         "reset_sizes" => {
             Some("Put the screen under the pointer back to the layout it came from, or even out its tiles")
         }
+        "scroll_left" => Some("On a Scrolling screen, focus the column on the left and scroll to it"),
+        "scroll_right" => Some("On a Scrolling screen, focus the column on the right and scroll to it"),
+        "column_left" => Some("Swap the focused window's column with the one on its left"),
+        "column_right" => Some("Swap the focused window's column with the one on its right"),
+        "column_width" => Some("Give the focused window's column the next width: a third, a half, two thirds or full"),
         a if a.starts_with("add_to_") => {
             Some("Add the focused window to this workspace, counted in the order of the Workspaces page")
         }
@@ -203,6 +208,11 @@ pub fn render(panel: &mut Panel, _: &mut Window, cx: &mut Context<Panel>) -> imp
         row("Show overview", "overview", keys.overview.as_ref(), 990),
         row("Rotate windows", "rotate", keys.rotate.as_ref(), 991),
         row("Reset sizes", "reset_sizes", keys.reset_sizes.as_ref(), 992),
+        row("Scroll left", "scroll_left", keys.scroll_left.as_ref(), 993),
+        row("Scroll right", "scroll_right", keys.scroll_right.as_ref(), 994),
+        row("Move column left", "column_left", keys.column_left.as_ref(), 995),
+        row("Move column right", "column_right", keys.column_right.as_ref(), 996),
+        row("Column width", "column_width", keys.column_width.as_ref(), 997),
     ]);
     window_rows.extend([
         row("Pin window on top", "pin_top", keys.pin_top.as_ref(), 17),

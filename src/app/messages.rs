@@ -143,6 +143,12 @@ pub(super) unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARA
                 with_app(overview::corner_rest);
                 LRESULT(0)
             }
+            mousewatch::WM_APP_WHEEL => {
+                let (left, lag) = mousewatch::wheel_of(wparam.0);
+                let at = (lparam.0 as i16 as i32, (lparam.0 >> 16) as i16 as i32);
+                with_app(|a| tiling::wheel(a, left, at, lag));
+                LRESULT(0)
+            }
             WM_TIMER if wparam.0 == TIMER_OVERVIEW => {
                 if with_app(overview::overview_moves) == Some(true) {
                     let _ = KillTimer(Some(hwnd), TIMER_OVERVIEW);
@@ -435,6 +441,12 @@ unsafe fn on_hotkey(id: i32) {
             HOTKEY_RESET_SIZES => {
                 with_app(|a| turn::start_turn(a, Verb::Reset, None, true, None));
             }
+            id @ (HOTKEY_SCROLL_LEFT | HOTKEY_SCROLL_RIGHT) => {
+                with_app(|a| tiling::scroll(a, None, id == HOTKEY_SCROLL_LEFT, None));
+            }
+            HOTKEY_COLUMN_LEFT => tiling::column(Some(true)),
+            HOTKEY_COLUMN_RIGHT => tiling::column(Some(false)),
+            HOTKEY_COLUMN_WIDTH => tiling::column(None),
             id if (HOTKEY_ADD_TO..HOTKEY_ADD_TO + ADD_TO_KEYS).contains(&id) => {
                 with_app(|a| start_add_window(a, Which::Number((id - HOTKEY_ADD_TO) as usize + 1), None, None));
             }
@@ -514,6 +526,8 @@ unsafe fn on_destroy() {
                 });
             }
         }
+        // No window stays parked off every screen once Seam is gone, whatever the quit.
+        snap::tiling_unpark_for_quit();
         snap::shutdown();
         altdrag::stop();
         mousewatch::stop();

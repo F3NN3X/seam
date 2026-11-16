@@ -164,8 +164,14 @@ const ENTRIES: &[Entry] = &[
     entry(
         Page::Zones,
         "How windows are arranged",
-        "Smart, Columns, Main + stack or Grid, while smart tiling is on",
-        "smart tiling family columns main stack grid dwindle layout shape",
+        "Smart, Columns, Main + stack, Grid or Scrolling, while smart tiling is on",
+        "smart tiling family columns main stack grid scrolling dwindle layout shape",
+    ),
+    entry(
+        Page::Zones,
+        "Scrolling",
+        "Each new window is a column on a strip wider than the screen, scrolled into view",
+        "smart tiling scrolling scroll strip columns niri paperwm wheel win parked off screen",
     ),
     entry(
         Page::Zones,
@@ -402,6 +408,36 @@ const ENTRIES: &[Entry] = &[
         "Rotate windows",
         "Move every snapped window on the screen under the pointer to the next zone. Shift added goes back",
         "hotkey keyboard rotate cycle shift swap zones windows next previous tiling",
+    ),
+    entry(
+        Page::Shortcuts,
+        "Scroll left",
+        "On a Scrolling screen, focus the column on the left and scroll to it",
+        "hotkey keyboard scrolling scroll strip column focus left previous",
+    ),
+    entry(
+        Page::Shortcuts,
+        "Scroll right",
+        "On a Scrolling screen, focus the column on the right and scroll to it",
+        "hotkey keyboard scrolling scroll strip column focus right next",
+    ),
+    entry(
+        Page::Shortcuts,
+        "Move column left",
+        "Swap the focused window's column with the one on its left",
+        "hotkey keyboard scrolling strip column move swap left",
+    ),
+    entry(
+        Page::Shortcuts,
+        "Move column right",
+        "Swap the focused window's column with the one on its right",
+        "hotkey keyboard scrolling strip column move swap right",
+    ),
+    entry(
+        Page::Shortcuts,
+        "Column width",
+        "Give the focused window's column the next width: a third, a half, two thirds or full",
+        "hotkey keyboard scrolling strip column width wider narrower size third half full",
     ),
     entry(
         Page::Shortcuts,

@@ -14,14 +14,17 @@
 use super::*;
 use crate::tiler::{Arrival, Event};
 use seam::config::TileScreen;
+use seam::strip::{Strip, Width};
 use seam::tiling::{self, Family, GAP_AFTER, Put, Seen, Tree};
 use seam::zones::{LeafTag, Node, Template};
 use std::collections::BTreeMap;
 use std::time::Duration;
 
 mod hand;
+mod scroll;
 mod turn;
 
+pub use scroll::{tiling_column, tiling_scroll, tiling_unpark_for_quit};
 pub use turn::Turned;
 
 /// One screen's tree on one virtual desktop.
@@ -45,6 +48,10 @@ pub(super) struct Tiled {
     dirty: bool,
     /// When a minimized window last came back, which holds the other tiles (D567).
     back: Option<Instant>,
+    /// Scrolling only: every column, the view's and the parked ones. `tree` is its view.
+    strip: Option<Strip>,
+    /// Scrolling only: where each parked window was sent, off every screen.
+    offscreen: HashMap<isize, Rect>,
 }
 
 #[derive(Default)]
@@ -73,6 +80,11 @@ pub(super) struct Tiling {
     refused: Option<String>,
     /// Handler timings while logging: batches, total and longest, in microseconds.
     stats: (u64, u128, u128),
+    /// A parked window that took the focus while nothing could move, brought into view
+    /// once tiling is active again.
+    focus_wait: Option<isize>,
+    /// Seam is paused, stepped aside or has zones off, so no window stays parked.
+    stood_down: bool,
 }
 
 /// A tiled screen as the state shows it.
@@ -95,6 +107,7 @@ pub fn tiling_events() -> bool {
                 Event::Arrived(a) => e.tile_arrived(a),
                 Event::Left { hwnd, minimized } => e.tile_left(hwnd, minimized),
                 Event::Desktop(id) => e.tiled_desktop(id),
+                Event::Focused(hwnd) => e.tiled_focused(hwnd),
                 Event::Refused(why) => e.tiling.refused = Some(why.to_string()),
             }
         }
@@ -192,6 +205,7 @@ pub fn tiling_switch_ended() {
         for (_, a) in tiling::after_pause(kept, placed) {
             e.tile_arrived(a);
         }
+        e.scroll_focus_waited();
     });
 }
 
@@ -214,8 +228,7 @@ pub fn tiling_desktop() -> Option<String> {
 pub fn tiled() -> Vec<TiledInfo> {
     let info = |e: &Engine| {
         let here = e.tiling.trees.iter().filter(|t| t.desktop == e.tiling.desktop);
-        here.map(|t| TiledInfo { screen: t.screen.clone(), windows: t.tree.windows().count() + t.overflow.len() })
-            .collect()
+        here.map(|t| TiledInfo { screen: t.screen.clone(), windows: t.all().len() }).collect()
     };
     with_engine(|e| info(e)).unwrap_or_default()
 }
@@ -245,6 +258,18 @@ impl Tiled {
                 z => z,
             };
         }
+    }
+
+    /// Every window it holds: in a tile, a column of its strip, or stacked.
+    fn all(&self) -> Vec<isize> {
+        let mut all: Vec<isize> = self.tree.windows().collect();
+        let columns = self.strip.iter().flat_map(|s| s.windows());
+        for k in columns.chain(self.overflow.iter().map(|(k, _)| *k)) {
+            if !all.contains(&k) {
+                all.push(k);
+            }
+        }
+        all
     }
 
     /// `key` leaves its tile and the others fill the gap.
@@ -306,9 +331,8 @@ impl Engine {
         }
         self.sync_dividers();
         let tiled = |t: &Tiled| {
-            let stacked = t.overflow.iter().map(|(h, _)| *h);
             let resting = t.resting.iter().map(|(h, ..)| *h);
-            t.tree.windows().chain(stacked).chain(resting).collect::<Vec<_>>()
+            t.all().into_iter().chain(resting).collect::<Vec<_>>()
         };
         crate::tiler::set_tiled(self.tiling.trees.iter().flat_map(tiled).collect());
     }
@@ -367,6 +391,7 @@ impl Engine {
                 self.tiled_apply(i);
             }
         }
+        self.scroll_focus_waited();
     }
 
     /// The work area changed under the trees of the desktop in front: each puts its windows in
@@ -394,10 +419,11 @@ impl Engine {
         }
     }
 
-    /// A tree ends: its windows stay where they are, out of tiling and out of zones.
+    /// A tree ends: its windows stay where they are, out of tiling and out of zones, except
+    /// parked ones, which come back onto the screen.
     fn tiled_release(&mut self, t: Tiled) {
-        let windows: Vec<isize> = t.tree.windows().chain(t.overflow.iter().map(|(h, _)| *h)).collect();
-        for k in windows {
+        self.unpark(&t);
+        for k in t.all() {
             winutil::set_tile_stamp(hwnd_of(k), 0);
             if t.desktop == self.tiling.desktop {
                 self.unsnap(hwnd_of(k), true);
@@ -414,6 +440,7 @@ impl Engine {
             return i;
         }
         let family = self.tiling.config.get(screen).map(|c| c.family).unwrap_or_default();
+        let strip = (family == Family::Scrolling).then(Strip::default);
         self.tiling.trees.push(Tiled {
             screen: screen.to_string(),
             desktop: desktop.to_string(),
@@ -424,6 +451,8 @@ impl Engine {
             parked: Vec::new(),
             dirty: false,
             back: None,
+            strip,
+            offscreen: HashMap::new(),
         });
         self.tiling.trees.len() - 1
     }
@@ -435,7 +464,11 @@ impl Engine {
 
     /// The tree a window is tiled in, in a tile or stacked in one.
     fn tree_of(&self, key: isize) -> Option<usize> {
-        let has = |t: &Tiled| t.tree.zone_of(key).is_some() || t.overflow.iter().any(|(k, _)| *k == key);
+        let has = |t: &Tiled| {
+            t.tree.zone_of(key).is_some()
+                || t.overflow.iter().any(|(k, _)| *k == key)
+                || t.strip.as_ref().is_some_and(|s| s.has(key))
+        };
         self.tiling.trees.iter().position(has)
     }
 
@@ -475,8 +508,15 @@ impl Engine {
             self.tiled_desktop(Some(String::new()));
         }
         let (x, y) = (a.frame.x + a.frame.w / 2, a.frame.y + a.frame.h / 2);
-        let Some(screen) = self.screens.iter().find(|s| s.bounds.contains(x, y)).map(|s| s.id.clone()) else { return };
+        let on = self.screens.iter().find(|s| s.bounds.contains(x, y)).map(|s| s.id.clone());
+        // A parked window that comes back off every screen, restored or tiled again after a
+        // crash, belongs to the screen it is nearest, as Windows has it.
+        let known = a.order > 0 || self.tiling.trees.iter().any(|t| t.resting.iter().any(|(k, ..)| *k == a.hwnd));
+        let Some(screen) = on.or_else(|| self.parked_home(a.frame).filter(|_| known)) else { return };
         if !self.tiling_on(&screen) {
+            if known {
+                self.rescue(a.hwnd, &screen, a.frame);
+            }
             return;
         }
         if self.tree_of(a.hwnd).is_some() {
@@ -498,14 +538,22 @@ impl Engine {
         }
         for t in &mut self.tiling.trees {
             t.resting.retain(|(k, ..)| *k != a.hwnd);
+            t.offscreen.remove(&a.hwnd);
         }
         let Some((work, _, gap)) = self.tile_area(&screen) else { return };
         self.tiled_check(i);
         let tree = &self.tiling.trees[i].tree;
         let back = rested.filter(|(t, _)| *t == i).and_then(|(_, zone)| tree.back_to(zone, a.hwnd, a.min));
-        let placed = match back {
-            Some(tree) => Some((tree.clone(), Put::Tile(tree.zone_of(a.hwnd).unwrap_or(0)))),
-            None => tree.insert(work, gap, a.hwnd, a.min),
+        let placed = match (back, &self.tiling.trees[i].strip) {
+            // A new column after the focused one, wide enough for it, and in view.
+            (_, Some(strip)) => {
+                let strip = strip.insert(a.hwnd, a.min, Width::fitting(a.min.0, work.w));
+                let tree = strip.tree();
+                self.tiling.trees[i].strip = Some(strip);
+                Some((tree.clone(), Put::Tile(tree.zone_of(a.hwnd).unwrap_or(0))))
+            }
+            (Some(tree), None) => Some((tree.clone(), Put::Tile(tree.zone_of(a.hwnd).unwrap_or(0)))),
+            (None, None) => tree.insert(work, gap, a.hwnd, a.min),
         };
         let Some((tree, put)) = placed else { return };
         let order = if a.order > 0 { a.order } else { self.tiling.seq + 1 };
@@ -546,6 +594,9 @@ impl Engine {
         let Some(i) = self.tree_of(key) else { return };
         if !minimized {
             winutil::set_tile_stamp(hwnd_of(key), 0);
+        }
+        if self.tiling.trees[i].strip.is_some() {
+            return self.scroll_left(i, key, minimized);
         }
         let t = &mut self.tiling.trees[i];
         if let Some(at) = t.overflow.iter().position(|(k, _)| *k == key) {
@@ -608,6 +659,10 @@ impl Engine {
         let now = Instant::now();
         for i in 0..self.tiling.trees.len() {
             if !self.here(i) {
+                continue;
+            }
+            if self.tiling.trees[i].strip.is_some() {
+                self.scroll_rest_after_switch(i, now);
                 continue;
             }
             let windows: Vec<isize> = self.tiling.trees[i].tree.windows().collect();
@@ -690,7 +745,7 @@ impl Engine {
         let shown = !hidden.contains(&key);
         Seen {
             floated: shown && winutil::is_floated(h),
-            moved: shown && !self.moving(key) && self.tiled_moved(key),
+            moved: shown && !self.moving(key) && (self.tiled_moved(key) || self.parked_moved(key)),
             away: winutil::is_minimized(h) || winutil::is_maximized(h) || winutil::is_cloaked(h),
             gone: gone(key),
         }
@@ -705,14 +760,20 @@ impl Engine {
         if !self.here(i) {
             return Vec::new();
         }
+        // Scrolling: a drag's changes to the view go into the strip, and the rule looks at
+        // every column, parked ones too.
+        self.scroll_absorb(i);
         let hidden = self.stack_hidden();
+        let t = &self.tiling.trees[i];
+        let looked = t.strip.as_ref().map_or_else(|| t.tree.clone(), Strip::whole);
         let plan = {
             let seen = |k: isize| self.tile_seen(k, &hidden);
-            tiling::plan_apply(&self.tiling.trees[i].tree, seen, |k| self.heir_of(i, k))
+            tiling::plan_apply(&looked, seen, |k| self.heir_of(i, k))
         };
         for &k in &plan.left {
             log::info!("tiling: a tiled window closed or went to another desktop unseen, so it leaves");
             self.tiling.trees[i].before.remove(&k);
+            self.tiling.trees[i].offscreen.remove(&k);
             winutil::set_tile_stamp(hwnd_of(k), 0);
             self.snapped.remove(&k);
         }
@@ -720,9 +781,15 @@ impl Engine {
         for (_, heir) in &plan.heirs {
             t.overflow.retain(|(k, _)| k != heir);
         }
-        t.tree = plan.tree;
-        for &zone in &plan.closed {
-            t.closed_zone(zone);
+        if let Some(strip) = &t.strip {
+            let strip = strip.keep(&plan.tree.tiles, &plan.heirs);
+            t.tree = strip.tree();
+            t.strip = Some(strip);
+        } else {
+            t.tree = plan.tree;
+            for &zone in &plan.closed {
+                t.closed_zone(zone);
+            }
         }
         for &k in &plan.floated {
             log::info!("tiling desk gate: a tiled window was placed by someone else since, so it floats where it is");
@@ -756,6 +823,7 @@ impl Engine {
         let t = &mut self.tiling.trees[i];
         t.overflow.retain(|(k, _)| *k != key);
         t.before.remove(&key);
+        t.offscreen.remove(&key);
         let h = hwnd_of(key);
         winutil::set_tile_stamp(h, 0);
         winutil::set_floated(h, true);
@@ -808,8 +876,11 @@ impl Engine {
             }
             moves.push(Placement { hwnd: key, target, zone: Some((screen.clone(), zone, zone)), dpi, maximize: false });
         }
+        // Scrolling: the columns out of view park first, so none is ever over another.
+        let parks = self.scroll_parks(i, &movable);
         self.sync_dividers();
-        if !moves.is_empty() {
+        if !moves.is_empty() || !parks.is_empty() {
+            self.queued.extend(parks);
             self.queued.extend(moves);
             self.window_pump();
         }
@@ -839,6 +910,9 @@ impl Engine {
     fn tiled_family(&mut self, i: usize, family: Family) {
         let Some((work, _, gap)) = self.tile_area(&self.tiling.trees[i].screen) else { return };
         self.tiled_check(i);
+        if family == Family::Scrolling || self.tiling.trees[i].strip.is_some() {
+            return self.scroll_family(i, family);
+        }
         let t = &mut self.tiling.trees[i];
         t.tree = t.tree.with_family(family, work, gap);
         // The tiles minimized windows left are gone in the new shape.

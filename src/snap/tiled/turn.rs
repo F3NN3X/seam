@@ -37,7 +37,11 @@ impl Engine {
             return Err("Smart tiling is off on this screen".into());
         }
         let desktop = self.tiling.desktop.clone();
-        Ok(self.tree_index(screen, &desktop))
+        let i = self.tree_index(screen, &desktop);
+        if self.tiling.trees[i].strip.is_some() {
+            return Err("Scrolling has its own keys: Move column and Column width".into());
+        }
+        Ok(i)
     }
 
     /// For Undo: where `key` was, and the windows stacked with it, which go back whole.
@@ -112,6 +116,9 @@ impl Engine {
         let Some(i) = self.tiling.trees.iter().position(|t| t.screen == screen && t.desktop == desktop) else {
             return false;
         };
+        if self.tiling.trees[i].strip.is_some() {
+            return false;
+        }
         let tree = &mut self.tiling.trees[i].tree;
         if !untouched(tree.node.as_ref(), &after) || zones::leaf_count(&before) != tree.tiles.len() {
             return false;

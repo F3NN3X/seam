@@ -2,7 +2,8 @@
 //! tree (`zones::Node`) and the window in each zone. Pure, so every family is
 //! tested here, and the snapping only carries out what it decides. Smart splits
 //! the largest tile along its longer side for a new window (dwindle by size);
-//! Columns, Main + stack and Grid lay every window out again by count.
+//! Columns, Main + stack and Grid lay every window out again by count. Scrolling keeps
+//! its windows as columns on a strip (`crate::strip`), and its tree is the view.
 
 use crate::zones::{self, Dir, LeafTag, Node, Rect};
 use serde::{Deserialize, Serialize};
@@ -17,10 +18,11 @@ pub enum Family {
     Columns,
     MainStack,
     Grid,
+    Scrolling,
 }
 
 impl Family {
-    pub const ALL: [Family; 4] = [Family::Smart, Family::Columns, Family::MainStack, Family::Grid];
+    pub const ALL: [Family; 5] = [Family::Smart, Family::Columns, Family::MainStack, Family::Grid, Family::Scrolling];
 
     pub fn title(self) -> &'static str {
         match self {
@@ -28,6 +30,7 @@ impl Family {
             Family::Columns => "Columns",
             Family::MainStack => "Main + stack",
             Family::Grid => "Grid",
+            Family::Scrolling => "Scrolling",
         }
     }
 
@@ -38,6 +41,7 @@ impl Family {
             Family::Columns => "columns",
             Family::MainStack => "main_stack",
             Family::Grid => "grid",
+            Family::Scrolling => "scrolling",
         }
     }
 
@@ -121,7 +125,8 @@ fn fixed(family: Family, n: usize, before: Option<&Node>) -> Node {
         _ => MAIN_SHARE,
     };
     match family {
-        Family::Columns | Family::Smart => even(Dir::Vertical, n),
+        // Scrolling's own tree is its view (`Strip::tree`); this is only its windows in a row.
+        Family::Columns | Family::Smart | Family::Scrolling => even(Dir::Vertical, n),
         Family::MainStack if n > 1 => split(Dir::Vertical, main, leaf(), even(Dir::Horizontal, n - 1)),
         Family::MainStack => leaf(),
         Family::Grid => grid(n),
@@ -701,7 +706,7 @@ mod tests {
                         tree = tree.vacate(h).unwrap();
                     }
                     8 => {
-                        let to = Family::ALL[rng.next(4) as usize];
+                        let to = Family::ALL[rng.next(Family::ALL.len() as u64) as usize];
                         tree = tree.with_family(to, AREA, 8);
                         // An empty tile goes with another family.
                         assert_eq!(tree.windows().count(), known.len());

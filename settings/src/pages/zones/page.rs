@@ -588,7 +588,7 @@ fn tiling_card(panel: &Panel, number: usize, p: Palette, window: &mut Window, cx
                 })
             }
         });
-        let about = "Smart splits the largest window's space. The others share the screen evenly";
+        let about = "Smart splits the largest window's space. Scrolling puts windows side by side on a strip you scroll. The others share the screen evenly";
         rows.push(row("How windows are arranged", Some(about.into()), choice, p));
     }
     rows.push(row(

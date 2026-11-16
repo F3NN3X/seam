@@ -114,6 +114,8 @@ fn apply(app: &mut App, wait: TilingWait, desktop: &str) {
     log::info!("tiling: {} on a screen, {}", if on { "on" } else { "off" }, family.title());
     persist(app);
     snap::update(app.hwnd, &app.cfg, &app.sig, &app.mons, aside(app).as_deref());
+    // Win+wheel's hook is in while any screen scrolls.
+    pointer_watch(app);
     publish(app);
     answer(wait.reply, Ok(json!({ "on": on, "family": family })));
 }
@@ -145,6 +147,58 @@ pub(super) fn free_tiling(app: &mut App, number: Option<u32>, reply: Option<Send
         _ => Ok(json!({ "ok": true, "freed": freed })),
     };
     answer(reply, result);
+}
+
+/// Scroll left or right on a Scrolling screen, from the keys or `tiling.scroll`: the
+/// column next to the focused one takes the focus, and the strip scrolls to show it. The
+/// focused window's strip, or else the screen by number or under the pointer.
+pub(super) fn scroll(app: &mut App, number: Option<u32>, left: bool, reply: Option<Sender<Reply>>) {
+    let Some(screen) = screen_of(app, number) else {
+        return answer(reply, Err(RpcError::new(api::NOT_FOUND, "no such screen")));
+    };
+    // A screen asked for by number is that screen, whatever has the focus.
+    let focused = if number.is_some() { 0 } else { unsafe { GetForegroundWindow() }.0 as isize };
+    match snap::tiling_scroll(focused, Some(&screen), left, true) {
+        Ok(focus) => {
+            if let Some(h) = focus {
+                wincontrol::focus(HWND(h as *mut _), reply.is_some());
+            }
+            answer(reply, Ok(json!({ "ok": true })));
+        }
+        Err(why) => {
+            log::info!("scroll: {why}");
+            answer(reply, refused(why));
+        }
+    }
+}
+
+/// Win+wheel over a Scrolling screen: the strip under the pointer scrolls a column,
+/// and the focus stays where it is. `lag` is how long since the hook heard the wheel.
+pub(super) fn wheel(app: &mut App, left: bool, (x, y): (i32, i32), lag: u32) {
+    let Some(screen) = app.mons.iter().find(|m| m.rect.contains(x, y)).map(|m| m.id.clone()) else { return };
+    match snap::tiling_scroll(0, Some(&screen), left, false) {
+        Ok(_) => log::info!("scroll wheel: scrolled {lag} ms after the hook heard it"),
+        Err(why) => log::info!("scroll wheel: {why}"),
+    }
+}
+
+/// Move column left or right (`Some`), or Column width (`None`), for the focused window.
+pub(super) fn column(left: Option<bool>) {
+    if let Err(why) = snap::tiling_column(unsafe { GetForegroundWindow() }.0 as isize, left) {
+        log::info!("column key: {why}");
+    }
+}
+
+/// The screens a Win+wheel scrolls: those with Scrolling on for some virtual desktop, while
+/// zones are on and Seam isn't paused or stepping aside. The tray side checks the desktop.
+pub(super) fn wheel_screens(app: &App) -> Vec<seam::geom::Rect> {
+    if !app.cfg.zones.enabled || standby::reason().is_some() || aside(app).is_some() {
+        return Vec::new();
+    }
+    let Some(desk) = app.cfg.desks.get(&app.sig) else { return Vec::new() };
+    let scrolls =
+        |id: &str| desk.tiling.get(id).is_some_and(|t| t.family == Family::Scrolling && !t.desktops.is_empty());
+    app.mons.iter().filter(|m| scrolls(&m.id)).map(|m| m.rect).collect()
 }
 
 /// "Float or tile this window", for the focused window.

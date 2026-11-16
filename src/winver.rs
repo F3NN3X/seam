@@ -1,6 +1,10 @@
 //! Which Windows this is, for About and diagnostics.
 
 use windows::Win32::Foundation::{ERROR_FILE_NOT_FOUND, ERROR_SUCCESS};
+use windows::Win32::Graphics::Gdi::{
+    COLOR_BTNFACE, COLOR_GRAYTEXT, COLOR_HIGHLIGHT, COLOR_HIGHLIGHTTEXT, COLOR_HOTLIGHT, COLOR_WINDOW,
+    COLOR_WINDOWTEXT, GetSysColor, SYS_COLOR_INDEX,
+};
 use windows::Win32::System::Registry::{
     HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE, RRF_RT_REG_DWORD, RRF_RT_REG_SZ, RegGetValueW,
 };
@@ -84,4 +88,53 @@ pub fn animation_effects() -> bool {
     };
     // Windows has them on until someone turns them off.
     read.is_err() || on.as_bool()
+}
+
+/// Settings > Accessibility > Text size, as a percentage: 100 to 225, 100 until someone changes it.
+pub fn text_scale_percent() -> u32 {
+    let mut value = 100u32;
+    let mut size = size_of::<u32>() as u32;
+    let read = unsafe {
+        RegGetValueW(
+            HKEY_CURRENT_USER,
+            w!(r"Software\Microsoft\Accessibility"),
+            w!("TextScaleFactor"),
+            RRF_RT_REG_DWORD,
+            None,
+            Some((&mut value as *mut u32).cast()),
+            Some(&mut size),
+        )
+    };
+    if read == ERROR_SUCCESS { value.clamp(100, 225) } else { 100 }
+}
+
+/// The colours of the contrast theme that is on, as `0xRRGGBB`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SystemColours {
+    pub window: u32,
+    pub window_text: u32,
+    pub highlight: u32,
+    pub highlight_text: u32,
+    pub gray_text: u32,
+    pub button_face: u32,
+    pub hotlight: u32,
+}
+
+/// One system colour, from Windows' `0x00BBGGRR` to `0xRRGGBB`.
+fn system_colour(index: SYS_COLOR_INDEX) -> u32 {
+    let bgr = unsafe { GetSysColor(index) };
+    (bgr & 0xFF) << 16 | (bgr & 0xFF00) | (bgr >> 16 & 0xFF)
+}
+
+/// The system colours while a contrast theme is on, `None` otherwise.
+pub fn contrast_colours() -> Option<SystemColours> {
+    high_contrast().then(|| SystemColours {
+        window: system_colour(COLOR_WINDOW),
+        window_text: system_colour(COLOR_WINDOWTEXT),
+        highlight: system_colour(COLOR_HIGHLIGHT),
+        highlight_text: system_colour(COLOR_HIGHLIGHTTEXT),
+        gray_text: system_colour(COLOR_GRAYTEXT),
+        button_face: system_colour(COLOR_BTNFACE),
+        hotlight: system_colour(COLOR_HOTLIGHT),
+    })
 }

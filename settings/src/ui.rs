@@ -121,6 +121,18 @@ pub fn focus_ring<E: Styled + ParentElement>(el: E, radius: f32, border: f32, p:
     )
 }
 
+/// Hover or press on an item: one surface step, or in a contrast theme the Highlight fill with its
+/// text, which a press keeps.
+pub fn lit(style: StyleRefinement, step: Hsla, p: Palette) -> StyleRefinement {
+    if p.contrast { style.bg(p.accent).text_color(p.text_on_accent) } else { style.bg(step) }
+}
+
+/// The same for an item that has an edge and styled text of its own: a contrast theme outlines it in
+/// Highlight, because a Highlight fill would put its text on the wrong ground.
+pub fn outlined(style: StyleRefinement, step: Hsla, p: Palette) -> StyleRefinement {
+    if p.contrast { style.border_color(p.accent) } else { style.bg(step) }
+}
+
 /// Tabular figures, so scales and offsets line up.
 pub fn tabular<E: Styled>(element: E) -> E {
     element.font_features(FontFeatures(Arc::new(vec![("tnum".to_string(), 1)])))
@@ -419,8 +431,8 @@ pub fn disclose(
         .aria_expanded(open)
         .cursor_pointer()
         .rounded(px(tokens::RADIUS_8))
-        .hover(|d| d.bg(p.surface_raised))
-        .active(|d| d.bg(p.surface_sidebar))
+        .hover(|d| lit(d, p.surface_raised, p))
+        .active(|d| lit(d, p.surface_sidebar, p))
         .when(focused(&focus, window), |d| focus_ring(d, tokens::RADIUS_8, 0., p))
         .on_click(move |_, window, cx| click(window, cx))
         .on_key_down(move |e: &KeyDownEvent, window, cx| {
@@ -442,6 +454,19 @@ pub fn selectable(
     cx: &mut App,
     pick: impl Fn(&mut Window, &mut App) + 'static,
 ) -> Stateful<Div> {
+    selectable_ringed(id, label, selected, (tokens::RADIUS_4, 0.), window, cx, pick)
+}
+
+/// `selectable` for something with a radius and a border of its own, which the focus ring goes round.
+pub fn selectable_ringed(
+    id: impl Into<ElementId>,
+    label: impl Into<SharedString>,
+    selected: bool,
+    (radius, border): (f32, f32),
+    window: &mut Window,
+    cx: &mut App,
+    pick: impl Fn(&mut Window, &mut App) + 'static,
+) -> Stateful<Div> {
     let p = palette(cx);
     let id = id.into();
     let focus = focus_for(&id, window, cx);
@@ -455,13 +480,33 @@ pub fn selectable(
         .aria_label(label)
         .aria_selected(selected)
         .cursor_pointer()
-        .when(focused(&focus, window), |d| focus_ring(d, tokens::RADIUS_4, 0., p))
+        .when(focused(&focus, window), |d| focus_ring(d, radius, border, p))
         .on_click(move |_, window, cx| click(window, cx))
         .on_key_down(move |e: &KeyDownEvent, window, cx| {
             if matches!(e.keystroke.key.as_str(), "space" | "enter") {
                 key(window, cx);
             }
         })
+}
+
+/// The focus handle of the list item `id`, drawn this frame, for its neighbours' Up and Down.
+pub fn item_focus(id: impl Into<ElementId>, window: &mut Window, cx: &mut App) -> FocusHandle {
+    focus_for(&id.into(), window, cx)
+}
+
+/// Up and Down on `item` move focus to the item before or after it in a list we drew ourselves.
+pub fn arrow_keys<E: InteractiveElement>(item: E, before: Option<FocusHandle>, after: Option<FocusHandle>) -> E {
+    item.on_key_down(move |e: &KeyDownEvent, window, cx| {
+        let to = match e.keystroke.key.as_str() {
+            "up" => &before,
+            "down" => &after,
+            _ => return,
+        };
+        if let Some(to) = to {
+            to.focus(window, cx);
+            cx.stop_propagation();
+        }
+    })
 }
 
 /// The chevron of a disclosure: down when closed, turned over when open.
@@ -679,10 +724,14 @@ pub fn choice(
             .py(px(tokens::SPACE_4))
             .rounded(px(tokens::RADIUS_6))
             .when(i == selected, |d| {
-                d.bg(p.surface_segment).text_color(p.text_primary).active(|d| d.bg(p.surface_sidebar))
+                let (ground, text) =
+                    if p.contrast { (p.accent, p.text_on_accent) } else { (p.surface_segment, p.text_primary) };
+                d.bg(ground).text_color(text).active(|d| lit(d, p.surface_sidebar, p))
             })
             .when(i != selected, |d| {
-                d.text_color(p.text_secondary).hover(|d| d.bg(p.surface_card)).active(|d| d.bg(p.hairline_strong))
+                d.text_color(p.text_secondary)
+                    .hover(|d| lit(d, p.surface_card, p))
+                    .active(|d| lit(d, p.hairline_strong, p))
             })
             .child(label);
         let segment = text_style(segment, tokens::LABEL);

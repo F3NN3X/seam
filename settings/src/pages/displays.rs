@@ -70,7 +70,9 @@ fn ease_alert(p: Palette, cx: &mut Context<Panel>) -> Div {
                 .flex_col()
                 .gap(px(2.))
                 .flex_1()
-                .child(div().text_size(px(14.)).child("Turn on Ease cursor movement between displays"))
+                .child(
+                    div().text_size(crate::theme::scaled(14.)).child("Turn on Ease cursor movement between displays"),
+                )
                 .child(ui::description("Without it the pointer can get stuck at some borders", p)),
         )
         .child(ui::secondary("open-display-settings", "Open Display settings", cx).on_click(|_, _, cx| {

@@ -34,8 +34,8 @@ fn screen_tile(
     index: usize,
     (x, y, w, h): Frame,
     (sized, on_desk): (bool, bool),
-    view: &View,
-    p: Palette,
+    (view, p): (&View, Palette),
+    window: &mut Window,
     cx: &mut Context<Panel>,
 ) -> impl IntoElement + use<> {
     let number = index + 1;
@@ -47,8 +47,13 @@ fn screen_tile(
         (true, false) => name,
     };
     let height = h * view.scale;
-    div()
-        .id(("screen", index))
+    let tile = cx.entity();
+    // A click flashes the screen's number on it, so Tab reaches it and Enter does the same.
+    let identify = move |window: &mut Window, cx: &mut App| {
+        tile.update(cx, |panel, cx| panel.command("screen.identify", json!({ "number": number }), window, cx));
+    };
+    let name = format!("Screen {number}, {label}. Show its number on the screen");
+    ui::selectable_ringed(("screen", index), name, false, (tokens::RADIUS_2, 1.), window, cx, identify)
         .absolute()
         .left(px((x * view.scale + view.left) as f32))
         .top(px((y * view.scale + view.top) as f32))
@@ -73,9 +78,6 @@ fn screen_tile(
                 .truncate()
                 .child(label),
         )
-        .on_click(cx.listener(move |panel, _, window, cx| {
-            panel.command("screen.identify", json!({ "number": number }), window, cx);
-        }))
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -249,7 +251,7 @@ fn desk_map(panel: &Panel, state: &State, width: f64, p: Palette, window: &mut W
     let mut surface = div().relative().w_full().h(px(MAP_HEIGHT)).bg(p.well()).rounded(px(tokens::RADIUS_8));
     for (s, frame) in panel.layout.iter().zip(&frames) {
         let on_desk = !off_desk(state, s.index + 1);
-        surface = surface.child(screen_tile(panel, s.index, *frame, (s.sized, on_desk), &view, p, cx));
+        surface = surface.child(screen_tile(panel, s.index, *frame, (s.sized, on_desk), (&view, p), window, cx));
     }
     for (at, b) in state.borders.iter().enumerate() {
         let find = |number: u32| panel.layout.iter().find(|s| s.index + 1 == number as usize);
@@ -307,7 +309,14 @@ fn windows_chips(rects: &[Rect]) -> Vec<Chip> {
 }
 
 /// The screens as Windows arranges them, in pixels, with a chip where they don't meet.
-fn windows_map(panel: &Panel, state: &State, width: f64, p: Palette, cx: &mut Context<Panel>) -> Div {
+fn windows_map(
+    panel: &Panel,
+    state: &State,
+    width: f64,
+    p: Palette,
+    window: &mut Window,
+    cx: &mut Context<Panel>,
+) -> Div {
     let frames: Vec<Frame> = state
         .screens
         .iter()
@@ -319,7 +328,7 @@ fn windows_map(panel: &Panel, state: &State, width: f64, p: Palette, cx: &mut Co
     let mut surface = div().relative().w_full().h(px(MAP_HEIGHT)).bg(p.well()).rounded(px(tokens::RADIUS_8));
     for (s, frame) in state.screens.iter().zip(&frames) {
         let index = (s.number as usize).saturating_sub(1);
-        surface = surface.child(screen_tile(panel, index, *frame, (true, true), &view, p, cx));
+        surface = surface.child(screen_tile(panel, index, *frame, (true, true), (&view, p), window, cx));
     }
     for chip in windows_chips(&rects) {
         surface = surface.child(chip_at(x_at(chip.x), y_at(chip.y), chip.text, p));
@@ -337,6 +346,6 @@ pub(super) fn map(
 ) -> Div {
     match panel.layout_view {
         LayoutView::Seam => desk_map(panel, state, width, p, window, cx),
-        LayoutView::Windows => windows_map(panel, state, width, p, cx),
+        LayoutView::Windows => windows_map(panel, state, width, p, window, cx),
     }
 }

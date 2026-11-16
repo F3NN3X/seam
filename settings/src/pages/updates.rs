@@ -168,7 +168,7 @@ fn shell(p: Palette) -> Div {
 }
 
 fn title(text: impl Into<SharedString>) -> Div {
-    div().text_size(px(16.)).child(text.into())
+    div().text_size(crate::theme::scaled(16.)).child(text.into())
 }
 
 fn busy_card(label: String, p: Palette) -> Div {
@@ -177,17 +177,17 @@ fn busy_card(label: String, p: Palette) -> Div {
         .items_center()
         .gap(px(12.))
         .child(Spinner::new().color(p.text_muted))
-        .child(div().text_size(px(14.)).child(label))
+        .child(div().text_size(crate::theme::scaled(14.)).child(label))
 }
 
 fn progress_card(version: &str, done: u64, total: u64, p: Palette) -> Div {
     let percent = if total == 0 { 0. } else { (done as f32 / total as f32) * 100. };
-    let range = |text: String| div().text_size(px(12.)).text_color(p.text_muted).child(text);
+    let range = |text: String| div().text_size(crate::theme::scaled(12.)).text_color(p.text_muted).child(text);
     let spread = |left: Div, right: Div| div().flex().justify_between().child(left).child(right);
     shell(p)
         .child(spread(
             title(format!("Downloading Seam {version}")),
-            ui::tabular(div().text_size(px(16.)).text_color(p.text_secondary)).child(format!(
+            ui::tabular(div().text_size(crate::theme::scaled(16.)).text_color(p.text_secondary)).child(format!(
                 "{:.1} of {}",
                 done as f64 / 1_048_576.,
                 megabytes(total)
@@ -209,7 +209,7 @@ fn problem_card(message: String, cx: &mut Context<Panel>) -> Div {
                 .items_center()
                 .gap(px(12.))
                 .child(ui::dot(p.negative, false))
-                .child(div().text_size(px(14.)).child(message)),
+                .child(div().text_size(crate::theme::scaled(14.)).child(message)),
         )
         .child(ui::secondary("update-retry", "Try again", cx).on_click(cx.listener(|panel, _, window, cx| {
             check_now(panel, window, cx);
@@ -268,13 +268,16 @@ fn ready_card(panel: &Panel, version: String, cx: &mut Context<Panel>) -> Div {
         );
     let mut card = shell(p).child(heading);
     if !notes.is_empty() {
-        let bullets = div().text_size(px(14.)).pl(px(20.)).child(TextView::markdown("update-notes", notes.join("\n")));
+        let bullets = div()
+            .text_size(crate::theme::scaled(14.))
+            .pl(px(20.))
+            .child(TextView::markdown("update-notes", notes.join("\n")));
         card = card.child(bullets);
     }
     card.child(
         div()
             .pl(px(20.))
-            .text_size(px(13.))
+            .text_size(crate::theme::scaled(13.))
             .text_color(p.text_muted)
             .child("Seam closes for a moment while it swaps files, then starts again with your layouts"),
     )

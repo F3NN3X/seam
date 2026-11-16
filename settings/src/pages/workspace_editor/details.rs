@@ -36,13 +36,15 @@ pub(super) fn details(
         panel.editing.delay.update(cx, |slider, cx| slider.set_value(saved, window, cx));
     }
     let value = (panel.editing.delay.read(cx).value().end() * 1000.).round() as u32;
-    let ends = |text: &'static str| div().text_size(px(12.)).text_color(p.text_muted).child(text);
+    let ends = |text: &'static str| div().text_size(crate::theme::scaled(12.)).text_color(p.text_muted).child(text);
     let slider = div()
         .flex()
         .items_center()
         .gap(px(12.))
         .child(ends("0 s"))
-        .child(Slider::new(&panel.editing.delay).horizontal().w(px(160.)))
+        .child(
+            Slider::new(&panel.editing.delay).horizontal().w(px(160.)).accessibility_label("Delay before the next app"),
+        )
         .child(ends("30 s"));
     let wait = switch(
         ("wait-for-window", i),

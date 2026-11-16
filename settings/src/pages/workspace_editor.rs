@@ -172,7 +172,7 @@ pub fn app_icon(rule: &Rule, icons: &Icons, p: Palette) -> Div {
         Some(image) => tile.child(img(image).size(px(16.))),
         None => {
             let letter = app_title(rule).chars().next().map(|c| c.to_uppercase().to_string()).unwrap_or_default();
-            tile.text_size(px(12.)).text_color(p.text_secondary).child(letter)
+            tile.text_size(crate::theme::scaled(12.)).text_color(p.text_secondary).child(letter)
         }
     }
 }

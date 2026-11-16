@@ -552,6 +552,7 @@ pub fn render(panel: &mut Panel, window: &mut Window, cx: &mut Context<Panel>) -
     if current.as_ref().is_some_and(|c| known != Some(c.id.as_str())) && panel.asking_status.is_none() {
         panel.ask_status(cx);
     }
+    let count = list.len();
     let cards: Vec<AnyElement> = list
         .iter()
         .enumerate()
@@ -566,7 +567,7 @@ pub fn render(panel: &mut Panel, window: &mut Window, cx: &mut Context<Panel>) -
                 (true, false) => Moved::Some,
             });
             let marks = Marks { picked, active: moved, default: default.as_deref() == Some(ws.id.as_str()) };
-            list::item(i, ws, &panel.icons, marks, p, cx)
+            list::item((i, count), ws, &panel.icons, marks, p, window, cx)
         })
         .collect();
     let sidebar = div()
@@ -576,7 +577,7 @@ pub fn render(panel: &mut Panel, window: &mut Window, cx: &mut Context<Panel>) -
         .gap(px(tokens::SPACE_8))
         .w(px(LIST_WIDTH))
         .children(cards)
-        .child(list::new_empty(p, cx));
+        .child(list::new_empty(count.checked_sub(1), p, window, cx));
     let body = div().flex().items_start().gap(px(tokens::SPACE_16)).child(sidebar);
     let body = match current {
         Some(ws) => body.child(detail(panel, ws, window, cx)),

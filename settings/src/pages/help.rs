@@ -96,23 +96,45 @@ fn getting_started(panel: &Panel, p: Palette, cx: &mut Context<Panel>) -> Option
 }
 
 /// A topic as a row of 48 px: its name and a chevron. It opens in place.
-fn topic_row(at: usize, p: Palette, window: &mut Window, cx: &mut Context<Panel>) -> AnyElement {
+fn topic_row(
+    at: usize,
+    (before, after): (Option<usize>, Option<usize>),
+    p: Palette,
+    window: &mut Window,
+    cx: &mut Context<Panel>,
+) -> AnyElement {
     let title = TOPICS[at].title;
     let view = cx.entity();
-    ui::selectable(("help-topic", at), title, false, window, cx, move |_, cx| {
+    let neighbour = |to: Option<usize>, window: &mut Window, cx: &mut Context<Panel>| {
+        to.map(|to| ui::item_focus(("help-topic", to), window, cx))
+    };
+    let (before, after) = (neighbour(before, window, cx), neighbour(after, window, cx));
+    let topic = ui::selectable(("help-topic", at), title, false, window, cx, move |_, cx| {
         view.update(cx, |panel, cx| panel.open_help_topic(at, cx));
-    })
-    .flex()
-    .items_center()
-    .justify_between()
-    .gap(px(tokens::SPACE_16))
-    .h(px(tokens::SIZE_ROW))
-    .px(px(tokens::SPACE_16))
-    .hover(|d| d.bg(p.surface_raised))
-    .active(|d| d.bg(p.surface_sidebar))
-    .child(text_style(div(), tokens::BODY).child(title))
-    .child(Icon::new(assets::IconName::ChevronRight).size(px(tokens::SIZE_ICON)).text_color(p.text_muted))
-    .into_any_element()
+    });
+    ui::arrow_keys(topic, before, after)
+        .flex()
+        .items_center()
+        .justify_between()
+        .gap(px(tokens::SPACE_16))
+        .min_h(px(tokens::SIZE_ROW))
+        .px(px(tokens::SPACE_16))
+        .hover(|d| ui::lit(d, p.surface_raised, p))
+        .active(|d| ui::lit(d, p.surface_sidebar, p))
+        .child(text_style(div(), tokens::BODY).child(title))
+        .child(Icon::new(assets::IconName::ChevronRight).size(px(tokens::SIZE_ICON)).text_color(p.text_muted))
+        .into_any_element()
+}
+
+/// The rows of the topics titled `titles`, with Up and Down between them.
+fn topic_rows(titles: &[&str], p: Palette, window: &mut Window, cx: &mut Context<Panel>) -> Vec<AnyElement> {
+    let ats: Vec<usize> = titles.iter().filter_map(|title| help::position(title)).collect();
+    (0..ats.len())
+        .map(|k| {
+            let around = (k.checked_sub(1).map(|k| ats[k]), ats.get(k + 1).copied());
+            topic_row(ats[k], around, p, window, cx)
+        })
+        .collect()
 }
 
 /// The topics of one page, under its name.
@@ -122,8 +144,8 @@ fn topic_card(name: &str, titles: &[&str], p: Palette, window: &mut Window, cx: 
         .pt(px(tokens::SPACE_12))
         .pb(px(tokens::SPACE_8))
         .child(name.to_string());
-    let rows = titles.iter().filter_map(|title| help::position(title)).map(|at| topic_row(at, p, window, cx));
-    let list = rows.map(|row| div().border_t_1().border_color(p.hairline).child(row));
+    let rows = topic_rows(titles, p, window, cx);
+    let list = rows.into_iter().map(|row| div().border_t_1().border_color(p.hairline).child(row));
     div()
         .flex()
         .flex_col()
@@ -199,8 +221,7 @@ fn settings(topic: &Topic, p: Palette, cx: &mut Context<Panel>) -> Option<AnyEle
 
 /// "Related": the topics to read next.
 fn related(topic: &Topic, p: Palette, window: &mut Window, cx: &mut Context<Panel>) -> Option<AnyElement> {
-    let rows: Vec<AnyElement> =
-        topic.related.iter().filter_map(|title| help::position(title)).map(|at| topic_row(at, p, window, cx)).collect();
+    let rows = topic_rows(topic.related, p, window, cx);
     (!rows.is_empty()).then(|| section("Related", card(rows, p), p))
 }
 

@@ -179,7 +179,7 @@ pub fn zones_section(
     for (i, (screen, name)) in mons.iter().enumerate() {
         let saved = ws.zones.get(screen);
         let moved = screen_moved(panel, ws, screen).then(|| {
-            let word = div().text_size(px(12.)).text_color(p.text_secondary).child("Moved");
+            let word = div().text_size(crate::theme::scaled(12.)).text_color(p.text_secondary).child("Moved");
             div()
                 .flex()
                 .items_center()
@@ -201,7 +201,11 @@ pub fn zones_section(
             .on_click(cx.listener(move |panel, _, window, cx| {
                 set_zones(panel, &id, &screen, None, note.clone(), window, cx);
             }));
-        let about = div().text_size(px(13.)).text_color(p.text_muted).child("Not connected").into_any_element();
+        let about = div()
+            .text_size(crate::theme::scaled(13.))
+            .text_color(p.text_muted)
+            .child("Not connected")
+            .into_any_element();
         let control =
             div().flex().items_center().gap(px(8.)).child(zones_thumb(Some(saved), p).opacity(0.5)).child(remove);
         rows.push(div().text_color(p.text_muted).child(ui::row_with(model, Some(about), control)).into_any_element());

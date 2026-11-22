@@ -9,6 +9,8 @@ use windows::core::BOOL;
 
 /// A worker has listed the windows that carry a zone stamp.
 pub const WM_APP_REFIT: u32 = WM_APP + 15;
+/// A run has moved the last window it found back, for the restore offer to look after it.
+pub const WM_APP_REFIT_DONE: u32 = WM_APP + 45;
 /// Windows is still moving windows for a while after a display change.
 const DEBOUNCE_MS: u32 = 1500;
 
@@ -55,6 +57,11 @@ pub fn display_changed() {
 
 /// Line Up closed, so a re-fit that was waiting for it can go.
 pub fn line_up_ended() {
+    with_engine(Engine::refit_resume);
+}
+
+/// A switch ended, so a re-fit that was waiting for it can go.
+pub fn switch_ended() {
     with_engine(Engine::refit_resume);
 }
 
@@ -153,7 +160,13 @@ impl Engine {
         if !self.settings.refit || !self.active() {
             return;
         }
-        if self.drag.is_some() || overlay::is_active() || self.refit.busy || self.refit.run.is_some() {
+        // A switch places windows itself, and stamps them where it puts them.
+        if self.drag.is_some()
+            || overlay::is_active()
+            || crate::switcher::switching()
+            || self.refit.busy
+            || self.refit.run.is_some()
+        {
             self.refit.waiting = true;
             return;
         }
@@ -189,7 +202,11 @@ impl Engine {
             self.refit_pump();
             return;
         }
-        let free = self.drag.is_none() && self.refit.run.is_none() && !self.refit.busy && !overlay::is_active();
+        let free = self.drag.is_none()
+            && self.refit.run.is_none()
+            && !self.refit.busy
+            && !overlay::is_active()
+            && !crate::switcher::switching();
         if self.refit.waiting && free {
             self.refit.waiting = false;
             self.refit_schedule();
@@ -214,6 +231,9 @@ impl Engine {
                 log::info!("zone refit: {} found, {} moved, {} skipped", run.found, run.moved, run.skipped);
                 // Every window of a stack was fitted on its own, so its top goes back over the rest.
                 self.stack_raise_tops();
+                unsafe {
+                    let _ = PostMessageW(Some(hwnd_of(self.owner)), WM_APP_REFIT_DONE, WPARAM(0), LPARAM(0));
+                }
             }
             self.refit_resume();
         }

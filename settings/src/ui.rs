@@ -578,6 +578,11 @@ pub fn primary(id: impl Into<ElementId>, label: impl Into<SharedString>) -> Butt
 
 /// A dashed note, for what needs saying but not doing right now. It may carry one button.
 pub fn note(text: impl Into<SharedString>, action: Option<Button>, p: Palette) -> Div {
+    note_with(text, action.map(IntoElement::into_any_element), p)
+}
+
+/// `note`, with any element for its action, such as a button that opens a menu.
+pub fn note_with(text: impl Into<SharedString>, action: Option<AnyElement>, p: Palette) -> Div {
     div()
         .flex()
         .items_center()

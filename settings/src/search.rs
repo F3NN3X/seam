@@ -319,6 +319,12 @@ const ENTRIES: &[Entry] = &[
     ),
     entry(
         Page::Workspaces,
+        "Offer to restore after screens change",
+        "When screens are plugged in or out, or the PC wakes, Seam asks before putting the workspace's windows back",
+        "restore snap back plug unplug monitor wake sleep display change balloon",
+    ),
+    entry(
+        Page::Workspaces,
         "Apps that aren't open",
         "What Update from screen picks for each one first. You choose for each app when you update",
         "update capture remove closed delete keep turn off",

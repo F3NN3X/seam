@@ -1,7 +1,7 @@
 //! A desk is one set of connected screens. The tray and the panel both resolve
 //! it from here, so they always agree on what's lined up.
 
-use crate::config::{Config, Desk, SavedBorder, WindowSize};
+use crate::config::{Config, Desk, DeskScreen, SavedBorder, WindowSize};
 use crate::geom::{EdgeMap, Rect, Side, corridor, facing, facing_gap, predict_centred, touching};
 use crate::layout::Link;
 use crate::log;
@@ -420,6 +420,34 @@ pub fn note_active(cfg: &mut Config, sig: &str, mons: &[Mon], now: u64) {
         desk.name = default_name(mons);
     }
     desk.last_seen = now;
+}
+
+/// The screens as a desk remembers them: where Windows has each, and where it stands on the
+/// desk (in mm) once the desk is lined up. Without links there is no physical position.
+pub fn screens_of(mons: &[Mon], links: &[Link]) -> Vec<DeskScreen> {
+    let placed = if links.is_empty() { Vec::new() } else { physical_layout(mons, links) };
+    mons.iter()
+        .enumerate()
+        .map(|(i, m)| DeskScreen {
+            id: m.id.clone(),
+            number: i as u32 + 1,
+            name: m.name.clone(),
+            rect: [m.rect.left, m.rect.top, m.rect.width(), m.rect.height()],
+            primary: m.primary,
+            mm: placed.iter().find(|p| p.index == i).map(|p| [p.x as f32, p.y as f32, p.w as f32, p.h as f32]),
+        })
+        .collect()
+}
+
+/// Write the connected desk's screens when they differ from what it has. Returns whether it changed.
+pub fn note_screens(cfg: &mut Config, sig: &str, mons: &[Mon], links: &[Link]) -> bool {
+    let Some(desk) = cfg.desks.get_mut(sig) else { return false };
+    let screens = screens_of(mons, links);
+    if desk.screens == screens {
+        return false;
+    }
+    desk.screens = screens;
+    true
 }
 
 #[cfg(test)]

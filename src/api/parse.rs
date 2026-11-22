@@ -65,6 +65,10 @@ fn command(method: &str, p: &Value) -> Result<Command, RpcError> {
             workspace_edit(p, edit)?
         }
         "workspace.move" => workspace_move(p)?,
+        "workspace.copy_from_desk" => {
+            let from = str_param(p, "from")?.ok_or_else(|| RpcError::new(INVALID_PARAMS, "from is required"))?;
+            Command::WorkspaceCopyFromDesk { from }
+        }
         "workspace.remove_row" => workspace_edit(p, Edit::RemoveRow(row_param(p)?))?,
         "workspace.set_show_all" => workspace_edit(p, Edit::ShowAll(on_param(p)?))?,
         "workspace.get" => Command::WorkspaceGet {
@@ -530,6 +534,7 @@ fn allowed(command: &Command, peer: Peer) -> Result<(), RpcError> {
         | Command::WorkspaceCreate { .. }
         | Command::WorkspaceEdit { .. }
         | Command::WorkspaceMove { .. }
+        | Command::WorkspaceCopyFromDesk { .. }
         | Command::CursorEasingSet(_)
         | Command::LayoutShow(_) => peer.panel,
         Command::AppQuit
@@ -794,6 +799,8 @@ mod tests {
             (request("workspace.move", r#"{"id":"ws_1"}"#), panel, INVALID_PARAMS),
             (request("workspace.move", r#"{"to":2}"#), panel, INVALID_PARAMS),
             (request("workspace.move", r#"{"id":"ws_1","to":2}"#), anyone, FORBIDDEN),
+            (request("workspace.copy_from_desk", "{}"), panel, INVALID_PARAMS),
+            (request("workspace.copy_from_desk", r#"{"from":"a|b"}"#), anyone, FORBIDDEN),
             (request("workspace.add_window", "{}"), anyone, INVALID_PARAMS),
             (request("workspace.add_window", r#"{"id":"ws_1","number":1}"#), anyone, INVALID_PARAMS),
             (request("workspace.add_window", r#"{"number":0}"#), anyone, INVALID_PARAMS),
@@ -901,6 +908,7 @@ mod tests {
             ("screen.reset_sizes", "{}"),
             ("workspace.add_window", r#"{"number":1}"#),
             ("workspace.move", r#"{"id":"ws_1","to":2}"#),
+            ("workspace.copy_from_desk", r#"{"from":"a|b"}"#),
             ("overview.show", "{}"),
             ("app.quit", "{}"),
             ("session.restore", "{}"),
@@ -942,6 +950,8 @@ mod tests {
         let turn_on = request("workspace.edit_row", r#"{"id":"a","row":0,"off":false}"#);
         assert_eq!(code(&turn_on, assistant(false)).map_err(|e| e.0), Err(FORBIDDEN));
         assert!(code(&turn_on, panel).is_ok());
+        let copied = code(&request("workspace.copy_from_desk", r#"{"from":"a|b"}"#), panel);
+        assert_eq!(copied, Ok(Command::WorkspaceCopyFromDesk { from: "a|b".into() }));
         let moved = code(&request("workspace.move", r#"{"id":"a","to":2}"#), panel);
         assert_eq!(moved, Ok(Command::WorkspaceMove { id: "a".into(), to: 2 }));
         assert_eq!(row(r#"{"id":"a","row":0}"#), Err(INVALID_PARAMS));

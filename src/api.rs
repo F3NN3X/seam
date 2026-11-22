@@ -197,6 +197,10 @@ pub enum Command {
         id: String,
         to: usize,
     },
+    /// `workspace.copy_from_desk`: the workspaces of another desk, copied onto this empty one.
+    WorkspaceCopyFromDesk {
+        from: String,
+    },
     /// `workspace.get`: the rows of one workspace on this desk, read from the snapshot.
     WorkspaceGet {
         id: String,
@@ -398,6 +402,7 @@ pub fn desks_list(snapshot: &Snapshot) -> Value {
             "sig": sig,
             "name": desk["name"],
             "screens": sig.split('|').count(),
+            "workspaces": desk["workspaces"].as_array().map_or(0, Vec::len),
             "active": sig == active,
         })
     });

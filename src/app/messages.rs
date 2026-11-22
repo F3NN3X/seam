@@ -216,6 +216,18 @@ pub(super) unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARA
                 snap::refit_found();
                 LRESULT(0)
             }
+            WM_APP_REFIT_DONE => {
+                with_app(|a| {
+                    if a.restore_armed {
+                        restore_look(a);
+                    }
+                });
+                LRESULT(0)
+            }
+            WM_TIMER if wparam.0 == TIMER_RESTORE_OFFER => {
+                with_app(restore_look);
+                LRESULT(0)
+            }
             snap::WM_APP_SWAP_LOOK => {
                 snap::look_ready();
                 LRESULT(0)
@@ -314,6 +326,7 @@ pub(super) unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARA
                 // If the app is busy (menu open), keep the timer and try again.
                 if with_app(refresh).is_some() {
                     let _ = KillTimer(Some(hwnd), TIMER_REFRESH);
+                    with_app(arm_restore_offer);
                 }
                 LRESULT(0)
             }
@@ -387,6 +400,9 @@ unsafe fn on_balloon_click(hwnd: HWND) {
             }
             Some(BalloonAction::OpenWorkspace) => {
                 with_app(open_offered);
+            }
+            Some(BalloonAction::RestoreAfterScreens) => {
+                with_app(restore_offered);
             }
             Some(BalloonAction::RestoreSession) => {
                 with_app(|a| {

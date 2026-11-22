@@ -464,3 +464,55 @@ fn a_config_file_loads_without_clear_commands_or_session_items() {
     assert_eq!(tab["command_sealed"], "c2Vh");
     assert!(desk.last_session.as_ref().unwrap()["windows"][0].get("item").is_none());
 }
+
+#[test]
+fn desks_without_screens_load_unchanged() {
+    let file = json!({ "version": CURRENT_VERSION, "desks": { "a|b": { "name": "Desk" } } });
+    let loaded: Config = serde_json::from_value(file).unwrap();
+    assert!(loaded.desks["a|b"].screens.is_empty());
+    // And nothing is written for them.
+    let saved = serde_json::to_value(&loaded).unwrap();
+    assert!(saved["desks"]["a|b"].get("screens").is_none());
+}
+
+#[test]
+fn screens_round_trip() {
+    let screens = vec![
+        DeskScreen {
+            id: "a".into(),
+            number: 1,
+            name: "Left".into(),
+            rect: [0, 0, 1920, 1080],
+            primary: true,
+            mm: None,
+        },
+        DeskScreen {
+            id: "b".into(),
+            number: 2,
+            name: "Right".into(),
+            rect: [1920, -10, 2560, 1440],
+            primary: false,
+            mm: Some([530.5, 0.0, 600.0, 340.0]),
+        },
+    ];
+    let mut config = Config::default();
+    config.desks.insert("a|b".into(), Desk { screens: screens.clone(), ..Desk::default() });
+    let saved = serde_json::to_value(&config).unwrap();
+    // A false main screen and an unknown position are left out.
+    assert!(saved["desks"]["a|b"]["screens"][1].get("primary").is_none());
+    assert!(saved["desks"]["a|b"]["screens"][0].get("mm").is_none());
+    let back: Config = serde_json::from_value(saved).unwrap();
+    assert_eq!(back.desks["a|b"].screens, screens);
+}
+
+#[test]
+fn offer_restore_defaults_off_and_is_skipped_when_off() {
+    assert!(!Config::default().workspaces_offer_restore);
+    let saved = serde_json::to_value(Config::default()).unwrap();
+    assert!(saved.get("workspaces_offer_restore").is_none());
+    let on: Config = serde_json::from_value(json!({ "workspaces_offer_restore": true })).unwrap();
+    assert!(on.workspaces_offer_restore);
+    assert_eq!(serde_json::to_value(&on).unwrap()["workspaces_offer_restore"], true);
+    let older: Config = serde_json::from_value(json!({})).unwrap();
+    assert!(!older.workspaces_offer_restore);
+}

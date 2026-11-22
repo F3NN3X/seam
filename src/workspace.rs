@@ -13,6 +13,7 @@ use std::path::{Component, Path, Prefix};
 mod assist;
 mod capture;
 mod close;
+mod copy;
 mod export;
 mod geometry;
 mod items;
@@ -32,6 +33,7 @@ pub use capture::{
     take_window_place, tame_delay, why_not,
 };
 pub use close::{Fact, Why, sort_out, still_ours};
+pub use copy::{CopyError, OfferFacts, copy_between, copy_sources, copy_workspaces, map_screens, should_offer};
 pub use export::{
     Export, OpenWith, ScreenInfo, explorer_arg, has_places, import, open_with_for, page_of, safe_aumid, safe_exe,
     safe_folder, safe_open_with, safe_url, without_open_with, without_places,

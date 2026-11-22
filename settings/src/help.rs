@@ -455,11 +455,22 @@ pub const TOPICS: &[Topic] = &[
                 "**Add window to workspace 1** to **9** on Shortcuts add the focused window to that workspace, counted in the order of the list. A window with no row there gets a new one at the end with where it is now and **Start if it's closed** off, so a switch places it but never starts it. A window that already has a row there updates that row's place and keeps its start details and order. It never takes the window out of another workspace. Seam's own windows, apps under Left alone, apps running as administrator, windows kept out of workspace switches and windows with no taskbar button are refused, and a notice says why. A notification offers Undo for 8 seconds. None has a key until you set one.",
             ),
             Text(
+                "A desk with no workspaces yet offers to copy another desk's when that one has the same number of screens: **Copy workspaces from** puts each screen's apps on the screen in the same place, the same monitor first, then the main screen, then left to right. The workspace in use, the default and the sign-in choice stay behind, and a notification offers Undo for 8 seconds. Seam learns a desk's screens when it is connected, so a desk you haven't connected since this version isn't offered.",
+            ),
+            Text(
+                "**Offer to restore after screens change** is off until you turn it on. Then, when screens are plugged in or out or the PC wakes and a window of the workspace in use isn't where it puts it, a notice asks to restore the workspace. Clicking it puts that workspace's windows back and leaves other windows alone. With **Keep windows in their zones** on, Seam waits for it to finish first.",
+            ),
+            Text(
                 "The workspace in use shows as Active in the list, and as Active, moved once one of its windows moved. **Set as default**, on a workspace's menu, makes it the one in use when Seam starts and none is remembered.",
             ),
         ],
         settings: &[
             Setting { title: "Put apps in place when they open", page: Page::Workspaces, section: "All workspaces" },
+            Setting {
+                title: "Offer to restore after screens change",
+                page: Page::Workspaces,
+                section: "All workspaces",
+            },
             Setting { title: "Apps that aren't open", page: Page::Workspaces, section: "All workspaces" },
             Setting {
                 title: "Bring back minimized windows",

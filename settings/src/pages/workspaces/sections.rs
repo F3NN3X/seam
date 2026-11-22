@@ -121,6 +121,20 @@ fn auto_apply_row(panel: &Panel, window: &mut Window, cx: &mut Context<Panel>) -
     row("Put apps in place when they open", Some(about.into()), toggle, p)
 }
 
+/// "Offer to restore after screens change" (D746): this PC's own, off until it is turned on.
+fn offer_restore_row(panel: &Panel, window: &mut Window, cx: &mut Context<Panel>) -> Row {
+    let p = crate::theme::palette(cx);
+    let view = cx.entity();
+    let title = "Offer to restore after screens change";
+    let on = panel.config.workspaces_offer_restore;
+    let toggle = switch("offer-restore", title, on, window, cx, move |on, window, cx| {
+        view.update(cx, |panel, cx| panel.patch(json!({ "workspaces_offer_restore": on }), window, cx));
+    });
+    let about =
+        "When screens are plugged in or out, or the PC wakes, Seam asks before putting the workspace's windows back";
+    row(title, Some(about.into()), toggle, p)
+}
+
 /// "Remember folders and pages" (D330), and while some are still saved, the button that
 /// forgets them on every desk.
 fn places_row(panel: &Panel, window: &mut Window, cx: &mut Context<Panel>) -> Row {
@@ -168,6 +182,11 @@ fn closed_row(panel: &Panel, window: &mut Window, cx: &mut Context<Panel>) -> Ro
 
 /// "All workspaces": what holds whichever one is in use.
 pub(super) fn all_section(panel: &Panel, p: Palette, window: &mut Window, cx: &mut Context<Panel>) -> AnyElement {
-    let rows = vec![auto_apply_row(panel, window, cx), places_row(panel, window, cx), closed_row(panel, window, cx)];
+    let rows = vec![
+        auto_apply_row(panel, window, cx),
+        offer_restore_row(panel, window, cx),
+        places_row(panel, window, cx),
+        closed_row(panel, window, cx),
+    ];
     section("All workspaces", card(rows, p), p)
 }

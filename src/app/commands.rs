@@ -369,6 +369,7 @@ fn command_result(app: &mut App, command: Command, panel: bool) -> Reply {
             start_switch(app, id.as_deref(), name.as_deref(), alongside, Via::api(panel))
         }
         Command::WorkspaceMove { id, to } => move_workspace(app, &id, to),
+        Command::WorkspaceCopyFromDesk { from } => copy_from_desk(app, &from),
         Command::WorkspaceUpdate { id, workspace } => update_from_panel(app, &id, workspace),
         Command::WorkspaceSnapBack { alongside } => snap_back(app, alongside, Via::api(panel)),
         Command::WorkspaceSwitchBack { alongside } => switch_back(app, alongside, Via::api(panel)),

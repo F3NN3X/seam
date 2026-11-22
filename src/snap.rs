@@ -43,7 +43,7 @@ mod tiled;
 
 pub use adhoc::{adhoc_area, adhoc_dragged, fit, is_adhoc};
 pub use overview::{overview_place, overview_targets};
-pub use refit::{WM_APP_REFIT, display_changed, found as refit_found, line_up_ended};
+pub use refit::{WM_APP_REFIT, WM_APP_REFIT_DONE, display_changed, found as refit_found, line_up_ended, switch_ended};
 pub use stacks::{
     StackInfo, WM_APP_STACKS, WM_APP_STACKS_FOUND, cycle as stack_cycle, rebuild as rebuild_stacks, set as stack_set,
     stacks, stacks_found, take_joined,

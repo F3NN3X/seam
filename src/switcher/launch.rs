@@ -218,17 +218,38 @@ fn open_item(rule: &Rule, item: &Item) -> Result<Option<&'static str>, &'static 
             // its tab opens without it.
             let commands: Vec<Option<String>> =
                 tabs.iter().map(|t| t.command_sealed.as_deref().and_then(seam::seal::unseal)).collect();
-            let dropped = tabs
-                .iter()
-                .zip(&commands)
-                .any(|(t, c)| c.is_none() && (t.command_sealed.is_some() || t.command.is_some()));
+            let foreign = foreign_command(tabs, &commands);
             let (profiles, _) = seam::apps::terminal_profiles();
+            let unused = workspace::unused_commands(tabs, &profiles, &commands);
             match workspace::terminal_args(tabs, &profiles, &commands) {
-                Ok(args) if shell_open(&wt, Some(&args)) => Ok(dropped.then_some(FOREIGN_COMMAND)),
+                Ok(args) if shell_open(&wt, Some(&args)) => {
+                    let note = command_note(foreign, unused);
+                    if unused && !foreign {
+                        log::info!(
+                            "{app}: a startup command wasn't used, its profile isn't there or runs no shell Seam knows"
+                        );
+                    }
+                    Ok(note)
+                }
                 Ok(_) => refused("it didn't start"),
                 Err(why) => refused(why),
             }
         }
+    }
+}
+
+/// Whether a tab's command didn't open here: it was sealed elsewhere, or was typed into the file in clear.
+fn foreign_command(tabs: &[workspace::Tab], commands: &[Option<String>]) -> bool {
+    tabs.iter().zip(commands).any(|(t, c)| c.is_none() && (t.command_sealed.is_some() || t.command.is_some()))
+}
+
+/// What a started Terminal item says it didn't do: a command from elsewhere never runs, and one
+/// whose profile is missing or runs no shell Seam knows is left out.
+fn command_note(foreign: bool, unused: bool) -> Option<&'static str> {
+    match (foreign, unused) {
+        (true, _) => Some(FOREIGN_COMMAND),
+        (false, true) => Some("item refused"),
+        (false, false) => None,
     }
 }
 
@@ -239,4 +260,29 @@ const DRIVE_REMOTE_TYPE: u32 = 4;
 fn is_network_drive(exe: &str) -> bool {
     let root: Vec<u16> = exe.chars().take(2).chain(['\\']).map(|c| c as u16).chain([0]).collect();
     unsafe { GetDriveTypeW(PCWSTR(root.as_ptr())) == DRIVE_REMOTE_TYPE }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use workspace::Tab;
+
+    #[test]
+    fn a_command_that_didnt_open_here_is_foreign() {
+        let sealed = Tab { command_sealed: Some("x".into()), ..Tab::default() };
+        let typed = Tab { command: Some("calc".into()), ..Tab::default() };
+        let none = Tab::default();
+        assert!(foreign_command(std::slice::from_ref(&sealed), &[None]));
+        assert!(foreign_command(&[typed], &[None]));
+        assert!(!foreign_command(&[sealed], &[Some("ls".into())]));
+        assert!(!foreign_command(&[none], &[None]));
+    }
+
+    #[test]
+    fn a_started_terminal_says_what_it_left_out() {
+        assert_eq!(command_note(true, true), Some(FOREIGN_COMMAND));
+        assert_eq!(command_note(true, false), Some(FOREIGN_COMMAND));
+        assert_eq!(command_note(false, true), Some("item refused"));
+        assert_eq!(command_note(false, false), None);
+    }
 }

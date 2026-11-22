@@ -29,6 +29,7 @@ pub const TERMINAL_AUMIDS: [&str; 2] =
 const NOT_LOCAL: &str = r"Use a full path on this PC's own drive, like C:\Projects";
 const NOT_WEB: &str = "Use a web address starting with http:// or https://";
 const BAD_COMMAND: &str = "A command can't have line breaks or hidden characters";
+const TOO_LONG: &str = "Those commands are too long together";
 const CMD_QUOTES: &str = "A Command Prompt command can't have quotes";
 
 fn exe_name(exe: &str) -> String {
@@ -45,7 +46,8 @@ fn exe_stem(exe: &str) -> String {
 /// it's opened.
 pub fn folder_ok(folder: &str) -> Result<String, &'static str> {
     let folder = folder.trim();
-    let plain = folder.len() <= MAX_OPEN_WITH && !folder.contains('%') && !folder.chars().any(invisible);
+    // A `;` would end a Terminal tab's arguments, so no folder has one.
+    let plain = folder.len() <= MAX_OPEN_WITH && !folder.contains(['%', ';']) && !folder.chars().any(invisible);
     if !plain || !safe_folder(folder) {
         return Err(NOT_LOCAL);
     }
@@ -205,6 +207,33 @@ pub fn terminal_args(tabs: &[Tab], profiles: &[Profile], commands: &[Option<Stri
     if line.chars().count() > MAX_LINE { Err("That terminal is too long") } else { Ok(line) }
 }
 
+/// Whether these tabs could make a command line past the cap whatever shell their profiles run:
+/// each command counted as its longer form, encoded for PowerShell or `;` escaped for Command Prompt.
+pub fn terminal_too_long(tabs: &[Tab]) -> bool {
+    let mut line = "-w new ".len();
+    for tab in tabs {
+        line += "new-tab".len() + " ; ".len();
+        line += tab.profile.as_ref().map_or(0, |p| p.chars().count() + " -p \"\"".len());
+        line += tab.folder.as_ref().map_or(0, |f| f.chars().count() + " -d \"\"".len());
+        if let Some(command) = &tab.command {
+            let units = command.encode_utf16().count();
+            let powershell = " powershell.exe -NoExit -EncodedCommand ".len() + (units * 2).div_ceil(3) * 4;
+            let cmd = " cmd.exe /k ".len() + command.chars().count() * 2;
+            line += powershell.max(cmd);
+        }
+    }
+    line > MAX_LINE
+}
+
+/// Whether a tab's command is left out of the line: its profile isn't in `profiles` or runs
+/// neither PowerShell nor Command Prompt.
+pub fn unused_commands(tabs: &[Tab], profiles: &[Profile], commands: &[Option<String>]) -> bool {
+    tabs.iter().zip(commands).any(|(tab, command)| {
+        let profile = tab.profile.as_deref().and_then(|name| profiles.iter().find(|p| p.name == name));
+        command.is_some() && profile.is_none_or(|p| shell_of(p) == Shell::Other)
+    })
+}
+
 /// An item as it's stored, or why not, for the row it's on: the row's app must be the one the
 /// kind needs, every address, folder, profile and command must pass its check, and the lists
 /// must be within their limits. A Terminal tab's sealed command and its flags are left as they are.
@@ -250,7 +279,11 @@ pub fn check_item(item: &Item, exe: &str, aumid: Option<&str>) -> Result<Item, &
                 let command = t.command.as_deref().map(command_ok).transpose()?.flatten();
                 Ok(Tab { profile, folder, command, ..t.clone() })
             };
-            Ok(Item::Terminal { tabs: tabs.iter().map(tab).collect::<Result<_, _>>()? })
+            let tabs = tabs.iter().map(tab).collect::<Result<Vec<_>, _>>()?;
+            if terminal_too_long(&tabs) {
+                return Err(TOO_LONG);
+            }
+            Ok(Item::Terminal { tabs })
         }
     }
 }
@@ -285,6 +318,7 @@ mod tests {
             r"C:\a.",
             "C:\\a\u{202e}b",
             "C:\\a\u{200b}",
+            r"C:\a;b",
             r"relative\path",
             r"C:",
             r"\\?\C:\x",
@@ -448,6 +482,26 @@ mod tests {
         assert!(command_ok(&"x".repeat(MAX_COMMAND + 1)).is_err());
         let item = Item::Terminal { tabs: vec![Tab { command: Some("a\nb".into()), ..Tab::default() }] };
         assert_eq!(check_item(&item, "", Some(WT)), Err(BAD_COMMAND));
+    }
+
+    #[test]
+    fn terminal_commands_are_capped_in_the_worst_case() {
+        let long = |n: usize| Tab { command: Some("x".repeat(n)), ..Tab::default() };
+        assert!(!terminal_too_long(&[long(1000), long(1000)]));
+        let eight: Vec<Tab> = (0..8).map(|_| long(MAX_COMMAND)).collect();
+        assert!(terminal_too_long(&eight));
+        assert_eq!(check_item(&Item::Terminal { tabs: eight }, "", Some(WT)), Err(TOO_LONG));
+    }
+
+    #[test]
+    fn commands_for_missing_or_other_profiles_are_reported_unused() {
+        let profiles = [profile("PowerShell", Some("pwsh.exe")), profile("Ubuntu", Some("wsl.exe"))];
+        let some = [Some("ls".to_string())];
+        assert!(!unused_commands(&[tab("PowerShell", None)], &profiles, &some));
+        assert!(unused_commands(&[tab("Ubuntu", None)], &profiles, &some));
+        assert!(unused_commands(&[tab("Gone", None)], &profiles, &some));
+        assert!(unused_commands(&[tab("PowerShell", None)], &[], &some));
+        assert!(!unused_commands(&[tab("Ubuntu", None)], &profiles, &[None]));
     }
 
     #[test]

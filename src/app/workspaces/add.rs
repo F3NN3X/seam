@@ -127,7 +127,7 @@ fn save(app: &mut App, job: &Capturing, read: Result<(Rule, isize), String>) -> 
     let name = label(&rule);
     let (bound, _) = switcher::capture_bindings(&old, &[hwnd], remember);
     let added = workspace::add_window(&old, rule, &bound);
-    super::capture::update_rows(app, id, workspace::to_value(&added.workspace), Some(added.row))?;
+    super::capture::update_rows(app, id, workspace::to_value(&added.workspace), Some(added.row), false)?;
     if let Some(place) = added.place {
         store_place(app, id, added.row, place);
     }

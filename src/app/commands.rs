@@ -12,15 +12,18 @@ pub(super) fn busy(message: &str) -> Reply {
 
 /// The panel's patch with its items checked and each startup command in it sealed, so none
 /// reaches config.json in clear and none is one the panel didn't have (D736).
-fn seal_items(app: &App, patch: &mut Value) {
-    let known: std::collections::HashSet<String> =
-        app.cfg.desks.values().flat_map(|d| workspace::sealed_in(&d.workspaces)).collect();
+fn seal_items(app: &App, patch: &mut Value) -> Result<(), &'static str> {
+    let saved: Vec<Value> = app.cfg.desks.values().flat_map(|d| d.workspaces.clone()).collect();
+    let (sealed, clear) = (workspace::sealed_in(&saved), workspace::unsealed_in(&saved, &seam::seal::unseal));
+    let stored = workspace::tabs_in(&saved);
+    let held = workspace::Held { sealed: &sealed, clear: &clear, stored: &stored };
     let desks = patch.get_mut("desks").and_then(Value::as_object_mut);
     for desk in desks.into_iter().flat_map(|d| d.values_mut()) {
         if let Some(list) = desk.get_mut("workspaces").and_then(Value::as_array_mut) {
-            workspace::seal_patch(list, &known, &seam::seal::seal);
+            workspace::seal_patch(list, &held, &seam::seal::seal)?;
         }
     }
+    Ok(())
 }
 
 /// Merge a patch into the settings, keep it only if the result is a valid
@@ -262,7 +265,9 @@ fn command_result(app: &mut App, command: Command, panel: bool) -> Reply {
     let ok = || Ok(json!({ "ok": true }));
     match command {
         Command::ConfigPatch(mut patch) => {
-            seal_items(app, &mut patch);
+            if let Err(why) = seal_items(app, &mut patch) {
+                return refused(why);
+            }
             patch_config(app, &patch)
         }
         Command::RemapSet(on) => {
@@ -347,7 +352,7 @@ fn command_result(app: &mut App, command: Command, panel: bool) -> Reply {
             start_switch(app, id.as_deref(), name.as_deref(), alongside, Via { from_panel: panel, ..Via::default() })
         }
         Command::WorkspaceMove { id, to } => move_workspace(app, &id, to),
-        Command::WorkspaceUpdate { id, workspace } => update_workspace(app, &id, workspace),
+        Command::WorkspaceUpdate { id, workspace } => update_from_panel(app, &id, workspace),
         Command::WorkspaceSnapBack { alongside } => snap_back(app, alongside, panel),
         Command::WorkspaceSwitchBack { alongside } => switch_back(app, alongside, panel),
         Command::WorkspaceSetDefault(id) => set_default(app, id),

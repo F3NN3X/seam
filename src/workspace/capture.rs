@@ -297,6 +297,7 @@ pub fn checked_rows(
     let mut focused = false;
     // Sealed commands this workspace holds already: the only ones a save may keep.
     let held = sealed_in(&[to_value(old)]);
+    let stored = tabs_in(&[to_value(old)]);
     for (i, rule) in new.windows.iter_mut().enumerate() {
         let known = old.windows.iter().any(|o| o.exe == rule.exe && o.aumid == rule.aumid);
         let exe_ok = rule.exe.is_empty() || safe_exe(&rule.exe);
@@ -334,10 +335,15 @@ pub fn checked_rows(
             }
         }
         // An item is what I typed too, and it wins over Open with and a saved place (D732).
-        if let Some(item) = rule.item.take_if(|_| !skip) {
+        if let Some(item) = rule.item.take() {
+            // A row `only` leaves alone is still settled, and one that fails its check keeps no command.
             let checked = check_item(&item, &rule.exe, rule.aumid.as_deref());
-            let mut item = checked.map_err(|why| format!("{}: {why}", rule.title_hint))?;
-            settle(&mut item, &|sealed| held.contains(sealed));
+            let mut item = match (checked, skip) {
+                (Ok(item), _) => item,
+                (Err(_), true) => item.without_commands(),
+                (Err(why), false) => return Err(format!("{}: {why}", rule.title_hint)),
+            };
+            settle(&mut item, &|sealed| held.contains(sealed), &stored);
             rule.item = Some(item);
         }
         if rule.item.is_some() {

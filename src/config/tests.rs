@@ -447,3 +447,20 @@ fn a_settings_file_brings_no_startup_commands() {
     assert!(tab.get("command_sealed").is_none() && tab.get("command").is_none());
     assert_eq!(tab["profile"], "PowerShell");
 }
+
+#[test]
+fn a_config_file_loads_without_clear_commands_or_session_items() {
+    let tab = json!({ "profile": "P", "command": "calc", "unreadable": true, "command_sealed": "c2Vh" });
+    let row = json!({ "exe": "C:\\wt.exe", "item": { "kind": "terminal", "tabs": [tab] } });
+    let desk = json!({ "sign_in": { "mode": "last_session" }, "workspaces": [{ "id": "w", "windows": [row.clone()] }], "last_session": { "id": "s", "windows": [row] } });
+    let file = json!({ "version": CURRENT_VERSION, "desks": { "a": desk } });
+    let path = std::env::temp_dir().join(format!("seam-load-{}.json", std::process::id()));
+    std::fs::write(&path, file.to_string()).unwrap();
+    let loaded = Config::load_from(&path);
+    let _ = std::fs::remove_file(&path);
+    let desk = &loaded.desks["a"];
+    let tab = &desk.workspaces[0]["windows"][0]["item"]["tabs"][0];
+    assert!(tab.get("command").is_none() && tab.get("unreadable").is_none());
+    assert_eq!(tab["command_sealed"], "c2Vh");
+    assert!(desk.last_session.as_ref().unwrap()["windows"][0].get("item").is_none());
+}

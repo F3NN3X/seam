@@ -28,12 +28,24 @@ impl Config {
                     c.migrate_v1();
                 }
                 c.migrate_sign_in();
+                c.clean_items();
                 c
             }
             Err(_) => {
                 // Set it aside: the next save would otherwise destroy the layouts in it.
                 let _ = std::fs::rename(p, p.with_extension("json.corrupt"));
                 Config::default()
+            }
+        }
+    }
+
+    /// What a file can't have: a clear startup command, which is only ever the panel's on its way
+    /// to be sealed, and an item in the last session, which a capture never makes (D736, D737).
+    fn clean_items(&mut self) {
+        for desk in self.desks.values_mut() {
+            desk.workspaces = crate::workspace::without_clear(&desk.workspaces);
+            if let Some(session) = desk.last_session.take() {
+                desk.last_session = crate::workspace::without_items(&[session]).pop();
             }
         }
     }
@@ -55,7 +67,7 @@ impl Config {
             desk.workspaces = clean(&desk.workspaces);
             // The last session never saves them, so one in a file is dropped too.
             if let Some(session) = desk.last_session.take() {
-                desk.last_session = clean(&[session]).pop();
+                desk.last_session = crate::workspace::without_items(&clean(&[session])).pop();
             }
         }
         Ok(c)

@@ -39,13 +39,15 @@ pub use export::{
 pub use geometry::{from_fractions, rect_for, target_of, to_fractions};
 pub use items::{
     BROWSERS, EDITORS, MAX_ADDRESSES, MAX_COMMAND, MAX_TABS, TERMINAL_AUMIDS, address_ok, base64, check_item,
-    cmd_escape, command_ok, editor_args, encoded_command, folder_ok, terminal_args, unbase64, web_args,
+    cmd_escape, command_ok, editor_args, encoded_command, folder_ok, terminal_args, terminal_too_long, unbase64,
+    unused_commands, web_args,
 };
 pub use matching::{Bound, Candidate, assign, assign_bound, assign_bound_all};
 pub use order::{MoveError, moved_to};
 pub use plan::{RowAction, SCREEN_GONE, row_action, screen_gone, takes_part};
 pub use secrets::{
-    Seal, clean_imported_items, for_panel, kind_only, seal_commands, seal_patch, sealed_in, without_commands,
+    Held, Seal, clean_imported_items, for_panel, kind_only, seal_commands, seal_patch, sealed_in, tabs_in, unsealed_in,
+    without_clear, without_clear_commands, without_commands, without_items,
 };
 pub use terminal::{Profile, Shell, default_profile, profiles, shell_of, strip_jsonc};
 

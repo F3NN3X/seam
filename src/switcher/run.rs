@@ -371,7 +371,7 @@ fn place_then_start(run: &Run, mine: u64, waits: &mut Waits, starts: &mut Starts
     // desktop, say) isn't started a second time.
     let open = |i: usize| matches!(run.bound[i], Some(Bound::Alive(_)));
     // Snap back puts windows back and never starts an item that wasn't running (D740).
-    let item_left = |i: usize| run.put_back && ws.windows[i].item.is_some();
+    let item_left = |i: usize| item_left_alone(run.put_back, &ws.windows[i]);
     let wanted =
         |i: usize| (ws.launch_missing && action(i) == RowAction::Start && !open(i) && !item_left(i)).then_some(i);
     let starting: Vec<usize> = (0..ws.windows.len()).filter_map(wanted).collect();
@@ -396,6 +396,11 @@ fn place_then_start(run: &Run, mine: u64, waits: &mut Waits, starts: &mut Starts
         }
     }
     Some(())
+}
+
+/// Snap back puts windows back and never starts an item that wasn't running (D740).
+pub(super) fn item_left_alone(put_back: bool, rule: &Rule) -> bool {
+    put_back && rule.item.is_some()
 }
 
 fn restack_and_focus(tally: &Tally) {
@@ -504,6 +509,14 @@ pub(super) fn pin_again(hwnd: isize, pin: Pin) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn snap_back_starts_no_item() {
+        let item = Rule { item: Some(workspace::Item::Folder { folder: r"C:\p".into() }), ..Rule::default() };
+        assert!(item_left_alone(true, &item));
+        assert!(!item_left_alone(false, &item));
+        assert!(!item_left_alone(true, &Rule::default()));
+    }
 
     #[test]
     fn a_cancel_stops_only_the_switch_it_names() {

@@ -1046,8 +1046,9 @@ fn a_patch_seals_commands_and_drops_what_fails_its_check() {
     kept.open_with = Some(r"C:\x".into());
     let windows = vec![typed, broken, kept, terminal(Some("held"))];
     let mut list = vec![to_value(&Workspace { id: "w".into(), windows, ..Workspace::default() })];
-    let held = HashSet::from(["held".to_string()]);
-    seal_patch(&mut list, &held, &|c| Some(format!("sealed:{c}")));
+    let (sealed, clear) = (HashSet::from(["held".to_string()]), HashSet::from(["npm run dev".to_string()]));
+    let held = Held { sealed: &sealed, clear: &clear, stored: &[] };
+    seal_patch(&mut list, &held, &|c| Some(format!("sealed:{c}"))).unwrap();
     let rows = &list[0]["windows"];
     assert_eq!(rows[0]["item"]["tabs"][0]["command_sealed"], "sealed:npm run dev");
     assert!(rows[0]["item"]["tabs"][0].get("command").is_none());
@@ -1080,4 +1081,132 @@ fn a_window_added_by_hand_never_updates_an_item_row() {
     assert!(added.new);
     assert_eq!(added.workspace.windows.len(), 2);
     assert_eq!(added.workspace.windows[0], item);
+}
+
+fn with_command(sealed: Option<&str>, command: Option<&str>) -> Rule {
+    let mut row = terminal(sealed);
+    if let Some(Item::Terminal { tabs }) = &mut row.item {
+        tabs[0].command = command.map(Into::into);
+    }
+    row
+}
+
+fn tab_of(row: &Value) -> &Value {
+    &row["item"]["tabs"][0]
+}
+
+#[test]
+fn a_stored_clear_command_is_never_sealed_or_shown() {
+    let stored = to_value(&Workspace {
+        id: "w".into(),
+        windows: vec![with_command(None, Some("calc"))],
+        ..Workspace::default()
+    });
+    // On load it comes off, with the flag.
+    let loaded = without_clear(std::slice::from_ref(&stored));
+    assert!(tab_of(&loaded[0]["windows"][0]).get("command").is_none());
+    // For the panel it isn't shown, and nothing sealed appears.
+    let panel = for_panel(std::slice::from_ref(&stored), &|_| Some("x".into()));
+    let tab = tab_of(&panel[0]["windows"][0]);
+    assert!(tab.get("command").is_none() && tab.get("command_sealed").is_none());
+    // A patch holding it seals nothing, because it isn't a command the panel was given.
+    let mut list = vec![stored];
+    let (sealed, clear) = (HashSet::new(), HashSet::new());
+    let held = Held { sealed: &sealed, clear: &clear, stored: &[] };
+    seal_patch(&mut list, &held, &|c| Some(format!("sealed:{c}"))).unwrap();
+    let tab = tab_of(&list[0]["windows"][0]);
+    assert!(tab.get("command").is_none() && tab.get("command_sealed").is_none());
+    // An edit that isn't the panel's own seals no clear command.
+    let mut ws = Workspace { id: "w".into(), windows: vec![with_command(None, Some("calc"))], ..Workspace::default() };
+    without_clear_commands(&mut ws);
+    seal_commands(&mut ws, &|_| panic!("nothing to seal")).unwrap();
+    assert_eq!(ws.windows[0], terminal(None));
+}
+
+#[test]
+fn an_unchanged_command_keeps_its_seal_through_a_patch() {
+    // The panel was handed "ls", so a whole-list patch sends it back and it's sealed again.
+    let sent =
+        to_value(&Workspace { id: "w".into(), windows: vec![with_command(None, Some("ls"))], ..Workspace::default() });
+    let (sealed, clear) = (HashSet::new(), HashSet::from(["ls".to_string()]));
+    let held = Held { sealed: &sealed, clear: &clear, stored: &[] };
+    let mut list = vec![sent];
+    seal_patch(&mut list, &held, &|c| Some(format!("sealed:{c}"))).unwrap();
+    assert_eq!(tab_of(&list[0]["windows"][0])["command_sealed"], "sealed:ls");
+    // A seal that fails refuses the patch.
+    let mut again = vec![to_value(&Workspace {
+        id: "w".into(),
+        windows: vec![with_command(None, Some("ls"))],
+        ..Workspace::default()
+    })];
+    assert!(seal_patch(&mut again, &held, &|_| None).is_err());
+}
+
+#[test]
+fn a_foreign_command_survives_the_panel_saving() {
+    let old = Workspace { id: "ws".into(), windows: vec![terminal(Some("elsewhere"))], ..Workspace::default() };
+    // The panel was told it's unreadable and sends the tab back with no command and no seal.
+    let panel = for_panel(&[to_value(&old)], &|_| None);
+    assert_eq!(tab_of(&panel[0]["windows"][0])["unreadable"], true);
+    assert!(tab_of(&panel[0]["windows"][0]).get("command_sealed").is_none());
+    let back: Workspace = serde_json::from_value(panel[0].clone()).unwrap();
+    let saved = checked_update(&old, back, &|_| 0).unwrap();
+    let Some(Item::Terminal { tabs }) = &saved.windows[0].item else { panic!() };
+    assert_eq!(tabs[0].command_sealed.as_deref(), Some("elsewhere"));
+    assert!(!tabs[0].unreadable);
+}
+
+#[test]
+fn last_session_rows_never_carry_an_item() {
+    let session = to_value(&Workspace {
+        id: "s".into(),
+        windows: vec![folder_row(), terminal(Some("x"))],
+        ..Workspace::default()
+    });
+    let cleaned = without_items(std::slice::from_ref(&session));
+    assert!(cleaned[0]["windows"].as_array().unwrap().iter().all(|r| r.get("item").is_none()));
+    let config = json!({ "desks": { "d": { "last_session": session, "workspaces": [] } } });
+    let seen = crate::api::config_for_others(&config);
+    assert!(!seen["desks"]["d"]["last_session"].to_string().contains("item"));
+}
+
+#[test]
+fn an_item_with_no_text_kind_is_dropped_for_others() {
+    let rows = json!({ "windows": [{ "exe": "a", "item": { "kind": 3, "folder": "C:\\x" } }, { "exe": "b", "item": { "kind": "folder" } }] });
+    let shown = kind_only(&[rows]);
+    assert!(shown[0]["windows"][0].get("item").is_none());
+    assert_eq!(shown[0]["windows"][1]["item"], json!({ "kind": "folder" }));
+}
+
+#[test]
+fn rows_left_alone_by_an_add_are_still_settled() {
+    let old =
+        Workspace { id: "ws".into(), windows: vec![terminal(Some("mine")), folder_row()], ..Workspace::default() };
+    let mut planted = terminal(Some("planted"));
+    if let Some(Item::Terminal { tabs }) = &mut planted.item {
+        tabs[0].unreadable = true;
+    }
+    let new = Workspace { windows: vec![planted, folder_row(), folder_row()], ..old.clone() };
+    let saved = checked_rows(&old, new, &|_| 0, Some(2)).unwrap();
+    let Some(Item::Terminal { tabs }) = &saved.windows[0].item else { panic!() };
+    assert_eq!(tabs[0].command_sealed, None);
+    assert!(!tabs[0].unreadable);
+}
+
+#[test]
+fn terminal_commands_too_long_together_refuse_the_save() {
+    let old = Workspace { id: "ws".into(), ..Workspace::default() };
+    let long = "x".repeat(MAX_COMMAND);
+    let mut row = terminal(None);
+    row.item =
+        Some(Item::Terminal { tabs: (0..8).map(|_| Tab { command: Some(long.clone()), ..Tab::default() }).collect() });
+    let new = Workspace { windows: vec![row], ..old.clone() };
+    assert!(checked_update(&old, new, &|_| 0).unwrap_err().contains("too long together"));
+}
+
+#[test]
+fn a_semicolon_in_a_tab_folder_is_refused() {
+    assert!(folder_ok(r"C:\a;b").is_err());
+    let item = Item::Terminal { tabs: vec![Tab { folder: Some(r"C:\a;b".into()), ..Tab::default() }] };
+    assert!(check_item(&item, "", Some(WT)).is_err());
 }

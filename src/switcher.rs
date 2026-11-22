@@ -52,7 +52,7 @@ use run::pin_again;
 use run::{begin_starting, end_starting, stopped};
 use stages::{place_rules, run_stages, usable_place};
 
-pub use bind::{bind_rows, capture_bindings, keep_bindings, rebind};
+pub use bind::{bind_rows, capture_bindings, keep_bindings, know_item_rows, rebind};
 pub use capture::{
     CaptureJob, Captured, capture, capture_added, capture_session, capture_window, take_added, take_captured,
     take_session, wait_session,

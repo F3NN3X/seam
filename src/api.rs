@@ -414,6 +414,10 @@ pub fn config_for_others(config: &Value) -> Value {
         if let Some(list) = desk.get_mut("workspaces").and_then(Value::as_array_mut) {
             *list = crate::workspace::kind_only(&crate::workspace::without_open_with(list));
         }
+        // The last session is a capture's, which never has an item, so none shows.
+        if let Some(session) = desk.get_mut("last_session").filter(|s| s.is_object()) {
+            *session = crate::workspace::without_items(std::slice::from_ref(session)).remove(0);
+        }
     }
     config
 }

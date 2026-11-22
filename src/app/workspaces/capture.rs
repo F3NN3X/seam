@@ -385,11 +385,17 @@ pub(super) fn save_capture(app: &mut App, job: Capturing, got: switcher::Capture
 /// The editor saved a workspace of this desk. It's checked as `checked_update`
 /// says, then saved and applied through the same path as `config.patch`.
 pub(in crate::app) fn update_workspace(app: &mut App, id: &str, sent: Value) -> Reply {
-    update_rows(app, id, sent, None)
+    update_rows(app, id, sent, None, false)
+}
+
+/// `update_workspace` for the Seam window's own save, the one way a startup command is typed: a
+/// command in clear is sealed (D736). Anyone else's save, and an add, seals none.
+pub(in crate::app) fn update_from_panel(app: &mut App, id: &str, sent: Value) -> Reply {
+    update_rows(app, id, sent, None, true)
 }
 
 /// `update_workspace`; with `only` set, the Open with of the other rows isn't checked again.
-pub(super) fn update_rows(app: &mut App, id: &str, sent: Value, only: Option<usize>) -> Reply {
+pub(super) fn update_rows(app: &mut App, id: &str, sent: Value, only: Option<usize>, sealing: bool) -> Reply {
     let Some(desk) = app.cfg.desks.get(&app.sig) else { return refused("This desk has no workspaces") };
     let Some(old) = workspace::list(&desk.workspaces).into_iter().find(|w| w.id == id) else {
         return Err(RpcError::new(api::NOT_FOUND, "no such workspace on this desk"));
@@ -402,6 +408,10 @@ pub(super) fn update_rows(app: &mut App, id: &str, sent: Value, only: Option<usi
     };
     if keeps_zones {
         sent.zones = old.zones.clone();
+    }
+    // A clear command is only the panel's own, so no other save seals one (D736).
+    if !sealing {
+        workspace::without_clear_commands(&mut sent);
     }
     let zones = |monitor: &str| {
         let layout = desk.zones.get(monitor).and_then(zones::layout_of);

@@ -89,6 +89,7 @@ impl Kind {
     pub fn unavailable(self, extras: &Extras) -> Option<&'static str> {
         match self {
             Kind::Terminal if !extras.terminal => Some("Windows Terminal isn't installed"),
+            Kind::Web if extras.browsers.is_empty() => Some("No browser found"),
             Kind::Editor if extras.editors.is_empty() => {
                 Some("No editor found. Pick one from Installed and type a folder in Open with")
             }
@@ -120,12 +121,13 @@ struct TabForm {
     command: Entity<InputState>,
     /// The saved command came from another PC or a file (D736).
     unreadable: bool,
+    /// The tray's reference for the saved seal, sent back so a save keeps it.
+    seal_ref: Option<String>,
 }
 
 #[derive(Default)]
 struct Errors {
     folder: Option<String>,
-    program: Option<String>,
     list: Option<String>,
     addresses: Vec<Option<String>>,
     /// Each tab's folder and command.
@@ -196,6 +198,7 @@ fn tab_form(tab: &Tab, window: &mut Window, cx: &mut App) -> TabForm {
         folder: field(r"C:\Projects\seam", tab.folder.clone().unwrap_or_default(), window, cx),
         command: field("", tab.command.clone().unwrap_or_default(), window, cx),
         unreadable: tab.unreadable,
+        seal_ref: tab.seal_ref.clone(),
     }
 }
 
@@ -234,14 +237,11 @@ fn submit(form: &mut Form, cx: &App) -> Option<Rule> {
             ..Rule::default()
         },
         Kind::Terminal => form.extras.terminal_rule.clone(),
-        Kind::Web | Kind::Editor => match form.programs.get(form.program) {
-            Some(program) => Rule { class: String::new(), ..program.clone() },
-            None => {
-                let what = if kind == Kind::Web { "browser" } else { "editor" };
-                form.errors.program = Some(format!("Seam found no {what} to use"));
-                return None;
-            }
-        },
+        Kind::Web | Kind::Editor => {
+            // The entry is dimmed when there is none, so adding never lacks one.
+            let program = form.programs.get(form.program)?;
+            Rule { class: String::new(), ..program.clone() }
+        }
     };
     let item = match kind {
         Kind::Folder | Kind::Editor => {
@@ -298,6 +298,7 @@ fn submit(form: &mut Form, cx: &App) -> Option<Rule> {
                     profile: tab.profile.clone(),
                     folder: Some(folder).filter(|f| !f.is_empty()),
                     command: runs.then_some(command),
+                    seal_ref: tab.seal_ref.clone(),
                     ..Tab::default()
                 });
             }
@@ -431,10 +432,7 @@ fn web_body(form: &Form, state: &Rc<RefCell<Form>>, view: &WeakEntity<Panel>, p:
         }
         window.refresh();
     });
-    let mut body = vec![
-        labelled("Browser", program_select(form, "Browser", state, cx), form.errors.program.as_ref(), p)
-            .into_any_element(),
-    ];
+    let mut body = vec![labelled("Browser", program_select(form, "Browser", state, cx), None, p).into_any_element()];
     body.push(list.into_any_element());
     body.push(
         div()
@@ -570,14 +568,9 @@ fn body(form: &Form, state: &Rc<RefCell<Form>>, view: &WeakEntity<Panel>, p: Pal
             form.errors.folder.as_ref(),
             p,
         )),
-        Kind::Editor => column
-            .child(labelled("Editor", program_select(form, "Editor", state, cx), form.errors.program.as_ref(), p))
-            .child(labelled(
-                "Folder",
-                folder_row("item-browse", &form.folder, view, cx),
-                form.errors.folder.as_ref(),
-                p,
-            )),
+        Kind::Editor => column.child(labelled("Editor", program_select(form, "Editor", state, cx), None, p)).child(
+            labelled("Folder", folder_row("item-browse", &form.folder, view, cx), form.errors.folder.as_ref(), p),
+        ),
         Kind::Web => column.children(web_body(form, state, view, p, cx)),
         Kind::Terminal => column.children(terminal_body(form, state, view, p, cx)),
     }

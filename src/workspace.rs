@@ -39,15 +39,15 @@ pub use export::{
 pub use geometry::{from_fractions, rect_for, target_of, to_fractions};
 pub use items::{
     BROWSERS, EDITORS, MAX_ADDRESSES, MAX_COMMAND, MAX_TABS, TERMINAL_AUMIDS, address_ok, base64, check_item,
-    cmd_escape, command_ok, editor_args, encoded_command, folder_ok, terminal_args, terminal_too_long, unbase64,
-    unused_commands, web_args,
+    cmd_escape, command_ok, edited_items, editor_args, encoded_command, folder_ok, item_shape, terminal_args,
+    terminal_too_long, unbase64, unused_commands, web_args,
 };
 pub use matching::{Bound, Candidate, assign, assign_bound, assign_bound_all};
 pub use order::{MoveError, moved_to};
 pub use plan::{RowAction, SCREEN_GONE, row_action, screen_gone, takes_part};
 pub use secrets::{
-    Held, Seal, clean_imported_items, for_panel, kind_only, seal_commands, seal_patch, sealed_in, tabs_in, unsealed_in,
-    without_clear, without_clear_commands, without_commands, without_items,
+    Seal, clean_imported_items, for_panel, kind_only, seal_commands, seal_patch, sealed_in, without_clear,
+    without_clear_commands, without_commands, without_items,
 };
 pub use terminal::{Profile, Shell, default_profile, profiles, shell_of, strip_jsonc};
 
@@ -197,7 +197,7 @@ impl Item {
             Item::Terminal { tabs } => Item::Terminal {
                 tabs: tabs
                     .into_iter()
-                    .map(|t| Tab { command_sealed: None, command: None, unreadable: false, ..t })
+                    .map(|t| Tab { command_sealed: None, command: None, unreadable: false, seal_ref: None, ..t })
                     .collect(),
             },
             other => other,
@@ -221,6 +221,10 @@ pub struct Tab {
     /// anything is saved, and unseals it for the panel alone (D737).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub command: Option<String>,
+    /// The tray's reference for the tab's stored seal, given to the panel with `command` and sent
+    /// back to keep that seal (D736). Never stored.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub seal_ref: Option<String>,
     /// The panel is told the sealed command didn't open on this PC.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub unreadable: bool,

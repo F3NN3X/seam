@@ -234,6 +234,33 @@ pub fn unused_commands(tabs: &[Tab], profiles: &[Profile], commands: &[Option<St
     })
 }
 
+/// What makes one item another: its program, kind, folder or addresses, and each tab's profile and
+/// folder. Not a seal or a command, which change without a new window being wanted (D738).
+pub fn item_shape(rule: &Rule) -> String {
+    let exe = rule.exe.to_lowercase();
+    match &rule.item {
+        None => String::new(),
+        Some(Item::Folder { folder }) => format!("{exe}\u{1}folder\u{1}{folder}"),
+        Some(Item::Editor { folder }) => format!("{exe}\u{1}editor\u{1}{folder}"),
+        Some(Item::Web { urls }) => format!("{exe}\u{1}web\u{1}{}", urls.join("\u{1}")),
+        Some(Item::Terminal { tabs }) => {
+            let tab = |t: &Tab| format!("{:?}\u{2}{:?}", t.profile, t.folder);
+            format!("{exe}\u{1}terminal\u{1}{}", tabs.iter().map(tab).collect::<Vec<_>>().join("\u{1}"))
+        }
+    }
+}
+
+/// The rows of `new` whose item is another one than the row they were (`moves` as `moved_rows`
+/// says), for a switch to start the new item rather than take the window the old one opened.
+pub fn edited_items(old: &[Rule], new: &[Rule], moves: &[Option<usize>]) -> Vec<usize> {
+    let changed = |(i, to): (usize, &Option<usize>)| {
+        let to = (*to)?;
+        let (before, after) = (old.get(i)?, new.get(to)?);
+        (after.item.is_some() && item_shape(before) != item_shape(after)).then_some(to)
+    };
+    moves.iter().enumerate().filter_map(changed).collect()
+}
+
 /// An item as it's stored, or why not, for the row it's on: the row's app must be the one the
 /// kind needs, every address, folder, profile and command must pass its check, and the lists
 /// must be within their limits. A Terminal tab's sealed command and its flags are left as they are.
@@ -502,6 +529,25 @@ mod tests {
         assert!(unused_commands(&[tab("Gone", None)], &profiles, &some));
         assert!(unused_commands(&[tab("PowerShell", None)], &[], &some));
         assert!(!unused_commands(&[tab("Ubuntu", None)], &profiles, &[None]));
+    }
+
+    #[test]
+    fn an_edited_item_is_told_from_an_edited_command() {
+        let row = |item: Item| Rule { exe: r"C:\Windows\explorer.exe".into(), item: Some(item), ..Rule::default() };
+        let folder = |f: &str| row(Item::Folder { folder: f.into() });
+        let tab = |command: Option<&str>, sealed: Option<&str>| Tab {
+            profile: Some("P".into()),
+            command: command.map(Into::into),
+            command_sealed: sealed.map(Into::into),
+            ..Tab::default()
+        };
+        let terminal = |t: Tab| row(Item::Terminal { tabs: vec![t] });
+        let old = [folder(r"C:\a"), terminal(tab(None, Some("s1"))), folder(r"C:\z")];
+        let new = [folder(r"C:\b"), terminal(tab(Some("other"), Some("s2"))), folder(r"C:\z")];
+        // Only the folder that changed starts again; a command or its seal changing isn't a new window.
+        assert_eq!(edited_items(&old, &new, &[Some(0), Some(1), Some(2)]), [0]);
+        // A row that was removed, or moved, is judged against the row it became.
+        assert!(edited_items(&old, &new, &[None, Some(1), Some(2)]).is_empty());
     }
 
     #[test]

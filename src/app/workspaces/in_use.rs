@@ -135,7 +135,7 @@ pub(in crate::app) fn set_default(app: &mut App, id: Option<String>) -> Reply {
 /// Snap back: switch to the workspace in use again, so what drifted goes back.
 pub(in crate::app) fn snap_back(app: &mut App, alongside: bool, from_panel: bool) -> Reply {
     match app.workspace.clone() {
-        Some(id) => start_switch(app, Some(&id), None, alongside, Via { put_back: true, from_panel }),
+        Some(id) => start_switch(app, Some(&id), None, alongside, Via { put_back: true, from_panel, ..Via::default() }),
         None => Err(RpcError::new(api::NOT_FOUND, "No workspace is in use on this desk")),
     }
 }
@@ -143,9 +143,14 @@ pub(in crate::app) fn snap_back(app: &mut App, alongside: bool, from_panel: bool
 /// Switch back: switch to the workspace that was in use before this one. Switching
 /// back twice goes to and fro between the two.
 pub(in crate::app) fn switch_back(app: &mut App, alongside: bool, from_panel: bool) -> Reply {
+    switch_back_via(app, alongside, Via { from_panel, ..Via::default() })
+}
+
+/// `switch_back`, asked for by `via`.
+pub(in crate::app) fn switch_back_via(app: &mut App, alongside: bool, via: Via) -> Reply {
     let previous = app.cfg.desks.get(&app.sig).and_then(|d| d.previous_workspace.clone());
     match previous.filter(|id| desk_workspaces(app).iter().any(|w| w.id == *id)) {
-        Some(id) => start_switch(app, Some(&id), None, alongside, Via { from_panel, ..Via::default() }),
+        Some(id) => start_switch(app, Some(&id), None, alongside, via),
         None => Err(RpcError::new(api::NOT_FOUND, "No workspace to switch back to")),
     }
 }

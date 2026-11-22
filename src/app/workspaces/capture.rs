@@ -446,7 +446,11 @@ pub(super) fn update_rows(app: &mut App, id: &str, sent: Value, only: Option<usi
     if reply.is_ok() && !unmoved {
         // The windows place rows remember follow their rows the same way (D336).
         switcher::rebind(id, &moves);
-        live::restamp(workspace::stamp_key(id), moves);
+        live::restamp(workspace::stamp_key(id), moves.clone());
+    }
+    // An item that was edited isn't what its window opened, so the next switch starts the new one (D733).
+    if reply.is_ok() {
+        switcher::forget_edited(id, &workspace::edited_items(&old.windows, &checked.windows, &moves));
     }
     reply
 }

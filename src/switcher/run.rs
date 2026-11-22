@@ -24,6 +24,8 @@ pub struct SwitchJob {
     pub put_back: bool,
     /// The Seam window asked for it, which shows the result itself.
     pub from_panel: bool,
+    /// Another app asked through the API, so a Terminal item opens without its startup command.
+    pub other_app: bool,
 }
 
 /// How a switch went: what the event says.
@@ -194,8 +196,19 @@ fn run_switch(job: &SwitchJob, mine: u64) -> Option<Switched> {
     let (pins_stay, size_mode, places) = (job.pins_stay, job.size_mode, job.places);
     let (bound, elsewhere) = bindings(ws, places);
     let put_back = job.put_back;
-    let run =
-        Run { owner: job.owner, ws, geos, pins_stay, size_mode, cancelled: &cancelled, stamp, places, put_back, bound };
+    let run = Run {
+        owner: job.owner,
+        ws,
+        geos,
+        pins_stay,
+        size_mode,
+        cancelled: &cancelled,
+        stamp,
+        places,
+        put_back,
+        bound,
+        other_app: job.other_app,
+    };
     let mut tally = Tally::default();
     let mut procs = Procs::new();
 

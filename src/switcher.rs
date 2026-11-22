@@ -52,7 +52,7 @@ use run::pin_again;
 use run::{begin_starting, end_starting, stopped};
 use stages::{place_rules, run_stages, usable_place};
 
-pub use bind::{bind_rows, capture_bindings, keep_bindings, know_item_rows, rebind};
+pub use bind::{bind_rows, capture_bindings, forget_edited, keep_bindings, know_item_rows, rebind};
 pub use capture::{
     CaptureJob, Captured, capture, capture_added, capture_session, capture_window, take_added, take_captured,
     take_session, wait_session,
@@ -365,6 +365,8 @@ struct Run<'a> {
     places: bool,
     /// Snap back: windows already open are moved whatever the workspace says.
     put_back: bool,
+    /// Another app asked for the switch: no startup command runs.
+    other_app: bool,
     /// Each row's remembered window as the switch began, `None` for a row without a
     /// place (D336).
     bound: Vec<Option<Bound>>,

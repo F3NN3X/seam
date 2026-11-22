@@ -14,10 +14,15 @@ static BOUND: Mutex<Vec<(String, usize, Option<Held>)>> = Mutex::new(Vec::new())
 static STARTUP_ITEMS: Mutex<Option<HashSet<String>>> = Mutex::new(None);
 
 fn item_key(id: &str, rule: &Rule) -> String {
-    format!("{id}\u{1}{}\u{1}{:?}", rule.exe.to_lowercase(), rule.item)
+    format!("{id}\u{1}{}", workspace::item_shape(rule))
 }
 
 /// Remember the item rows of these workspaces as the ones that existed at start.
+/// A row's item was edited, so its window isn't the new item's: the next switch starts it.
+pub fn forget_edited(id: &str, rows: &[usize]) {
+    rows.iter().for_each(|row| unbind(id, *row));
+}
+
 pub fn know_item_rows(workspaces: &[Workspace]) {
     let keys =
         workspaces.iter().flat_map(|ws| ws.windows.iter().filter(|r| r.item.is_some()).map(|r| item_key(&ws.id, r)));

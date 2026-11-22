@@ -216,7 +216,7 @@ pub fn reopen(gone: Pinned) -> bool {
         // Only a window that wasn't there before the launch counts as the new one.
         let mut procs = Procs::new();
         let before: HashSet<isize> = snapshot(&mut procs).into_iter().map(|s| s.cand.hwnd).collect();
-        if let Err(reason) = launch(&rule, false) {
+        if let Err(reason) = launch(&rule, false, false) {
             log::info!("reopen {app}: not started ({reason})");
             return;
         }

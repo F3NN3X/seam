@@ -297,7 +297,6 @@ pub fn checked_rows(
     let mut focused = false;
     // Sealed commands this workspace holds already: the only ones a save may keep.
     let held = sealed_in(&[to_value(old)]);
-    let stored = tabs_in(&[to_value(old)]);
     for (i, rule) in new.windows.iter_mut().enumerate() {
         let known = old.windows.iter().any(|o| o.exe == rule.exe && o.aumid == rule.aumid);
         let exe_ok = rule.exe.is_empty() || safe_exe(&rule.exe);
@@ -343,7 +342,7 @@ pub fn checked_rows(
                 (Err(_), true) => item.without_commands(),
                 (Err(why), false) => return Err(format!("{}: {why}", rule.title_hint)),
             };
-            settle(&mut item, &|sealed| held.contains(sealed), &stored);
+            settle(&mut item, &|sealed| held.contains(sealed));
             rule.item = Some(item);
         }
         if rule.item.is_some() {

@@ -1,7 +1,7 @@
 //! Starting apps and opening places, without starting one twice.
 
 use super::*;
-use workspace::report::FOREIGN_COMMAND;
+use workspace::report::{COMMAND_NOT_RUN, FOREIGN_COMMAND};
 
 /// Apps a switch has started and is still waiting on: key, when, and which switch. A
 /// newer switch that replaces it waits for these instead of starting a second copy.
@@ -55,9 +55,9 @@ fn steam_game(rule: &Rule) -> bool {
 
 /// Start what a row opens when it has no window yet: its item (D731), or else its app. A
 /// `Some` answer is a reason to list the row as skipped though it started.
-pub(super) fn launch(rule: &Rule, places: bool) -> Result<Option<&'static str>, &'static str> {
+pub(super) fn launch(rule: &Rule, places: bool, other_app: bool) -> Result<Option<&'static str>, &'static str> {
     match &rule.item {
-        Some(item) if !steam_game(rule) => open_item(rule, item),
+        Some(item) if !steam_game(rule) => open_item(rule, item, other_app),
         _ => start_app(rule, places).map(|()| None),
     }
 }
@@ -176,7 +176,7 @@ fn open_with(rule: &Rule, target: &str) -> Result<(), &'static str> {
 /// Start an item (D734), checked again here whatever saved it. Each kind's arguments come from
 /// `workspace`'s pure builders. Only a row with no window gets here, so an open window is never
 /// sent anywhere new.
-fn open_item(rule: &Rule, item: &Item) -> Result<Option<&'static str>, &'static str> {
+fn open_item(rule: &Rule, item: &Item, other_app: bool) -> Result<Option<&'static str>, &'static str> {
     let app = app_name(rule);
     let refused = |why: &str| {
         log::info!("{app}: item not used, {why}");
@@ -216,14 +216,13 @@ fn open_item(rule: &Rule, item: &Item) -> Result<Option<&'static str>, &'static 
             }
             // Only a command sealed for this account runs. One that doesn't open is dropped, and
             // its tab opens without it.
-            let commands: Vec<Option<String>> =
-                tabs.iter().map(|t| t.command_sealed.as_deref().and_then(seam::seal::unseal)).collect();
-            let foreign = foreign_command(tabs, &commands);
+            let (commands, held_back) = commands_for(other_app, tabs, &seam::seal::unseal);
+            let foreign = !held_back && foreign_command(tabs, &commands);
             let (profiles, _) = seam::apps::terminal_profiles();
             let unused = workspace::unused_commands(tabs, &profiles, &commands);
             match workspace::terminal_args(tabs, &profiles, &commands) {
                 Ok(args) if shell_open(&wt, Some(&args)) => {
-                    let note = command_note(foreign, unused);
+                    let note = command_note(held_back, foreign, unused);
                     if unused && !foreign {
                         log::info!(
                             "{app}: a startup command wasn't used, its profile isn't there or runs no shell Seam knows"
@@ -243,13 +242,26 @@ fn foreign_command(tabs: &[workspace::Tab], commands: &[Option<String>]) -> bool
     tabs.iter().zip(commands).any(|(t, c)| c.is_none() && (t.command_sealed.is_some() || t.command.is_some()))
 }
 
-/// What a started Terminal item says it didn't do: a command from elsewhere never runs, and one
-/// whose profile is missing or runs no shell Seam knows is left out.
-fn command_note(foreign: bool, unused: bool) -> Option<&'static str> {
-    match (foreign, unused) {
-        (true, _) => Some(FOREIGN_COMMAND),
-        (false, true) => Some("item refused"),
-        (false, false) => None,
+/// The commands a Terminal item starts with, and whether any was held back. Only a command
+/// sealed for this account opens, and none runs when another app asked for the switch (D737).
+fn commands_for(
+    other_app: bool,
+    tabs: &[workspace::Tab],
+    unseal: &dyn Fn(&str) -> Option<String>,
+) -> (Vec<Option<String>>, bool) {
+    let held_back = other_app && tabs.iter().any(|t| t.command_sealed.is_some());
+    let open = |t: &workspace::Tab| t.command_sealed.as_deref().and_then(unseal).filter(|_| !other_app);
+    (tabs.iter().map(open).collect(), held_back)
+}
+
+/// What a started Terminal item says it didn't do: a command another app's switch held back, one
+/// from elsewhere that never runs, and one whose profile is missing or runs no shell Seam knows.
+fn command_note(held_back: bool, foreign: bool, unused: bool) -> Option<&'static str> {
+    match (held_back, foreign, unused) {
+        (true, ..) => Some(COMMAND_NOT_RUN),
+        (false, true, _) => Some(FOREIGN_COMMAND),
+        (false, false, true) => Some("item refused"),
+        (false, false, false) => None,
     }
 }
 
@@ -280,9 +292,23 @@ mod tests {
 
     #[test]
     fn a_started_terminal_says_what_it_left_out() {
-        assert_eq!(command_note(true, true), Some(FOREIGN_COMMAND));
-        assert_eq!(command_note(true, false), Some(FOREIGN_COMMAND));
-        assert_eq!(command_note(false, true), Some("item refused"));
-        assert_eq!(command_note(false, false), None);
+        assert_eq!(command_note(false, true, true), Some(FOREIGN_COMMAND));
+        assert_eq!(command_note(false, true, false), Some(FOREIGN_COMMAND));
+        assert_eq!(command_note(false, false, true), Some("item refused"));
+        assert_eq!(command_note(false, false, false), None);
+        assert_eq!(command_note(true, true, true), Some(COMMAND_NOT_RUN));
+    }
+
+    #[test]
+    fn another_apps_switch_runs_no_startup_command() {
+        let tab = |sealed: Option<&str>| Tab { command_sealed: sealed.map(Into::into), ..Tab::default() };
+        let open = |s: &str| Some(format!("open:{s}"));
+        let tabs = [tab(Some("a")), tab(None)];
+        // The Seam window, the tray, a shortcut and sign-in run what opens here.
+        assert_eq!(commands_for(false, &tabs, &open), (vec![Some("open:a".to_string()), None], false));
+        // Any other app gets the terminal without any command, and the row says so.
+        assert_eq!(commands_for(true, &tabs, &open), (vec![None, None], true));
+        // A terminal with no command has nothing held back.
+        assert_eq!(commands_for(true, &[tab(None)], &open), (vec![None], false));
     }
 }

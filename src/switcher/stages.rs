@@ -82,7 +82,7 @@ pub(super) fn place_rules(run: &Run, found: &[Option<isize>], which: &[usize], s
 
 impl Starts {
     /// Start the app of row `i`, unless a switch this one replaced already did.
-    fn start(&mut self, ws: &Workspace, i: usize, mine: u64, places: bool, tally: &mut Tally) {
+    fn start(&mut self, ws: &Workspace, i: usize, mine: u64, (places, other_app): (bool, bool), tally: &mut Tally) {
         let rule = &ws.windows[i];
         let key = launch_key(rule);
         if let Some(at) = earlier_launch(&key, mine, &mut self.reused) {
@@ -90,7 +90,7 @@ impl Starts {
             self.waiting.push((i, at));
             return;
         }
-        match launch(rule, places) {
+        match launch(rule, places, other_app) {
             Ok(note) => {
                 // Started, but not as it was saved: the row says why.
                 if let Some(reason) = note {
@@ -174,7 +174,7 @@ pub(super) fn run_stages(
             if stopped(mine) {
                 break;
             }
-            starts.start(ws, *i, mine, run.places, tally);
+            starts.start(ws, *i, mine, (run.places, run.other_app), tally);
         }
         due.retain(|(_, at)| *at > now);
         // Each app's time runs from when it started.

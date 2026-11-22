@@ -19,7 +19,7 @@ pub(super) use close::{Ask, Closing, Minimized, closed, start_close, start_close
 use in_use::{active_workspace, set_in_use};
 pub(super) use in_use::{
     choose_in_use, detected_in_use, drift_checked, drift_due, forget_deleted, live_of, set_default, snap_back,
-    switch_back, sync_live, ws_moved,
+    switch_back, switch_back_via, sync_live, ws_moved,
 };
 pub(super) use notice::{LastSwitch, ended, last_switch, open_switched, skipped_json, started, starting, starting_due};
 pub(super) use order::move_workspace;
@@ -36,6 +36,8 @@ pub(super) struct Via {
     pub put_back: bool,
     /// The Seam window asked, and shows the result itself.
     pub from_panel: bool,
+    /// An API client other than the Seam window asked, so no startup command runs (D737).
+    pub other_app: bool,
 }
 
 /// The workspaces saved for the desk that is connected.
@@ -192,7 +194,7 @@ pub(super) fn start_switch_job(
     let (pins_stay, size_mode) = (app.cfg.windows.pins_stay_on_switch, app.cfg.window_size_on_move);
     // The last session never saves a folder or page, so it never opens one either.
     let places = app.cfg.workspaces_remember_places && workspace.id != SESSION_ID;
-    let Via { put_back, from_panel } = via;
+    let Via { put_back, from_panel, other_app } = via;
     let job = SwitchJob {
         owner,
         workspace,
@@ -205,6 +207,7 @@ pub(super) fn start_switch_job(
         places,
         put_back,
         from_panel,
+        other_app,
     };
     if switcher::switch(job) {
         Ok(json!({ "ok": true }))

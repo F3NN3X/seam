@@ -7,9 +7,44 @@
 //! reaches `seal_patch` is sealed only if it's one the panel could have been given.
 
 use super::*;
+use std::collections::HashMap;
+use std::sync::Mutex;
 
 /// The sealing and unsealing the tray does with `CryptProtectData`.
 pub type Seal<'a> = &'a dyn Fn(&str) -> Option<String>;
+
+/// The seals this tray has read from its own config, for as long as it runs: reference to the
+/// sealed command and, when it opened, the command in clear. `for_panel` hands the panel a
+/// reference for each tab, and a save that sends it back keeps that tab's seal without sealing
+/// again, so nothing is matched by value, and a reference the tray never made resolves to nothing.
+#[derive(Default)]
+struct Seals {
+    next: u64,
+    by_ref: HashMap<String, (String, Option<String>)>,
+    by_seal: HashMap<String, String>,
+}
+
+static SEALS: Mutex<Option<Seals>> = Mutex::new(None);
+
+fn register(sealed: &str, clear: Option<String>) -> String {
+    let mut guard = SEALS.lock().unwrap_or_else(|e| e.into_inner());
+    let seals = guard.get_or_insert_with(Seals::default);
+    let known = seals.by_seal.get(sealed).cloned();
+    let reference = known.unwrap_or_else(|| {
+        seals.next += 1;
+        // Not derived from the seal, and not a number to count up to.
+        let mut hasher = RandomState::new().build_hasher();
+        hasher.write_u64(seals.next);
+        format!("{:016x}", hasher.finish())
+    });
+    seals.by_seal.insert(sealed.to_string(), reference.clone());
+    seals.by_ref.insert(reference.clone(), (sealed.to_string(), clear));
+    reference
+}
+
+fn lookup(reference: &str) -> Option<(String, Option<String>)> {
+    SEALS.lock().unwrap_or_else(|e| e.into_inner()).as_ref()?.by_ref.get(reference).cloned()
+}
 
 /// Each row of each saved workspace, as stored.
 fn rows(saved: &mut [Value]) -> impl Iterator<Item = &mut Value> {
@@ -37,13 +72,13 @@ fn without_keys(saved: &[Value], keys: &[&str]) -> Vec<Value> {
 /// The saved workspaces as stored, without any startup command, sealed or in clear: they stay
 /// on this PC, so both exports leave them out.
 pub fn without_commands(saved: &[Value]) -> Vec<Value> {
-    without_keys(saved, &["command_sealed", "command", "unreadable"])
+    without_keys(saved, &["command_sealed", "command", "unreadable", "seal_ref"])
 }
 
 /// The saved workspaces without the clear command and the flag, which are never stored. A
 /// file that has them, written by hand or by another program, never gets them sealed or shown.
 pub fn without_clear(saved: &[Value]) -> Vec<Value> {
-    without_keys(saved, &["command", "unreadable"])
+    without_keys(saved, &["command", "unreadable", "seal_ref"])
 }
 
 /// The saved workspaces without any item: the last session is only what a capture read.
@@ -85,14 +120,12 @@ pub fn for_panel(saved: &[Value], unseal: Seal) -> Vec<Value> {
             let Some(sealed) = tab.remove("command_sealed").and_then(|s| s.as_str().map(str::to_string)) else {
                 continue;
             };
-            match unseal(&sealed) {
-                Some(command) => {
-                    tab.insert("command".into(), Value::String(command));
-                }
-                None => {
-                    tab.insert("unreadable".into(), Value::Bool(true));
-                }
-            }
+            let clear = unseal(&sealed);
+            tab.insert("seal_ref".into(), Value::String(register(&sealed, clear.clone())));
+            match clear {
+                Some(command) => tab.insert("command".into(), Value::String(command)),
+                None => tab.insert("unreadable".into(), Value::Bool(true)),
+            };
         }
     }
     saved
@@ -109,39 +142,27 @@ pub fn sealed_in(saved: &[Value]) -> HashSet<String> {
     found
 }
 
-/// Every command these saved workspaces hold, opened: the ones the panel was handed.
-pub fn unsealed_in(saved: &[Value], unseal: Seal) -> HashSet<String> {
-    sealed_in(saved).iter().filter_map(|s| unseal(s)).collect()
-}
-
-/// Every tab of every Terminal item these saved workspaces hold.
-pub fn tabs_in(saved: &[Value]) -> Vec<Tab> {
-    let mut saved = saved.to_vec();
-    let mut tabs = Vec::new();
-    for row in rows(&mut saved) {
-        if let Some(Item::Terminal { tabs: found }) =
-            row.get("item").and_then(|i| serde_json::from_value(i.clone()).ok())
-        {
-            tabs.extend(found);
-        }
-    }
-    tabs
-}
-
-/// A tab as it may be saved. A command in clear is the one to keep, and a sealed one is kept
-/// only when it's one the workspace already held, so a client can't plant a value from elsewhere.
-/// A tab the panel marked `unreadable` and sent back with no command gets back the sealed value
-/// of the stored tab with the same profile and folder: saving never destroys another PC's command.
-pub(super) fn settle(item: &mut Item, known: &dyn Fn(&str) -> bool, stored: &[Tab]) {
-    if let Item::Terminal { tabs } = item {
-        for tab in tabs {
-            if tab.unreadable && tab.command.is_none() && tab.command_sealed.is_none() {
-                let same = |s: &&Tab| s.profile == tab.profile && s.folder == tab.folder;
-                tab.command_sealed = stored.iter().filter(same).find_map(|s| s.command_sealed.clone());
+/// A tab as it may be saved. The reference the panel was given for the tab keeps its seal when
+/// the tab's command is what the panel was shown (none for an unreadable one), so another PC's
+/// command survives a save. A different command stays in clear to be sealed, and a reference the
+/// tray didn't make drops the tab's command. With no reference, a command in clear is new, and a
+/// sealed one is kept only when it's one the workspace already held (`held`), which is how a
+/// save the tray makes itself carries them.
+pub(super) fn settle(item: &mut Item, held: &dyn Fn(&str) -> bool) {
+    let Item::Terminal { tabs } = item else { return };
+    for tab in tabs {
+        tab.unreadable = false;
+        match tab.seal_ref.take().map(|r| lookup(&r)) {
+            Some(Some((sealed, clear))) if clear == tab.command => {
+                tab.command_sealed = Some(sealed);
+                tab.command = None;
             }
-            tab.unreadable = false;
-            if tab.command.is_some() || !tab.command_sealed.as_deref().is_some_and(known) {
-                tab.command_sealed = None;
+            Some(Some(_)) => tab.command_sealed = None,
+            Some(None) => (tab.command_sealed, tab.command) = (None, None),
+            None => {
+                if tab.command.is_some() || !tab.command_sealed.as_deref().is_some_and(held) {
+                    tab.command_sealed = None;
+                }
             }
         }
     }
@@ -169,21 +190,12 @@ pub fn without_clear_commands(ws: &mut Workspace) {
     }
 }
 
-/// What a patch's items may be sealed against: the sealed commands and the opened ones the
-/// saved config holds, and its tabs.
-pub struct Held<'a> {
-    pub sealed: &'a HashSet<String>,
-    pub clear: &'a HashSet<String>,
-    pub stored: &'a [Tab],
-}
-
 /// A patch's workspaces as they may be saved: each item read, checked as `check_item` says and
-/// settled, its commands sealed, and `open_with` and `place` taken off the row (D732). A clear
-/// command is sealed only if it's one the saved config holds, opened, which is what the panel was
-/// handed; one anywhere else is dropped, and a new command only arrives through `workspace.update`.
-/// An item that fails is dropped, and the row starts its app with nothing. Fails when a command
-/// can't be sealed, so nothing is saved.
-pub fn seal_patch(saved: &mut [Value], held: &Held, seal: Seal) -> Result<(), &'static str> {
+/// settled, and `open_with` and `place` taken off the row (D732). A tab keeps its seal only through
+/// the reference the panel was given for it, and a command in clear is never sealed here: a new
+/// or changed one arrives through `workspace.update` alone. An item that fails is dropped, and the
+/// row starts its app with nothing.
+pub fn seal_patch(saved: &mut [Value]) {
     for (n, ws) in saved.iter_mut().enumerate() {
         let name = ws.get("name").and_then(Value::as_str).unwrap_or_default().to_string();
         let Some(list) = ws.get_mut("windows").and_then(Value::as_array_mut) else { continue };
@@ -191,27 +203,18 @@ pub fn seal_patch(saved: &mut [Value], held: &Held, seal: Seal) -> Result<(), &'
             let Some(sent) = row.get("item").cloned() else { continue };
             let exe = row.get("exe").and_then(Value::as_str).unwrap_or_default().to_string();
             let aumid = row.get("aumid").and_then(Value::as_str).map(str::to_string);
-            let checked = serde_json::from_value::<Item>(sent).ok().and_then(|mut item| {
-                if let Item::Terminal { tabs } = &mut item {
-                    tabs.iter_mut().for_each(|t| t.command = t.command.take().filter(|c| held.clear.contains(c)));
-                }
-                check_item(&item, &exe, aumid.as_deref()).ok()
-            });
-            let sealed = checked.map(|mut item| {
-                settle(&mut item, &|s| held.sealed.contains(s), held.stored);
-                if let Item::Terminal { tabs } = &mut item {
-                    for tab in tabs {
-                        if let Some(command) = tab.command.take() {
-                            tab.command_sealed =
-                                Some(seal(&command).ok_or("Seam couldn't keep the command on this PC")?);
-                        }
+            let checked = serde_json::from_value::<Item>(sent)
+                .ok()
+                .and_then(|item| check_item(&item, &exe, aumid.as_deref()).ok())
+                .map(|mut item| {
+                    settle(&mut item, &|_| false);
+                    if let Item::Terminal { tabs } = &mut item {
+                        tabs.iter_mut().for_each(|t| t.command = None);
                     }
-                }
-                Ok::<_, &'static str>(item)
-            });
-            let item = sealed.transpose()?;
+                    item
+                });
             let Some(fields) = row.as_object_mut() else { continue };
-            match item.and_then(|item| serde_json::to_value(item).ok()) {
+            match checked.and_then(|item| serde_json::to_value(item).ok()) {
                 Some(item) => {
                     fields.insert("item".into(), item);
                     fields.remove("open_with");
@@ -227,7 +230,6 @@ pub fn seal_patch(saved: &mut [Value], held: &Held, seal: Seal) -> Result<(), &'
             }
         }
     }
-    Ok(())
 }
 
 /// An imported file's workspaces: no startup command, and an item that doesn't pass its check

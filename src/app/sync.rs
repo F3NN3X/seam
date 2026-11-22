@@ -9,12 +9,12 @@ use seam::config::{Config, SyncStamp};
 use std::path::{Path, PathBuf};
 use windows::Win32::Foundation::{CloseHandle, HANDLE, WAIT_OBJECT_0, WAIT_TIMEOUT};
 use windows::Win32::Storage::FileSystem::{
-    CreateFileW, FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OVERLAPPED, FILE_LIST_DIRECTORY, FILE_NOTIFY_CHANGE_FILE_NAME,
-    FILE_NOTIFY_CHANGE_LAST_WRITE, FILE_NOTIFY_CHANGE_SIZE, FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE,
-    GetDriveTypeW, OPEN_EXISTING,
+    BY_HANDLE_FILE_INFORMATION, CreateFileW, FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OVERLAPPED, FILE_LIST_DIRECTORY,
+    FILE_NOTIFY_CHANGE_FILE_NAME, FILE_NOTIFY_CHANGE_LAST_WRITE, FILE_NOTIFY_CHANGE_SIZE, FILE_SHARE_DELETE,
+    FILE_SHARE_READ, FILE_SHARE_WRITE, GetDriveTypeW, GetFileInformationByHandle, OPEN_EXISTING,
 };
 use windows::Win32::System::IO::{CancelIoEx, GetOverlappedResult, OVERLAPPED};
-use windows::Win32::System::Threading::{CreateEventW, INFINITE, ResetEvent, SetEvent, WaitForMultipleObjects};
+use windows::Win32::System::Threading::{CreateEventW, ResetEvent, SetEvent, WaitForMultipleObjects};
 use windows::core::HSTRING;
 
 /// The folder's file changed, or its state did: look at `INBOX`.
@@ -195,6 +195,36 @@ fn open_dir(folder: &Path) -> Option<HANDLE> {
     }
 }
 
+/// Which folder a handle is open on: its volume and file index.
+fn identity(handle: HANDLE) -> Option<(u32, u64)> {
+    let mut info = BY_HANDLE_FILE_INFORMATION::default();
+    unsafe { GetFileInformationByHandle(handle, &mut info) }.ok()?;
+    Some((info.dwVolumeSerialNumber, u64::from(info.nFileIndexHigh) << 32 | u64::from(info.nFileIndexLow)))
+}
+
+/// Whether the path still names the folder being watched. A watch follows a folder that is renamed or
+/// moved away and hears nothing of it, since nothing in the folder changed.
+fn still_there(handle: HANDLE, folder: &Path) -> bool {
+    let Some(at_path) = open_dir(folder) else { return false };
+    let same = identity(at_path).is_some_and(|id| identity(handle) == Some(id));
+    unsafe {
+        let _ = CloseHandle(at_path);
+    }
+    same
+}
+
+/// Stop the watch on a handle, waiting for a read that was started to be cancelled, and close it.
+fn close_watch(handle: HANDLE, armed: bool, overlapped: &OVERLAPPED) {
+    unsafe {
+        if armed {
+            let _ = CancelIoEx(handle, Some(overlapped));
+            let mut got = 0u32;
+            let _ = GetOverlappedResult(handle, overlapped, &mut got, true);
+        }
+        let _ = CloseHandle(handle);
+    }
+}
+
 /// The size and write time of the file, for the checks made while the folder can't be watched.
 fn file_mark(folder: &Path) -> Option<(u64, SystemTime)> {
     let meta = std::fs::metadata(folder.join(folder::SHARED_FILE)).ok()?;
@@ -244,7 +274,7 @@ fn run(folder: &Path, hwnd: isize, (stop, wake): (isize, isize), id: u64) {
                 }
             }
         }
-        let wait = wait_for(due, dir.is_some(), folder::state());
+        let wait = wait_for(due);
         let handles = [stop, wake, io];
         let count = if armed { 3 } else { 2 };
         let woken =
@@ -302,6 +332,15 @@ fn run(folder: &Path, hwnd: isize, (stop, wake): (isize, isize), id: u64) {
                     }
                     continue;
                 }
+                // The folder was renamed or moved away, or another took its place: read the path again, which
+                // finds it gone, or watches the folder that is there now.
+                if let Some(handle) = dir.filter(|h| !still_there(*h, folder)) {
+                    close_watch(handle, armed, &overlapped);
+                    (dir, armed) = (None, false);
+                    due = Some(now());
+                    tries = 0;
+                    continue;
+                }
                 // A write that failed, or a file that was locked, with the watch still on: look again.
                 if dir.is_some() && folder::state() == FolderState::Unavailable {
                     due = Some(now());
@@ -324,28 +363,19 @@ fn run(folder: &Path, hwnd: isize, (stop, wake): (isize, isize), id: u64) {
             _ => break,
         }
     }
+    if let Some(handle) = dir {
+        close_watch(handle, armed, &overlapped);
+    }
     unsafe {
-        if let Some(handle) = dir {
-            if armed {
-                let _ = CancelIoEx(handle, Some(&overlapped));
-                let mut got = 0u32;
-                let _ = GetOverlappedResult(handle, &overlapped, &mut got, true);
-            }
-            let _ = CloseHandle(handle);
-        }
         let _ = CloseHandle(io);
     }
 }
 
 /// Read the file once and hand what came of it to the tray. The time to read again, if it should.
-/// How long the watcher waits: until a read is due, else for ever while the folder is watched and fine, and
-/// 30 s otherwise (not watched, or down, which looks again for a write that failed or a file that was locked).
-fn wait_for(due: Option<Instant>, watched: bool, state: FolderState) -> Duration {
-    match due {
-        Some(at) => at.saturating_duration_since(now()),
-        None if watched && state != FolderState::Unavailable => Duration::from_millis(u64::from(INFINITE)),
-        None => POLL,
-    }
+/// How long the watcher waits: until a read is due, else 30 s. Then it checks the folder is still at its
+/// path, or, if it can't be watched or is down, whether it is back or a write that failed can go now.
+fn wait_for(due: Option<Instant>) -> Duration {
+    due.map_or(POLL, |at| at.saturating_duration_since(now()))
 }
 
 /// What a read of this PC's own bytes asks of the tray: a resync if the folder had been down, since what
@@ -762,6 +792,27 @@ mod tests {
     }
 
     #[test]
+    fn a_folder_renamed_away_or_replaced_is_no_longer_the_one_watched() {
+        let base = std::env::temp_dir().join(format!("seam-test-{}-moved", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let (dir, away) = (base.join("sync"), base.join("away"));
+        std::fs::create_dir_all(&dir).unwrap();
+        let handle = open_dir(&dir).unwrap();
+        assert!(still_there(handle, &dir));
+        // The open handle doesn't stop the rename, and follows the folder.
+        std::fs::rename(&dir, &away).unwrap();
+        assert!(!still_there(handle, &dir));
+        assert!(still_there(handle, &away));
+        // Another folder made at the path isn't the one watched.
+        std::fs::create_dir_all(&dir).unwrap();
+        assert!(!still_there(handle, &dir));
+        unsafe {
+            let _ = CloseHandle(handle);
+        }
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
     fn a_watcher_that_was_replaced_or_stopped_is_no_longer_current() {
         let _lock = LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let first = begin_watch();
@@ -774,13 +825,11 @@ mod tests {
     }
 
     #[test]
-    fn the_wait_is_30_s_while_down_even_when_watched_and_a_resync_follows_a_return() {
-        // Watched and fine: no timeout. Down, or not watched: 30 s. A read that is due: until then.
-        assert!(wait_for(None, true, FolderState::Synced) > POLL * 1000);
-        assert_eq!(wait_for(None, true, FolderState::Unavailable), POLL);
-        assert_eq!(wait_for(None, false, FolderState::Synced), POLL);
-        assert!(wait_for(Some(now() + DEBOUNCE), true, FolderState::Synced) <= DEBOUNCE);
-        assert_eq!(wait_for(Some(now()), false, FolderState::Synced), Duration::ZERO);
+    fn the_wait_is_30_s_unless_a_read_is_due_and_a_resync_follows_a_return() {
+        // Even watched and fine, the folder is looked at every 30 s: a watch hears nothing of its renaming.
+        assert_eq!(wait_for(None), POLL);
+        assert!(wait_for(Some(now() + DEBOUNCE)) <= DEBOUNCE);
+        assert_eq!(wait_for(Some(now())), Duration::ZERO);
         // Its own bytes read after the folder was down: write what changed meanwhile.
         assert!(matches!(own_write_seen(true), Some(Seen::Resync)));
         assert!(own_write_seen(false).is_none());

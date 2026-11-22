@@ -2,6 +2,7 @@
 //! key or `workspace.add_window`. The worker reads the window as a capture would, and the
 //! row is saved through the editor's checks, with Undo as a quick save has.
 
+use super::capture::{check_rows, write_checked};
 use super::*;
 use std::path::Path;
 
@@ -135,24 +136,22 @@ fn store_place(app: &mut App, id: &str, row: usize, place: workspace::Place) {
     }
 }
 
-/// A move: take the window's row out of the workspace it leaves, if that has one for it.
-/// What Undo needs to put it back, or `None` when there was nothing to take out.
-fn take_out(app: &mut App, from: &str, rule: Rule, hwnd: isize, remember: bool) -> Option<MovedFrom> {
+/// A move's workspace on the leaving side: as it is stored, and without the window's row,
+/// when it has one. `None` when it has no row for the window, so the move only adds.
+fn leaving(app: &App, from: &str, rule: Rule, hwnd: isize, remember: bool) -> Option<Leaving> {
     let before = stored(app, from)?;
     let old = workspace::parse(&before)?;
     let (bound, _) = switcher::capture_bindings(&old, &[hwnd], remember);
-    let found = workspace::add_window(&old, rule, &bound);
-    if found.new {
-        return None;
-    }
-    let without = workspace::edited(&old, &workspace::Edit::RemoveRow(found.row)).ok()?;
-    if let Err(e) = super::capture::update_rows(app, from, workspace::to_value(&without), None, false) {
-        log::info!("move window: the row stayed in {}: {}", old.name, e.message);
-        return None;
-    }
-    let after = stored(app, from)?;
-    let from_rows = workspace::survivors(old.windows.len(), found.row);
-    Some(MovedFrom { id: from.to_string(), before, after, from: from_rows })
+    let (without, row) = super::moved::without_row(&old, rule, &bound)?;
+    Some(Leaving { before, without, row, rows: old.windows.len() })
+}
+
+struct Leaving {
+    before: Value,
+    without: Workspace,
+    /// The row that goes, and how many rows there were.
+    row: usize,
+    rows: usize,
 }
 
 /// Fold the window into its workspace and save it the way an edit is saved, so the same
@@ -170,16 +169,26 @@ fn save(app: &mut App, job: &Capturing, read: Result<(Rule, isize), String>) -> 
     let remember = app.cfg.workspaces_remember_places;
     let name = label(&rule);
     let (bound, _) = switcher::capture_bindings(&old, &[hwnd], remember);
-    let leaving = rule.clone();
+    let going = job.move_from.as_deref().filter(|from| *from != id);
+    let out = going.and_then(|from| leaving(app, from, rule.clone(), hwnd, remember));
     let added = workspace::add_window(&old, rule, &bound);
-    super::capture::update_rows(app, id, workspace::to_value(&added.workspace), Some(added.row), false)?;
+    // Both workspaces are checked first and written once, so a move is whole or not at all.
+    let target = check_rows(app, id, workspace::to_value(&added.workspace), Some(added.row), false)?;
+    let moved = match (going, out) {
+        (Some(from), Some(Leaving { before, without, row, rows })) => {
+            let source = check_rows(app, from, workspace::to_value(&without), None, false)?;
+            write_checked(app, &[target, source])?;
+            let after = stored(app, from);
+            after.map(|after| MovedFrom { id: from.to_string(), before, after, from: workspace::survivors(rows, row) })
+        }
+        _ => {
+            write_checked(app, &[target])?;
+            None
+        }
+    };
     if let Some(place) = added.place {
         store_place(app, id, added.row, place);
     }
-    let moved = match job.move_from.as_deref() {
-        Some(from) if from != id => take_out(app, from, leaving, hwnd, remember),
-        _ => None,
-    };
     let (Some(after), Some(saved)) = (stored(app, id), desk_workspaces(app).into_iter().find(|w| w.id == id)) else {
         return Err(RpcError::new(api::NOT_FOUND, "no such workspace on this desk"));
     };
@@ -213,7 +222,12 @@ fn save(app: &mut App, job: &Capturing, read: Result<(Rule, isize), String>) -> 
     let (title, body) = match (added.new, off) {
         _ if left.is_some() => {
             let from = left.map(|w| w.name).unwrap_or_default();
-            (format!("Moved to {}", saved.name), format!("{name} left {from}. Click to undo"))
+            let body = if off {
+                "It's off, so a switch leaves it alone. Click to undo".to_string()
+            } else {
+                format!("{name} is no longer in {from}. Click to undo")
+            };
+            (format!("Moved to {}", saved.name), body)
         }
         (true, _) => {
             (format!("Added to {}", saved.name), format!("{name} has a new row that won't start it. Click to undo"))

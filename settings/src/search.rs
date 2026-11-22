@@ -327,7 +327,7 @@ const ENTRIES: &[Entry] = &[
         Page::Workspaces,
         "Show the workspace name when I switch",
         "A short label appears on each screen the switch changed",
-        "label overlay name banner toast popup notification",
+        "label overlay name banner",
     ),
     entry(
         Page::Workspaces,

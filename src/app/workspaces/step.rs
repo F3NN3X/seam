@@ -23,15 +23,18 @@ pub(in crate::app) fn step(app: &mut App, dir: Step, _screen: Option<usize>, alo
         return Err(RpcError::new(api::NOT_FOUND, nothing_to_step_to(&list)));
     };
     let id = list[i].id.clone();
+    // Starting a switch drops a chain, so a refused one gives it back.
+    let chain = app.step_to.clone();
     let reply = start_switch(app, Some(&id), None, alongside, via);
-    app.step_to = reply.is_ok().then_some(id);
+    app.step_to = if reply.is_ok() { Some(id) } else { chain };
     reply
 }
 
 /// The workspace "Move window to next workspace" or "previous" moves into, from the one in use.
 pub(in crate::app) fn step_add(app: &mut App, dir: Step) {
     let list = desk_workspaces(app);
-    match workspace::stepped(&list, app.workspace.as_deref(), dir, true) {
+    // From where a step still running is headed, as the next step would go.
+    match step_target(&list, app.workspace.as_deref(), app.step_to.as_deref(), dir) {
         Some(i) => start_move_window(app, Which::Id(list[i].id.clone())),
         None => refuse_move(app, nothing_to_step_to(&list)),
     }

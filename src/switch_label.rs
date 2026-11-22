@@ -35,6 +35,17 @@ thread_local! {
     static SHOWING: RefCell<Showing> = RefCell::new(Showing::default());
 }
 
+/// "2 of 5".
+pub fn place_text(at: usize, of: usize) -> String {
+    format!("{at} of {of}")
+}
+
+/// Where the label goes on `screen` at `dpi`: left, top, width and height in pixels, in the middle.
+fn frame(screen: &Rect, dpi: i32) -> (i32, i32, i32, i32) {
+    let (width, height) = (WIDTH * dpi / 96, HEIGHT * dpi / 96);
+    (screen.left + (screen.width() - width) / 2, screen.top + (screen.height() - height) / 2, width, height)
+}
+
 unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
     unsafe {
         match msg {
@@ -102,7 +113,7 @@ pub fn show(name: &str, place: &str, screens: &[Rect]) {
         RegisterClassExW(&wc); // fails harmlessly if already registered
         for screen in screens {
             let Ok(hwnd) = CreateWindowExW(
-                WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE | WS_EX_TRANSPARENT,
+                WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE | WS_EX_LAYERED | WS_EX_TRANSPARENT,
                 CLASS,
                 w!("Seam workspace name"),
                 WS_POPUP,
@@ -118,16 +129,34 @@ pub fn show(name: &str, place: &str, screens: &[Rect]) {
                 continue;
             };
             SHOWING.with(|s| s.borrow_mut().windows.push(hwnd.0 as isize));
+            // Layered, so a click goes to the window under it, whichever app owns that; fully opaque.
+            let _ = SetLayeredWindowAttributes(hwnd, COLORREF(0), 255, LWA_ALPHA);
             // Sized after creation, because the window now knows its screen's DPI.
             let dpi = GetDpiForWindow(hwnd).max(96) as i32;
-            let (width, height) = (WIDTH * dpi / 96, HEIGHT * dpi / 96);
-            let left = screen.left + (screen.width() - width) / 2;
-            let top = screen.top + (screen.height() - height) / 2;
+            let (left, top, width, height) = frame(screen, dpi);
             let corner = CORNER * dpi / 96;
             let round = CreateRoundRectRgn(0, 0, width + 1, height + 1, corner, corner);
             SetWindowRgn(hwnd, Some(round), true);
             let _ = SetWindowPos(hwnd, Some(HWND_TOPMOST), left, top, width, height, SWP_NOACTIVATE | SWP_SHOWWINDOW);
             SetTimer(Some(hwnd), TIMER_CLOSE, SHOWN_MS, None);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_place_reads_n_of_m() {
+        assert_eq!(place_text(2, 5), "2 of 5");
+    }
+
+    #[test]
+    fn the_label_is_centred_and_scales_with_the_dpi() {
+        let screen = Rect::new(1920, 0, 1920, 1080);
+        assert_eq!(frame(&screen, 96), (1920 + 780, 480, 360, 120));
+        // At 150 % it is 1.5 times larger, and still centred.
+        assert_eq!(frame(&screen, 144), (1920 + 690, 450, 540, 180));
     }
 }

@@ -110,17 +110,17 @@ pub(in crate::app) fn ended(app: &mut App, done: &Switched) {
     }
 }
 
+/// Whether a switch that ended names its workspace on screen (D769).
+fn label_wanted(on: bool, standing_by: bool, done: &Switched, panel_shows: bool) -> bool {
+    on && !standing_by && !done.cancelled && !done.put_back && done.id != SESSION_ID && !panel_shows
+}
+
 /// Name the workspace a switch ended on, on each screen it changed (D768). Not with the toggle
 /// off, while Seam stands by, for a cancelled switch, the last session, Snap back, or when the
 /// Seam window asked and shows the result itself (D769).
 pub(in crate::app) fn show_label(app: &App, done: &Switched) {
-    let skip = !app.cfg.workspaces_switch_label
-        || standby::reason().is_some()
-        || done.cancelled
-        || done.put_back
-        || done.id == SESSION_ID
-        || (done.from_panel && panel_open(app));
-    if skip {
+    let panel_shows = done.from_panel && panel_open(app);
+    if !label_wanted(app.cfg.workspaces_switch_label, standby::reason().is_some(), done, panel_shows) {
         return;
     }
     let list = desk_workspaces(app);
@@ -136,11 +136,41 @@ pub(in crate::app) fn show_label(app: &App, done: &Switched) {
         screens.extend(app.mons.iter().position(|m| m.rect.contains(pt.x, pt.y)));
     }
     let rects: Vec<_> = screens.into_iter().map(|i| app.mons[i].rect).collect();
-    switch_label::show(&done.name, &format!("{} of {}", at + 1, list.len()), &rects);
+    switch_label::show(&done.name, &switch_label::place_text(at + 1, list.len()), &rects);
 }
 
 /// A click on the summary: the Seam window on the workspace that was switched.
 pub(in crate::app) fn open_switched(app: &mut App) {
     let id = app.switched_id.clone();
     open_panel_with(app, Some("workspaces"), None, id.as_deref());
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn done(id: &str) -> Switched {
+        Switched {
+            id: id.into(),
+            name: id.into(),
+            launched: 0,
+            placed: 0,
+            skipped: Vec::new(),
+            stacks: Vec::new(),
+            from_panel: false,
+            cancelled: false,
+            put_back: false,
+        }
+    }
+
+    #[test]
+    fn the_label_shows_unless_one_of_the_d769_cases_holds() {
+        assert!(label_wanted(true, false, &done("a"), false));
+        assert!(!label_wanted(false, false, &done("a"), false), "toggle off");
+        assert!(!label_wanted(true, true, &done("a"), false), "standing by");
+        assert!(!label_wanted(true, false, &Switched { cancelled: true, ..done("a") }, false), "cancelled");
+        assert!(!label_wanted(true, false, &Switched { put_back: true, ..done("a") }, false), "Snap back");
+        assert!(!label_wanted(true, false, &done(SESSION_ID), false), "last session");
+        assert!(!label_wanted(true, false, &Switched { from_panel: true, ..done("a") }, true), "the panel shows it");
+    }
 }

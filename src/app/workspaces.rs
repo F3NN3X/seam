@@ -8,6 +8,7 @@ mod capture;
 mod close;
 mod copy;
 mod in_use;
+mod moved;
 mod notice;
 mod order;
 mod review;
@@ -329,7 +330,10 @@ pub(super) fn switched(app: &mut App) {
     // The last session isn't a workspace anyone can pick, so it never shows as the one in use.
     if done.id != SESSION_ID {
         set_in_use(app, Some(done.id.clone()));
-        app.step_to = None;
+        // Only the end of the switch a step asked for ends its chain: the end of one it replaced may arrive late.
+        if app.step_to.as_deref() == Some(done.id.as_str()) {
+            app.step_to = None;
+        }
         sync_live(app);
         app.recheck = true;
         unsafe { SetTimer(Some(app.hwnd), TIMER_DRIFT, DRIFT_AFTER_MS, None) };

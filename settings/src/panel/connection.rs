@@ -55,6 +55,7 @@ impl Panel {
                 let Ok((client, events, state, config)) = session else {
                     let linked = this.update(cx, |this, cx| {
                         this.client = None;
+                        this.moving = false;
                         this.set_state(None);
                         this.setup_unlinked(cx);
                         cx.notify();
@@ -75,6 +76,7 @@ impl Panel {
                     }
                     this.was_linked = true;
                     this.client = Some(client.clone());
+                    this.moving = false;
                     if this.apply(state, config) {
                         this.open_setup(window, cx);
                     }

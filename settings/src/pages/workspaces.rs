@@ -92,7 +92,8 @@ fn move_workspace(panel: &mut Panel, id: &str, to: usize, window: &mut Window, c
     if from + 1 == to || panel.moving {
         return;
     }
-    panel.moving = true;
+    // Without a connection `call` never answers, so there is nothing to wait for.
+    panel.moving = panel.client.is_some();
     let (name, id) = (list[from].name.clone(), id.to_string());
     panel.call("workspace.move", json!({ "id": id, "to": to }), window, cx, move |panel, result, window, cx| {
         panel.moving = false;

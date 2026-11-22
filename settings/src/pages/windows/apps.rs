@@ -372,7 +372,7 @@ pub fn section_view(panel: &mut Panel, window: &mut Window, cx: &mut Context<Pan
     let excluded = panel.config.zones.exclude.clone();
     rows.extend(excluded.into_iter().enumerate().map(|(i, name)| left_alone_row(i, name, p, cx)));
     let adding: app_picker::Add = Rc::new(|panel, rule, _, window, cx| add(panel, rule, window, cx));
-    let button = app_picker::button(panel, &apps, "Already has a place", adding, cx);
+    let button = app_picker::button(panel, &apps, "Already has a place", adding, None, cx);
     if rows.is_empty() {
         let about = "Pick where an app's windows open, keep them on top, or keep workspaces from touching them";
         rows.push(ui::row("No apps yet", Some(about.into()), button, p).into_any_element());

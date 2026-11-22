@@ -32,7 +32,7 @@ pub fn status(live: &LiveWorkspace) -> Vec<RowStatus> {
     let row = |(i, (rule, hit)): (usize, (&Rule, Option<isize>))| {
         let state = match hit {
             _ if !workspace::takes_part(rule) => RowState::Off,
-            None if background.runs(rule, &mut procs) => RowState::Background,
+            None if rule.item.is_none() && background.runs(rule, &mut procs) => RowState::Background,
             _ => row_state(rule, hit, &seen, &geos, live),
         };
         RowStatus { rule_index: i, state }

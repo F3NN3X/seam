@@ -9,6 +9,12 @@ pub const RUNS_IN_BACKGROUND: &str = "Running in background";
 /// What `skipped` says about an app a cancelled switch never started. Not a problem: the user asked.
 pub const CANCELLED: &str = "cancelled";
 
+/// What `skipped` says about a Terminal item whose startup command didn't come from this PC (D736).
+pub const FOREIGN_COMMAND: &str = "startup command not from this PC";
+
+/// What `skipped` says about a Terminal item a switch from another app started without its startup command.
+pub const COMMAND_NOT_RUN: &str = "startup command not run for another app";
+
 /// A balloon's text holds 255 characters, and its title 63.
 const BODY_MAX: usize = 255;
 const TITLE_MAX: usize = 63;
@@ -22,6 +28,9 @@ pub fn words(reason: &str) -> Option<&'static str> {
         "not installed" => "isn't installed, or Seam can't find it",
         "refused" => "is on a network drive or a path Seam won't start",
         "open with refused" => "has an Open with that Seam won't use",
+        "item refused" => "has something to open that Seam won't use",
+        COMMAND_NOT_RUN => "opened without its startup command, because another app asked for the switch",
+        FOREIGN_COMMAND => "opened without its startup command, which didn't come from this PC",
         TOOK_TOO_LONG => "didn't show a window within 15 seconds",
         RUNS_IN_BACKGROUND => "is running with no window, so there was nothing to move",
         "elevated" => "runs as administrator, so Seam can't move it",

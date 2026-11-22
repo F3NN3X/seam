@@ -1,5 +1,6 @@
 //! Folding a fresh capture into a saved workspace, and checked edits.
 
+use super::secrets::settle;
 use super::*;
 use crate::config::ClosedApps;
 
@@ -199,8 +200,10 @@ pub struct Added {
 pub fn add_window(old: &Workspace, fresh: Rule, bound: &[Option<Bound>]) -> Added {
     let this = as_candidates(std::slice::from_ref(&fresh));
     let same_app = |r: &Rule| matching::same_app(r, &this[0]);
-    let of_app: Vec<usize> = (0..old.windows.len()).filter(|i| same_app(&old.windows[*i])).collect();
-    let held = of_app.iter().copied().find(|i| matches!(bound.get(*i).copied().flatten(), Some(Bound::Alive(0))));
+    let app_rows: Vec<usize> = (0..old.windows.len()).filter(|i| same_app(&old.windows[*i])).collect();
+    let held = app_rows.iter().copied().find(|i| matches!(bound.get(*i).copied().flatten(), Some(Bound::Alive(0))));
+    // An item is one row of its own, so a window that isn't its own never updates it (D731).
+    let of_app: Vec<usize> = app_rows.into_iter().filter(|i| old.windows[*i].item.is_none()).collect();
     let only = (of_app.len() == 1)
         .then(|| of_app[0])
         .filter(|i| !matches!(bound.get(*i).copied().flatten(), Some(Bound::Alive(h)) if h != 0));
@@ -292,6 +295,8 @@ pub fn checked_rows(
     let name = new.name.trim().to_string();
     new.name = if name.is_empty() { old.name.clone() } else { name };
     let mut focused = false;
+    // Sealed commands this workspace holds already: the only ones a save may keep.
+    let held = sealed_in(&[to_value(old)]);
     for (i, rule) in new.windows.iter_mut().enumerate() {
         let known = old.windows.iter().any(|o| o.exe == rule.exe && o.aumid == rule.aumid);
         let exe_ok = rule.exe.is_empty() || safe_exe(&rule.exe);
@@ -327,6 +332,27 @@ pub fn checked_rows(
                 Ok(OpenWith::Path(open) | OpenWith::Link(open)) => rule.open_with = Some(open),
                 Err(why) => return Err(format!("{}: {why}", rule.title_hint)),
             }
+        }
+        // An item is what I typed too, and it wins over Open with and a saved place (D732).
+        if let Some(item) = rule.item.take() {
+            // A row `only` leaves alone is still settled, and one that fails its check keeps no command.
+            let checked = check_item(&item, &rule.exe, rule.aumid.as_deref());
+            let mut item = match (checked, skip) {
+                (Ok(item), _) => item,
+                (Err(_), true) => item.without_commands(),
+                (Err(why), false) => return Err(format!("{}: {why}", rule.title_hint)),
+            };
+            if settle(&mut item, &|sealed| held.contains(sealed)) > 0 {
+                crate::log::info!(
+                    "workspace {}, row {i}: a startup command with no reference of the tray's is dropped",
+                    new.name
+                );
+            }
+            rule.item = Some(item);
+        }
+        if rule.item.is_some() {
+            rule.open_with = None;
+            rule.place = None;
         }
         // At most one window has the focus.
         rule.focused &= !focused;

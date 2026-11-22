@@ -417,3 +417,50 @@ fn new_field_is_skipped_when_unset() {
     let set = serde_json::to_value(Config::default().patched(&ClosedApps::TurnOff.patch()).unwrap()).unwrap();
     assert_eq!(set["workspaces_update_closed"], "turn_off");
 }
+
+const SEALED_ROW: &str = r#"{ "exe": "C:\\wt.exe", "aumid": "Microsoft.WindowsTerminal_8wekyb3d8bbwe!App", "item": { "kind": "terminal", "tabs": [
+    { "profile": "PowerShell", "folder": "C:\\p", "command_sealed": "c2VhbGVk" } ] } }"#;
+
+// A startup command stays on this PC and in this account: another client reads only the kind
+// of an item, and the panel the command in clear.
+#[test]
+fn config_get_shows_only_kind_to_other_clients() {
+    let row: serde_json::Value = serde_json::from_str(SEALED_ROW).unwrap();
+    let config = json!({ "desks": { "a": { "workspaces": [{ "id": "w", "windows": [row] }] } } });
+    let seen = crate::api::config_for_others(&config);
+    let item = &seen["desks"]["a"]["workspaces"][0]["windows"][0]["item"];
+    assert_eq!(item, &json!({ "kind": "terminal" }));
+    assert!(!seen.to_string().contains("c2VhbGVk") && !seen.to_string().contains("PowerShell"));
+    let panel = crate::api::config_for_panel(&config, &|s| (s == "c2VhbGVk").then(|| "npm run dev".to_string()));
+    let tab = &panel["desks"]["a"]["workspaces"][0]["windows"][0]["item"]["tabs"][0];
+    assert_eq!(tab["command"], "npm run dev");
+    assert!(tab.get("command_sealed").is_none());
+}
+
+#[test]
+fn a_settings_file_brings_no_startup_commands() {
+    let row: serde_json::Value = serde_json::from_str(SEALED_ROW).unwrap();
+    let desk = json!({ "workspaces": [{ "id": "w", "windows": [row] }] });
+    let file = json!({ "version": CURRENT_VERSION, "desks": { "a": desk } });
+    let imported = Config::from_import(file.to_string().as_bytes()).unwrap();
+    let tab = &imported.desks["a"].workspaces[0]["windows"][0]["item"]["tabs"][0];
+    assert!(tab.get("command_sealed").is_none() && tab.get("command").is_none());
+    assert_eq!(tab["profile"], "PowerShell");
+}
+
+#[test]
+fn a_config_file_loads_without_clear_commands_or_session_items() {
+    let tab = json!({ "profile": "P", "command": "calc", "unreadable": true, "command_sealed": "c2Vh" });
+    let row = json!({ "exe": "C:\\wt.exe", "item": { "kind": "terminal", "tabs": [tab] } });
+    let desk = json!({ "sign_in": { "mode": "last_session" }, "workspaces": [{ "id": "w", "windows": [row.clone()] }], "last_session": { "id": "s", "windows": [row] } });
+    let file = json!({ "version": CURRENT_VERSION, "desks": { "a": desk } });
+    let path = std::env::temp_dir().join(format!("seam-load-{}.json", std::process::id()));
+    std::fs::write(&path, file.to_string()).unwrap();
+    let loaded = Config::load_from(&path);
+    let _ = std::fs::remove_file(&path);
+    let desk = &loaded.desks["a"];
+    let tab = &desk.workspaces[0]["windows"][0]["item"]["tabs"][0];
+    assert!(tab.get("command").is_none() && tab.get("unreadable").is_none());
+    assert_eq!(tab["command_sealed"], "c2Vh");
+    assert!(desk.last_session.as_ref().unwrap()["windows"][0].get("item").is_none());
+}

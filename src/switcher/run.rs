@@ -24,6 +24,8 @@ pub struct SwitchJob {
     pub put_back: bool,
     /// The Seam window asked for it, which shows the result itself.
     pub from_panel: bool,
+    /// Another app asked through the API, so a Terminal item opens without its startup command.
+    pub other_app: bool,
 }
 
 /// How a switch went: what the event says.
@@ -194,8 +196,19 @@ fn run_switch(job: &SwitchJob, mine: u64) -> Option<Switched> {
     let (pins_stay, size_mode, places) = (job.pins_stay, job.size_mode, job.places);
     let (bound, elsewhere) = bindings(ws, places);
     let put_back = job.put_back;
-    let run =
-        Run { owner: job.owner, ws, geos, pins_stay, size_mode, cancelled: &cancelled, stamp, places, put_back, bound };
+    let run = Run {
+        owner: job.owner,
+        ws,
+        geos,
+        pins_stay,
+        size_mode,
+        cancelled: &cancelled,
+        stamp,
+        places,
+        put_back,
+        bound,
+        other_app: job.other_app,
+    };
     let mut tally = Tally::default();
     let mut procs = Procs::new();
 
@@ -343,7 +356,8 @@ fn arrange_as_they_open(
     log::info!("{}: placed {shown} of {}, never showed: {}", ws.name, found.len(), names.join(", "));
     let mut background = Background::default();
     for (i, rule) in absent {
-        let why = if background.runs(rule, waits.procs) { RUNS_IN_BACKGROUND } else { "timeout" };
+        let why =
+            if rule.item.is_none() && background.runs(rule, waits.procs) { RUNS_IN_BACKGROUND } else { "timeout" };
         tally.skipped.push(Skip::row(i, rule, why));
     }
     Some(())
@@ -370,7 +384,10 @@ fn place_then_start(run: &Run, mine: u64, waits: &mut Waits, starts: &mut Starts
     // A place row whose window is open but not one a switch takes (on another
     // desktop, say) isn't started a second time.
     let open = |i: usize| matches!(run.bound[i], Some(Bound::Alive(_)));
-    let wanted = |i: usize| (ws.launch_missing && action(i) == RowAction::Start && !open(i)).then_some(i);
+    // Snap back puts windows back and never starts an item that wasn't running (D740).
+    let item_left = |i: usize| item_left_alone(run.put_back, &ws.windows[i]);
+    let wanted =
+        |i: usize| (ws.launch_missing && action(i) == RowAction::Start && !open(i) && !item_left(i)).then_some(i);
     let starting: Vec<usize> = (0..ws.windows.len()).filter_map(wanted).collect();
     for &i in starting.iter().filter(|i| run.bound[**i] == Some(Bound::Gone)) {
         let (app, kind) = (app_name(&ws.windows[i]), usable_place(&ws.windows[i]).map_or("place", place_kind));
@@ -388,11 +405,16 @@ fn place_then_start(run: &Run, mine: u64, waits: &mut Waits, starts: &mut Starts
         .enumerate()
         .filter(|(i, r)| workspace::takes_part(r) && waits.found[*i].is_none() && !starting.contains(i));
     for (i, rule) in idle {
-        if background.runs(rule, waits.procs) {
+        if rule.item.is_none() && background.runs(rule, waits.procs) {
             tally.skipped.push(Skip::row(i, rule, RUNS_IN_BACKGROUND));
         }
     }
     Some(())
+}
+
+/// Snap back puts windows back and never starts an item that wasn't running (D740).
+pub(super) fn item_left_alone(put_back: bool, rule: &Rule) -> bool {
+    put_back && rule.item.is_some()
 }
 
 fn restack_and_focus(tally: &Tally) {
@@ -501,6 +523,14 @@ pub(super) fn pin_again(hwnd: isize, pin: Pin) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn snap_back_starts_no_item() {
+        let item = Rule { item: Some(workspace::Item::Folder { folder: r"C:\p".into() }), ..Rule::default() };
+        assert!(item_left_alone(true, &item));
+        assert!(!item_left_alone(false, &item));
+        assert!(!item_left_alone(true, &Rule::default()));
+    }
 
     #[test]
     fn a_cancel_stops_only_the_switch_it_names() {

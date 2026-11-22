@@ -29,8 +29,8 @@ mod table;
 
 pub use edits::{add_app, update};
 use edits::{
-    exe_name, move_rows, never_include, remove_rows, seconds, send_to_screen, set_delay, set_open_with, update_row,
-    update_rows, where_it_is,
+    change_item, exe_name, move_rows, never_include, remove_rows, seconds, send_to_screen, set_delay, set_open_with,
+    update_row, update_rows, where_it_is,
 };
 pub use screen_zones::{zones_moved, zones_section};
 pub use table::rows;

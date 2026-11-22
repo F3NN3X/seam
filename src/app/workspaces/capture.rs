@@ -385,11 +385,17 @@ pub(super) fn save_capture(app: &mut App, job: Capturing, got: switcher::Capture
 /// The editor saved a workspace of this desk. It's checked as `checked_update`
 /// says, then saved and applied through the same path as `config.patch`.
 pub(in crate::app) fn update_workspace(app: &mut App, id: &str, sent: Value) -> Reply {
-    update_rows(app, id, sent, None)
+    update_rows(app, id, sent, None, false)
+}
+
+/// `update_workspace` for the Seam window's own save, the one way a startup command is typed: a
+/// command in clear is sealed (D736). Anyone else's save, and an add, seals none.
+pub(in crate::app) fn update_from_panel(app: &mut App, id: &str, sent: Value) -> Reply {
+    update_rows(app, id, sent, None, true)
 }
 
 /// `update_workspace`; with `only` set, the Open with of the other rows isn't checked again.
-pub(super) fn update_rows(app: &mut App, id: &str, sent: Value, only: Option<usize>) -> Reply {
+pub(super) fn update_rows(app: &mut App, id: &str, sent: Value, only: Option<usize>, sealing: bool) -> Reply {
     let Some(desk) = app.cfg.desks.get(&app.sig) else { return refused("This desk has no workspaces") };
     let Some(old) = workspace::list(&desk.workspaces).into_iter().find(|w| w.id == id) else {
         return Err(RpcError::new(api::NOT_FOUND, "no such workspace on this desk"));
@@ -403,6 +409,10 @@ pub(super) fn update_rows(app: &mut App, id: &str, sent: Value, only: Option<usi
     if keeps_zones {
         sent.zones = old.zones.clone();
     }
+    // A clear command is only the panel's own, so no other save seals one (D736).
+    if !sealing {
+        workspace::without_clear_commands(&mut sent);
+    }
     let zones = |monitor: &str| {
         let layout = desk.zones.get(monitor).and_then(zones::layout_of);
         layout.map_or(0, |l| zones::leaf_count(&l.tree))
@@ -413,7 +423,11 @@ pub(super) fn update_rows(app: &mut App, id: &str, sent: Value, only: Option<usi
     };
     let others: Vec<String> =
         workspace::list(&desk.workspaces).into_iter().filter(|w| w.id != id).map(|w| w.name).collect();
-    let checked = Workspace { name: workspace::unique_name(&checked.name, &others), ..checked };
+    let mut checked = Workspace { name: workspace::unique_name(&checked.name, &others), ..checked };
+    // A startup command is saved sealed for this account, and only ever from the panel (D736).
+    if let Err(why) = workspace::seal_commands(&mut checked, &seam::seal::seal) {
+        return refused(why);
+    }
     let list: Vec<Value> = desk
         .workspaces
         .iter()
@@ -432,7 +446,11 @@ pub(super) fn update_rows(app: &mut App, id: &str, sent: Value, only: Option<usi
     if reply.is_ok() && !unmoved {
         // The windows place rows remember follow their rows the same way (D336).
         switcher::rebind(id, &moves);
-        live::restamp(workspace::stamp_key(id), moves);
+        live::restamp(workspace::stamp_key(id), moves.clone());
+    }
+    // An item that was edited isn't what its window opened, so the next switch starts the new one (D733).
+    if reply.is_ok() {
+        switcher::forget_edited(id, &workspace::edited_items(&old.windows, &checked.windows, &moves));
     }
     reply
 }

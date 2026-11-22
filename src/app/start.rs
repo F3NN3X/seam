@@ -58,6 +58,9 @@ pub fn run() {
         } else {
             Config::load()
         };
+        // The item rows saved now are the ones that match their window by app, once (D733).
+        let saved: Vec<_> = cfg.desks.values().flat_map(|d| seam::workspace::list(&d.workspaces)).collect();
+        crate::switcher::know_item_rows(&saved);
         // After the instance check: only the running instance owns the log.
         log::apply(cfg.debug_log);
         log::info!("seam {} started", env!("CARGO_PKG_VERSION"));

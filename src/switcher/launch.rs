@@ -1,6 +1,7 @@
 //! Starting apps and opening places, without starting one twice.
 
 use super::*;
+use workspace::report::{COMMAND_NOT_RUN, FOREIGN_COMMAND};
 
 /// Apps a switch has started and is still waiting on: key, when, and which switch. A
 /// newer switch that replaces it waits for these instead of starting a second copy.
@@ -48,11 +49,24 @@ fn shell_open(file: &str, parameters: Option<&str>) -> bool {
     }
 }
 
+fn steam_game(rule: &Rule) -> bool {
+    rule.exe.to_lowercase().contains(r"\steamapps\")
+}
+
+/// Start what a row opens when it has no window yet: its item (D731), or else its app. A
+/// `Some` answer is a reason to list the row as skipped though it started.
+pub(super) fn launch(rule: &Rule, places: bool, other_app: bool) -> Result<Option<&'static str>, &'static str> {
+    match &rule.item {
+        Some(item) if !steam_game(rule) => open_item(rule, item, other_app),
+        _ => start_app(rule, places).map(|()| None),
+    }
+}
+
 /// Start an app that has no window yet. A packaged app, a PWA or a Squirrel app
 /// starts through its AUMID, because the exe that was running isn't the thing to start.
 /// With `places`, a row with a folder or page opens on it (D330).
-pub(super) fn launch(rule: &Rule, places: bool) -> Result<(), &'static str> {
-    if rule.exe.to_lowercase().contains(r"\steamapps\") {
+fn start_app(rule: &Rule, places: bool) -> Result<(), &'static str> {
+    if steam_game(rule) {
         return Err("steam game");
     }
     // What I typed wins over a saved place, and a refusal never falls back to a plain start.
@@ -159,6 +173,98 @@ fn open_with(rule: &Rule, target: &str) -> Result<(), &'static str> {
     }
 }
 
+/// Start an item (D734), checked again here whatever saved it. Each kind's arguments come from
+/// `workspace`'s pure builders. Only a row with no window gets here, so an open window is never
+/// sent anywhere new.
+fn open_item(rule: &Rule, item: &Item, other_app: bool) -> Result<Option<&'static str>, &'static str> {
+    let app = app_name(rule);
+    let refused = |why: &str| {
+        log::info!("{app}: item not used, {why}");
+        Err("item refused")
+    };
+    let item = match workspace::check_item(item, &rule.exe, rule.aumid.as_deref()) {
+        Ok(item) => item,
+        Err(why) => return refused(why),
+    };
+    let started = |ok: bool| if ok { Ok(None) } else { refused("it didn't start") };
+    // The program a Folder item or an editor starts, from a drive of this PC.
+    let program = |rule: &Rule| {
+        let there = workspace::safe_exe(&rule.exe) && !is_network_drive(&rule.exe) && places::local_drive(&rule.exe);
+        there && Path::new(&rule.exe).is_file()
+    };
+    let folder_there = |folder: &str| places::local_drive(folder) && Path::new(folder).is_dir();
+    match &item {
+        Item::Folder { folder } => match folder_there(folder) {
+            true => started(shell_open(&explorer_path(), Some(&workspace::explorer_arg(folder)))),
+            false => refused("the folder isn't on this PC or is gone"),
+        },
+        Item::Editor { folder } => match (program(rule), folder_there(folder)) {
+            (true, true) => started(shell_open(&rule.exe, Some(&workspace::editor_args(folder)))),
+            (false, _) => refused("the editor can't be started from there"),
+            (_, false) => refused("the folder isn't on this PC or is gone"),
+        },
+        Item::Web { urls } => match (program(rule), workspace::web_args(&rule.exe, urls)) {
+            (true, Ok(args)) => started(shell_open(&rule.exe, Some(&args))),
+            (false, _) => refused("the browser can't be started from there"),
+            (_, Err(why)) => refused(why),
+        },
+        Item::Terminal { tabs } => {
+            let wt = seam::apps::terminal_alias().filter(|wt| std::fs::symlink_metadata(wt).is_ok());
+            let Some(wt) = wt else { return refused("Windows Terminal isn't installed") };
+            if tabs.iter().filter_map(|t| t.folder.as_deref()).any(|f| !folder_there(f)) {
+                return refused("a tab's folder isn't on this PC or is gone");
+            }
+            // Only a command sealed for this account runs. One that doesn't open is dropped, and
+            // its tab opens without it.
+            let (commands, held_back) = commands_for(other_app, tabs, &seam::seal::unseal);
+            let foreign = !held_back && foreign_command(tabs, &commands);
+            let (profiles, _) = seam::apps::terminal_profiles();
+            let unused = workspace::unused_commands(tabs, &profiles, &commands);
+            match workspace::terminal_args(tabs, &profiles, &commands) {
+                Ok(args) if shell_open(&wt, Some(&args)) => {
+                    let note = command_note(held_back, foreign, unused);
+                    if unused && !foreign {
+                        log::info!(
+                            "{app}: a startup command wasn't used, its profile isn't there or runs no shell Seam knows"
+                        );
+                    }
+                    Ok(note)
+                }
+                Ok(_) => refused("it didn't start"),
+                Err(why) => refused(why),
+            }
+        }
+    }
+}
+
+/// Whether a tab's command didn't open here: it was sealed elsewhere, or was typed into the file in clear.
+fn foreign_command(tabs: &[workspace::Tab], commands: &[Option<String>]) -> bool {
+    tabs.iter().zip(commands).any(|(t, c)| c.is_none() && (t.command_sealed.is_some() || t.command.is_some()))
+}
+
+/// The commands a Terminal item starts with, and whether any was held back. Only a command
+/// sealed for this account opens, and none runs when another app asked for the switch (D737).
+fn commands_for(
+    other_app: bool,
+    tabs: &[workspace::Tab],
+    unseal: &dyn Fn(&str) -> Option<String>,
+) -> (Vec<Option<String>>, bool) {
+    let held_back = other_app && tabs.iter().any(|t| t.command_sealed.is_some());
+    let open = |t: &workspace::Tab| t.command_sealed.as_deref().and_then(unseal).filter(|_| !other_app);
+    (tabs.iter().map(open).collect(), held_back)
+}
+
+/// What a started Terminal item says it didn't do: a command another app's switch held back, one
+/// from elsewhere that never runs, and one whose profile is missing or runs no shell Seam knows.
+fn command_note(held_back: bool, foreign: bool, unused: bool) -> Option<&'static str> {
+    match (held_back, foreign, unused) {
+        (true, ..) => Some(COMMAND_NOT_RUN),
+        (false, true, _) => Some(FOREIGN_COMMAND),
+        (false, false, true) => Some("item refused"),
+        (false, false, false) => None,
+    }
+}
+
 /// `GetDriveTypeW` answer for a network drive (`DRIVE_REMOTE`).
 const DRIVE_REMOTE_TYPE: u32 = 4;
 
@@ -166,4 +272,43 @@ const DRIVE_REMOTE_TYPE: u32 = 4;
 fn is_network_drive(exe: &str) -> bool {
     let root: Vec<u16> = exe.chars().take(2).chain(['\\']).map(|c| c as u16).chain([0]).collect();
     unsafe { GetDriveTypeW(PCWSTR(root.as_ptr())) == DRIVE_REMOTE_TYPE }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use workspace::Tab;
+
+    #[test]
+    fn a_command_that_didnt_open_here_is_foreign() {
+        let sealed = Tab { command_sealed: Some("x".into()), ..Tab::default() };
+        let typed = Tab { command: Some("calc".into()), ..Tab::default() };
+        let none = Tab::default();
+        assert!(foreign_command(std::slice::from_ref(&sealed), &[None]));
+        assert!(foreign_command(&[typed], &[None]));
+        assert!(!foreign_command(&[sealed], &[Some("ls".into())]));
+        assert!(!foreign_command(&[none], &[None]));
+    }
+
+    #[test]
+    fn a_started_terminal_says_what_it_left_out() {
+        assert_eq!(command_note(false, true, true), Some(FOREIGN_COMMAND));
+        assert_eq!(command_note(false, true, false), Some(FOREIGN_COMMAND));
+        assert_eq!(command_note(false, false, true), Some("item refused"));
+        assert_eq!(command_note(false, false, false), None);
+        assert_eq!(command_note(true, true, true), Some(COMMAND_NOT_RUN));
+    }
+
+    #[test]
+    fn another_apps_switch_runs_no_startup_command() {
+        let tab = |sealed: Option<&str>| Tab { command_sealed: sealed.map(Into::into), ..Tab::default() };
+        let open = |s: &str| Some(format!("open:{s}"));
+        let tabs = [tab(Some("a")), tab(None)];
+        // The Seam window, the tray, a shortcut and sign-in run what opens here.
+        assert_eq!(commands_for(false, &tabs, &open), (vec![Some("open:a".to_string()), None], false));
+        // Any other app gets the terminal without any command, and the row says so.
+        assert_eq!(commands_for(true, &tabs, &open), (vec![None, None], true));
+        // A terminal with no command has nothing held back.
+        assert_eq!(commands_for(true, &[tab(None)], &open), (vec![None], false));
+    }
 }

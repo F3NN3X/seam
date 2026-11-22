@@ -162,7 +162,7 @@ pub(in crate::app) fn show_menu(app: &mut App) {
             }
             ID_RELEASE => wm::release(None),
             ID_PUT_BACK => {
-                if let Err(e) = snap_back(app, false, false) {
+                if let Err(e) = snap_back(app, false, Via::local()) {
                     log::info!("workspace menu: {}", e.message);
                     notify(app, "Put windows back", &e.message, BalloonAction::None);
                 }
@@ -170,7 +170,7 @@ pub(in crate::app) fn show_menu(app: &mut App) {
             ID_MINIMIZE_WS => start_close_here(app, "Minimize this workspace", Ask::Minimize),
             ID_CLOSE_WS => start_close_here(app, "Close this workspace", Ask::List),
             ID_SWITCH_BACK => {
-                if let Err(e) = switch_back(app, false, false) {
+                if let Err(e) = switch_back(app, false, Via::local()) {
                     log::info!("workspace menu: {}", e.message);
                     notify(app, "Switch back", &e.message, BalloonAction::None);
                 }
@@ -185,7 +185,7 @@ pub(in crate::app) fn show_menu(app: &mut App) {
             }
             id if id >= ID_WORKSPACE => {
                 let chosen = workspaces.get(id - ID_WORKSPACE).map(|w| w.id.clone());
-                if let Some(Err(e)) = chosen.map(|id| start_switch(app, Some(&id), None, false, Via::default())) {
+                if let Some(Err(e)) = chosen.map(|id| start_switch(app, Some(&id), None, false, Via::local())) {
                     log::info!("workspace menu: {}", e.message);
                 }
             }

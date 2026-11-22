@@ -6,14 +6,13 @@
 
 use crate::log;
 use seam::winutil;
-use seam::workspace::{self, Place, Rule};
+use seam::workspace::{self, BROWSERS, Place, Rule};
 use std::collections::HashMap;
 use std::path::Path;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc::{self, Receiver};
 use std::time::{Duration, Instant};
 use windows::Win32::Foundation::HWND;
-use windows::Win32::Storage::FileSystem::GetDriveTypeW;
 use windows::Win32::System::Com::{
     CLSCTX_ALL, CLSCTX_INPROC_SERVER, COINIT_APARTMENTTHREADED, COINIT_MULTITHREADED, CoCreateInstance, CoInitializeEx,
     CoTaskMemFree, CoUninitialize, IServiceProvider,
@@ -28,16 +27,12 @@ use windows::Win32::UI::Shell::{
     SID_STopLevelBrowser, ShellWindows,
 };
 use windows::Win32::UI::WindowsAndMessaging::FindWindowExW;
-use windows::core::{BSTR, Interface, PCWSTR, w};
+use windows::core::{BSTR, Interface, w};
 
 /// The longest each browser window may take to read.
 const PAGE_WAIT: Duration = Duration::from_millis(300);
 /// The longest the Explorer windows may take to read, all together.
 const FOLDER_WAIT: Duration = Duration::from_secs(1);
-
-/// Browsers whose address bar is read, by exe name. Chromium's first.
-const BROWSERS: [&str; 7] =
-    ["chrome.exe", "msedge.exe", "brave.exe", "vivaldi.exe", "opera.exe", "helium.exe", "firefox.exe"];
 
 /// Bits of a private window's title, in lower case, in several languages. A false match
 /// only means its page isn't saved. `privat` covers private, (private), privata and privaten.
@@ -47,10 +42,6 @@ const PRIVATE: [&str; 8] = ["incognito", "inkognito", "inprivate", "privat", "pr
 /// `MAX_READING` a capture starts no more.
 static READING: AtomicUsize = AtomicUsize::new(0);
 const MAX_READING: usize = 8;
-
-/// `GetDriveTypeW` answers for a removable and a fixed drive.
-const DRIVE_REMOVABLE: u32 = 2;
-const DRIVE_FIXED: u32 = 3;
 
 #[derive(Clone, Copy, PartialEq)]
 pub(crate) enum Kind {
@@ -81,8 +72,7 @@ pub(crate) fn new_window_args(rule: &Rule, url: &str) -> String {
 
 /// Whether the path is on a fixed or removable drive of this PC, not a mapped one.
 pub(crate) fn local_drive(path: &str) -> bool {
-    let root: Vec<u16> = path.chars().take(2).chain(['\\']).map(|c| c as u16).chain([0]).collect();
-    matches!(unsafe { GetDriveTypeW(PCWSTR(root.as_ptr())) }, DRIVE_FIXED | DRIVE_REMOVABLE)
+    winutil::local_drive(path)
 }
 
 /// Counts a read as running for as long as its thread lives.

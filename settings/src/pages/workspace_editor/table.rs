@@ -356,7 +356,7 @@ fn name_cell(
     // What will run is shown in full on hover.
     let path = if rule.exe.is_empty() { exe_line(rule) } else { rule.exe.clone() };
     let full_path = SharedString::from(format!("{title}: {path}"));
-    let mut meta = exe_line(rule);
+    let mut meta = super::super::app_picker::words::meta(rule, &exe_line(rule)).unwrap_or_else(|| exe_line(rule));
     if row.windows.len() > 1 {
         meta = format!("{meta}, {} windows", row.windows.len());
     }

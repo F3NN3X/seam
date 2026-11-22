@@ -145,24 +145,20 @@ pub(super) fn notes(panel: &Panel, p: Palette, cx: &mut Context<Panel>) -> Vec<D
 }
 
 /// The system folder picker, then `config.set_folder` with what was picked.
-fn choose(window: &mut Window, cx: &mut App) {
+/// The window's root is gpui-kit's `Root`, not the Panel, so the Panel comes in as `cx`.
+fn choose(window: &mut Window, cx: &mut Context<Panel>) {
     let picked = cx.prompt_for_paths(PathPromptOptions {
         files: false,
         directories: true,
         multiple: false,
         prompt: Some("Use folder".into()),
     });
-    window
-        .spawn(cx, async move |cx| {
-            let Ok(Ok(Some(paths))) = picked.await else { return };
-            let Some(path) = paths.first().map(|p| p.display().to_string()) else { return };
-            let _ = cx.update(|window, cx| {
-                if let Some(view) = window.root::<Panel>().flatten() {
-                    view.update(cx, |panel, cx| set_folder(panel, path, None, window, cx));
-                }
-            });
-        })
-        .detach();
+    cx.spawn_in(window, async move |this, cx| {
+        let Ok(Ok(Some(paths))) = picked.await else { return };
+        let Some(path) = paths.first().map(|p| p.display().to_string()) else { return };
+        let _ = this.update_in(cx, move |panel, window, cx| set_folder(panel, path, None, window, cx));
+    })
+    .detach();
 }
 
 /// The name of the last folder of a path, for what Seam says about it.

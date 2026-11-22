@@ -4,12 +4,17 @@
 use super::sync::{self, Attempt};
 use super::*;
 use serde_json::{Value, json};
+use std::collections::BTreeSet;
 use std::io::Read;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Mutex, MutexGuard};
 
 pub const SHARED_FILE: &str = "config.json";
 const BASE_FILE: &str = "config.sync-base.json";
+const ACCEPTED_FILE: &str = "config.sync-accepted.json";
+/// The most copies by a sync app that are listed, and the longest name shown.
+const MAX_CONFLICTS: usize = 20;
+const MAX_NAME: usize = 100;
 
 /// Whether the settings live on this PC only, in a folder Seam can reach, or in one it can't.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -55,6 +60,9 @@ struct Status {
     /// What this PC holds of it after taking in the folder's file, which is `base` unless taking it in cleared something.
     held: Option<Value>,
     base_dirty: bool,
+    /// What this PC accepted of the shared part: see `sync::accepted_of`. Only ever in a file on this PC.
+    accepted: BTreeSet<String>,
+    accepted_dirty: bool,
     /// Hash of the bytes Seam last wrote to the folder, so the watcher can tell its own writes.
     own: Option<u64>,
 }
@@ -72,6 +80,8 @@ static STATUS: Mutex<Status> = Mutex::new(Status {
     base: None,
     held: None,
     base_dirty: false,
+    accepted: BTreeSet::new(),
+    accepted_dirty: false,
     own: None,
 });
 
@@ -113,11 +123,13 @@ pub fn point_at(folder: Option<PathBuf>, base: Option<Value>) {
     let mut status = lock();
     let state = if folder.is_some() { FolderState::Synced } else { FolderState::Local };
     let path = folder.as_ref().map(|f| f.display().to_string());
+    let accepted = std::mem::take(&mut status.accepted);
     *status = Status {
         folder,
         info: Info { path, state, ..Info::default() },
         base: base.clone(),
         held: base,
+        accepted,
         ..Status::default()
     };
 }
@@ -144,8 +156,44 @@ pub fn set_base(base: Value, held: Value) {
     status.base_dirty = true;
 }
 
-/// Write the base to its file if it changed. Called from the save thread.
+/// What this PC accepted of the shared part, as it kept it last time.
+pub fn load_accepted() -> BTreeSet<String> {
+    let read = std::fs::read(local_dir().join(ACCEPTED_FILE)).ok();
+    read.and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or_default()
+}
+
+pub fn set_accepted(set: BTreeSet<String>) {
+    lock().accepted = set;
+}
+
+pub fn accepted() -> BTreeSet<String> {
+    lock().accepted.clone()
+}
+
+/// Take what this PC accepts from its own config: every row that launches and every workspace that
+/// closes other windows in it. A row the folder brought with its launch off is not in it, until the
+/// user turns it on. `keep` adds what was accepted before, which a start does.
+pub fn accept(config: &Config, keep: bool) {
+    let mut now = sync::accepted_of(&shared_of(config));
+    let mut status = lock();
+    if keep {
+        now.extend(status.accepted.iter().cloned());
+    }
+    if status.accepted != now {
+        status.accepted = now;
+        status.accepted_dirty = true;
+    }
+}
+
+/// Write the base and what was accepted to their files if they changed. Called from the save thread.
 pub fn flush_base() {
+    let accepted = {
+        let mut status = lock();
+        std::mem::take(&mut status.accepted_dirty).then(|| status.accepted.clone())
+    };
+    if let Some(Ok(text)) = accepted.map(|a| serde_json::to_string_pretty(&a)) {
+        let _ = write_atomic(&local_dir().join(ACCEPTED_FILE), &text);
+    }
     let base = {
         let mut status = lock();
         if !std::mem::take(&mut status.base_dirty) {
@@ -201,7 +249,12 @@ pub fn is_own_write(bytes: &[u8]) -> bool {
 /// The folder's `config.json`: None when it isn't there, an error when the folder can't be read.
 /// Never more than the limit, so a hostile file can't fill memory.
 pub fn read_theirs(folder: &Path) -> std::io::Result<Option<Vec<u8>>> {
-    let file = match std::fs::File::open(folder.join(SHARED_FILE)) {
+    let path = folder.join(SHARED_FILE);
+    // Never a link: it could lead anywhere, such as a slow share or a device.
+    if std::fs::symlink_metadata(&path).is_ok_and(|m| m.file_type().is_symlink()) {
+        return Err(std::io::Error::other("config.json is a link"));
+    }
+    let file = match std::fs::File::open(&path) {
         Ok(file) => file,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound && folder.is_dir() => return Ok(None),
         Err(e) => return Err(e),
@@ -217,6 +270,8 @@ pub fn conflict_files(folder: &Path) -> Vec<String> {
     let mut found: Vec<String> =
         names.filter_map(|e| e.file_name().into_string().ok()).filter(|n| sync::is_conflict_copy(n)).collect();
     found.sort();
+    found.truncate(MAX_CONFLICTS);
+    found.iter_mut().for_each(|n| n.truncate(MAX_NAME));
     found
 }
 
@@ -241,8 +296,12 @@ fn write_shared(folder: &Path, shared: &Value, unix: u64) -> std::io::Result<()>
     value["sync"] = json!({ "pc": computer_name(), "at": unix });
     let text = serde_json::to_string_pretty(&value).map_err(std::io::Error::other)?;
     lock().own = Some(hash(text.as_bytes()));
-    let (dest, tmp) = (folder.join(SHARED_FILE), folder.join("config.json.tmp"));
-    std::fs::write(&tmp, &text)?;
+    // A name nobody can have planted: `create_new` never writes through a link or into a file that is there.
+    let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.subsec_nanos());
+    let (dest, tmp) = (folder.join(SHARED_FILE), folder.join(format!("config.{}-{nanos}.tmp", std::process::id())));
+    let mut file = std::fs::OpenOptions::new().write(true).create_new(true).open(&tmp)?;
+    std::io::Write::write_all(&mut file, text.as_bytes())?;
+    drop(file);
     replace(&tmp, &dest).inspect_err(|_| {
         let _ = std::fs::remove_file(&tmp);
     })
@@ -299,7 +358,13 @@ pub fn push(config: &Config, unix: u64) -> Push {
     let (base, held) = (base(), held());
     // The folder can't be reached or written: this PC carries on with its own copy.
     let down = || if set_state(FolderState::Unavailable) { Push::Changed } else { Push::Quiet };
-    let there = match read_theirs(&folder) {
+    let mut read = read_theirs(&folder);
+    // A sync app may replace the file by deleting and creating it: look once more before writing over it.
+    if matches!(read, Ok(None)) && base.is_some() {
+        std::thread::sleep(std::time::Duration::from_secs(1));
+        read = read_theirs(&folder);
+    }
+    let there = match read {
         Err(_) => return down(),
         Ok(None) => None,
         Ok(Some(bytes)) => match sync::attempt(&bytes, 0) {
@@ -316,9 +381,14 @@ pub fn push(config: &Config, unix: u64) -> Push {
     if there.is_some() && held.as_ref() == Some(&ours) {
         return Push::Quiet;
     }
-    match write_shared(&folder, &ours, unix) {
+    // What the folder had goes back for everything this PC didn't change: what it holds is only its own view.
+    let out = match (&held, &base) {
+        (Some(held), Some(base)) => sync::outgoing(held, &ours, base),
+        _ => ours.clone(),
+    };
+    match write_shared(&folder, &out, unix) {
         Ok(()) => {
-            set_base(ours.clone(), ours);
+            set_base(out, ours);
             let was = state();
             synced_at(unix);
             if was == FolderState::Synced { Push::Quiet } else { Push::Changed }
@@ -326,6 +396,10 @@ pub fn push(config: &Config, unix: u64) -> Push {
         Err(_) => down(),
     }
 }
+
+/// Tests that use the folder status take this, since it is one for the whole process.
+#[cfg(test)]
+pub static TEST_LOCK: Mutex<()> = Mutex::new(());
 
 /// Keep this PC's side of a clash beside the local config. The file's name, once it is written.
 pub fn keep_conflict(ours: &Value, unix: u64) -> Option<String> {

@@ -537,6 +537,10 @@ fn unix_now() -> u64 {
 }
 
 fn persist(app: &App) {
+    // With the settings in a folder, what launches here is what this PC accepts of the folder's rows.
+    if seam::config::folder::state() != seam::config::folder::FolderState::Local {
+        seam::config::folder::accept(&app.cfg, false);
+    }
     if let Some(saver) = &app.saver {
         let _ = saver.queue.send((app.cfg.clone(), seam::config::folder::generation()));
     }

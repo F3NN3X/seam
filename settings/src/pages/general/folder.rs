@@ -208,10 +208,13 @@ fn ask_which(path: &str, who: Option<Value>, window: &mut Window, cx: &mut Conte
         let date = seam::winutil::local_date(at).map(seam::locale::month_day_local)?;
         Some(format!(", saved {date} on {pc}"))
     });
-    let body = format!(
-        "{name} already has Seam settings{}. Shortcuts and this PC's own settings stay as they are either way",
-        saved.unwrap_or_default()
-    );
+    // A file with no stamp says no more than that it has settings.
+    let body = match saved {
+        Some(saved) => format!(
+            "{name} already has Seam settings{saved}. Shortcuts and this PC's own settings stay as they are either way"
+        ),
+        None => format!("{name} already has Seam settings"),
+    };
     let path = path.to_string();
     window.open_dialog(cx, move |dialog, _, cx| {
         let p = palette(cx);

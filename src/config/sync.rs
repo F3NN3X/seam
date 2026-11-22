@@ -3,7 +3,7 @@
 
 use super::{CURRENT_VERSION, Config};
 use serde_json::{Map, Value};
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::{Component, Path, PathBuf};
 
 /// Top-level fields that stay on this PC. `config_folder` is the pointer to the folder itself, and
@@ -120,7 +120,8 @@ pub fn join(shared: &Value, local: &Value) -> Value {
         if let Some(list) = joined.get_mut("workspaces").and_then(Value::as_array_mut) {
             *list = crate::workspace::without_commands(list);
             let before = mine.and_then(|m| m.get("workspaces")).and_then(Value::as_array);
-            list.iter_mut().for_each(|ws| restore_commands(ws, before.map(Vec::as_slice).unwrap_or_default()));
+            let kept = sealed_by_id(before.map(Vec::as_slice).unwrap_or_default());
+            list.iter_mut().for_each(|ws| restore_commands(ws, &kept));
         }
         desks.insert(sig.clone(), Value::Object(joined));
     }
@@ -128,67 +129,225 @@ pub fn join(shared: &Value, local: &Value) -> Value {
     Value::Object(out)
 }
 
-/// Put back the sealed commands this PC kept for a workspace, matched by workspace id, row and tab.
-/// A row whose app or kind of item is no longer the same gets none.
-fn restore_commands(ws: &mut Value, before: &[Value]) {
-    let Some(old) =
-        ws.get("id").filter(|id| id.is_string()).and_then(|id| before.iter().find(|w| w.get("id") == Some(id)))
-    else {
-        return;
-    };
-    let old_rows = old.get("windows").and_then(Value::as_array).map(Vec::as_slice).unwrap_or_default();
-    let rows = ws.get_mut("windows").and_then(Value::as_array_mut).into_iter().flatten();
-    for (row, was) in rows.zip(old_rows) {
-        if row.get("exe") != was.get("exe") || row.pointer("/item/kind") != was.pointer("/item/kind") {
-            continue;
-        }
-        let tabs = row.pointer_mut("/item/tabs").and_then(Value::as_array_mut).into_iter().flatten();
-        let old_tabs = was.pointer("/item/tabs").and_then(Value::as_array).map(Vec::as_slice).unwrap_or_default();
-        for (tab, was) in tabs.zip(old_tabs) {
-            if let (Some(tab), Some(sealed)) = (tab.as_object_mut(), was.get("command_sealed")) {
-                tab.insert("command_sealed".into(), sealed.clone());
+/// A tab as a sealed command is tied to it: the row's app and kind of item, and the tab's profile and
+/// folder. A command only goes back onto a tab with the same of all of these (D757).
+fn tab_key(row: &Value, tab: &Value) -> String {
+    let part = |v: Option<&Value>| v.map_or_else(String::new, Value::to_string);
+    [
+        part(row.get("exe")),
+        part(row.get("aumid")),
+        part(row.pointer("/item/kind")),
+        part(tab.get("profile")),
+        part(tab.get("folder")),
+    ]
+    .join("\u{1}")
+}
+
+/// This PC's sealed commands by workspace id, then by tab key, in the order they stand in the workspace.
+type Sealed<'a> = HashMap<&'a str, HashMap<String, Vec<&'a Value>>>;
+
+fn sealed_by_id(workspaces: &[Value]) -> Sealed<'_> {
+    let mut all: Sealed = HashMap::new();
+    for ws in workspaces {
+        let Some(id) = ws.get("id").and_then(Value::as_str) else { continue };
+        let rows = ws.get("windows").and_then(Value::as_array).into_iter().flatten();
+        for row in rows {
+            for tab in row.pointer("/item/tabs").and_then(Value::as_array).into_iter().flatten() {
+                if let Some(sealed) = tab.get("command_sealed") {
+                    all.entry(id).or_default().entry(tab_key(row, tab)).or_default().push(sealed);
+                }
             }
+        }
+    }
+    all
+}
+
+/// Put back the sealed commands this PC kept for a workspace, onto the tabs that are still the same
+/// by `tab_key`, the nth such tab getting the nth command. A tab that moved keeps its command, and a
+/// tab whose folder, profile or app changed in the folder gets none.
+fn restore_commands(ws: &mut Value, kept: &Sealed) {
+    let Some(mine) = ws.get("id").and_then(Value::as_str).and_then(|id| kept.get(id)) else { return };
+    let mut used: HashMap<String, usize> = HashMap::new();
+    let rows = ws.get_mut("windows").and_then(Value::as_array_mut).into_iter().flatten();
+    for row in rows {
+        let snapshot = row.clone();
+        let tabs = row.pointer_mut("/item/tabs").and_then(Value::as_array_mut).into_iter().flatten();
+        for tab in tabs {
+            let key = tab_key(&snapshot, tab);
+            let n = used.entry(key.clone()).or_default();
+            if let (Some(sealed), Some(fields)) = (mine.get(&key).and_then(|c| c.get(*n)), tab.as_object_mut()) {
+                fields.insert("command_sealed".into(), (*sealed).clone());
+            }
+            *n += 1;
         }
     }
 }
 
-/// What comes in from the folder, cleared as an untrusted import is (D757): nothing local, no
-/// startup command, every item checked, and an "Open with" that isn't the one `base` had dropped,
-/// with that row's launch turned off. `base` is the shared part as this PC last saw it.
-pub fn intake(base: Option<&Value>, theirs: &mut Value) {
+/// The most the file in the folder may hold. A bigger one is refused as unreadable, so a file under
+/// the byte cap can't make the merge slow or huge.
+const MAX_DESKS: usize = 64;
+const MAX_WORKSPACES: usize = 200;
+const MAX_ROWS: usize = 100;
+const MAX_TABS: usize = 8;
+const MAX_TOTAL_ROWS: usize = 2_000;
+
+/// Whether the counts of a config in JSON are within the limits above.
+pub fn within_limits(cfg: &Value) -> bool {
+    let desks = cfg.get("desks").and_then(Value::as_object);
+    if desks.is_some_and(|d| d.len() > MAX_DESKS) {
+        return false;
+    }
+    let mut total = 0;
+    for desk in desks.into_iter().flat_map(|d| d.values()) {
+        let list = desk.get("workspaces").and_then(Value::as_array).map(Vec::as_slice).unwrap_or_default();
+        if list.len() > MAX_WORKSPACES {
+            return false;
+        }
+        for ws in list {
+            let rows = ws.get("windows").and_then(Value::as_array).map(Vec::as_slice).unwrap_or_default();
+            total += rows.len();
+            let tabs_ok =
+                |row: &Value| row.pointer("/item/tabs").and_then(Value::as_array).is_none_or(|t| t.len() <= MAX_TABS);
+            if rows.len() > MAX_ROWS || total > MAX_TOTAL_ROWS || !rows.iter().all(tabs_ok) {
+                return false;
+            }
+        }
+    }
+    true
+}
+
+/// FNV-1a, so what is remembered across runs doesn't change with the compiler.
+fn fnv(text: &str) -> String {
+    let hash = text.bytes().fold(0xcbf2_9ce4_8422_2325u64, |h, b| (h ^ u64::from(b)).wrapping_mul(0x100_0000_01b3));
+    format!("{hash:016x}")
+}
+
+/// What a row can start or open, with its workspace: the app, the item, "Open with" and the folder or page.
+/// This is what this PC accepts, or doesn't, before a row from the folder may launch.
+fn identity(ws_id: &str, row: &Value) -> String {
+    let part = |key: &str| row.get(key).map_or_else(String::new, Value::to_string);
+    fnv(&[ws_id.to_string(), part("exe"), part("aumid"), part("item"), part("open_with"), part("place")].join("\u{1}"))
+}
+
+fn close_mark(ws_id: &str) -> String {
+    format!("close:{ws_id}")
+}
+
+/// What this PC has accepted of a config's shared part: each row that launches (by `identity`) and each
+/// workspace that closes other windows. A row from the folder that isn't one of these doesn't launch here.
+/// It is kept in a file on this PC and never in the shared one.
+pub fn accepted_of(shared: &Value) -> BTreeSet<String> {
+    let mut set = BTreeSet::new();
+    for desk in shared.get("desks").into_iter().flat_map(fields).map(|(_, d)| d) {
+        for ws in desk.get("workspaces").and_then(Value::as_array).into_iter().flatten() {
+            let Some(id) = ws.get("id").and_then(Value::as_str) else { continue };
+            if ws.get("other_windows").and_then(Value::as_str) == Some("close") {
+                set.insert(close_mark(id));
+            }
+            for row in ws.get("windows").and_then(Value::as_array).into_iter().flatten() {
+                if row.get("launch").and_then(Value::as_bool).unwrap_or(true) {
+                    set.insert(identity(id, row));
+                }
+            }
+        }
+    }
+    set
+}
+
+/// What comes in from the folder, cleared as an untrusted import is and then held to what this PC
+/// accepted (D757): nothing local, no startup command, every item checked. A row whose app, item,
+/// "Open with" or folder or page isn't one this PC accepted arrives with its launch off, and
+/// without the "Open with" and the folder or page if the version without them isn't accepted either.
+/// A workspace that closes other windows arrives leaving them, unless this PC accepted that. The
+/// result is what this PC holds; what is written back to the folder is never this (see `outgoing`).
+pub fn guard(theirs: &mut Value, accepted: &BTreeSet<String>) {
     let Some(map) = theirs.as_object_mut() else { return };
     map.retain(|key, _| key == "desks" || key == "version" || !(LOCAL_TOP.contains(&key.as_str()) || key == STAMP));
-    for (sig, desk) in map.get_mut("desks").and_then(Value::as_object_mut).into_iter().flatten() {
+    for desk in map.get_mut("desks").and_then(Value::as_object_mut).into_iter().flat_map(|d| d.values_mut()) {
         let Some(desk) = desk.as_object_mut() else { continue };
         desk.retain(|key, _| !LOCAL_DESK.contains(&key.as_str()));
-        let before = base.and_then(|b| b.pointer(&format!("/desks/{}/workspaces", pointer_key(sig))));
-        if let Some(list) = desk.get_mut("workspaces").and_then(Value::as_array_mut) {
-            guard_open_with(list, before.and_then(Value::as_array).map(Vec::as_slice).unwrap_or_default());
-            *list = crate::workspace::clean_imported_items(list);
-        }
-    }
-}
-
-fn pointer_key(key: &str) -> String {
-    key.replace('~', "~0").replace('/', "~1")
-}
-
-fn guard_open_with(list: &mut [Value], before: &[Value]) {
-    for ws in list {
-        let old = ws.get("id").and_then(|id| before.iter().find(|w| w.get("id") == Some(id))).cloned();
-        let old_rows = old.as_ref().and_then(|w| w.get("windows")).and_then(Value::as_array);
-        let rows = ws.get_mut("windows").and_then(Value::as_array_mut).into_iter().flatten();
-        for (n, row) in rows.enumerate() {
-            let Some(fields) = row.as_object_mut() else { continue };
-            let same = fields
-                .get("open_with")
-                .is_some_and(|now| old_rows.and_then(|rows| rows.get(n)).and_then(|r| r.get("open_with")) == Some(now));
-            if fields.contains_key("open_with") && !same {
+        let Some(list) = desk.get_mut("workspaces").and_then(Value::as_array_mut) else { continue };
+        *list = crate::workspace::clean_imported_items(list);
+        for ws in list.iter_mut() {
+            let id = ws.get("id").and_then(Value::as_str).unwrap_or_default().to_string();
+            if ws.get("other_windows").and_then(Value::as_str) == Some("close") && !accepted.contains(&close_mark(&id))
+            {
+                ws["other_windows"] = Value::String("leave".into());
+            }
+            for row in ws.get_mut("windows").and_then(Value::as_array_mut).into_iter().flatten() {
+                let Some(fields) = row.as_object_mut() else { continue };
+                if accepted.contains(&identity(&id, &Value::Object(fields.clone()))) {
+                    continue;
+                }
                 fields.remove("open_with");
-                fields.insert("launch".into(), Value::Bool(false));
+                fields.remove("place");
+                if !accepted.contains(&identity(&id, &Value::Object(fields.clone()))) {
+                    fields.insert("launch".into(), Value::Bool(false));
+                }
             }
         }
     }
+}
+
+/// The shared part to write to the folder: this PC's, but with the folder's own value for everything this PC
+/// didn't change since it took the folder's file in. `held` is what this PC made of `base` (the file as
+/// it was read) with `guard`, so a row that came in with its launch off, or without an "Open with",
+/// goes back out as the other PC wrote it. A key or row this PC changed goes out as this PC has it.
+pub fn outgoing(held: &Value, ours: &Value, base: &Value) -> Value {
+    let (h, o, b) = (flat(held), flat(ours), flat(base));
+    let mut out: BTreeMap<Key, Value> = BTreeMap::new();
+    for (key, mine) in &o {
+        let value = match (h.get(key), b.get(key)) {
+            (Some(held), Some(base)) if held == mine => base.clone(),
+            (Some(held), Some(base)) if key.1 == "workspaces" => unguard(mine, held, base),
+            _ => mine.clone(),
+        };
+        out.insert(key.clone(), value);
+    }
+    unflat(out)
+}
+
+/// A workspace list this PC edited, with each workspace and row it left as held put back as the folder had it.
+fn unguard(mine: &Value, held: &Value, base: &Value) -> Value {
+    let index = |v: &Value| -> HashMap<String, Value> {
+        v.as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|ws| Some((ws.get("id")?.as_str()?.to_string(), ws.clone())))
+            .collect()
+    };
+    let (held, base) = (index(held), index(base));
+    let list = mine.as_array().into_iter().flatten().map(|ws| {
+        let id = ws.get("id").and_then(Value::as_str).unwrap_or_default();
+        let (Some(was), Some(raw)) = (held.get(id), base.get(id)) else { return ws.clone() };
+        if ws == was {
+            return raw.clone();
+        }
+        let mut ws = ws.clone();
+        if ws.get("other_windows") == was.get("other_windows") {
+            match raw.get("other_windows") {
+                Some(v) => ws["other_windows"] = v.clone(),
+                None => {
+                    ws.as_object_mut().map(|f| f.remove("other_windows"));
+                }
+            }
+        }
+        let (held_rows, raw_rows) =
+            (was.get("windows").and_then(Value::as_array), raw.get("windows").and_then(Value::as_array));
+        if let (Some(rows), Some(held_rows), Some(raw_rows)) =
+            (ws.get_mut("windows").and_then(Value::as_array_mut), held_rows, raw_rows)
+        {
+            for (i, row) in rows.iter_mut().enumerate() {
+                if let (Some(was), Some(raw)) = (held_rows.get(i), raw_rows.get(i))
+                    && row == was
+                {
+                    *row = raw.clone();
+                }
+            }
+        }
+        ws
+    });
+    Value::Array(list.collect())
 }
 
 /// A key to merge: a top-level shared field, or one shared field of one desk.
@@ -257,6 +416,24 @@ pub fn merge3(base: &Value, ours: &Value, theirs: &Value) -> Merged {
     Merged { value: Value::Object(top), clashed }
 }
 
+fn unflat(keys: BTreeMap<Key, Value>) -> Value {
+    let (mut top, mut desks) = (Map::new(), Map::<String, Value>::new());
+    for (key, value) in keys {
+        match key {
+            (Some(sig), field) => {
+                if let Some(desk) = desks.entry(sig).or_insert_with(|| Value::Object(Map::new())).as_object_mut() {
+                    desk.insert(field, value);
+                }
+            }
+            (None, field) => {
+                top.insert(field, value);
+            }
+        }
+    }
+    top.insert("desks".into(), Value::Object(desks));
+    Value::Object(top)
+}
+
 /// A file a sync app made beside `config.json` when two PCs wrote it at once. Seam never reads one.
 pub fn is_conflict_copy(file: &str) -> bool {
     let file = file.to_ascii_lowercase();
@@ -287,6 +464,9 @@ pub fn attempt(bytes: &[u8], tries: u8) -> Attempt {
     let Ok(value) = serde_json::from_slice::<Value>(bytes) else { return again };
     if value.get("version").and_then(Value::as_u64).is_some_and(|v| v > u64::from(CURRENT_VERSION)) {
         return Attempt::Newer;
+    }
+    if !within_limits(&value) {
+        return Attempt::GiveUp;
     }
     let Ok(mut config) = serde_json::from_value::<Config>(value) else { return again };
     if config.version < CURRENT_VERSION {
@@ -326,6 +506,14 @@ pub fn folder_ok(path: &str, own: &Path, drives: &dyn Drives) -> Result<PathBuf,
     let folder = PathBuf::from(path);
     if !folder.is_dir() {
         return Err(NOT_THERE);
+    }
+    // A junction or link on a fixed drive can lead to a network share: the real path has to pass too.
+    if let Ok(real) = std::fs::canonicalize(&folder) {
+        let text = real.to_string_lossy().replace('/', "\\");
+        let plain = text.strip_prefix(r"\\?\").unwrap_or(&text);
+        if plain.starts_with(r"UNC\") || plain.starts_with(r"\\") || !shape_ok(plain).is_ok_and(|l| drives.fixed(l)) {
+            return Err(NOT_LOCAL);
+        }
     }
     if same_folder(&folder, own) {
         return Err(OWN_FOLDER);

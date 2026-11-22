@@ -35,6 +35,8 @@ pub(super) enum Seen {
     Missing,
     /// A file that parsed.
     File(Box<Config>),
+    /// The folder is back and holds only what this PC wrote: what changed meanwhile is written now.
+    Resync,
 }
 
 /// "Keep settings in a folder…": what the folder holds, as the worker read it.
@@ -113,17 +115,20 @@ fn watch(folder: PathBuf, hwnd: isize) {
     }
 }
 
-/// Stop watching, and wait for the thread.
+/// Stop watching. The thread may sit in a read of a file that is still downloading, so another
+/// thread waits for it, and the tray never does.
 fn unwatch() {
     let Some(watch) = watching().take() else { return };
     unsafe {
         let _ = SetEvent(HANDLE(watch.stop as *mut _));
     }
-    let _ = watch.thread.join();
-    unsafe {
-        let _ = CloseHandle(HANDLE(watch.stop as *mut _));
-        let _ = CloseHandle(HANDLE(watch.wake as *mut _));
-    }
+    let _ = std::thread::Builder::new().name("seam-sync-stop".into()).spawn(move || {
+        let _ = watch.thread.join();
+        unsafe {
+            let _ = CloseHandle(HANDLE(watch.stop as *mut _));
+            let _ = CloseHandle(HANDLE(watch.wake as *mut _));
+        }
+    });
 }
 
 /// Ask the watcher to read the folder's file now: a save found it isn't what this PC last saw.
@@ -189,6 +194,9 @@ fn run(folder: &Path, hwnd: isize, stop: isize, wake: isize) {
     let mut due = Some(now());
     let mut tries = 0u8;
     let mut mark = file_mark(folder);
+    if folder::set_conflicts(folder::conflict_files(folder)) {
+        post(hwnd);
+    }
     loop {
         if let (Some(handle), false) = (dir, armed) {
             let size = (buffer.len() * 4) as u32;
@@ -215,7 +223,9 @@ fn run(folder: &Path, hwnd: isize, stop: isize, wake: isize) {
         }
         let wait = match due {
             Some(at) => at.saturating_duration_since(now()),
-            None if dir.is_some() => Duration::from_millis(u64::from(INFINITE)),
+            None if dir.is_some() && folder::state() != FolderState::Unavailable => {
+                Duration::from_millis(u64::from(INFINITE))
+            }
             None => POLL,
         };
         let handles = [stop, wake, io];
@@ -225,7 +235,9 @@ fn run(folder: &Path, hwnd: isize, stop: isize, wake: isize) {
         match woken.0.wrapping_sub(WAIT_OBJECT_0.0) {
             0 => break,
             1 => {
-                due = Some(now());
+                // A save that found the folder down waits before it looks again.
+                let wait = if folder::state() == FolderState::Unavailable { POLL } else { Duration::ZERO };
+                due = Some(now() + wait);
                 tries = 0;
             }
             2 => {
@@ -260,11 +272,19 @@ fn run(folder: &Path, hwnd: isize, stop: isize, wake: isize) {
             }
             _ if woken == WAIT_TIMEOUT => {
                 if due.is_some_and(|at| at <= now()) {
-                    due = read_once(folder, hwnd, &mut tries, dir.is_some());
+                    due = read_once(folder, hwnd, &mut tries);
                     mark = file_mark(folder);
+                    if folder::set_conflicts(folder::conflict_files(folder)) {
+                        post(hwnd);
+                    }
                     if dir.is_none() {
                         dir = open_dir(folder);
                     }
+                    continue;
+                }
+                // A write that failed, or a file that was locked, with the watch still on: look again.
+                if dir.is_some() && folder::state() == FolderState::Unavailable {
+                    due = Some(now());
                     continue;
                 }
                 // Not watched: see whether the folder is back, or the file changed.
@@ -298,7 +318,8 @@ fn run(folder: &Path, hwnd: isize, stop: isize, wake: isize) {
 }
 
 /// Read the file once and hand what came of it to the tray. The time to read again, if it should.
-fn read_once(folder: &Path, hwnd: isize, tries: &mut u8, watched: bool) -> Option<Instant> {
+fn read_once(folder: &Path, hwnd: isize, tries: &mut u8) -> Option<Instant> {
+    let was_down = folder::state() == FolderState::Unavailable;
     let bytes = match folder::read_theirs(folder) {
         Err(_) => {
             // Gone, or locked: the copy on this PC carries on, and the folder is looked at every 30 s.
@@ -306,7 +327,7 @@ fn read_once(folder: &Path, hwnd: isize, tries: &mut u8, watched: bool) -> Optio
                 log::info!("sync: the settings folder isn't available");
             }
             post(hwnd);
-            return (!watched).then(|| now() + POLL);
+            return Some(now() + POLL);
         }
         Ok(bytes) => bytes,
     };
@@ -319,6 +340,9 @@ fn read_once(folder: &Path, hwnd: isize, tries: &mut u8, watched: bool) -> Optio
     // What Seam wrote itself, which the tray already holds.
     if folder::is_own_write(&bytes) {
         folder::synced_at(unix_now());
+        if was_down {
+            inbox().seen = Some(Seen::Resync);
+        }
         post(hwnd);
         return None;
     }
@@ -357,7 +381,14 @@ fn read_once(folder: &Path, hwnd: isize, tries: &mut u8, watched: bool) -> Optio
 pub(super) fn start(app: &mut App) {
     let Some(path) = app.cfg.config_folder.clone() else { return };
     folder::point_at(Some(PathBuf::from(&path)), folder::load_base());
-    if shared::shape_ok(&path).is_err() {
+    // What this PC already launches is what it accepts, with what it accepted before.
+    folder::set_accepted(folder::load_accepted());
+    folder::accept(&app.cfg, true);
+    // The same rules as when it was chosen. A folder that isn't there yet is polled for.
+    let own = package::settings_dir();
+    if let Err(why) = shared::folder_ok(&path, &own, &FixedDrives)
+        && why != shared::NOT_THERE
+    {
         log::info!("sync: the settings folder in config.json isn't a folder Seam may use");
         folder::set_state(FolderState::Unavailable);
         return;
@@ -370,7 +401,13 @@ pub(super) fn saved(hwnd: isize, config: &Config, generation: u64) {
     if generation == folder::generation() {
         match folder::push(config, unix_now()) {
             folder::Push::Quiet => {}
-            folder::Push::Changed => post(hwnd),
+            folder::Push::Changed => {
+                post(hwnd);
+                // Down: look again in 30 s, and write what changed meanwhile.
+                if folder::state() == FolderState::Unavailable {
+                    wake();
+                }
+            }
             folder::Push::Wake => wake(),
         }
     }
@@ -394,11 +431,14 @@ pub(super) fn incoming(app: &mut App) {
         let mut inbox = inbox();
         (inbox.seen.take(), inbox.pick.take())
     };
+    // What a watcher read of a folder this PC no longer uses is dropped.
+    let seen = seen.filter(|_| folder::state() != FolderState::Local);
     if let Some(pick) = pick {
         picked(app, pick);
     }
     match seen {
         Some(Seen::File(theirs)) => absorb(app, &theirs),
+        Some(Seen::Resync) => bump_and_persist(app),
         Some(Seen::Missing) => {
             // The file is gone or was never there: this PC's copy is written back.
             bump_and_persist(app);
@@ -440,9 +480,11 @@ fn warn_unavailable(app: &mut App) {
 /// Merge the folder's file into what this PC has (D754) and apply the result.
 fn absorb(app: &mut App, theirs: &Config) {
     let raw = folder::shared_of(theirs);
-    let base = folder::base();
+    // What this PC holds is `held`, the file as it last read it and guarded: the merge starts from that,
+    // so a setting this PC changed isn't mistaken for a clash with a row the guard changed.
+    let base = folder::held();
     let mut cleaned = raw.clone();
-    shared::intake(base.as_ref(), &mut cleaned);
+    shared::guard(&mut cleaned, &folder::accepted());
     let ours_config = serde_json::to_value(&app.cfg).unwrap_or_default();
     let ours = folder::shared_of(&app.cfg);
     // No base is the first time the folder is read here: its shared settings are taken (D753).
@@ -559,7 +601,9 @@ fn picked(app: &mut App, pick: Pick) {
             Ok(json!({ "ok": true, "state": FolderState::Synced }))
         }
         (Found::Config(theirs), None) => {
-            let stamp = theirs.sync.clone().unwrap_or_default();
+            let mut stamp = theirs.sync.clone().unwrap_or_default();
+            // Only a short plain name is shown.
+            stamp.pc = stamp.pc.chars().filter(|c| !c.is_control()).take(40).collect();
             let who = json!({ "pc": stamp.pc, "at": stamp.at });
             refused(if stamp == SyncStamp::default() { "has_config".to_string() } else { format!("has_config {who}") })
         }
@@ -582,6 +626,7 @@ fn picked(app: &mut App, pick: Pick) {
 /// writes over, if there is one.
 fn point(app: &mut App, chosen: PathBuf, seen: Option<serde_json::Value>) {
     app.cfg.config_folder = Some(chosen.display().to_string());
+    inbox().seen = None;
     folder::point_at(Some(chosen.clone()), None);
     if let Some(seen) = seen {
         folder::set_base(seen.clone(), seen);
@@ -593,6 +638,7 @@ fn point(app: &mut App, chosen: PathBuf, seen: Option<serde_json::Value>) {
 /// Keep the settings on this PC only. The file in the folder stays as it is.
 fn turn_off(app: &mut App) {
     unwatch();
+    inbox().seen = None;
     app.cfg.config_folder = None;
     folder::point_at(None, None);
     let _ = std::fs::remove_file(folder::local_dir().join("config.sync-base.json"));

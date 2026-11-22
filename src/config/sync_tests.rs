@@ -109,7 +109,7 @@ fn local_fields_never_reach_the_shared_file() {
     assert_eq!(joined["desks"]["sig"]["last_seen"], 3);
     assert_eq!(joined["desks"]["sig"]["active_workspace"], "mine");
     let mut taken = hostile.clone();
-    intake(None, &mut taken);
+    guard(&mut taken, &BTreeSet::new());
     assert!(taken.get("hotkeys").is_none() && taken["desks"]["sig"].get("last_seen").is_none());
 }
 
@@ -341,7 +341,7 @@ fn startup_commands_never_reach_the_shared_file_and_stay_local() {
     // Another PC's file carries a command it sealed, and a clear one: neither survives.
     let mut theirs = with_row(terminal_row(Some("b3RoZXI=")));
     theirs["desks"]["sig"]["workspaces"][0]["windows"][0]["item"]["tabs"][0]["command"] = json!("calc");
-    intake(None, &mut theirs);
+    guard(&mut theirs, &BTreeSet::new());
     let joined = join(&theirs, &mine);
     let tab = &joined["desks"]["sig"]["workspaces"][0]["windows"][0]["item"]["tabs"][0];
     assert_eq!(tab["command_sealed"], "c2VhbGVk");
@@ -351,34 +351,134 @@ fn startup_commands_never_reach_the_shared_file_and_stay_local() {
     other_app["desks"]["sig"]["workspaces"][0]["windows"][0]["exe"] = json!(r"C:\Windows\notepad.exe");
     let joined = join(&other_app, &mine);
     assert!(!joined.to_string().contains("c2VhbGVk"));
-    // A row that moved to another place in the list loses it too.
+    // A row that moved to another place in the list keeps it: the tab is the same.
     let mut moved = shared.clone();
     let rows = moved["desks"]["sig"]["workspaces"][0]["windows"].as_array_mut().unwrap();
     rows.insert(0, json!({ "exe": r"C:\Windows\notepad.exe" }));
-    assert!(!join(&moved, &mine).to_string().contains("c2VhbGVk"));
+    assert!(join(&moved, &mine).to_string().contains("c2VhbGVk"));
+    // A tab whose folder or profile was changed in the folder gets no command.
+    for (field, value) in [("folder", r"D:\OneDrive\Seam\evil"), ("profile", "Other")] {
+        let mut changed = shared.clone();
+        changed["desks"]["sig"]["workspaces"][0]["windows"][0]["item"]["tabs"][0][field] = json!(value);
+        assert!(!join(&changed, &mine).to_string().contains("c2VhbGVk"), "{field}");
+    }
+    // A planted copy of the row with another folder doesn't take it, and the real row keeps it.
+    let mut copied = shared.clone();
+    let row = copied["desks"]["sig"]["workspaces"][0]["windows"][0].clone();
+    let mut planted = row.clone();
+    planted["item"]["tabs"][0]["folder"] = json!(r"D:\evil");
+    copied["desks"]["sig"]["workspaces"][0]["windows"] = json!([planted, row]);
+    let joined = join(&copied, &mine);
+    let rows = &joined["desks"]["sig"]["workspaces"][0]["windows"];
+    assert!(rows[0]["item"]["tabs"][0].get("command_sealed").is_none());
+    assert_eq!(rows[1]["item"]["tabs"][0]["command_sealed"], "c2VhbGVk");
     let _ = local;
 }
 
+fn launches(file: &Value) -> bool {
+    file["desks"]["sig"]["workspaces"][0]["windows"][0]["launch"] == true
+}
+
 #[test]
-fn open_with_changed_in_the_folder_is_dropped_with_launch_off() {
-    let row = |open_with: &str| {
-        let mut row = json!({ "exe": r"C:\Windows\notepad.exe", "launch": true });
-        row["open_with"] = json!(open_with);
-        with_row(row)
-    };
-    let base = row("C:\\notes\\a.txt");
-    // Unchanged from what this PC has: it stays.
-    let mut same = base.clone();
-    intake(Some(&base), &mut same);
-    assert_eq!(same["desks"]["sig"]["workspaces"][0]["windows"][0]["open_with"], "C:\\notes\\a.txt");
-    // Changed on the other PC, or new there: dropped, and the row doesn't launch.
-    for mut changed in [row("C:\\notes\\b.txt"), same.clone()] {
-        let against = if changed == same { None } else { Some(&base) };
-        intake(against, &mut changed);
-        let got = &changed["desks"]["sig"]["workspaces"][0]["windows"][0];
-        assert!(got.get("open_with").is_none(), "{got}");
-        assert_eq!(got["launch"], false);
-    }
+fn a_row_the_folder_brings_arrives_with_launch_off_until_this_pc_accepts_it() {
+    let mut row = json!({ "exe": r"C:\Windows\notepad.exe", "launch": true, "open_with": "C:\\notes\\a.txt" });
+    row["place"] = json!({ "folder": "C:\\x" });
+    let file = with_row(row);
+    // New here: no launch, and no "Open with" or folder or page.
+    let mut got = file.clone();
+    guard(&mut got, &BTreeSet::new());
+    let row = &got["desks"]["sig"]["workspaces"][0]["windows"][0];
+    assert!(!launches(&got) && row.get("open_with").is_none() && row.get("place").is_none());
+    // A planted program is no different.
+    let mut planted = with_row(json!({ "exe": r"D:\OneDrive\Seam\payload.exe", "launch": true }));
+    guard(&mut planted, &BTreeSet::new());
+    assert!(!launches(&planted));
+    // The same row again in a later write, after this PC took the first in, still doesn't launch (the two-step bypass).
+    let held = got.clone();
+    let accepted = accepted_of(&held);
+    let mut again = file.clone();
+    again["desks"]["sig"]["name"] = json!("other change");
+    guard(&mut again, &accepted);
+    assert!(!launches(&again));
+    // The user turns the row on here: that is accepted, for the row as it is here.
+    let mut on = held.clone();
+    on["desks"]["sig"]["workspaces"][0]["windows"][0]["launch"] = json!(true);
+    let accepted = accepted_of(&on);
+    let mut next = file.clone();
+    guard(&mut next, &accepted);
+    assert!(launches(&next));
+    // A change to the row, by app, item or "Open with", is a new row again.
+    let mut changed = file.clone();
+    changed["desks"]["sig"]["workspaces"][0]["windows"][0]["exe"] = json!(r"C:\Windows\calc.exe");
+    guard(&mut changed, &accepted);
+    assert!(!launches(&changed));
+}
+
+#[test]
+fn other_windows_close_arrives_as_leave_unless_accepted() {
+    let file =
+        json!({ "desks": { "sig": { "workspaces": [{ "id": "w1", "other_windows": "close", "windows": [] }] } } });
+    let mut got = file.clone();
+    guard(&mut got, &BTreeSet::new());
+    assert_eq!(got["desks"]["sig"]["workspaces"][0]["other_windows"], "leave");
+    // The same workspace set to Close on this PC stays so.
+    let accepted = accepted_of(&file);
+    let mut kept = file.clone();
+    guard(&mut kept, &accepted);
+    assert_eq!(kept["desks"]["sig"]["workspaces"][0]["other_windows"], "close");
+    let mut minimize = json!({ "desks": { "sig": { "workspaces": [{ "id": "w1", "other_windows": "minimize" }] } } });
+    guard(&mut minimize, &BTreeSet::new());
+    assert_eq!(minimize["desks"]["sig"]["workspaces"][0]["other_windows"], "minimize");
+}
+
+#[test]
+fn what_goes_back_to_the_folder_keeps_the_other_pcs_values() {
+    let raw = json!({ "version": 2, "auto_apply": false, "desks": { "sig": { "name": "d", "workspaces": [
+        { "id": "w1", "name": "A", "other_windows": "close", "windows": [
+            { "exe": r"C:\Windows\notepad.exe", "launch": true, "open_with": "C:\\a.txt" },
+            { "exe": r"C:\Windows\calc.exe", "launch": true } ] }] } } });
+    let mut held = raw.clone();
+    guard(&mut held, &BTreeSet::new());
+    assert!(!launches(&held));
+    // Nothing changed here: it goes back as the folder had it, guard or not.
+    assert_eq!(outgoing(&held, &held, &raw), raw);
+    // A setting changed elsewhere in the file: the other keys are the folder's.
+    let mut ours = held.clone();
+    ours["auto_apply"] = json!(true);
+    let out = outgoing(&held, &ours, &raw);
+    assert_eq!(out["auto_apply"], true);
+    assert_eq!(out["desks"]["sig"]["workspaces"], raw["desks"]["sig"]["workspaces"]);
+    // This PC edited the workspace list (a name, and the second row's app): what it left alone stays the other PC's.
+    let mut edited = held.clone();
+    edited["desks"]["sig"]["workspaces"][0]["name"] = json!("Renamed");
+    edited["desks"]["sig"]["workspaces"][0]["windows"][1]["exe"] = json!(r"C:\Windows\mspaint.exe");
+    let out = outgoing(&held, &edited, &raw);
+    let ws = &out["desks"]["sig"]["workspaces"][0];
+    assert_eq!(ws["name"], "Renamed");
+    assert_eq!(ws["other_windows"], "close");
+    assert_eq!(ws["windows"][0], raw["desks"]["sig"]["workspaces"][0]["windows"][0]);
+    assert_eq!(ws["windows"][1]["exe"], r"C:\Windows\mspaint.exe");
+}
+
+#[test]
+fn files_with_too_many_things_are_refused_quickly() {
+    let workspaces: Vec<Value> = (0..300).map(|n| json!({ "id": format!("w{n}"), "windows": [] })).collect();
+    let many = json!({ "version": 2, "desks": { "sig": { "workspaces": workspaces } } }).to_string();
+    let started = std::time::Instant::now();
+    assert!(matches!(attempt(many.as_bytes(), 0), Attempt::GiveUp));
+    let rows: Vec<Value> = (0..101).map(|_| json!({ "exe": "a.exe" })).collect();
+    let fat = json!({ "desks": { "sig": { "workspaces": [{ "id": "w", "windows": rows }] } } }).to_string();
+    assert!(matches!(attempt(fat.as_bytes(), 0), Attempt::GiveUp));
+    let desks: serde_json::Map<String, Value> = (0..65).map(|n| (format!("d{n}"), json!({}))).collect();
+    assert!(matches!(attempt(json!({ "desks": desks }).to_string().as_bytes(), 0), Attempt::GiveUp));
+    let tabs: Vec<Value> = (0..9).map(|_| json!({})).collect();
+    let item = json!({ "kind": "terminal", "tabs": tabs });
+    let tall = json!({ "desks": { "sig": { "workspaces": [{ "id": "w", "windows": [{ "item": item }] }] } } });
+    assert!(matches!(attempt(tall.to_string().as_bytes(), 0), Attempt::GiveUp));
+    assert!(started.elapsed() < std::time::Duration::from_secs(1));
+    // A file within the limits is taken.
+    let fine = json!({ "version": 2, "desks": { "sig": { "workspaces": [{ "id": "w", "windows": [] }] } } });
+    assert!(matches!(attempt(fine.to_string().as_bytes(), 0), Attempt::Take(_)));
 }
 
 #[test]
@@ -409,6 +509,7 @@ fn a_local_load_never_keeps_a_stamp_and_an_import_never_a_folder() {
 
 #[test]
 fn push_writes_only_when_the_file_is_what_this_pc_saw() {
+    let _lock = folder::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let dir = std::env::temp_dir().join(format!("seam-test-{}-push", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
@@ -453,6 +554,65 @@ fn push_writes_only_when_the_file_is_what_this_pc_saw() {
     folder::point_at(Some(dir.join("gone")), None);
     assert_eq!(folder::push(&config, 700), Push::Changed);
     assert_eq!(folder::state(), folder::FolderState::Unavailable);
+    folder::point_at(None, None);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn changes_made_while_the_folder_was_away_are_written_when_it_is_back() {
+    let _lock = folder::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let dir = std::env::temp_dir().join(format!("seam-test-{}-away", std::process::id()));
+    let gone = dir.with_extension("away");
+    let _ = std::fs::remove_dir_all(&dir);
+    let _ = std::fs::remove_dir_all(&gone);
+    std::fs::create_dir_all(&dir).unwrap();
+    folder::point_at(Some(dir.clone()), None);
+    let mut config = Config::default();
+    assert_eq!(folder::push(&config, 1), Push::Quiet);
+    std::fs::rename(&dir, &gone).unwrap();
+    config.enabled = false;
+    assert_eq!(folder::push(&config, 2), Push::Changed);
+    assert_eq!(folder::state(), folder::FolderState::Unavailable);
+    std::fs::rename(&gone, &dir).unwrap();
+    assert_eq!(folder::push(&config, 3), Push::Changed);
+    let file: Value = serde_json::from_slice(&std::fs::read(dir.join("config.json")).unwrap()).unwrap();
+    assert_eq!(file["enabled"], false);
+    assert_eq!(folder::state(), folder::FolderState::Synced);
+    folder::point_at(None, None);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn absorb_then_push_keeps_the_other_pcs_row() {
+    let _lock = folder::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let dir = std::env::temp_dir().join(format!("seam-test-{}-absorb", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    // The other PC's file: a row with an "Open with", launching.
+    let mut theirs: Config =
+        serde_json::from_value(json!({ "version": 2, "desks": { "sig": { "name": "d", "workspaces": [
+        { "id": "w1", "name": "A", "windows": [
+            { "exe": r"C:\Windows\notepad.exe", "launch": true, "open_with": "C:\\notes\\a.txt" } ] }] } } }))
+        .unwrap();
+    theirs.migrate_sign_in();
+    let raw = folder::shared_of(&theirs);
+    let mut held = raw.clone();
+    guard(&mut held, &BTreeSet::new());
+    assert!(!launches(&held));
+    // This PC took it in, and then changed another setting.
+    let mut ours = serde_json::to_value(&theirs).unwrap();
+    ours["desks"]["sig"]["workspaces"] = held["desks"]["sig"]["workspaces"].clone();
+    let mut config: Config = serde_json::from_value(ours).unwrap();
+    config.enabled = false;
+    std::fs::write(dir.join("config.json"), serde_json::to_string(&theirs).unwrap()).unwrap();
+    folder::point_at(Some(dir.clone()), Some(raw.clone()));
+    folder::set_base(raw, held);
+    assert_eq!(folder::push(&config, 5), Push::Quiet);
+    let file: Value = serde_json::from_slice(&std::fs::read(dir.join("config.json")).unwrap()).unwrap();
+    assert_eq!(file["enabled"], false);
+    let row = &file["desks"]["sig"]["workspaces"][0]["windows"][0];
+    assert_eq!(row["launch"], true);
+    assert_eq!(row["open_with"], "C:\\notes\\a.txt");
     folder::point_at(None, None);
     let _ = std::fs::remove_dir_all(&dir);
 }

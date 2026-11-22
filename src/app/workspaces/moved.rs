@@ -18,6 +18,45 @@ pub(super) fn without_row(
     Some((without, found.row))
 }
 
+/// The workspace a move leaves: the one a step still running is heading to, else the one in
+/// use, the same origin the target is counted from.
+pub(super) fn origin(in_use: Option<&str>, step_to: Option<&str>) -> Option<String> {
+    step_to.or(in_use).map(str::to_string)
+}
+
+/// What a move saves: the window added to its workspace, and when the workspace it
+/// leaves has a row for it, that workspace without the row.
+pub(super) struct Plan {
+    pub added: workspace::Added,
+    pub out: Option<Out>,
+}
+
+/// The workspace a move leaves, without the window's row.
+pub(super) struct Out {
+    pub without: Workspace,
+    /// For each row it has now, the row it was, for Undo.
+    pub from: Vec<Option<usize>>,
+}
+
+/// Work out a move. `source` is the workspace it leaves with its bindings, none for a plain add.
+pub(super) fn plan(
+    target: &Workspace,
+    target_bound: &[Option<workspace::Bound>],
+    rule: Rule,
+    source: Option<(&Workspace, &[Option<workspace::Bound>])>,
+) -> Plan {
+    let out = source.and_then(|(old, bound)| {
+        let (without, row) = without_row(old, rule.clone(), bound)?;
+        Some(Out { without, from: workspace::survivors(old.windows.len(), row) })
+    });
+    Plan { added: workspace::add_window(target, rule, target_bound), out }
+}
+
+/// What Undo needs to put the workspace a move left back.
+pub(super) fn record(id: &str, before: Value, after: Value, from: Vec<Option<usize>>) -> MovedFrom {
+    MovedFrom { id: id.to_string(), before, after, from }
+}
+
 /// The desk's workspace list with an Undo applied, or `None` to leave it as it is. A
 /// workspace the save wrote (`after`) must still be exactly that, and a move's other
 /// workspace too: the move is undone whole or not at all. With no `before` the workspace
@@ -90,6 +129,35 @@ mod tests {
         // The only row of its app is bound to a different window, and this one is on another screen.
         let fresh = Rule { monitor: "other".into(), ..rule(r"C:\notepad.exe") };
         assert!(without_row(&old, fresh, &[Some(Bound::Alive(7))]).is_none());
+    }
+
+    #[test]
+    fn a_move_plans_the_row_into_one_workspace_and_out_of_the_other() {
+        let (to, from) = (ws("b", &[r"C:\y.exe"]), ws("a", &[r"C:\notepad.exe", r"C:\x.exe"]));
+        let p = plan(&to, &[None], rule(r"C:\notepad.exe"), Some((&from, &[None, None])));
+        // The target gets a row at the end, and the source loses its row.
+        assert!(p.added.new && p.added.workspace.windows.len() == 2);
+        let out = p.out.expect("the source has a row for it");
+        assert_eq!(out.without.windows.len(), 1);
+        assert_eq!(out.without.windows[0].exe, r"C:\x.exe");
+        assert_eq!(out.from, [Some(1)]);
+        // What is recorded for Undo restores the source.
+        let rec = record("a", workspace::to_value(&from), workspace::to_value(&out.without), out.from);
+        assert_eq!((rec.id.as_str(), rec.before), ("a", workspace::to_value(&from)));
+    }
+
+    #[test]
+    fn a_move_leaves_the_workspace_a_step_is_heading_to() {
+        assert_eq!(origin(Some("a"), None).as_deref(), Some("a"));
+        assert_eq!(origin(Some("a"), Some("b")).as_deref(), Some("b"));
+        assert_eq!(origin(None, None), None);
+    }
+
+    #[test]
+    fn a_plain_add_or_a_source_without_the_row_plans_nothing_to_remove() {
+        let (to, from) = (ws("b", &[]), ws("a", &[r"C:\x.exe"]));
+        assert!(plan(&to, &[], rule(r"C:\notepad.exe"), None).out.is_none());
+        assert!(plan(&to, &[], rule(r"C:\notepad.exe"), Some((&from, &[None]))).out.is_none());
     }
 
     fn value(id: &str, exes: &[&str]) -> Value {

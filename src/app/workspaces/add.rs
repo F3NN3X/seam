@@ -65,7 +65,7 @@ fn begin(
         return Err(RpcError::new(api::REFUSED, "No window is in front"));
     }
     let into = Some(found.id.clone());
-    let move_from = if moving { app.workspace.clone() } else { None };
+    let move_from = if moving { super::moved::origin(app.workspace.as_deref(), app.step_to.as_deref()) } else { None };
     app.capturing = Some(Capturing {
         reply,
         name: None,
@@ -138,20 +138,18 @@ fn store_place(app: &mut App, id: &str, row: usize, place: workspace::Place) {
 
 /// A move's workspace on the leaving side: as it is stored, and without the window's row,
 /// when it has one. `None` when it has no row for the window, so the move only adds.
-fn leaving(app: &App, from: &str, rule: Rule, hwnd: isize, remember: bool) -> Option<Leaving> {
+fn leaving(app: &App, from: &str, hwnd: isize, remember: bool) -> Option<Leaving> {
     let before = stored(app, from)?;
     let old = workspace::parse(&before)?;
     let (bound, _) = switcher::capture_bindings(&old, &[hwnd], remember);
-    let (without, row) = super::moved::without_row(&old, rule, &bound)?;
-    Some(Leaving { before, without, row, rows: old.windows.len() })
+    Some(Leaving { before, old, bound })
 }
 
+/// The workspace a move leaves, as stored, and what a switch has bound in it.
 struct Leaving {
     before: Value,
-    without: Workspace,
-    /// The row that goes, and how many rows there were.
-    row: usize,
-    rows: usize,
+    old: Workspace,
+    bound: Vec<Option<workspace::Bound>>,
 }
 
 /// Fold the window into its workspace and save it the way an edit is saved, so the same
@@ -170,16 +168,16 @@ fn save(app: &mut App, job: &Capturing, read: Result<(Rule, isize), String>) -> 
     let name = label(&rule);
     let (bound, _) = switcher::capture_bindings(&old, &[hwnd], remember);
     let going = job.move_from.as_deref().filter(|from| *from != id);
-    let out = going.and_then(|from| leaving(app, from, rule.clone(), hwnd, remember));
-    let added = workspace::add_window(&old, rule, &bound);
+    let source = going.and_then(|from| leaving(app, from, hwnd, remember));
+    let planned = super::moved::plan(&old, &bound, rule, source.as_ref().map(|s| (&s.old, s.bound.as_slice())));
+    let added = planned.added;
     // Both workspaces are checked first and written once, so a move is whole or not at all.
     let target = check_rows(app, id, workspace::to_value(&added.workspace), Some(added.row), false)?;
-    let moved = match (going, out) {
-        (Some(from), Some(Leaving { before, without, row, rows })) => {
-            let source = check_rows(app, from, workspace::to_value(&without), None, false)?;
-            write_checked(app, &[target, source])?;
-            let after = stored(app, from);
-            after.map(|after| MovedFrom { id: from.to_string(), before, after, from: workspace::survivors(rows, row) })
+    let moved = match (going, source, planned.out) {
+        (Some(from), Some(source), Some(out)) => {
+            let leaving = check_rows(app, from, workspace::to_value(&out.without), None, false)?;
+            write_checked(app, &[target, leaving])?;
+            stored(app, from).map(|after| super::moved::record(from, source.before, after, out.from))
         }
         _ => {
             write_checked(app, &[target])?;

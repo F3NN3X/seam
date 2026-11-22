@@ -103,6 +103,9 @@ impl Panel {
                         {
                             this.show(page, None, window, cx);
                         }
+                        if event.kind == "workspace.switched" && std::mem::take(&mut this.awaiting_switch) {
+                            this.say_screens_gone(&event.data, window, cx);
+                        }
                         // A moved window of another workspace changes nothing on show.
                         let moved_here = event.kind == "workspace.moved"
                             && this.status.as_ref().is_some_and(|(id, _)| event.data["id"].as_str() == Some(id));
@@ -141,6 +144,20 @@ impl Panel {
                 }
             }
         })
+    }
+
+    /// After a switch this window asked for, say so when apps stayed put because their screen
+    /// isn't connected. The tray shows nothing then.
+    fn say_screens_gone(&self, switched: &Value, window: &mut Window, cx: &mut Context<Self>) {
+        let skipped: Vec<(String, String)> = switched["skipped"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|s| Some((s["app"].as_str()?.to_string(), s["reason"].as_str()?.to_string())))
+            .collect();
+        let Some(body) = seam::workspace::screen_gone_note(&skipped) else { return };
+        let title = format!("Switched to {}", switched["name"].as_str().unwrap_or_default());
+        window.push_notification(Notification::new().title(title).message(body), cx);
     }
 
     /// Take the tray's state and config. False when the config couldn't be read, and was left as it was.

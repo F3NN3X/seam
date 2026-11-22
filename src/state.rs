@@ -63,6 +63,14 @@ pub struct Screen {
     pub layout: Option<String>,
 }
 
+/// A screen that is connected but turned off in Windows. Seam can't use it.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct InactiveScreen {
+    pub id: String,
+    /// Empty when Windows has no name for it.
+    pub name: String,
+}
+
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum BorderState {
@@ -188,6 +196,8 @@ pub struct State {
     pub wm: WmState,
     pub desk: DeskRef,
     pub screens: Vec<Screen>,
+    /// Screens Windows has turned off, which the desk and its workspaces ignore.
+    pub screens_inactive: Vec<InactiveScreen>,
     pub borders: Vec<Border>,
     pub workspace: Option<WorkspaceRef>,
     pub session: Option<SessionRef>,

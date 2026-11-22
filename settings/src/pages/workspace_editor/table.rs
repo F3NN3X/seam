@@ -38,6 +38,7 @@ fn status_of(states: &[Option<RowState>]) -> Option<(Kind, String)> {
         (RowState::Background, "hidden", "Hidden"),
         (RowState::NotRunning, "not running", "Not running"),
         (RowState::CantMove, "can't move", "Can't move: runs as administrator"),
+        (RowState::Off, "off", "Off"),
     ];
     let word = match states.as_slice() {
         [one] => words.iter().find(|(s, ..)| s == one).map(|(.., word)| word.to_string())?,
@@ -50,7 +51,7 @@ fn status_of(states: &[Option<RowState>]) -> Option<(Kind, String)> {
     let kind = match () {
         _ if count(RowState::CantMove) > 0 => Kind::Problem,
         _ if count(RowState::InPlace) == states.len() => Kind::Good,
-        _ if count(RowState::NotRunning) == states.len() => Kind::Off,
+        _ if count(RowState::NotRunning) + count(RowState::Off) == states.len() => Kind::Off,
         _ => Kind::Waiting,
     };
     Some((kind, word))
@@ -195,6 +196,7 @@ fn more_menu(ws: &Workspace, row: &AppRow, merged: Merge, title: &str, cx: &mut 
     let (id, windows, excludable) = (ws.id.clone(), row.windows.clone(), exe_name(&ws.windows[first]).is_some());
     let (starts, top, sticky) =
         (row.windows.iter().all(|i| ws.windows[*i].launch), pinned(ws, row, TOP), pinned(ws, row, STICKY));
+    let (off, ws_name) = (row.windows.iter().all(|i| ws.windows[*i].off), ws.name.clone());
     let (here, key) = (ws.clone(), groups::split_key(&ws.id, &ws.windows[first]));
     ui::secondary(("row-more", first), "", cx)
         .ghost()
@@ -230,6 +232,19 @@ fn more_menu(ws: &Workspace, row: &AppRow, merged: Merge, title: &str, cx: &mut 
                     let _ = start.update(cx, |panel, cx| {
                         update_rows(panel, &id, &windows, note, window, cx, |rule| rule.launch = !starts);
                     });
+                }))
+                .item(PopupMenuItem::new(if off { "Turn on this app" } else { "Turn off this app" }).on_click({
+                    let (turn, id, windows, ws_name) = (weak.clone(), id.clone(), windows.clone(), ws_name.clone());
+                    move |_, window, cx| {
+                        let (id, windows, ws_name) = (id.clone(), windows.clone(), ws_name.clone());
+                        let note = |title: &str| match off {
+                            true => format!("Turned on {title} in {ws_name}"),
+                            false => format!("Turned off {title} in {ws_name}"),
+                        };
+                        let _ = turn.update(cx, |panel, cx| {
+                            update_rows(panel, &id, &windows, note, window, cx, |rule| rule.off = !off);
+                        });
+                    }
                 }))
                 .item(
                     PopupMenuItem::new(one_window("Start order details…", merged))
@@ -341,8 +356,13 @@ fn name_cell(ws: &Workspace, row: &AppRow, title: &str, state: Option<RowState>,
         meta = format!("{meta}, {} windows", row.windows.len());
     }
     // A closed app that starts with the workspace says so.
-    if state == Some(RowState::NotRunning) && rule.launch && ws.launch_missing {
+    if state == Some(RowState::NotRunning) && rule.launch && ws.launch_missing && !rule.off {
         meta = format!("{meta}, starts when you switch");
+    }
+    // A merged row is off when all its windows are.
+    let off = row.windows.iter().all(|i| ws.windows[*i].off);
+    if off {
+        meta = format!("{meta}, off");
     }
     div()
         .id(("app-name", first))
@@ -351,7 +371,12 @@ fn name_cell(ws: &Workspace, row: &AppRow, title: &str, state: Option<RowState>,
         .flex_1()
         .min_w_0()
         .tooltip(move |window, cx| Tooltip::new(full_path.clone()).build(window, cx))
-        .child(text_style(div(), tokens::BODY).truncate().child(title.to_string()))
+        .child(
+            text_style(div(), tokens::BODY)
+                .truncate()
+                .when(off, |d| d.text_color(p.text_muted))
+                .child(title.to_string()),
+        )
         .child(text_style(div(), tokens::CAPTION).text_color(p.text_muted).truncate().child(meta))
 }
 
@@ -424,7 +449,9 @@ fn app_row(
     let id = ws.id.clone();
     let open = panel.editing.expanded.as_ref().is_some_and(|(e, i)| *e == id && *i == first);
     let focus = row_focus(ws, first, window, cx);
-    let states: Vec<Option<RowState>> = row.windows.iter().map(|i| row_state(panel, ws, *i)).collect();
+    // A row that is off says so at once, before the tray has been asked.
+    let state_of = |i: &usize| if ws.windows[*i].off { Some(RowState::Off) } else { row_state(panel, ws, *i) };
+    let states: Vec<Option<RowState>> = row.windows.iter().map(state_of).collect();
     let near = Neighbours {
         before: at.checked_sub(1).map(|n| group.rows[n].windows[0]),
         after: group.rows.get(at + 1).and_then(|r| r.windows.last().copied()),

@@ -630,3 +630,127 @@ fn refusals_say_why_and_everything_else_means_no_taskbar_button() {
     let texts: HashSet<&str> = all.iter().map(|s| why_not(s)).collect();
     assert_eq!(texts.len(), all.len());
 }
+
+#[test]
+fn off_rows_and_open_windows_round_trip_and_old_files_are_unchanged() {
+    // A workspace saved before either field existed serializes without them.
+    let old = json!({
+        "id": "w", "name": "w", "hotkey": null, "launch_missing": true, "other_windows": "leave",
+        "show_all": false, "windows": [{"exe": "a.exe", "monitor": "m", "launch": true}]
+    });
+    let ws = parse(&old).unwrap();
+    assert!(!ws.windows[0].off);
+    assert_eq!(ws.open_windows, OpenWindows::Move);
+    let written = to_value(&ws);
+    assert!(written.get("open_windows").is_none());
+    assert!(written["windows"][0].get("off").is_none());
+    // Both are kept when set, and read back.
+    let mut set = ws.clone();
+    set.windows[0].off = true;
+    set.open_windows = OpenWindows::Leave;
+    let written = to_value(&set);
+    assert_eq!(written["open_windows"], "leave");
+    assert_eq!(written["windows"][0]["off"], true);
+    assert_eq!(parse(&written), Some(set));
+}
+
+#[test]
+fn an_off_row_is_neither_started_nor_placed() {
+    let on = rule("a.exe", None, "", "");
+    let off = Rule { off: true, ..on.clone() };
+    assert_eq!(row_action(&on, None, OpenWindows::Move, false), RowAction::Start);
+    assert_eq!(row_action(&off, None, OpenWindows::Move, false), RowAction::Leave);
+    assert_eq!(row_action(&on, Some(1), OpenWindows::Move, false), RowAction::Place);
+    assert_eq!(row_action(&off, Some(1), OpenWindows::Move, false), RowAction::Leave);
+    // Not even when Snap back asks.
+    assert_eq!(row_action(&off, Some(1), OpenWindows::Move, true), RowAction::Leave);
+    // A row with launch off is placed but never started, which is not the same as off.
+    let placed_only = Rule { launch: false, ..on };
+    assert_eq!(row_action(&placed_only, None, OpenWindows::Move, false), RowAction::Leave);
+    assert_eq!(row_action(&placed_only, Some(1), OpenWindows::Move, false), RowAction::Place);
+    // An off row matches no window and takes none from another row.
+    let wins = [win(1, "a.exe", None, "", "", 0)];
+    let rules = [off.clone(), rule("a.exe", None, "", "")];
+    assert_eq!(assign_bound(&rules, &wins, &[], &HashSet::new()), [None, Some(1)]);
+    assert_eq!(assign_bound_all(&rules, &wins, &[], &HashSet::new()), [Some(1), None]);
+}
+
+#[test]
+fn leave_where_they_are_places_only_started_windows() {
+    let r = rule("a.exe", None, "", "");
+    assert_eq!(row_action(&r, Some(1), OpenWindows::Leave, false), RowAction::Leave);
+    assert_eq!(row_action(&r, None, OpenWindows::Leave, false), RowAction::Start);
+}
+
+#[test]
+fn put_back_moves_open_windows_even_when_the_workspace_leaves_them() {
+    let r = rule("a.exe", None, "", "");
+    assert_eq!(row_action(&r, Some(1), OpenWindows::Leave, true), RowAction::Place);
+}
+
+#[test]
+fn update_from_screen_keeps_off() {
+    let off = Rule { off: true, ..rule("a.exe", None, "A", "a") };
+    let old = Workspace { windows: vec![off], ..named("w") };
+    let mut fresh = rule("a.exe", None, "A", "a");
+    fresh.target = Target::Zone { zone: 2, span_to: None };
+    let merged = merge_capture(&old, vec![fresh], &[], &HashSet::new(), &[], false);
+    assert_eq!(merged.windows.len(), 1);
+    // The row's place is updated though it is off, and it stays off.
+    assert!(merged.windows[0].off);
+    assert_eq!(merged.windows[0].target, Target::Zone { zone: 2, span_to: None });
+}
+
+#[test]
+fn add_window_keeps_an_off_row_off() {
+    let off = Rule { off: true, launch: false, ..rule("a.exe", None, "A", "a") };
+    let old = Workspace { windows: vec![off], ..named("w") };
+    let mut fresh = rule("a.exe", None, "A", "a");
+    fresh.target = Target::Zone { zone: 3, span_to: None };
+    let added = add_window(&old, fresh, &[]);
+    assert!(!added.new);
+    assert!(added.workspace.windows[0].off);
+    assert_eq!(added.workspace.windows[0].target, Target::Zone { zone: 3, span_to: None });
+}
+
+#[test]
+fn moving_a_workspace_changes_its_number() {
+    let saved: Vec<Value> = ["a", "b", "c"].iter().map(|id| to_value(&named(id))).collect();
+    let ids = |list: &[Value]| -> Vec<String> { crate::workspace::list(list).into_iter().map(|w| w.id).collect() };
+    let moved = moved_to(&saved, "c", 1).unwrap();
+    assert_eq!(ids(&moved), ["c", "a", "b"]);
+    assert_eq!(numbered(&crate::workspace::list(&moved), 1).map(|w| w.id.as_str()), Some("c"));
+    assert_eq!(ids(&moved_to(&saved, "a", 3).unwrap()), ["b", "c", "a"]);
+    assert_eq!(ids(&moved_to(&saved, "b", 2).unwrap()), ["a", "b", "c"]);
+    assert_eq!(moved_to(&saved, "x", 1), Err(MoveError::NotFound));
+    assert_eq!(moved_to(&saved, "a", 0), Err(MoveError::OutOfRange));
+    assert_eq!(moved_to(&saved, "a", 4), Err(MoveError::OutOfRange));
+}
+
+#[test]
+fn moving_keeps_unknown_keys() {
+    let mut first = to_value(&named("a"));
+    first["from_the_future"] = json!({ "kept": [1, 2] });
+    let saved = vec![first.clone(), json!("not a workspace"), to_value(&named("b"))];
+    let moved = moved_to(&saved, "b", 1).unwrap();
+    assert_eq!(moved.len(), 3);
+    assert_eq!(moved[0]["id"], "b");
+    // Moved as it was, not read and written again.
+    assert!(moved.contains(&first));
+    assert!(moved.contains(&json!("not a workspace")));
+}
+
+#[test]
+fn a_switch_that_cant_place_says_so_once_per_app() {
+    let skip = |app: &str, why: &str| (app.to_string(), why.to_string());
+    assert_eq!(screen_gone_note(&[skip("Slack", "elevated")]), None);
+    assert_eq!(
+        screen_gone_note(&[skip("Slack", SCREEN_GONE)]).as_deref(),
+        Some("Slack stayed where it is, because its screen isn't connected")
+    );
+    let three = [skip("a", SCREEN_GONE), skip("a", SCREEN_GONE), skip("b", SCREEN_GONE), skip("c", SCREEN_GONE)];
+    assert_eq!(
+        screen_gone_note(&three).as_deref(),
+        Some("3 apps stayed where they are, because their screen isn't connected")
+    );
+}

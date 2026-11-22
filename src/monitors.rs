@@ -4,7 +4,7 @@ pub use crate::desk::Mon;
 use crate::geom::Rect;
 use crate::log;
 use windows::Win32::Devices::Display::*;
-use windows::Win32::Foundation::{ERROR_SUCCESS, LPARAM, RECT};
+use windows::Win32::Foundation::{ERROR_SUCCESS, LPARAM, LUID, RECT};
 use windows::Win32::Graphics::Gdi::*;
 use windows::Win32::UI::HiDpi::{GetDpiForMonitor, MDT_RAW_DPI};
 use windows::Win32::UI::WindowsAndMessaging::MONITORINFOF_PRIMARY;
@@ -13,6 +13,21 @@ use windows::core::BOOL;
 fn wstr(buf: &[u16]) -> String {
     let n = buf.iter().position(|&c| c == 0).unwrap_or(buf.len());
     String::from_utf16_lossy(&buf[..n])
+}
+
+/// A display target's device path and friendly name.
+fn target_info(adapter: LUID, id: u32) -> Option<(String, String)> {
+    unsafe {
+        let mut tgt = DISPLAYCONFIG_TARGET_DEVICE_NAME::default();
+        tgt.header.r#type = DISPLAYCONFIG_DEVICE_INFO_GET_TARGET_NAME;
+        tgt.header.size = std::mem::size_of::<DISPLAYCONFIG_TARGET_DEVICE_NAME>() as u32;
+        tgt.header.adapterId = adapter;
+        tgt.header.id = id;
+        if DisplayConfigGetDeviceInfo(&mut tgt.header) != 0 {
+            return None;
+        }
+        Some((wstr(&tgt.monitorDevicePath), wstr(&tgt.monitorFriendlyDeviceName)))
+    }
 }
 
 /// GDI device name -> (device path, friendly name), via the display-config API.
@@ -40,22 +55,64 @@ fn target_names() -> Vec<(String, String, String)> {
             if DisplayConfigGetDeviceInfo(&mut src.header) != 0 {
                 continue;
             }
-            let mut tgt = DISPLAYCONFIG_TARGET_DEVICE_NAME::default();
-            tgt.header.r#type = DISPLAYCONFIG_DEVICE_INFO_GET_TARGET_NAME;
-            tgt.header.size = std::mem::size_of::<DISPLAYCONFIG_TARGET_DEVICE_NAME>() as u32;
-            tgt.header.adapterId = p.targetInfo.adapterId;
-            tgt.header.id = p.targetInfo.id;
-            if DisplayConfigGetDeviceInfo(&mut tgt.header) != 0 {
-                continue;
-            }
-            out.push((
-                wstr(&src.viewGdiDeviceName),
-                wstr(&tgt.monitorDevicePath),
-                wstr(&tgt.monitorFriendlyDeviceName),
-            ));
+            let Some((path, name)) = target_info(p.targetInfo.adapterId, p.targetInfo.id) else { continue };
+            out.push((wstr(&src.viewGdiDeviceName), path, name));
         }
     }
     out
+}
+
+/// What `QDC_ALL_PATHS` says about one display target.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TargetFacts {
+    pub path: String,
+    pub name: String,
+    /// A monitor is connected to it.
+    pub available: bool,
+}
+
+/// The connected targets that have no active path, once each by device path: screens
+/// that are plugged in but turned off in Windows (D697). `active` is the device paths
+/// of the screens in use.
+pub fn inactive_targets(all: &[TargetFacts], active: &[String]) -> Vec<(String, String)> {
+    let mut seen: Vec<&str> = Vec::new();
+    let mut out = Vec::new();
+    for t in all.iter().filter(|t| t.available && !t.path.is_empty()) {
+        let known = |p: &str| p.eq_ignore_ascii_case(&t.path);
+        if active.iter().any(|a| known(a)) || seen.iter().any(|s| known(s)) {
+            continue;
+        }
+        seen.push(&t.path);
+        out.push((t.path.clone(), t.name.clone()));
+    }
+    out
+}
+
+/// Screens that are connected but turned off in Windows: device path and friendly name,
+/// which is empty when Windows has none. Information only.
+pub fn inactive() -> Vec<(String, String)> {
+    let mut all = Vec::new();
+    unsafe {
+        let (mut np, mut nm) = (0u32, 0u32);
+        if GetDisplayConfigBufferSizes(QDC_ALL_PATHS, &mut np, &mut nm) != ERROR_SUCCESS {
+            return Vec::new();
+        }
+        let mut paths = vec![DISPLAYCONFIG_PATH_INFO::default(); np as usize];
+        let mut modes = vec![DISPLAYCONFIG_MODE_INFO::default(); nm as usize];
+        if QueryDisplayConfig(QDC_ALL_PATHS, &mut np, paths.as_mut_ptr(), &mut nm, modes.as_mut_ptr(), None)
+            != ERROR_SUCCESS
+        {
+            return Vec::new();
+        }
+        paths.truncate(np as usize);
+        for p in &paths {
+            let available = p.targetInfo.targetAvailable.as_bool();
+            let Some((path, name)) = target_info(p.targetInfo.adapterId, p.targetInfo.id) else { continue };
+            all.push(TargetFacts { path, name, available });
+        }
+    }
+    let active: Vec<String> = target_names().into_iter().map(|(_, path, _)| path).collect();
+    inactive_targets(&all, &active)
 }
 
 unsafe extern "system" fn enum_proc(hmon: HMONITOR, _: HDC, _: *mut RECT, data: LPARAM) -> BOOL {
@@ -118,4 +175,29 @@ pub fn enumerate() -> Vec<Mon> {
         );
     }
     mons
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn target(path: &str, available: bool) -> TargetFacts {
+        TargetFacts { path: path.into(), name: format!("name of {path}"), available }
+    }
+
+    #[test]
+    fn inactive_targets_are_available_and_not_active_once_each() {
+        let all = [
+            target("a", true),
+            target("b", true),
+            // A path per source for the same target.
+            target("b", true),
+            target("c", false),
+            target("d", true),
+            target("", true),
+        ];
+        let got = inactive_targets(&all, &["A".to_string(), "d".to_string()]);
+        assert_eq!(got, vec![("b".to_string(), "name of b".to_string())]);
+        assert!(inactive_targets(&all, &[]).iter().all(|(p, _)| !p.is_empty() && p != "c"));
+    }
 }

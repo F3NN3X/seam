@@ -172,6 +172,11 @@ pub enum Command {
         id: String,
         edit: workspace::Edit,
     },
+    /// `workspace.move`: the workspace to number `to` of this desk's list, from 1.
+    WorkspaceMove {
+        id: String,
+        to: usize,
+    },
     /// `workspace.get`: the rows of one workspace on this desk, read from the snapshot.
     WorkspaceGet {
         id: String,
@@ -407,6 +412,7 @@ pub fn workspace_get(snapshot: &Snapshot, id: &str, panel: bool) -> Reply {
             "target": r["target"],
             "shown": r["shown"],
             "launch": r["launch"],
+            "off": r["off"].as_bool().unwrap_or(false),
         });
         // What I typed in "Open with" is the panel's alone, as in `config.get`.
         if panel {
@@ -419,6 +425,7 @@ pub fn workspace_get(snapshot: &Snapshot, id: &str, panel: bool) -> Reply {
         "name": ws["name"],
         "show_all": ws["show_all"],
         "other_windows": ws["other_windows"],
+        "open_windows": ws.get("open_windows").cloned().unwrap_or_else(|| json!("move")),
         "rows": rows.collect::<Vec<_>>(),
     }))
 }

@@ -401,13 +401,13 @@ unsafe fn on_hotkey(id: i32) {
             }
             HOTKEY_RELEASE => wm::release(None),
             HOTKEY_SNAP_BACK => {
-                if let Some(Err(e)) = with_app(|a| snap_back(a, false)) {
+                if let Some(Err(e)) = with_app(|a| snap_back(a, false, false)) {
                     log::info!("snap back hotkey: {}", e.message);
                 }
             }
             HOTKEY_SWITCH_BACK => {
                 with_app(|a| {
-                    if let Err(e) = switch_back(a, false) {
+                    if let Err(e) = switch_back(a, false, false) {
                         log::info!("switch back hotkey: {}", e.message);
                         notify(a, "Switch back", &e.message, BalloonAction::None);
                     }
@@ -487,7 +487,7 @@ unsafe fn on_hotkey(id: i32) {
                 with_app(|a| {
                     let action = a.bound.iter().find(|(id, ..)| *id == slot).map(|(_, action, _)| action.clone());
                     let id = action.as_deref().and_then(|action| action.strip_prefix("workspace:"));
-                    if let Some(Err(e)) = id.map(|id| start_switch(a, Some(id), None, false)) {
+                    if let Some(Err(e)) = id.map(|id| start_switch(a, Some(id), None, false, Via::default())) {
                         log::info!("workspace hotkey: {}", e.message);
                     }
                 });

@@ -255,3 +255,8 @@ pub(super) fn to_focus(stack: &[Stacked]) -> Option<isize> {
     let focused = stack.iter().find(|s| s.focused);
     focused.or_else(|| stack.iter().min_by_key(|s| s.z)).map(|s| s.hwnd)
 }
+
+/// The rule sends its window to a screen that isn't connected.
+pub(super) fn screen_gone(rule: &Rule, geos: &[Geo]) -> bool {
+    rule.moves() && !geos.iter().any(|g| g.id == rule.monitor)
+}

@@ -243,6 +243,14 @@ On my desk the panel (screen 3) touches the U3477 (screen 4) in Windows, 18 px b
 - [ ] **Align.** With it on, Align arrangement doesn't move the panel to match the 4 to 3 border.
 - [ ] **Games and remote input.** In a game that confines the pointer, or over Remote Desktop, the pointer moves between screen 4 and the panel as Windows has it.
 
+## Inactive screens
+
+Use the 4-screen desk.
+
+- [ ] **Shown as Inactive.** In Windows' Display settings, pick a screen and choose **Disconnect this display**. Displays shows a row under the map with a grey dot and "Inactive", the screen's model name and "Connected but turned off in Windows, so Seam can't use it. Turn it on in Display settings". `state.get` has it in `screens_inactive`, and not in `screens`.
+- [ ] **Open Display settings.** The row's button opens Windows' Display settings.
+- [ ] **Nothing else changes.** The desk, its name, its borders, zones and workspaces are the ones for the screens still on. Turn the screen back on in Windows: the row goes, and the 4-screen desk is back.
+
 ## Edge resistance
 
 Both rows are in the Pointer card on Displays.
@@ -717,6 +725,11 @@ Use the 4-screen desk with Priority zones on screen 1.
 - [ ] **Steam.** A rule whose `exe` is under `steamapps\` is never started, and is skipped with `steam game`.
 - [ ] **Desk change.** Unplug to "Laptop only". That desk has its own workspaces and shortcuts, and the old shortcuts stop working. Plug back in and they return.
 - [ ] **API.** With a test client, `workspaces.list` returns the workspaces, `workspace.switch` with `{"name":"coding"}` (any case) starts a switch and a subscribed client gets `workspace.switched`, and an unknown name gets error 1. `workspace.capture` with `{"name":"From API"}` returns an id, and with `into` overwrites that workspace.
+- [ ] **Reorder.** With three workspaces, drag the third one by its grip (shown on hover and when focused) onto the first: it is first, the others follow, and a notification says "Moved <name> to 1" with Undo, which puts it back. Dropping on **New empty workspace** puts it last. Alt+Up and Alt+Down on a focused item move it one place, and the focus stays with it. A hint under the list says "Drag to change the order..." with two or more workspaces, and not with one.
+- [ ] **Order is the numbering.** After the reorder, **Add window to workspace 2** (or `workspace.add_window` with `number` 2) hits the workspace that is now second, the tray's Workspaces menu lists them in the new order, and each workspace's own shortcut still switches to it. `config.json` keeps any key a workspace has that Seam doesn't know.
+- [ ] **Turn off this app.** On a row's **...** menu pick **Turn off this app**: its name goes grey, its line reads "<exe>, off", **Now** says "Off" with a filled grey dot, its icon leaves the workspace's item in the list, and a notification "Turned off <app> in <workspace>" offers Undo. Switch with the app closed: it isn't started. Open it somewhere else and switch: it isn't moved, **Put windows back** doesn't count it as moved, and with **Other windows** on Minimize it isn't minimized. **Update from screen** and **Add window to workspace** update its place and leave it off (the add notice says "It's off, so a switch leaves it alone"). **Turn on this app** brings it back. On a shared row it turns every window off or on.
+- [ ] **Windows already open.** In "When you switch to <name>", **Windows already open** reads **Move back**. Move one app off its zone and close another, set **Leave where they are** and switch: only the closed one starts and lands in its zone, the moved one stays where it is. **Put windows back** moves both. Set it back to **Move back** and switch: both land. The setting needs no Undo.
+- [ ] **Screen not connected.** Save a workspace with an app on screen 2, unplug screen 2 (or use the Laptop only desk with a copied workspace), switch with the app open: it stays where it is, the tray says "<app> stayed where it is, because its screen isn't connected" ("3 apps stayed where they are..." for several), and `workspace.switched` has `screen not connected` in `skipped`. Click the notice: Workspaces opens. Switch from the Seam window instead: the tray shows nothing and the window says the same under "Switched to <name>".
 
 ### Only real app windows
 

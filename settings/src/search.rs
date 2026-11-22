@@ -296,7 +296,19 @@ const ENTRIES: &[Entry] = &[
         "A window saved minimized comes back, in its place",
         "minimized restore show all show every window",
     ),
+    entry(
+        Page::Workspaces,
+        "Windows already open",
+        "New windows always go to their place. Put windows back moves every window",
+        "move leave stay where they are open",
+    ),
     entry(Page::Workspaces, "Other windows", "Close asks each app first, so it can save", "close minimize leave"),
+    entry(
+        Page::Workspaces,
+        "Turn off this app",
+        "The app stays in the workspace, and a switch leaves it alone",
+        "disable skip off on row",
+    ),
     entry(Page::Workspaces, "Export workspace", "Save a workspace to a file", "import share backup"),
     entry(Page::Workspaces, "Add an app", "Add an open window or an installed app", "picker store start menu"),
     entry(

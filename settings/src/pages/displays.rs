@@ -3,7 +3,7 @@
 use crate::panel::{Panel, error_text, refusal};
 use crate::theme::tokens::{self, text_style};
 use crate::theme::{Palette, palette};
-use crate::ui::{self, Card, Row, card, row, section, switch};
+use crate::ui::{self, Card, Row, card, row, row_with, section, switch};
 use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::dialog::{DialogAction, DialogClose, DialogFooter};
 use gpui_kit::component::input::{Input, InputState};
@@ -16,7 +16,7 @@ use seam::api::LayoutView;
 use seam::config::{Desk, MAX_EDGE_RESISTANCE_PX, MAX_GLUE_PUSH_PX, SavedBorder};
 use seam::desk::Placed;
 use seam::geom::{EdgeMap, Rect, Side, corridor, facing_gap, touching};
-use seam::state::{Border, BorderState, State};
+use seam::state::{Border, BorderState, InactiveScreen, State};
 use seam::winutil;
 use serde_json::json;
 use std::time::{SystemTime, UNIX_EPOCH};

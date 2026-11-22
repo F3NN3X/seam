@@ -11,6 +11,7 @@ use gpui_kit::component::input::Input;
 use gpui_kit::component::menu::{DropdownMenu, PopupMenuItem};
 use gpui_kit::component::notification::Notification;
 use gpui_kit::component::{Icon, WindowExt};
+use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 use list::{Marks, Moved};
 use seam::state::Screen;
@@ -81,6 +82,44 @@ pub fn set_hotkey(panel: &mut Panel, id: &str, combo: Option<String>, window: &m
 /// The workspaces on this desk, for the Shortcuts page.
 pub fn on_desk(panel: &Panel) -> Vec<Workspace> {
     all(panel)
+}
+
+/// Move a workspace to number `to` of the list, which is the number Add window to workspace
+/// counts by. Undo moves it back.
+fn move_workspace(panel: &mut Panel, id: &str, to: usize, window: &mut Window, cx: &mut Context<Panel>) {
+    let list = all(panel);
+    let Some(from) = list.iter().position(|w| w.id == id) else { return };
+    if from + 1 == to {
+        return;
+    }
+    let (name, id) = (list[from].name.clone(), id.to_string());
+    panel.call("workspace.move", json!({ "id": id, "to": to }), window, cx, move |panel, result, window, cx| {
+        match result {
+            Ok(_) => {
+                panel.reload_config(window, cx);
+                let (id, back) = (id.clone(), from + 1);
+                let undo = move |panel: &mut Panel, window: &mut Window, cx: &mut Context<Panel>| {
+                    let params = json!({ "id": id, "to": back });
+                    panel.call("workspace.move", params, window, cx, |panel, result, window, cx| {
+                        if let Err(e) = result {
+                            window.push_notification(refusal("Workspace not moved", &error_text(&e)), cx);
+                        }
+                        panel.reload_config(window, cx);
+                    });
+                };
+                panel.offer_undo(format!("Moved {name} to {to}"), undo, window, cx);
+            }
+            Err(e) => window.push_notification(refusal("Workspace not moved", &error_text(&e)), cx),
+        }
+    });
+}
+
+/// A workspace was dropped just before the one at place `before` of the list, or last when
+/// that is the count.
+fn dropped(panel: &mut Panel, id: &str, before: usize, window: &mut Window, cx: &mut Context<Panel>) {
+    let list = all(panel);
+    let Some(from) = list.iter().position(|w| w.id == id) else { return };
+    move_workspace(panel, id, list::number_after(from, before, list.len()), window, cx);
 }
 
 fn start_naming(panel: &mut Panel, cx: &mut Context<Panel>) {
@@ -339,8 +378,9 @@ fn in_use(panel: &Panel, ws: &Workspace) -> bool {
 }
 
 /// Move the windows of the workspace in use back to where it puts them.
-fn put_back(panel: &Panel, count: usize, window: &mut Window, cx: &mut Context<Panel>) {
-    panel.call("workspace.snap_back", json!({}), window, cx, move |_, result, window, cx| match result {
+fn put_back(panel: &mut Panel, count: usize, window: &mut Window, cx: &mut Context<Panel>) {
+    panel.awaiting_switch = true;
+    panel.call("workspace.snap_back", json!({}), window, cx, move |panel, result, window, cx| match result {
         Ok(_) => {
             let said = match count {
                 0 => "Put windows back".to_string(),
@@ -349,12 +389,16 @@ fn put_back(panel: &Panel, count: usize, window: &mut Window, cx: &mut Context<P
             };
             window.push_notification(Notification::new().message(said), cx);
         }
-        Err(e) => window.push_notification(refusal("Windows left as they were", &error_text(&e)), cx),
+        Err(e) => {
+            panel.awaiting_switch = false;
+            window.push_notification(refusal("Windows left as they were", &error_text(&e)), cx)
+        }
     });
 }
 
 /// Switch to the workspace. Undo goes back to the one that was in use, when there was another.
-fn switch_to(panel: &Panel, ws: &Workspace, window: &mut Window, cx: &mut Context<Panel>) {
+fn switch_to(panel: &mut Panel, ws: &Workspace, window: &mut Window, cx: &mut Context<Panel>) {
+    panel.awaiting_switch = true;
     let name = ws.name.clone();
     let before = panel.state.as_ref().and_then(|s| s.workspace.as_ref()).map(|w| w.id.clone());
     let undoable = before.is_some_and(|id| id != ws.id);
@@ -366,7 +410,10 @@ fn switch_to(panel: &Panel, ws: &Workspace, window: &mut Window, cx: &mut Contex
             panel.offer_undo(format!("Switched to {name}"), undo, window, cx);
         }
         Ok(_) => window.push_notification(Notification::new().message(format!("Switched to {name}")), cx),
-        Err(e) => window.push_notification(refusal("Seam can't do that", &error_text(&e)), cx),
+        Err(e) => {
+            panel.awaiting_switch = false;
+            window.push_notification(refusal("Seam can't do that", &error_text(&e)), cx)
+        }
     });
 }
 
@@ -577,7 +624,14 @@ pub fn render(panel: &mut Panel, window: &mut Window, cx: &mut Context<Panel>) -
         .gap(px(tokens::SPACE_8))
         .w(px(LIST_WIDTH))
         .children(cards)
-        .child(list::new_empty(count.checked_sub(1), p, window, cx));
+        .child(list::new_empty(count.checked_sub(1), p, window, cx))
+        .when(count >= 2, |d| {
+            d.child(
+                text_style(div(), tokens::LABEL)
+                    .text_color(p.text_secondary)
+                    .child("Drag to change the order. Add window to workspace 1 to 9 counts in this order"),
+            )
+        });
     let body = div().flex().items_start().gap(px(tokens::SPACE_16)).child(sidebar);
     let body = match current {
         Some(ws) => body.child(detail(panel, ws, window, cx)),

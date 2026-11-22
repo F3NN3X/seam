@@ -6,6 +6,7 @@ mod add;
 mod assist;
 mod capture;
 mod in_use;
+mod order;
 mod window;
 
 pub(super) use add::{Which, start_add_window};
@@ -16,10 +17,20 @@ pub(super) use in_use::{
     choose_in_use, detected_in_use, drift_checked, drift_due, forget_deleted, live_of, set_default, snap_back,
     switch_back, sync_live, ws_moved,
 };
+pub(super) use order::move_workspace;
 pub(super) use window::{
     aside, other_wm_changed, queue_window, set_spotlight, show_spotlight, start_focus_only, start_group, start_window,
     window_planned,
 };
+
+/// How a switch was asked for, beyond which workspace.
+#[derive(Clone, Copy, Default)]
+pub(super) struct Via {
+    /// Snap back: windows already open are moved whatever the workspace says.
+    pub put_back: bool,
+    /// The Seam window asked, and shows the result itself.
+    pub from_panel: bool,
+}
 
 /// The workspaces saved for the desk that is connected.
 pub(super) fn desk_workspaces(app: &App) -> Vec<Workspace> {
@@ -138,7 +149,7 @@ pub(super) fn capture_job(app: &App) -> CaptureJob {
 
 /// Start switching to a workspace on this desk. The worker does the rest and the
 /// result comes back as an event.
-pub(super) fn start_switch(app: &mut App, id: Option<&str>, name: Option<&str>, alongside: bool) -> Reply {
+pub(super) fn start_switch(app: &mut App, id: Option<&str>, name: Option<&str>, alongside: bool, via: Via) -> Reply {
     let found = desk_workspaces(app).into_iter().find(|w| match (id, name) {
         (Some(id), _) => w.id == id,
         (None, Some(name)) => w.name.eq_ignore_ascii_case(name),
@@ -147,7 +158,7 @@ pub(super) fn start_switch(app: &mut App, id: Option<&str>, name: Option<&str>, 
     let Some(workspace) = found else {
         return Err(RpcError::new(api::NOT_FOUND, "no such workspace on this desk"));
     };
-    start_switch_job(app, workspace, None, alongside)
+    start_switch_job(app, workspace, None, alongside, via)
 }
 
 /// Hand a workspace, saved or the last session, to the switch worker.
@@ -156,6 +167,7 @@ pub(super) fn start_switch_job(
     workspace: Workspace,
     arrange_for: Option<Duration>,
     alongside: bool,
+    via: Via,
 ) -> Reply {
     log::info!("switching to workspace {}", workspace.name);
     // A hotkey gives the tray the right to take focus. For anyone else this is all it can do.
@@ -167,7 +179,20 @@ pub(super) fn start_switch_job(
     let (pins_stay, size_mode) = (app.cfg.windows.pins_stay_on_switch, app.cfg.window_size_on_move);
     // The last session never saves a folder or page, so it never opens one either.
     let places = app.cfg.workspaces_remember_places && workspace.id != SESSION_ID;
-    let job = SwitchJob { owner, workspace, screens, gap, arrange_for, pins_stay, size_mode, alongside, places };
+    let Via { put_back, from_panel } = via;
+    let job = SwitchJob {
+        owner,
+        workspace,
+        screens,
+        gap,
+        arrange_for,
+        pins_stay,
+        size_mode,
+        alongside,
+        places,
+        put_back,
+        from_panel,
+    };
     if switcher::switch(job) {
         Ok(json!({ "ok": true }))
     } else {
@@ -274,4 +299,8 @@ pub(super) fn switched(app: &mut App) {
         "id": done.id, "name": done.name, "launched": done.launched, "placed": done.placed, "skipped": skipped
     });
     api_server::broadcast("workspace.switched", &data);
+    // The Seam window shows the same words itself.
+    if let (false, Some(body)) = (done.from_panel, workspace::screen_gone_note(&done.skipped)) {
+        notify(app, &format!("Switched to {}", done.name), &body, BalloonAction::OpenPanel("workspaces"));
+    }
 }

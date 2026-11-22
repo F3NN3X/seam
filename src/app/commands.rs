@@ -218,13 +218,17 @@ pub(super) fn run_command(app: &mut App, queued: Queued) {
             return;
         }
         Command::WorkspaceCapture { name, into, save: Some(save), .. } => {
-            if let Some(refusal) = save_preview(app, name, into, save, reply.clone()) {
+            if let Some(refusal) = save_preview(app, (name, into), save, (reply.clone(), panel)) {
                 let _ = reply.send(refusal);
             }
             return;
         }
         Command::WorkspaceCapture { name, into, row, pick, save: None } => {
-            if let Some(refusal) = start_capture(app, name, into, row, pick, Some(reply.clone())) {
+            let refusal = start_capture(app, name, into, row, pick, Some(reply.clone()));
+            if let Some(job) = app.capturing.as_mut().filter(|_| refusal.is_none()) {
+                job.from_panel = panel;
+            }
+            if let Some(refusal) = refusal {
                 let _ = reply.send(refusal);
             }
             return;

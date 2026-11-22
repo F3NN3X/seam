@@ -11,22 +11,22 @@ use crate::classify::brief_window;
 pub fn ticks(rules: &[Rule], elevated: &[bool]) -> Vec<(bool, Option<&'static str>)> {
     let same =
         |a: &Rule, b: &Rule| a.title_hint == b.title_hint && (a.exe.eq_ignore_ascii_case(&b.exe) && a.aumid == b.aumid);
-    rules
-        .iter()
-        .enumerate()
-        .map(|(i, rule)| {
-            let why = if elevated.get(i).copied().unwrap_or(false) {
-                Some("runs as administrator, so a switch can't move it")
-            } else if brief_window(&rule.exe) {
-                Some("usually open only for a moment")
-            } else if rules[..i].iter().any(|above| same(above, rule)) {
-                Some("same as the one above")
-            } else {
-                None
-            };
-            (why.is_none(), why)
-        })
-        .collect()
+    let mut out: Vec<(bool, Option<&'static str>)> = Vec::with_capacity(rules.len());
+    for (i, rule) in rules.iter().enumerate() {
+        // Only a window above that starts ticked is the one this copies, or the app would start out of the list.
+        let copy = rules[..i].iter().zip(&out).any(|(above, (on, _))| *on && same(above, rule));
+        let why = if elevated.get(i).copied().unwrap_or(false) {
+            Some("runs as administrator, so a switch can't move it")
+        } else if brief_window(&rule.exe) {
+            Some("usually open only for a moment")
+        } else if copy {
+            Some("same as the one above")
+        } else {
+            None
+        };
+        out.push((why.is_none(), why));
+    }
+    out
 }
 
 /// The rows of `old` whose app has no window open, as a capture of `fresh` finds it, in
@@ -77,7 +77,9 @@ pub fn closed_note(removed: usize, turned_off: usize) -> String {
     match (removed, turned_off) {
         (r, 0) => format!("Removed {} open", apps(r)),
         (0, t) => format!("Turned off {} open", apps(t)),
-        (r, t) => format!("Turned off {t} and removed {r} of the apps that weren't open"),
+        (r, t) => {
+            format!("Turned off {} and removed {r}", if t == 1 { "1 app".to_string() } else { format!("{t} apps") })
+        }
     }
 }
 
@@ -113,6 +115,13 @@ mod tests {
         assert!(ticks_of(&folders).iter().all(|(on, _)| *on));
     }
 
+    #[test]
+    fn a_copy_of_an_unticked_window_still_starts_ticked() {
+        let rules = [rule("a.exe", "A"), rule("a.exe", "A")];
+        let ticks = ticks(&rules, &[true, false]);
+        assert_eq!((ticks[0].0, ticks[1]), (false, (true, None)));
+    }
+
     fn ticks_of(rules: &[Rule]) -> Vec<(bool, Option<&'static str>)> {
         ticks(rules, &[])
     }
@@ -123,7 +132,7 @@ mod tests {
         assert_eq!(closed_note(2, 0), "Removed 2 apps that weren't open");
         assert_eq!(closed_note(0, 1), "Turned off 1 app that wasn't open");
         assert_eq!(closed_note(0, 3), "Turned off 3 apps that weren't open");
-        assert_eq!(closed_note(2, 1), "Turned off 1 and removed 2 of the apps that weren't open");
+        assert_eq!(closed_note(2, 1), "Turned off 1 app and removed 2");
     }
 
     #[test]

@@ -36,7 +36,7 @@ const ROWS: &[(Page, &str, &[&str])] = &[
     (Page::Windows, "Also when I drag a window to another screen", &["/window_size_on_drag"]),
     (Page::Windows, "Another window manager handles my windows", &["/windows/other_wm"]),
     (Page::Workspaces, "Put apps in place when they open", &["/auto_apply"]),
-    (Page::Workspaces, "Apps that aren't open", &["/workspaces_update_removes_closed"]),
+    (Page::Workspaces, "Apps that aren't open", &["/workspaces_update_closed"]),
     (Page::Shortcuts, "Line up screens", &["/hotkeys/line_up"]),
     (Page::Shortcuts, "Pause or resume pointer remap", &["/hotkeys/pause"]),
     (Page::Shortcuts, "Pause Seam", &["/hotkeys/pause_seam"]),
@@ -97,12 +97,19 @@ const ROWS: &[(Page, &str, &[&str])] = &[
     (Page::About, "Include pre-releases", &["/updates/prerelease"]),
 ];
 
-static DEFAULT: LazyLock<Value> = LazyLock::new(|| serde_json::to_value(Config::default()).unwrap_or_default());
+/// `config` as JSON, with the choices that have an effective value written out: an
+/// unset `workspaces_update_closed` reads as what the older flag says, so a file that
+/// never set it and one that sets Keep compare equal.
+fn normalised(config: &Config) -> Value {
+    let config = Config { workspaces_update_closed: Some(config.closed_apps()), ..config.clone() };
+    serde_json::to_value(config).unwrap_or_default()
+}
+
+static DEFAULT: LazyLock<Value> = LazyLock::new(|| normalised(&Config::default()));
 
 /// The titles of `page`'s rows whose value in `config` isn't the default.
 pub fn titles(page: Page, config: &Config) -> HashSet<&'static str> {
-    let Ok(now) = serde_json::to_value(config) else { return HashSet::new() };
-    differing(page, &now, &DEFAULT)
+    differing(page, &normalised(config), &DEFAULT)
 }
 
 fn differing(page: Page, now: &Value, default: &Value) -> HashSet<&'static str> {
@@ -137,6 +144,20 @@ mod tests {
     }
 
     #[test]
+    fn apps_that_arent_open_marks_turn_off_and_remove_only() {
+        use seam::config::ClosedApps;
+        let marked = |config: &Config| titles(Page::Workspaces, config).contains("Apps that aren't open");
+        let with = |choice: ClosedApps| Config::default().patched(&choice.patch()).unwrap();
+        assert!(marked(&with(ClosedApps::TurnOff)));
+        assert!(marked(&with(ClosedApps::Remove)));
+        assert!(!marked(&with(ClosedApps::Keep)));
+        assert!(!marked(&Config::default()));
+        // A file from before the choice, with the old flag on.
+        let old = Config { workspaces_update_removes_closed: true, ..Config::default() };
+        assert!(marked(&old));
+    }
+
+    #[test]
     fn every_row_is_a_search_entry_of_its_page() {
         for (page, title, _) in ROWS {
             let found = ENTRIES.iter().any(|e| e.page == *page && e.title == *title);
@@ -146,7 +167,7 @@ mod tests {
 
     #[test]
     fn every_pointer_reaches_a_value() {
-        let default = serde_json::to_value(Config::default()).unwrap();
+        let default = normalised(&Config::default());
         for (page, title, pointers) in ROWS {
             for at in *pointers {
                 assert!(default.pointer(at).is_some(), "{} {title}: {at}", page.title());

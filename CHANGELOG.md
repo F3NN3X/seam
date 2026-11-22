@@ -17,13 +17,13 @@ All notable changes to Seam. The format follows [Keep a Changelog](https://keepa
 - **Inactive screens on Displays.** A screen that is connected but turned off in Windows shows as "Inactive", with **Open Display settings**. `state.get` lists them as `screens_inactive`. Information only.
 - **Close this workspace and Minimize this workspace.** On a workspace's **...** menu, in the tray menu after **Put windows back**, and as two shortcuts with no key set. They take the windows the workspace's rows match, never a pinned window, one kept out of switches, one running as administrator, an app under **Left alone**, or a row that is off. **Close this workspace** lists the windows first (untick one to keep it) and sends each a normal close request, so an app with unsaved work asks you first; Seam never ends a process. **Minimize this workspace** offers Undo for 8 seconds. New API methods `workspace.windows`, `workspace.close`, `workspace.minimize` and `workspace.minimize_undo`, and events `workspace.closed` and `workspace.minimized`. Assistants get none of them, and no MCP tool was added.
 
+Config: nothing new for these two, the results live in memory. `off` on a workspace row and `open_windows` on a workspace are new and optional. An older Seam ignores them, and if it edits that workspace it drops them, so the row is on again and the workspace moves open windows, as before. `close_workspace` and `minimize_workspace` in `hotkeys` are new and optional, null until set. An older Seam ignores them.
+
 ### Changed
 
 - **Update from screen removes apps that aren't open** is now **Apps that aren't open** on All workspaces, a choice of **Keep**, **Turn off** and **Remove** that sets what each app starts at in the list. `workspace.capture` with `into` and no `token` applies it to the apps that aren't open. The Seam window offers the only Undo for its own updates; the tray's balloon stays for the tray's.
 
 Config: `workspaces_update_closed` (`keep`, `turn_off` or `remove`) is new and optional, left out of the file until it is set. Without it Seam reads `workspaces_update_removes_closed` as before (true is Remove, false is Keep), and writing the choice writes that flag too, true only for Remove, so an older Seam does the closest thing (Turn off reads as Keep there). Nothing is removed from the format.
-
-Config: nothing new for these two, the results live in memory. `off` on a workspace row and `open_windows` on a workspace are new and optional. An older Seam ignores them, and if it edits that workspace it drops them, so the row is on again and the workspace moves open windows, as before. `close_workspace` and `minimize_workspace` in `hotkeys` are new and optional, null until set. An older Seam ignores them.
 
 ## [0.8.0] - 2026-11-16
 

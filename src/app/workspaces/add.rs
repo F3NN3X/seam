@@ -53,6 +53,7 @@ fn begin(app: &mut App, which: Which, hwnd: Option<isize>, reply: Option<Sender<
         add: Some(hwnd),
         preview: false,
         closed: BTreeMap::new(),
+        from_panel: false,
     });
     if switcher::capture_added(capture_job(app), hwnd) {
         return Ok(());

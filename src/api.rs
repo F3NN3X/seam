@@ -33,6 +33,8 @@ pub const BUSY: i32 = 2;
 pub const REFUSED: i32 = 3;
 pub const FORBIDDEN: i32 = 4;
 pub const DISABLED: i32 = 5;
+/// What `workspace.capture` says when its `token` is no longer good.
+pub const PREVIEW_EXPIRED: &str = "preview expired";
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct RpcError {

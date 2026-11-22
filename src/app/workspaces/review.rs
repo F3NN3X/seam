@@ -3,12 +3,6 @@
 
 use super::capture::{begin_capture, save_capture};
 use super::*;
-use std::collections::hash_map::RandomState;
-use std::hash::{BuildHasher, Hasher};
-
-fn new_token() -> String {
-    format!("{:016x}", RandomState::new().build_hasher().finish())
-}
 
 /// Start a capture the review will show. The answer comes when it is read, as
 /// `workspace.capture_preview` says. Returns an answer only if it can't start.
@@ -62,22 +56,63 @@ pub(super) fn previewed(app: &mut App, job: Capturing, got: switcher::Captured) 
             })
             .collect();
     }
-    let token = new_token();
+    let Some(token) = crate::api_server::new_token() else {
+        let _ = reply.send(refused("Couldn't make a token for the preview"));
+        return;
+    };
     answer["token"] = json!(token);
     let (sig, into, tx) = (job.sig.clone(), job.into.clone(), reply.clone());
+    let rows = old.map_or(0, |w| w.windows.len());
     // A new preview replaces the one before it.
-    app.preview = Some(Preview { token, sig, into, captured: got, expires: Instant::now() + PREVIEW_FOR });
+    app.preview = Some(Preview { token, sig, into, rows, captured: got, expires: Instant::now() + PREVIEW_FOR });
     let _ = tx.send(Ok(answer));
+}
+
+/// Whether `p` is the preview a save names: the same token, desk and workspace, not
+/// past its time, and the workspace still has the rows it had.
+fn live(p: &Preview, (token, sig, into): (&str, &str, &Option<String>), rows: usize, now: Instant) -> bool {
+    p.token == token && p.sig == sig && p.into == *into && p.rows == rows && p.expires > now
+}
+
+/// The windows of a preview that `take` ticks, numbered from the top again, with the
+/// ones left out added to `others`: they are still open, so they keep their app from
+/// counting as closed. Saving nothing is only for an update, which keeps every row.
+fn ticked_subset(got: &switcher::Captured, take: &[usize], updating: bool) -> Result<switcher::Captured, RpcError> {
+    let mut take = take.to_vec();
+    take.sort_unstable();
+    take.dedup();
+    if take.iter().any(|i| *i >= got.rules.len()) {
+        return Err(RpcError::new(api::INVALID_PARAMS, "take has a window the preview doesn't"));
+    }
+    if take.is_empty() && !updating {
+        return Err(RpcError::new(api::REFUSED, "No window is ticked"));
+    }
+    let left = (0..got.rules.len()).filter(|i| !take.contains(i)).map(|i| {
+        let rule = &got.rules[i];
+        workspace::Candidate {
+            hwnd: got.hwnds[i],
+            exe: rule.exe.clone(),
+            aumid: rule.aumid.clone(),
+            class: rule.class.clone(),
+            title: rule.title_hint.clone(),
+            z: i,
+        }
+    });
+    Ok(switcher::Captured {
+        rules: take.iter().enumerate().map(|(z, i)| Rule { z: z as u32, ..got.rules[*i].clone() }).collect(),
+        hwnds: take.iter().map(|i| got.hwnds[*i]).collect(),
+        others: got.others.iter().cloned().chain(left).collect(),
+        elevated: Vec::new(),
+    })
 }
 
 /// Save the ticked windows of the preview `save` names. Returns an answer only when it
 /// can't go ahead; otherwise the save answers.
 pub(in crate::app) fn save_preview(
     app: &mut App,
-    name: Option<String>,
-    into: Option<String>,
+    (name, into): (Option<String>, Option<String>),
     save: api::Save,
-    reply: Sender<Reply>,
+    (reply, from_panel): (Sender<Reply>, bool),
 ) -> Option<Reply> {
     if app.capturing.is_some() {
         return Some(busy("Already capturing"));
@@ -85,41 +120,19 @@ pub(in crate::app) fn save_preview(
     if app.closing.is_some() {
         return Some(busy("Windows of a workspace are still being closed or minimized"));
     }
-    let live = |p: &&Preview| p.token == save.token && p.expires > Instant::now() && p.sig == app.sig && p.into == into;
-    let Some(preview) = app.preview.as_ref().filter(live) else {
-        return Some(refused("preview expired"));
+    let now = Instant::now();
+    // A preview past its time holds folders and pages for nothing.
+    if app.preview.as_ref().is_some_and(|p| p.token == save.token && p.expires <= now) {
+        app.preview = None;
+    }
+    let rows =
+        into.as_ref().map_or(0, |id| desk_workspaces(app).iter().find(|w| w.id == *id).map_or(0, |w| w.windows.len()));
+    let Some(preview) = app.preview.as_ref().filter(|p| live(p, (&save.token, &app.sig, &into), rows, now)) else {
+        return Some(refused(api::PREVIEW_EXPIRED));
     };
-    let got = &preview.captured;
-    let mut take = save.take;
-    take.sort_unstable();
-    take.dedup();
-    if take.iter().any(|i| *i >= got.rules.len()) {
-        return Some(Err(RpcError::new(api::INVALID_PARAMS, "take has a window the preview doesn't")));
-    }
-    if take.is_empty() && into.is_none() {
-        return Some(refused("No window is ticked"));
-    }
-    // What isn't ticked is still open, so it keeps its app from counting as closed.
-    let left: Vec<workspace::Candidate> = (0..got.rules.len())
-        .filter(|i| !take.contains(i))
-        .map(|i| {
-            let rule = &got.rules[i];
-            workspace::Candidate {
-                hwnd: got.hwnds[i],
-                exe: rule.exe.clone(),
-                aumid: rule.aumid.clone(),
-                class: rule.class.clone(),
-                title: rule.title_hint.clone(),
-                z: i,
-            }
-        })
-        .collect();
-    let rules = take.iter().enumerate().map(|(z, i)| Rule { z: z as u32, ..got.rules[*i].clone() }).collect();
-    let ticked = switcher::Captured {
-        rules,
-        hwnds: take.iter().map(|i| got.hwnds[*i]).collect(),
-        others: got.others.iter().cloned().chain(left).collect(),
-        elevated: Vec::new(),
+    let ticked = match ticked_subset(&preview.captured, &save.take, into.is_some()) {
+        Ok(ticked) => ticked,
+        Err(e) => return Some(Err(e)),
     };
     let sig = preview.sig.clone();
     app.preview = None;
@@ -134,7 +147,95 @@ pub(in crate::app) fn save_preview(
         add: None,
         preview: false,
         closed: save.closed,
+        from_panel,
     };
     save_capture(app, job, ticked);
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use seam::workspace::review::not_open;
+    use std::time::Duration;
+
+    fn rule(exe: &str) -> Rule {
+        Rule { exe: exe.into(), z: 9, ..Rule::default() }
+    }
+
+    fn captured(exes: &[&str]) -> switcher::Captured {
+        switcher::Captured {
+            rules: exes.iter().map(|e| rule(e)).collect(),
+            hwnds: (0..exes.len() as isize).map(|h| h + 100).collect(),
+            ..Default::default()
+        }
+    }
+
+    fn preview(now: Instant) -> Preview {
+        Preview {
+            token: "t".into(),
+            sig: "desk".into(),
+            into: Some("ws".into()),
+            rows: 3,
+            captured: captured(&["a.exe"]),
+            expires: now + PREVIEW_FOR,
+        }
+    }
+
+    #[test]
+    fn a_preview_is_live_until_its_time_is_up() {
+        let now = Instant::now();
+        let p = preview(now);
+        let into = Some("ws".to_string());
+        let key = ("t", "desk", &into);
+        assert!(live(&p, key, 3, now));
+        assert!(live(&p, key, 3, now + PREVIEW_FOR - Duration::from_millis(1)));
+        assert!(!live(&p, key, 3, now + PREVIEW_FOR));
+    }
+
+    #[test]
+    fn another_token_desk_workspace_or_row_count_isnt_the_preview() {
+        let now = Instant::now();
+        let p = preview(now);
+        let (ws, other, none) = (Some("ws".to_string()), Some("other".to_string()), None);
+        // A token already used is gone from the slot, so only a different one is left to refuse.
+        assert!(!live(&p, ("used", "desk", &ws), 3, now));
+        assert!(!live(&p, ("t", "elsewhere", &ws), 3, now));
+        assert!(!live(&p, ("t", "desk", &other), 3, now));
+        assert!(!live(&p, ("t", "desk", &none), 3, now));
+        // Rows added or removed by another client since the preview.
+        assert!(!live(&p, ("t", "desk", &ws), 2, now));
+    }
+
+    #[test]
+    fn take_picks_renumbers_and_collapses_duplicates() {
+        let got = captured(&["a.exe", "b.exe", "c.exe"]);
+        let subset = ticked_subset(&got, &[2, 0, 2], false).unwrap();
+        let rows: Vec<(&str, u32)> = subset.rules.iter().map(|r| (r.exe.as_str(), r.z)).collect();
+        assert_eq!(rows, [("a.exe", 0), ("c.exe", 1)]);
+        assert_eq!(subset.hwnds, [100, 102]);
+    }
+
+    #[test]
+    fn a_bad_take_is_refused() {
+        let got = captured(&["a.exe"]);
+        let out_of_range = ticked_subset(&got, &[1], true).err().map(|e| e.code);
+        assert_eq!(out_of_range, Some(api::INVALID_PARAMS));
+        // Nothing ticked saves nothing for a new workspace, and only keeps every row of an update.
+        assert_eq!(ticked_subset(&got, &[], false).err().map(|e| e.code), Some(api::REFUSED));
+        assert!(ticked_subset(&got, &[], true).unwrap().rules.is_empty());
+    }
+
+    #[test]
+    fn unticked_windows_keep_their_app_open() {
+        let got = captured(&["a.exe", "b.exe"]);
+        let subset = ticked_subset(&got, &[0], true).unwrap();
+        assert_eq!(subset.others.len(), 1);
+        assert_eq!((subset.others[0].exe.as_str(), subset.others[0].hwnd), ("b.exe", 101));
+        let old = Workspace { windows: vec![rule("a.exe"), rule("b.exe")], ..Workspace::default() };
+        let none = std::collections::HashSet::new();
+        assert!(not_open(&old, &subset.rules, &[], &none, &subset.others).is_empty());
+        // Without them in `others` the second row would count as closed.
+        assert_eq!(not_open(&old, &subset.rules, &[], &none, &[]), [1]);
+    }
 }

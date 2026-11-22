@@ -52,6 +52,7 @@ pub(super) fn begin_capture(
         add: None,
         preview,
         closed: BTreeMap::new(),
+        from_panel: false,
     });
     let started = match hwnd {
         Some(hwnd) => switcher::capture_window(job, hwnd),
@@ -314,8 +315,8 @@ fn finish_capture(
         live::check_drift();
     }
     publish(app);
-    // The Seam window offers its own Undo, so only a call with no one waiting raises the balloon (D727).
-    if let (Some((_, from, counts)), None) = (removal, &job.reply) {
+    // The Seam window offers its own Undo, so only a call from anywhere else raises the balloon (D727).
+    if let (Some((_, from, counts)), false) = (removal, job.from_panel) {
         update_removed(app, saved, before, from, counts);
     }
     if job.reply.is_some() {

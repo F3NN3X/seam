@@ -312,6 +312,8 @@ struct Capturing {
     /// What the save does with each row of `into` whose app isn't open, by row. A row
     /// missing here takes the default.
     closed: BTreeMap<usize, ClosedApps>,
+    /// The Seam window asked, so it offers the Undo and the tray raises no balloon.
+    from_panel: bool,
 }
 
 /// A capture the review is showing, kept until it is saved or this long has passed.
@@ -320,6 +322,8 @@ struct Preview {
     /// The desk and workspace it was captured for.
     sig: String,
     into: Option<String>,
+    /// How many rows `into` had, so a save after another client changed them is refused.
+    rows: usize,
     captured: switcher::Captured,
     expires: Instant,
 }

@@ -41,11 +41,25 @@ struct Review {
     token: String,
     items: Vec<Item>,
     ticked: Vec<bool>,
+    /// A save is out, so it isn't sent twice.
+    saving: bool,
+    /// The name field takes the focus once the list shows.
+    focus_pending: bool,
+    /// The dialog was closed with Don't save, so an answer that comes later leaves other dialogs alone.
+    dismissed: bool,
 }
 
 impl Review {
     fn reading() -> Review {
-        Review { stage: Stage::Reading, token: String::new(), items: Vec::new(), ticked: Vec::new() }
+        Review {
+            stage: Stage::Reading,
+            token: String::new(),
+            items: Vec::new(),
+            ticked: Vec::new(),
+            saving: false,
+            focus_pending: false,
+            dismissed: false,
+        }
     }
 
     fn read(&mut self, answer: &Value) {
@@ -63,12 +77,18 @@ impl Review {
             answer["windows"].as_array().into_iter().flatten().map(|w| w["ticked"].as_bool() == Some(true)).collect();
         self.token = text(answer, "token");
         self.stage = Stage::Ready;
+        self.focus_pending = true;
     }
 }
 
 /// Whether the tray refused a save because its preview is gone.
 fn expired(e: &CallError) -> bool {
-    matches!(e, CallError::Rpc(e) if e.code == seam::api::REFUSED && e.message.contains("expired"))
+    matches!(e, CallError::Rpc(e) if e.code == seam::api::REFUSED && e.message == seam::api::PREVIEW_EXPIRED)
+}
+
+/// Whether the tray can't take a save just now, such as while it closes windows.
+fn busy(e: &CallError) -> bool {
+    matches!(e, CallError::Rpc(e) if e.code == seam::api::BUSY)
 }
 
 /// "6 of 8 windows ticked".
@@ -89,17 +109,18 @@ fn ask(
     let (state, name) = (state.clone(), name.clone());
     panel.call("workspace.capture_preview", json!({}), window, cx, move |_, result, window, cx| match result {
         Ok(answer) => {
+            if state.borrow().dismissed {
+                return;
+            }
             state.borrow_mut().read(&answer);
             let text = answer["name"].as_str().unwrap_or_default().to_string();
-            name.update(cx, |input, cx| {
-                input.set_value(text, window, cx);
-                input.focus(window, cx);
-            });
-            window.defer(cx, |window, cx| window.dispatch_action(Box::new(SelectAll), cx));
+            name.update(cx, |input, cx| input.set_value(text, window, cx));
             window.refresh();
         }
         Err(e) => {
-            window.close_dialog(cx);
+            if !state.borrow().dismissed {
+                window.close_dialog(cx);
+            }
             window.push_notification(refusal("Nothing captured", &error_text(&e)), cx);
         }
     });
@@ -125,12 +146,18 @@ pub fn open(panel: &mut Panel, window: &mut Window, cx: &mut Context<Panel>) {
         }
     });
     let view = cx.entity().downgrade();
-    window.open_dialog(cx, move |dialog, _, cx| {
+    window.open_dialog(cx, move |dialog, window, cx| {
         let _typed = &typed;
         let p = palette(cx);
         let stage = state.borrow().stage;
         let text = name.read(cx).value().trim().to_string();
         let ticked = state.borrow().ticked.iter().filter(|t| **t).count();
+        // The field is drawn by now, so it can take the focus and select the suggested name.
+        if stage == Stage::Ready && std::mem::take(&mut state.borrow_mut().focus_pending) {
+            name.update(cx, |input, cx| input.focus(window, cx));
+            window.defer(cx, |window, cx| window.dispatch_action(Box::new(SelectAll), cx));
+        }
+        let saving = state.borrow().saving;
         let body = match stage {
             Stage::Reading => div()
                 .py(px(tokens::SPACE_16))
@@ -146,6 +173,7 @@ pub fn open(panel: &mut Panel, window: &mut Window, cx: &mut Context<Panel>) {
         let mut ok = ui::primary("review-ok", label);
         match stage {
             Stage::Reading => ok = ok.disabled(true),
+            Stage::Ready if saving => ok = ok.disabled(true),
             Stage::Ready if ticked == 0 => ok = ok.disabled(true).tooltip("Tick a window to save it"),
             Stage::Ready if text.is_empty() => ok = ok.disabled(true).tooltip("Give the workspace a name"),
             _ => {}
@@ -160,6 +188,13 @@ pub fn open(panel: &mut Panel, window: &mut Window, cx: &mut Context<Panel>) {
                     .child(DialogClose::new().trigger(|b| b.label("Don't save")))
                     .child(DialogAction::new().child(ok)),
             )
+            .on_cancel({
+                let state = state.clone();
+                move |_, _, _| {
+                    state.borrow_mut().dismissed = true;
+                    true
+                }
+            })
             .on_ok(move |_, window, cx| {
                 let stage = state.borrow().stage;
                 let _ = view.update(cx, |panel, cx| match stage {
@@ -265,11 +300,16 @@ fn save_ticked(
     if take.is_empty() || text.is_empty() {
         return;
     }
+    if std::mem::replace(&mut state.borrow_mut().saving, true) {
+        return;
+    }
     let state = state.clone();
     let params = json!({ "token": token, "take": take, "name": text });
     panel.call("workspace.capture", params, window, cx, move |panel, result, window, cx| match result {
         Ok(done) => {
-            window.close_dialog(cx);
+            if !state.borrow().dismissed {
+                window.close_dialog(cx);
+            }
             shortcuts::stop_recording(panel);
             // The tray gives a name already in use a number, the way `unique_name` does.
             let taken: Vec<String> = all(panel).into_iter().map(|w| w.name).collect();
@@ -289,11 +329,20 @@ fn save_ticked(
             }
         }
         Err(e) if expired(&e) => {
-            state.borrow_mut().stage = Stage::Expired;
+            let mut review = state.borrow_mut();
+            (review.stage, review.saving) = (Stage::Expired, false);
             window.refresh();
         }
+        // The ticks stay, so it can be tried again.
+        Err(e) if busy(&e) => {
+            state.borrow_mut().saving = false;
+            window.refresh();
+            window.push_notification(refusal("Nothing captured", &error_text(&e)), cx);
+        }
         Err(e) => {
-            window.close_dialog(cx);
+            if !state.borrow().dismissed {
+                window.close_dialog(cx);
+            }
             window.push_notification(refusal("Nothing captured", &error_text(&e)), cx);
         }
     });

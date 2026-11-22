@@ -306,6 +306,7 @@ pub(super) unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARA
             WM_POWERBROADCAST => {
                 if wparam.0 == PBT_APMRESUMEAUTOMATIC as usize {
                     log::info!("resumed from sleep");
+                    restore::CHANGE_PENDING.store(true, std::sync::atomic::Ordering::SeqCst);
                     with_app(cancel_restore_offer);
                     SetTimer(Some(hwnd), TIMER_REFRESH, 1500, None);
                     snap::display_changed();
@@ -321,7 +322,11 @@ pub(super) unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARA
             }
             WM_TIMER if wparam.0 == TIMER_REFRESH => {
                 // If the app is busy (menu open), keep the timer and try again.
-                if with_app(refresh).is_some() {
+                let refreshed = with_app(|a| {
+                    settle_restore_offer(a);
+                    refresh(a)
+                });
+                if refreshed.is_some() {
                     let _ = KillTimer(Some(hwnd), TIMER_REFRESH);
                     with_app(arm_restore_offer);
                 }
@@ -359,6 +364,9 @@ unsafe fn on_tray_event(hwnd: HWND, lparam: LPARAM) {
                 let _ = PostMessageW(Some(hwnd), WM_APP + 12, WPARAM(0), LPARAM(0));
             }
             NIN_BALLOONUSERCLICK => on_balloon_click(hwnd),
+            NIN_BALLOONTIMEOUT | NIN_BALLOONHIDE => {
+                with_app(balloon_faded);
+            }
             _ => {}
         }
     }
@@ -553,6 +561,7 @@ unsafe fn on_display_change(hwnd: HWND, lparam: LPARAM) {
         if overlay::is_active() {
             overlay::cancel();
         }
+        restore::CHANGE_PENDING.store(true, std::sync::atomic::Ordering::SeqCst);
         with_app(cancel_restore_offer);
         SetTimer(Some(hwnd), TIMER_REFRESH, 800, None);
         snap::display_changed();

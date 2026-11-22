@@ -199,11 +199,14 @@ pub struct OfferFacts {
     pub new_desk_balloon: bool,
 }
 
+/// About how long a balloon stays up, so how long an "Open <name>?" notice that nobody clicked
+/// can hold the restore offer back, whether or not the shell told us it faded.
+pub const SIGN_IN_OFFER_LIFE: std::time::Duration = std::time::Duration::from_secs(10);
+
 /// Whether the sign-in action still holds the restore offer back: its switch is waiting or
-/// running, or its "Open <name>?" notice is the one showing. An ignored notice that has been
-/// replaced or faded doesn't count.
-pub fn sign_in_pending(run_waiting: bool, offer_made: bool, notice_is_showing: bool) -> bool {
-    run_waiting || (offer_made && notice_is_showing)
+/// running, or its "Open <name>?" notice, shown `offer_age` ago, is still the one showing.
+pub fn sign_in_pending(run_waiting: bool, offer_age: Option<std::time::Duration>, notice_is_showing: bool) -> bool {
+    run_waiting || (notice_is_showing && offer_age.is_some_and(|age| age < SIGN_IN_OFFER_LIFE))
 }
 
 /// Whether to ask "Restore «Name»?".
@@ -394,11 +397,17 @@ mod tests {
     #[test]
     fn an_ignored_sign_in_offer_stops_holding_the_restore_offer_back() {
         // Waiting or running holds it, and so does a notice that is still the one showing.
-        assert!(sign_in_pending(true, false, false));
-        assert!(sign_in_pending(false, true, true));
-        // The notice was ignored and replaced: nothing holds it.
-        assert!(!sign_in_pending(false, true, false));
-        assert!(!sign_in_pending(false, false, true));
+        use std::time::Duration;
+        let fresh = Some(Duration::from_secs(2));
+        assert!(sign_in_pending(true, None, false));
+        assert!(sign_in_pending(false, fresh, true));
+        // The notice was replaced, or never made: nothing holds it.
+        assert!(!sign_in_pending(false, fresh, false));
+        assert!(!sign_in_pending(false, None, true));
+        // Ignored for longer than a balloon lives, the shell's word or not.
+        assert!(sign_in_pending(false, Some(SIGN_IN_OFFER_LIFE - Duration::from_millis(1)), true));
+        assert!(!sign_in_pending(false, Some(SIGN_IN_OFFER_LIFE), true));
+        assert!(!sign_in_pending(false, Some(Duration::from_secs(3600)), true));
     }
 
     #[test]

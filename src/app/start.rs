@@ -168,6 +168,8 @@ unsafe fn new_app(hwnd: HWND, cfg: Config) -> App {
             sign_in_offer: None,
             restore_offer: None,
             restore_armed: false,
+            sign_in_offered_at: None,
+            screens_changed_at: None,
             refit_done: false,
             restore_check: None,
             new_desk_shown: false,

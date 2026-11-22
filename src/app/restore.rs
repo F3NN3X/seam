@@ -4,6 +4,24 @@
 use super::*;
 use seam::config::SignInMode;
 use seam::workspace::OfferFacts;
+use std::sync::atomic::{AtomicBool, Ordering};
+
+/// The screens changed and their refresh hasn't run. Set before the app is taken, so it holds
+/// even when a tray menu has the app and the cancel can't run.
+pub(super) static CHANGE_PENDING: AtomicBool = AtomicBool::new(false);
+
+/// The longest a re-fit that was already going can take to end after a change, which is the
+/// debounce a re-fit of that change waits before it starts.
+const REFIT_AFTER_CHANGE: Duration = Duration::from_millis(1500);
+
+/// The balloon went away without a click: its click target and the sign-in offer it carried go too.
+pub(super) fn balloon_faded(app: &mut App) {
+    if app.balloon_action == BalloonAction::OpenWorkspace {
+        app.balloon_action = BalloonAction::None;
+        app.sign_in_offer = None;
+        app.sign_in_offered_at = None;
+    }
+}
 
 /// The screens changed or the PC woke, and the refresh has run: look once they've settled.
 /// Keep windows in their zones goes first, so its end starts the look. A later change arms it again.
@@ -24,13 +42,30 @@ pub(super) fn cancel_restore_offer(app: &mut App) {
     app.restore_armed = false;
     app.restore_check = None;
     app.refit_done = false;
+    app.screens_changed_at = Some(Instant::now());
     unsafe {
         let _ = KillTimer(Some(app.hwnd), TIMER_RESTORE_OFFER);
     }
 }
 
-/// A re-fit run ended. The look starts now if one was waiting for it.
+/// The refresh of a change runs: the same cancel again, for when the change's own was skipped
+/// because a tray menu held the app. A change that was already noted keeps its time.
+pub(super) fn settle_restore_offer(app: &mut App) {
+    CHANGE_PENDING.store(false, Ordering::SeqCst);
+    let noted = app.screens_changed_at;
+    cancel_restore_offer(app);
+    if noted.is_some_and(|at| at.elapsed() < REFIT_AFTER_CHANGE) {
+        app.screens_changed_at = noted;
+    }
+}
+
+/// A re-fit run ended. It counts for this change only if it started after it, which is at least
+/// the debounce later: a run that was already going ended too soon to be this change's.
+/// The look starts now if one was waiting for it.
 pub(super) fn refit_ended(app: &mut App) {
+    if app.screens_changed_at.is_some_and(|at| at.elapsed() < REFIT_AFTER_CHANGE) {
+        return;
+    }
     app.refit_done = true;
     if app.restore_armed {
         restore_look(app);
@@ -42,7 +77,8 @@ pub(super) fn restore_look(app: &mut App) {
     unsafe {
         let _ = KillTimer(Some(app.hwnd), TIMER_RESTORE_OFFER);
     }
-    if !std::mem::take(&mut app.restore_armed) || app.workspace.is_none() {
+    // A change whose refresh hasn't run yet (a tray menu holds the app) isn't settled.
+    if !std::mem::take(&mut app.restore_armed) || CHANGE_PENDING.load(Ordering::SeqCst) || app.workspace.is_none() {
         return;
     }
     // The live worker judges against the screens as they are now.
@@ -68,7 +104,7 @@ pub(super) fn restore_checked(app: &mut App, id: &str, moved: bool) {
             || overlay::is_active()
             || workspace::sign_in_pending(
                 app.sign_in_run.is_some() && sign_in_mode != SignInMode::Nothing,
-                app.sign_in_offer.is_some(),
+                app.sign_in_offer.is_some().then(|| app.sign_in_offered_at.map(|at| at.elapsed())).flatten(),
                 app.balloon_action == BalloonAction::OpenWorkspace,
             ),
         standing_by: standby::paused() || standby::reason().is_some(),

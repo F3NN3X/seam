@@ -19,7 +19,7 @@ pub(super) use close::{Ask, Closing, Minimized, closed, start_close, start_close
 use in_use::{active_workspace, set_in_use};
 pub(super) use in_use::{
     choose_in_use, detected_in_use, drift_checked, drift_due, forget_deleted, live_of, set_default, snap_back,
-    switch_back, switch_back_via, sync_live, ws_moved,
+    switch_back, sync_live, ws_moved,
 };
 pub(super) use notice::{LastSwitch, ended, last_switch, open_switched, skipped_json, started, starting, starting_due};
 pub(super) use order::move_workspace;
@@ -29,8 +29,9 @@ pub(super) use window::{
     window_planned,
 };
 
-/// How a switch was asked for, beyond which workspace.
-#[derive(Clone, Copy, Default)]
+/// How a switch was asked for, beyond which workspace. It has no default: each route chooses
+/// who is asking, so none can leave out that another app is (D737).
+#[derive(Clone, Copy)]
 pub(super) struct Via {
     /// Snap back: windows already open are moved whatever the workspace says.
     pub put_back: bool,
@@ -38,6 +39,23 @@ pub(super) struct Via {
     pub from_panel: bool,
     /// An API client other than the Seam window asked, so no startup command runs (D737).
     pub other_app: bool,
+}
+
+impl Via {
+    /// The tray's own menu, a shortcut, sign-in or a restore: Seam itself asks.
+    pub fn local() -> Via {
+        Via { put_back: false, from_panel: false, other_app: false }
+    }
+
+    /// An API request: the Seam window, or else another app.
+    pub fn api(from_panel: bool) -> Via {
+        Via { put_back: false, from_panel, other_app: !from_panel }
+    }
+
+    /// The same, as Snap back.
+    pub fn snapping(self) -> Via {
+        Via { put_back: true, ..self }
+    }
 }
 
 /// The workspaces saved for the desk that is connected.
@@ -317,4 +335,20 @@ pub(super) fn switched(app: &mut App) {
     });
     api_server::broadcast("workspace.switched", &data);
     ended(app, &done);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Via;
+
+    #[test]
+    fn only_the_seam_window_and_seam_itself_may_run_startup_commands() {
+        assert!(!Via::local().other_app && !Via::local().from_panel);
+        assert!(!Via::api(true).other_app && Via::api(true).from_panel);
+        assert!(Via::api(false).other_app && !Via::api(false).from_panel);
+        // Snap back keeps who asked.
+        assert!(Via::api(false).snapping().other_app && Via::api(false).snapping().put_back);
+        assert!(!Via::api(true).snapping().other_app);
+        assert!(!Via::local().put_back);
+    }
 }

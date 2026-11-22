@@ -250,6 +250,12 @@ pub fn add_app(
     let title = app_title(&rule);
     let Some(before) = by_id(panel, id) else { return };
     let row = before.windows.len();
+    // A row with no screen would sit under "Screen not connected", so it goes on a real one.
+    let mut rule = rule;
+    if rule.monitor.is_empty() {
+        let screens = panel.state.as_ref().map(|s| s.screens.clone()).unwrap_or_default();
+        rule.monitor = super::groups::home_screen(&before.windows, &screens).unwrap_or_default();
+    }
     // The tray checks the row is still this app's before it takes the place.
     let (exe, class) = (rule.exe.clone(), rule.class.clone());
     let mut after = before.clone();

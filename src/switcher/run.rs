@@ -356,7 +356,8 @@ fn arrange_as_they_open(
     log::info!("{}: placed {shown} of {}, never showed: {}", ws.name, found.len(), names.join(", "));
     let mut background = Background::default();
     for (i, rule) in absent {
-        let why = if background.runs(rule, waits.procs) { RUNS_IN_BACKGROUND } else { "timeout" };
+        let why =
+            if rule.item.is_none() && background.runs(rule, waits.procs) { RUNS_IN_BACKGROUND } else { "timeout" };
         tally.skipped.push(Skip::row(i, rule, why));
     }
     Some(())
@@ -404,7 +405,7 @@ fn place_then_start(run: &Run, mine: u64, waits: &mut Waits, starts: &mut Starts
         .enumerate()
         .filter(|(i, r)| workspace::takes_part(r) && waits.found[*i].is_none() && !starting.contains(i));
     for (i, rule) in idle {
-        if background.runs(rule, waits.procs) {
+        if rule.item.is_none() && background.runs(rule, waits.procs) {
             tally.skipped.push(Skip::row(i, rule, RUNS_IN_BACKGROUND));
         }
     }

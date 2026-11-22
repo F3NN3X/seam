@@ -342,7 +342,12 @@ pub fn checked_rows(
                 (Err(_), true) => item.without_commands(),
                 (Err(why), false) => return Err(format!("{}: {why}", rule.title_hint)),
             };
-            settle(&mut item, &|sealed| held.contains(sealed));
+            if settle(&mut item, &|sealed| held.contains(sealed)) > 0 {
+                crate::log::info!(
+                    "workspace {}, row {i}: a startup command with no reference of the tray's is dropped",
+                    new.name
+                );
+            }
             rule.item = Some(item);
         }
         if rule.item.is_some() {

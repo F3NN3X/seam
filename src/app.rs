@@ -93,7 +93,7 @@ use workspaces::{
     apply_hotkeys, aside, capture_job, captured, choose_in_use, desk_workspaces, detected_in_use, drift_checked,
     drift_due, forget_deleted, live_of, migrate_hotkeys, other_wm_changed, quick_save, set_default, set_spotlight,
     show_spotlight, snap_back, start_capture, start_focus_only, start_switch, start_switch_job, start_window,
-    switch_back, switch_back_via, switched, sync_live, undo_quick_save, update_from_panel, ws_moved,
+    switch_back, switched, sync_live, undo_quick_save, update_from_panel, ws_moved,
 };
 use workspaces::{last_switch, open_switched, started, starting, starting_due};
 use workspaces::{save_preview, start_preview};

@@ -147,9 +147,11 @@ pub fn sealed_in(saved: &[Value]) -> HashSet<String> {
 /// command survives a save. A different command stays in clear to be sealed, and a reference the
 /// tray didn't make drops the tab's command. With no reference, a command in clear is new, and a
 /// sealed one is kept only when it's one the workspace already held (`held`), which is how a
-/// save the tray makes itself carries them.
-pub(super) fn settle(item: &mut Item, held: &dyn Fn(&str) -> bool) {
-    let Item::Terminal { tabs } = item else { return };
+/// save the tray makes itself carries them. Returns how many tabs sent a reference the tray
+/// never made, for the caller to log.
+pub(super) fn settle(item: &mut Item, held: &dyn Fn(&str) -> bool) -> usize {
+    let Item::Terminal { tabs } = item else { return 0 };
+    let mut unknown = 0;
     for tab in tabs {
         tab.unreadable = false;
         match tab.seal_ref.take().map(|r| lookup(&r)) {
@@ -158,7 +160,10 @@ pub(super) fn settle(item: &mut Item, held: &dyn Fn(&str) -> bool) {
                 tab.command = None;
             }
             Some(Some(_)) => tab.command_sealed = None,
-            Some(None) => (tab.command_sealed, tab.command) = (None, None),
+            Some(None) => {
+                unknown += 1;
+                (tab.command_sealed, tab.command) = (None, None);
+            }
             None => {
                 if tab.command.is_some() || !tab.command_sealed.as_deref().is_some_and(held) {
                     tab.command_sealed = None;
@@ -166,6 +171,7 @@ pub(super) fn settle(item: &mut Item, held: &dyn Fn(&str) -> bool) {
             }
         }
     }
+    unknown
 }
 
 /// Seal each command in clear of a checked workspace, which is then the only form saved.
@@ -207,7 +213,9 @@ pub fn seal_patch(saved: &mut [Value]) {
                 .ok()
                 .and_then(|item| check_item(&item, &exe, aumid.as_deref()).ok())
                 .map(|mut item| {
-                    settle(&mut item, &|_| false);
+                    if settle(&mut item, &|_| false) > 0 {
+                        crate::log::info!("workspace {} ({name}), row {row_n}: a startup command with no reference of the tray's is dropped", n + 1);
+                    }
                     if let Item::Terminal { tabs } = &mut item {
                         tabs.iter_mut().for_each(|t| t.command = None);
                     }

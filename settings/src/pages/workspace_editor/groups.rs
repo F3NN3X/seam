@@ -53,6 +53,14 @@ pub fn group(windows: &[Rule], screens: &[Screen], split: impl Fn(&Rule) -> bool
     groups
 }
 
+/// The screen a new row with none goes on: the connected screen of the workspace's last group, else
+/// the primary screen, else the first. `None` with no screen connected.
+pub fn home_screen(windows: &[Rule], screens: &[Screen]) -> Option<String> {
+    let last = group(windows, screens, |_| false).into_iter().rev().find(|g| screens.iter().any(|s| s.id == g.monitor));
+    let primary = || screens.iter().find(|s| s.primary).or(screens.first());
+    last.map(|g| g.monitor).or_else(|| primary().map(|s| s.id.clone()))
+}
+
 /// Move the windows at `moving` to just before the window at `before`, or after it, keeping their
 /// order. `before` is a place in the list as it is now.
 pub fn reorder(windows: &mut Vec<Rule>, moving: &[usize], before: usize, after: bool) {
@@ -106,6 +114,18 @@ mod tests {
         let groups = group(&windows, &[screen(1, "m1")], |_| false);
         let rows: Vec<Vec<usize>> = groups[0].rows.iter().map(|r| r.windows.clone()).collect();
         assert_eq!(rows, [vec![0], vec![1, 3], vec![2]]);
+    }
+
+    #[test]
+    fn a_new_row_goes_on_the_last_groups_screen_else_the_primary() {
+        let mut primary = screen(1, "m1");
+        primary.primary = true;
+        let screens = [primary, screen(2, "m2")];
+        let windows = vec![rule("a.exe", "m1"), rule("b.exe", "m2"), rule("c.exe", "gone")];
+        assert_eq!(home_screen(&windows, &screens).as_deref(), Some("m2"));
+        assert_eq!(home_screen(&[], &screens).as_deref(), Some("m1"));
+        assert_eq!(home_screen(&[rule("c.exe", "gone")], &screens).as_deref(), Some("m1"));
+        assert_eq!(home_screen(&windows, &[]), None);
     }
 
     #[test]

@@ -25,6 +25,25 @@ fn seal_items(patch: &mut Value) {
     }
 }
 
+/// A patch that changes a row's item, compared with what is saved, leaves that row's window behind:
+/// the next switch starts the new item (D733). Rows are compared in the order the list holds them.
+fn forget_edited_items(app: &App, patch: &Value) {
+    let desks = patch.get("desks").and_then(Value::as_object).into_iter().flatten();
+    for (sig, desk) in desks {
+        let (Some(sent), Some(saved)) = (desk.get("workspaces").and_then(Value::as_array), app.cfg.desks.get(sig))
+        else {
+            continue;
+        };
+        let old = workspace::list(&saved.workspaces);
+        for new in workspace::list(sent) {
+            let Some(before) = old.iter().find(|w| w.id == new.id) else { continue };
+            let moves: Vec<Option<usize>> =
+                (0..before.windows.len()).map(|i| (i < new.windows.len()).then_some(i)).collect();
+            switcher::forget_edited(&new.id, &workspace::edited_items(&before.windows, &new.windows, &moves));
+        }
+    }
+}
+
 /// Merge a patch into the settings, keep it only if the result is a valid
 /// config, and apply it live.
 pub(super) fn patch_config(app: &mut App, patch: &Value) -> Reply {
@@ -265,6 +284,7 @@ fn command_result(app: &mut App, command: Command, panel: bool) -> Reply {
     match command {
         Command::ConfigPatch(mut patch) => {
             seal_items(&mut patch);
+            forget_edited_items(app, &patch);
             patch_config(app, &patch)
         }
         Command::RemapSet(on) => {
@@ -345,19 +365,13 @@ fn command_result(app: &mut App, command: Command, panel: bool) -> Reply {
             Some(session) => restore_session(app, session.workspace()),
             None => Err(RpcError::new(api::NOT_FOUND, "No last session is saved for this desk")),
         },
-        Command::WorkspaceSwitch { id, name, alongside } => start_switch(
-            app,
-            id.as_deref(),
-            name.as_deref(),
-            alongside,
-            Via { from_panel: panel, other_app: !panel, ..Via::default() },
-        ),
+        Command::WorkspaceSwitch { id, name, alongside } => {
+            start_switch(app, id.as_deref(), name.as_deref(), alongside, Via::api(panel))
+        }
         Command::WorkspaceMove { id, to } => move_workspace(app, &id, to),
         Command::WorkspaceUpdate { id, workspace } => update_from_panel(app, &id, workspace),
-        Command::WorkspaceSnapBack { alongside } => snap_back(app, alongside, panel),
-        Command::WorkspaceSwitchBack { alongside } => {
-            switch_back_via(app, alongside, Via { from_panel: panel, other_app: !panel, ..Via::default() })
-        }
+        Command::WorkspaceSnapBack { alongside } => snap_back(app, alongside, Via::api(panel)),
+        Command::WorkspaceSwitchBack { alongside } => switch_back(app, alongside, Via::api(panel)),
         Command::WorkspaceSetDefault(id) => set_default(app, id),
         Command::CursorEasingSet(on) => set_cursor_easing(app, on),
         Command::AutoApplySet(on) => {

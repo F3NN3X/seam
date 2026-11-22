@@ -12,8 +12,29 @@ pub(super) fn arm_restore_offer(app: &mut App) {
         return;
     }
     app.restore_armed = true;
-    let after = if app.cfg.zones.refit { RESTORE_OFFER_FALLBACK_MS } else { RESTORE_OFFER_AFTER_MS };
+    // A re-fit that already finished since the change has nothing left to wait for.
+    let waits = app.cfg.zones.refit && !app.refit_done;
+    let after = if waits { RESTORE_OFFER_FALLBACK_MS } else { RESTORE_OFFER_AFTER_MS };
     unsafe { SetTimer(Some(app.hwnd), TIMER_RESTORE_OFFER, after, None) };
+}
+
+/// The screens changed again: whatever was waiting to look is dropped, and the refresh that
+/// follows arms it anew (D747, a later change replaces the offer).
+pub(super) fn cancel_restore_offer(app: &mut App) {
+    app.restore_armed = false;
+    app.restore_check = None;
+    app.refit_done = false;
+    unsafe {
+        let _ = KillTimer(Some(app.hwnd), TIMER_RESTORE_OFFER);
+    }
+}
+
+/// A re-fit run ended. The look starts now if one was waiting for it.
+pub(super) fn refit_ended(app: &mut App) {
+    app.refit_done = true;
+    if app.restore_armed {
+        restore_look(app);
+    }
 }
 
 /// The screens have settled: have the worker say whether the workspace in use has windows out of place.
@@ -24,6 +45,8 @@ pub(super) fn restore_look(app: &mut App) {
     if !std::mem::take(&mut app.restore_armed) || app.workspace.is_none() {
         return;
     }
+    // The live worker judges against the screens as they are now.
+    sync_live(app);
     app.restore_check = Some(Instant::now());
     live::check_drift();
 }
@@ -43,8 +66,11 @@ pub(super) fn restore_checked(app: &mut App, id: &str, moved: bool) {
             || app.capturing.is_some()
             || app.closing.is_some()
             || overlay::is_active()
-            || app.sign_in_offer.is_some()
-            || (app.sign_in_run.is_some() && sign_in_mode != SignInMode::Nothing),
+            || workspace::sign_in_pending(
+                app.sign_in_run.is_some() && sign_in_mode != SignInMode::Nothing,
+                app.sign_in_offer.is_some(),
+                app.balloon_action == BalloonAction::OpenWorkspace,
+            ),
         standing_by: standby::paused() || standby::reason().is_some(),
         new_desk_balloon: app.new_desk_shown,
     };
@@ -69,5 +95,6 @@ pub(super) fn restore_offered(app: &mut App) {
         log::info!("restore after screens change: the workspace isn't in use any more, so nothing moves");
     } else if let Err(e) = start_switch(app, Some(&id), None, true, Via::local().snapping()) {
         log::info!("restore after screens change: {}", e.message);
+        notify(app, "Screens changed", &e.message, BalloonAction::None);
     }
 }

@@ -199,6 +199,13 @@ pub struct OfferFacts {
     pub new_desk_balloon: bool,
 }
 
+/// Whether the sign-in action still holds the restore offer back: its switch is waiting or
+/// running, or its "Open <name>?" notice is the one showing. An ignored notice that has been
+/// replaced or faded doesn't count.
+pub fn sign_in_pending(run_waiting: bool, offer_made: bool, notice_is_showing: bool) -> bool {
+    run_waiting || (offer_made && notice_is_showing)
+}
+
 /// Whether to ask "Restore «Name»?".
 pub fn should_offer(f: OfferFacts) -> bool {
     f.on && f.in_use && f.moved && !f.busy && !f.standing_by && !f.new_desk_balloon
@@ -382,6 +389,16 @@ mod tests {
         assert!(copy_sources(&cfg, "here", 0).is_empty());
         // The connected desk isn't in the config yet.
         assert_eq!(copy_sources(&cfg, "brand-new", 2), ["newer", "older"]);
+    }
+
+    #[test]
+    fn an_ignored_sign_in_offer_stops_holding_the_restore_offer_back() {
+        // Waiting or running holds it, and so does a notice that is still the one showing.
+        assert!(sign_in_pending(true, false, false));
+        assert!(sign_in_pending(false, true, true));
+        // The notice was ignored and replaced: nothing holds it.
+        assert!(!sign_in_pending(false, true, false));
+        assert!(!sign_in_pending(false, false, true));
     }
 
     #[test]

@@ -541,6 +541,20 @@ mod tests {
     use super::*;
 
     #[test]
+    fn desks_list_counts_screens_and_workspaces() {
+        let mut snapshot = Snapshot::default();
+        snapshot.state.desk.sig = "a|b".into();
+        snapshot.config = json!({ "desks": {
+            "a|b": { "name": "Home", "workspaces": [{ "id": "w1" }, { "id": "w2" }] },
+            "c": { "name": "Laptop" },
+        } });
+        let list = desks_list(&snapshot);
+        assert_eq!((list[0]["screens"].as_u64(), list[0]["workspaces"].as_u64()), (Some(2), Some(2)));
+        assert_eq!(list[0]["active"], true);
+        assert_eq!((list[1]["screens"].as_u64(), list[1]["workspaces"].as_u64()), (Some(1), Some(0)));
+    }
+
+    #[test]
     fn workspace_get_shows_open_with_only_to_the_panel() {
         let mut snapshot = Snapshot::default();
         snapshot.state.desk.sig = "d".into();

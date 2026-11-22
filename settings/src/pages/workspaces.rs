@@ -619,14 +619,15 @@ fn copy_note(panel: &Panel, p: Palette, cx: &mut Context<Panel>) -> Option<AnyEl
     let sig = desk_sig(panel);
     let here = panel.config.desks.get(&sig).map_or(0, |d| d.screens.len());
     let sources = workspace::copy_sources(&panel.config, &sig, here);
-    let desk = |sig: &String| panel.config.desks.get(sig).cloned().unwrap_or_default();
-    let count = |sig: &String| workspace::list(&desk(sig).workspaces).len();
+    let name_of = |sig: &String| panel.config.desks.get(sig).map(|d| d.name.clone()).unwrap_or_default();
+    let count = |sig: &String| panel.config.desks.get(sig).map_or(0, |d| workspace::list(&d.workspaces).len());
+    let seen = |sig: &String| panel.config.desks.get(sig).map_or(0, |d| d.last_seen);
     let lead = "This desk has no workspaces yet.";
     let view = cx.entity().downgrade();
     let (text, action) = match sources.as_slice() {
         [] => return None,
         [only] => {
-            let name = desk(only).name;
+            let name = name_of(only);
             let text = format!("{lead} {name} has {} on the same number of screens", count(only));
             let (from, from_name) = (only.clone(), name.clone());
             let button = ui::secondary("copy-workspaces", format!("Copy workspaces from {name}"), cx).on_click(
@@ -637,7 +638,7 @@ fn copy_note(panel: &Panel, p: Palette, cx: &mut Context<Panel>) -> Option<AnyEl
         _ => {
             let text = format!("{lead} {} other desks have workspaces on the same number of screens", sources.len());
             let items: Vec<(String, String, String)> =
-                sources.iter().map(|s| (s.clone(), desk(s).name, copy_meta(count(s), desk(s).last_seen))).collect();
+                sources.iter().map(|s| (s.clone(), name_of(s), copy_meta(count(s), seen(s)))).collect();
             let button =
                 ui::secondary("copy-workspaces", "Copy workspaces from…", cx).dropdown_menu(move |menu, _, _| {
                     items.iter().fold(menu.min_w(px(300.)).max_w(px(300.)), |menu, (sig, name, meta)| {

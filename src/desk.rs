@@ -460,6 +460,36 @@ mod tests {
     }
 
     #[test]
+    fn screens_are_remembered_with_a_place_in_mm_only_when_lined_up() {
+        let mut left = mon("a", Rect::new(0, 0, 1000, 1000));
+        left.primary = true;
+        let right = mon("b", Rect::new(1000, 0, 1000, 1000));
+        let mons = [left, right];
+        let plain = screens_of(&mons, &[]);
+        assert_eq!(plain.iter().map(|s| s.number).collect::<Vec<_>>(), [1, 2]);
+        assert!(plain[0].primary && !plain[1].primary);
+        assert_eq!(plain[1].rect, [1000, 0, 1000, 1000]);
+        assert!(plain.iter().all(|s| s.mm.is_none()));
+        let link =
+            Link { a: 0, b: 1, side: Side::Right, map: EdgeMap { s: 1.0, o: 0.0 }, glued: false, not_on_desk: false };
+        let lined = screens_of(&mons, &[link]);
+        assert!(lined[0].mm.is_some() && lined[1].mm.is_some());
+    }
+
+    #[test]
+    fn note_screens_writes_only_when_they_changed() {
+        let mons = [mon("a", Rect::new(0, 0, 1000, 1000))];
+        let mut cfg = Config::default();
+        assert!(!note_screens(&mut cfg, "a", &mons, &[]), "an unknown desk is left alone");
+        cfg.desks.insert("a".into(), Desk::default());
+        assert!(note_screens(&mut cfg, "a", &mons, &[]));
+        assert!(!note_screens(&mut cfg, "a", &mons, &[]));
+        let moved = [mon("a", Rect::new(0, 0, 2000, 1000))];
+        assert!(note_screens(&mut cfg, "a", &moved, &[]));
+        assert_eq!(cfg.desks["a"].screens[0].rect, [0, 0, 2000, 1000]);
+    }
+
+    #[test]
     fn a_glued_border_holds_across_a_gap_and_when_it_closes_but_not_when_it_flips() {
         let saved = [SavedBorder {
             a: "a".into(),

@@ -217,11 +217,7 @@ pub(super) unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARA
                 LRESULT(0)
             }
             WM_APP_REFIT_DONE => {
-                with_app(|a| {
-                    if a.restore_armed {
-                        restore_look(a);
-                    }
-                });
+                with_app(refit_ended);
                 LRESULT(0)
             }
             WM_TIMER if wparam.0 == TIMER_RESTORE_OFFER => {
@@ -310,6 +306,7 @@ pub(super) unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARA
             WM_POWERBROADCAST => {
                 if wparam.0 == PBT_APMRESUMEAUTOMATIC as usize {
                     log::info!("resumed from sleep");
+                    with_app(cancel_restore_offer);
                     SetTimer(Some(hwnd), TIMER_REFRESH, 1500, None);
                     snap::display_changed();
                 }
@@ -556,6 +553,7 @@ unsafe fn on_display_change(hwnd: HWND, lparam: LPARAM) {
         if overlay::is_active() {
             overlay::cancel();
         }
+        with_app(cancel_restore_offer);
         SetTimer(Some(hwnd), TIMER_REFRESH, 800, None);
         snap::display_changed();
     }

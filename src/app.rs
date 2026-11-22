@@ -44,7 +44,7 @@ use messages::wndproc;
 use pause::{set_paused, standby_check, standby_configure};
 use pointer::{lineup_done, set_cursor_easing, set_remap, start_lineup, warn_about_ease};
 use report::{publish, refresh, send_state_event, snapshot};
-use restore::{arm_restore_offer, restore_checked, restore_look, restore_offered};
+use restore::{arm_restore_offer, cancel_restore_offer, refit_ended, restore_checked, restore_look, restore_offered};
 use seam::api::{self, Client, Command, FocusScope, GroupVerb, PinKind, Reply, RpcError, WindowVerb};
 use seam::config::{ClosedApps, RestoreApps, TrayClick};
 use seam::direction::Dir;
@@ -468,6 +468,8 @@ struct App {
     restore_offer: Option<(String, String)>,
     /// The screens changed and the restore offer waits for them to settle, or for the re-fit.
     restore_armed: bool,
+    /// A re-fit run has ended since the screens last changed.
+    refit_done: bool,
     /// When the live check for the restore offer was asked for.
     restore_check: Option<Instant>,
     /// The latest refresh showed the new-desk notice, which has the one slot.

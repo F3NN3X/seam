@@ -359,6 +359,13 @@ pub enum Push {
 /// still what this PC last saw. A file that changed meanwhile is the watcher's to read and the
 /// tray's to merge, never overwritten from an older base.
 pub fn push(config: &Config, unix: u64, allowed: &dyn Fn(&Path) -> bool) -> Push {
+    let was_big = info().problem == Some(Problem::TooBig);
+    let pushed = push_checked(config, unix, allowed);
+    // The note about a config that was too big goes as soon as it isn't.
+    if was_big && pushed == Push::Quiet && info().problem != Some(Problem::TooBig) { Push::Changed } else { pushed }
+}
+
+fn push_checked(config: &Config, unix: u64, allowed: &dyn Fn(&Path) -> bool) -> Push {
     let Some(folder) = folder() else { return Push::Quiet };
     let ours = shared_of(config);
     // Seam never writes a file it would refuse to read: over the counts, nothing goes to the folder.

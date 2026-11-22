@@ -358,9 +358,8 @@ fn unguard(mine: &Value, held: &Value, base: &Value) -> Value {
 /// with the held row it equals: the one at its own place if that is equal, else the next unused equal
 /// one in order (the Nth identical row pairs with the Nth), so a row deleted, moved or added here
 /// doesn't change any other. A row that differs from every held row, such as one the user turned on,
-/// is paired with the held row of the same app and item only when that is the one such row, and only
-/// the fields that differ from it are put on the folder's own row. With several rows of one app the
-/// row goes out as this PC has it, since there is no telling which is which. All of it is linear.
+/// is paired by app and item, the Nth such row with the Nth held row of that app still unpaired, and only
+/// the fields that differ from it are put on the folder's own row. All of it is linear.
 fn unguard_rows(rows: &mut [Value], held: &[Value], raw: &[Value]) {
     let mut used = vec![false; held.len()];
     let mut exact: HashMap<String, Vec<usize>> = HashMap::new();
@@ -397,12 +396,20 @@ fn unguard_rows(rows: &mut [Value], held: &[Value], raw: &[Value]) {
             *at += 1;
         }
     }
+    // An edited row, such as one turned on: the Nth of an app pairs with the Nth held row of that app
+    // still unpaired, so with two terminals the other PC's fields stay on the right one.
+    let mut next: HashMap<String, usize> = HashMap::new();
     for (row, pair) in rows.iter().zip(paired.iter_mut()) {
-        if let (None, Some([only])) = (&pair, alike.get(&app(row)).map(Vec::as_slice))
-            && !used[*only]
-        {
-            used[*only] = true;
-            *pair = Some(*only);
+        let key = app(row);
+        let (Some(list), None) = (alike.get(&key), &pair) else { continue };
+        let at = next.entry(key).or_default();
+        while list.get(*at).is_some_and(|j| used[*j]) {
+            *at += 1;
+        }
+        if let Some(j) = list.get(*at) {
+            used[*j] = true;
+            *pair = Some(*j);
+            *at += 1;
         }
     }
     for (row, pair) in rows.iter_mut().zip(paired) {

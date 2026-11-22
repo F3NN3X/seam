@@ -25,8 +25,10 @@ pub(super) fn about(panel: &Panel, p: Palette, cx: &mut Context<Panel>) -> AnyEl
         .font_family(cx.theme().mono_font_family.clone())
         .text_color(p.text_secondary)
         .child(folder_label(chosen(panel).as_deref()));
+    // While the folder's file has a problem, the note says what it is.
     let line = match state(panel) {
         FolderState::Local => None,
+        FolderState::Synced if panel.folder.problem.is_some() => None,
         FolderState::Synced => Some("Synced. Shortcuts and this PC's own settings stay here"),
         FolderState::Unavailable => Some("Not available. Using the copy on this PC"),
     };
@@ -109,7 +111,7 @@ pub(super) fn notes(panel: &Panel, p: Palette, cx: &mut Context<Panel>) -> Vec<D
             p,
         )),
         Some(Problem::TooBig) => {
-            notes.push(ui::note("Too much to keep in the folder. Settings are saved on this PC only", None, p))
+            notes.push(ui::note("Your settings are too big for the folder. Seam keeps them on this PC only", None, p))
         }
         Some(Problem::Unreadable) => notes.push(ui::note(
             "Seam can't read the settings file in your folder, so it keeps the settings it has",

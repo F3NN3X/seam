@@ -712,7 +712,7 @@ fn a_config_over_the_limits_is_never_written_to_the_folder() {
     assert!(matches!(attempt(shared.to_string().as_bytes(), 0), Attempt::GiveUp));
     // Back within them: it is written, and the problem goes.
     config.desks.get_mut("sig").unwrap().workspaces.truncate(5);
-    assert_eq!(folder::push(&config, 3, &|_| true), Push::Quiet);
+    assert_eq!(folder::push(&config, 3, &|_| true), Push::Changed);
     assert!(dir.join("config.json").exists());
     assert_eq!(folder::info().problem, None);
     // A folder the check no longer allows is not written to.
@@ -741,11 +741,29 @@ fn identical_rows_pair_in_order_and_an_edited_one_does_not_take_a_neighbours_val
     let out = rows_of(&outgoing(&h, &workspace_with(json!(edited)), &r));
     assert_eq!(out[1], raw[1]);
     assert_eq!(out[2], raw[2]);
-    // It can't be told which of three the edited one was, so it goes out as this PC has it.
-    assert_eq!(out[0], edited[0]);
+    // The edited one takes the held row still unpaired, and only what it changed goes on the folder's row.
+    assert_eq!(out[0], json!({ "exe": "a.exe", "launch": true, "open_with": "one" }));
     // The second is deleted: the first and the last keep their own.
     let out = rows_of(&outgoing(&h, &workspace_with(json!([held[0], held[2]])), &r));
     assert_eq!(out[0], raw[0]);
+}
+
+#[test]
+fn turning_on_one_of_two_same_app_rows_keeps_the_other_pcs_fields_on_both() {
+    let held = json!([{ "exe": "wt.exe", "launch": false }, { "exe": "wt.exe", "launch": false }]);
+    let raw = json!([
+        { "exe": "wt.exe", "launch": false, "open_with": "a", "place": { "folder": "C:\\a" } },
+        { "exe": "wt.exe", "launch": false, "open_with": "b", "place": { "folder": "C:\\b" } },
+    ]);
+    let (h, r) = (workspace_with(held.clone()), workspace_with(raw.clone()));
+    // The second is turned on here.
+    let mut ours = held.clone();
+    ours[1]["launch"] = json!(true);
+    let out = rows_of(&outgoing(&h, &workspace_with(ours), &r));
+    assert_eq!(out[0], raw[0]);
+    assert_eq!(out[1]["launch"], true);
+    assert_eq!(out[1]["open_with"], "b");
+    assert_eq!(out[1]["place"]["folder"], "C:\\b");
 }
 
 #[test]

@@ -80,6 +80,7 @@ impl Panel {
                     if this.apply(state, config) {
                         this.open_setup(window, cx);
                     }
+                    this.refresh_folder(cx);
                     if let Some(id) = this.close_ask.take() {
                         this.show(Page::Workspaces, None, window, cx);
                         pages::workspaces::ask_to_close(this, &id, window, cx);
@@ -125,6 +126,14 @@ impl Panel {
                             && this.status.as_ref().is_some_and(|(id, _)| event.data["id"].as_str() == Some(id));
                         let restatus =
                             moved_here || matches!(event.kind.as_str(), "state.changed" | "workspace.switched");
+                        // The settings folder's file changed on another PC: its settings are the ones to show.
+                        if event.kind == "config.reloaded"
+                            && let Some(config) = fresh.clone().and_then(|c| serde_json::from_value(c).ok())
+                        {
+                            this.set_config(config);
+                            this.relink();
+                        }
+                        let sync_before = this.state.as_ref().map(|s| s.config_sync.clone());
                         // A state that comes back as it was redraws nothing.
                         let mut redraw = event.kind != "state.changed";
                         if event.kind == "state.changed"
@@ -141,6 +150,11 @@ impl Panel {
                                 redraw = true;
                                 this.apply(state, config);
                             }
+                        }
+                        if event.kind == "config.reloaded"
+                            || this.state.as_ref().map(|s| s.config_sync.clone()) != sync_before
+                        {
+                            this.refresh_folder(cx);
                         }
                         if event.kind == "lineup.finished" {
                             this.setup_lineup_finished(window, cx);
@@ -269,6 +283,23 @@ impl Panel {
         });
     }
 
+    /// Ask the tray about the settings folder: its copies, when it last synced, and what is wrong with its file.
+    pub fn refresh_folder(&self, cx: &mut Context<Self>) {
+        let Some(client) = self.client.clone() else { return };
+        let answer =
+            cx.background_executor().spawn(async move { client.lock().ok()?.call("config.folder", json!({})).ok() });
+        cx.spawn(async move |this, cx| {
+            let info = answer.await.and_then(|v| serde_json::from_value(v).ok());
+            let _ = this.update(cx, |this, cx| {
+                if let Some(info) = info.filter(|info| *info != this.folder) {
+                    this.folder = info;
+                    cx.notify();
+                }
+            });
+        })
+        .detach();
+    }
+
     pub fn reload_config(&self, window: &mut Window, cx: &mut Context<Self>) {
         self.call("config.get", json!({}), window, cx, |this, result, _, cx| {
             if let Some(config) = result.ok().and_then(|c| serde_json::from_value(c).ok()) {
@@ -376,7 +407,11 @@ type Session = (Client, Receiver<Event>, State, Value);
 
 fn connect(token: &str) -> Result<Session, CallError> {
     let mut client = Client::connect("panel", Some(token))?;
-    let events = Client::subscribe("panel", Some(token), &["state", "desk", "workspace", "update", "lineup", "panel"])?;
+    let events = Client::subscribe(
+        "panel",
+        Some(token),
+        &["state", "desk", "workspace", "update", "lineup", "panel", "config"],
+    )?;
     let state = client.call("state.get", json!({}))?;
     let state = serde_json::from_value(state).map_err(std::io::Error::other)?;
     let config = client.call("config.get", json!({}))?;

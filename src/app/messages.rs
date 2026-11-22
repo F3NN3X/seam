@@ -208,6 +208,14 @@ pub(super) unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARA
                 with_app(align_finished);
                 LRESULT(0)
             }
+            sync::WM_APP_SYNC => {
+                with_app(sync::incoming);
+                LRESULT(0)
+            }
+            WM_TIMER if wparam.0 == sync::TIMER_SYNC => {
+                with_app(sync::incoming);
+                LRESULT(0)
+            }
             WM_APP_UPDATE => {
                 with_app(update_read);
                 LRESULT(0)

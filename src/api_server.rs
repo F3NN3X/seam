@@ -367,7 +367,9 @@ impl Session {
                 "build": option_env!("SEAM_BUILD").unwrap_or("dev"),
                 "packaged": read_snapshot(shared).state.packaged,
                 "pid": std::process::id(),
+                "config_sync": { "state": seam::config::folder::state() },
             })),
+            Command::ConfigFolder => Ok(json!(seam::config::folder::info())),
             Command::StateGet => {
                 serde_json::to_value(&read_snapshot(shared).state).map_err(|e| RpcError::new(BUSY, e.to_string()))
             }

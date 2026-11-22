@@ -12,6 +12,7 @@ mod session;
 mod share;
 mod signin;
 mod start;
+mod sync;
 mod tile;
 mod tiling;
 mod tray_icon;
@@ -278,21 +279,24 @@ enum BalloonAction {
     UndoMinimize,
 }
 
-/// Writes config.json on its own thread, so the main thread never does file I/O.
+/// Writes config.json on its own thread, so the main thread never does file I/O. With the settings
+/// in a synced folder it writes the shared part there too. Each save carries the generation of
+/// the folder's file it was made from (see `folder::generation`).
 struct Saver {
-    queue: Sender<Config>,
+    queue: Sender<(Config, u64)>,
     thread: JoinHandle<()>,
 }
 
 impl Saver {
-    fn start() -> Option<Saver> {
-        let (queue, saves) = channel::<Config>();
+    fn start(hwnd: isize) -> Option<Saver> {
+        let (queue, saves) = channel::<(Config, u64)>();
         let spawned = std::thread::Builder::new().name("seam-save".into()).spawn(move || {
-            while let Ok(mut latest) = saves.recv() {
+            while let Ok((mut latest, mut generation)) = saves.recv() {
                 while let Ok(newer) = saves.try_recv() {
-                    latest = newer;
+                    (latest, generation) = newer;
                 }
                 latest.save();
+                sync::saved(hwnd, &latest, generation);
             }
         });
         Some(Saver { queue, thread: spawned.ok()? })
@@ -481,6 +485,8 @@ struct App {
     restore_check: Option<Instant>,
     /// The latest refresh showed the new-desk notice, which has the one slot.
     new_desk_shown: bool,
+    /// The balloon about the settings folder not being available was shown in this run.
+    sync_warned: bool,
     /// The sign-in action of this start, while it waits.
     sign_in_run: Option<SignInRun>,
     /// A last-session capture is running, for the desk it started on.
@@ -531,8 +537,12 @@ fn unix_now() -> u64 {
 }
 
 fn persist(app: &App) {
+    // With the settings in a folder, what launches here is what this PC accepts of the folder's rows.
+    if seam::config::folder::state() != seam::config::folder::FolderState::Local {
+        seam::config::folder::accept(&app.cfg);
+    }
     if let Some(saver) = &app.saver {
-        let _ = saver.queue.send(app.cfg.clone());
+        let _ = saver.queue.send((app.cfg.clone(), seam::config::folder::generation()));
     }
 }
 

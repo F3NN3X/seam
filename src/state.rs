@@ -180,6 +180,13 @@ pub struct TilingRef {
     pub windows: usize,
 }
 
+/// Where the settings live: on this PC, in a synced folder, or in one that isn't there now.
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default)]
+pub struct ConfigSync {
+    pub state: crate::config::folder::FolderState,
+}
+
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(default)]
 pub struct State {
@@ -214,6 +221,8 @@ pub struct State {
     pub stacks: Vec<StackRef>,
     /// Smart tiling on each screen, for the virtual desktop in front.
     pub tiling: Vec<TilingRef>,
+    /// Whether the settings are kept in a synced folder.
+    pub config_sync: ConfigSync,
 }
 
 /// What API reads are served from. The tray replaces it whole, so a reader

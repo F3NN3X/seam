@@ -138,7 +138,7 @@ unsafe fn new_app(hwnd: HWND, cfg: Config) -> App {
             ease_warned: false,
             cursor_easing: ease::read(),
             last_align: None,
-            saver: Saver::start(),
+            saver: Saver::start(hwnd.0 as isize),
             token: api_server::new_token().unwrap_or_default(),
             hotkey_errors: Vec::new(),
             bound: Vec::new(),
@@ -173,6 +173,7 @@ unsafe fn new_app(hwnd: HWND, cfg: Config) -> App {
             refit_done: false,
             restore_check: None,
             new_desk_shown: false,
+            sync_warned: false,
             sign_in_run: None,
             session_capture: None,
             session_ending: false,
@@ -193,6 +194,7 @@ unsafe fn start_services(hwnd: HWND) {
             apply_hotkeys(a);
             check_restart_apps(a);
             refresh(a);
+            sync::start(a);
             api_server::start(a.hwnd.0 as isize, a.token.clone(), snapshot(a), &a.cfg.api);
         });
         SetTimer(Some(hwnd), TIMER_REARM, 60_000, None);

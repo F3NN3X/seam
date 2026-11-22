@@ -104,6 +104,12 @@ pub struct Panel {
     pub token: String,
     pub state: Option<State>,
     pub config: Config,
+    /// What `config.folder` last said about the settings folder.
+    pub folder: seam::config::folder::Info,
+    /// Why the last folder the window asked for was refused, under the Settings folder row.
+    pub folder_error: Option<String>,
+    /// The kept copy of a clash the General note was pressed for, so it stays gone.
+    pub kept_seen: Option<String>,
     pub mons: Vec<Mon>,
     pub links: Vec<Link>,
     pub layout: Vec<Placed>,
@@ -295,6 +301,9 @@ impl Panel {
             token,
             state: None,
             config: Config::default(),
+            folder: seam::config::folder::Info::default(),
+            folder_error: None,
+            kept_seen: None,
             mons: Vec::new(),
             links: Vec::new(),
             layout: Vec::new(),

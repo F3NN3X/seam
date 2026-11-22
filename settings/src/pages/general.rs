@@ -9,13 +9,17 @@ use gpui_kit::component::menu::{DropdownMenu, PopupMenuItem};
 use gpui_kit::component::notification::Notification;
 use gpui_kit::component::{ActiveTheme, WindowExt};
 use gpui_kit::*;
+use seam::api::CallError;
 use seam::autostart;
 use seam::config::diff_patch;
+use seam::config::folder::{FolderState, Problem};
 use seam::config::{Config, RestoreApps, SignInMode, TrayClick};
 use seam::package::{self, Startup};
 use seam::workspace;
 use serde_json::{Value, json};
 use std::path::PathBuf;
+
+mod folder;
 
 fn export(panel: &Panel, window: &mut Window, cx: &mut Context<Panel>) {
     let dir = dirs_home();
@@ -25,6 +29,11 @@ fn export(panel: &Panel, window: &mut Window, cx: &mut Context<Panel>) {
             Ok(config) => config,
             Err(e) => return window.push_notification(refusal("Settings not exported", &error_text(&e)), cx),
         };
+        // A settings file shouldn't point another PC at my folder.
+        if let Some(fields) = config.as_object_mut() {
+            fields.remove("config_folder");
+            fields.remove("sync");
+        }
         // Folders and pages say where I've been, so they stay on this PC (D330).
         let desks = config.get_mut("desks").and_then(Value::as_object_mut);
         for desk in desks.into_iter().flat_map(|d| d.values_mut()) {
@@ -73,22 +82,23 @@ fn import(window: &mut Window, cx: &mut Context<Panel>) {
 fn confirm_import(panel: &Panel, next: Config, window: &mut Window, cx: &mut Context<Panel>) {
     let view = cx.entity().downgrade();
     let current = serde_json::to_string_pretty(&panel.config).unwrap_or_default();
+    let about = if panel.config.config_folder.is_some() {
+        "A copy of your current settings stays in the settings folder. Your other PCs get these settings too"
+    } else {
+        "A copy of your current settings stays in the settings folder"
+    };
     window.open_alert_dialog(cx, move |alert, _, _| {
         let (view, next, current) = (view.clone(), next.clone(), current.clone());
-        alert
-            .title("Replace your settings?")
-            .description("A copy of your current settings stays in the settings folder")
-            .ok_text("Import")
-            .on_ok(move |_, window, cx| {
-                let backup = Config::path().with_file_name("config.before-import.json");
-                if let Err(e) = std::fs::write(backup, &current) {
-                    window.push_notification(refusal("Nothing imported", &e.to_string()), cx);
-                    return true;
-                }
-                let next = next.clone();
-                let _ = view.update(cx, |panel, cx| apply_import(panel, &next, window, cx));
-                true
-            })
+        alert.title("Replace your settings?").description(about).ok_text("Import").on_ok(move |_, window, cx| {
+            let backup = Config::path().with_file_name("config.before-import.json");
+            if let Err(e) = std::fs::write(backup, &current) {
+                window.push_notification(refusal("Nothing imported", &e.to_string()), cx);
+                return true;
+            }
+            let next = next.clone();
+            let _ = view.update(cx, |panel, cx| apply_import(panel, &next, window, cx));
+            true
+        })
     });
 }
 
@@ -126,12 +136,23 @@ fn confirm_seam_reopens(window: &mut Window, cx: &mut Context<Panel>) {
     });
 }
 
-fn open_folder() {
-    let _ = std::process::Command::new("explorer").arg(package::settings_dir()).spawn();
+/// Open the settings folder: the chosen one when the settings are kept in one, else this PC's own.
+fn open_folder(chosen: Option<&str>) {
+    let dir = chosen.map_or_else(package::settings_dir, PathBuf::from);
+    let _ = std::process::Command::new("explorer").arg(dir).spawn();
+}
+
+/// Open this PC's settings folder with one of its files selected.
+fn show_file(name: &str) {
+    let file = package::settings_dir().join(name);
+    let _ = std::process::Command::new("explorer").arg(format!("/select,{}", file.display())).spawn();
 }
 
 /// Where the settings are. The Store copy's live in its package folder.
-fn folder_label() -> String {
+fn folder_label(chosen: Option<&str>) -> String {
+    if let Some(chosen) = chosen {
+        return chosen.to_string();
+    }
     let dir = package::settings_dir().display().to_string();
     match std::env::var("LOCALAPPDATA") {
         Ok(local) if package::is_packaged() => dir.replacen(&local, "%LOCALAPPDATA%", 1),
@@ -145,6 +166,7 @@ pub fn render(panel: &mut Panel, window: &mut Window, cx: &mut Context<Panel>) -
 
     let startup = startup_section(panel, &view, p, window, cx);
     let standing_by = standing_by_note(panel, p, cx);
+    let folder_notes = folder::notes(panel, p, cx);
     let others = others_section(panel, &view, p, window, cx);
     let debug_log = switch(
         "debug-log",
@@ -154,7 +176,7 @@ pub fn render(panel: &mut Panel, window: &mut Window, cx: &mut Context<Panel>) -
         cx,
         setter(&view, |on| json!({ "debug_log": on })),
     );
-    let files = files_section(debug_log, p, cx);
+    let files = files_section(panel, debug_log, p, cx);
     let header = ui::page_title(
         "General",
         "How Seam starts, works with other apps, and where it keeps its files",
@@ -169,6 +191,7 @@ pub fn render(panel: &mut Panel, window: &mut Window, cx: &mut Context<Panel>) -
         .gap(px(ui::SECTION_GAP))
         .child(header)
         .children(standing_by)
+        .children(folder_notes)
         .child(startup)
         .child(others)
         .child(files)
@@ -438,40 +461,13 @@ fn standing_by_note(panel: &Panel, p: Palette, cx: &mut Context<Panel>) -> Optio
     })
 }
 
-/// The `…` next to Open: Export… and Import…, for the settings folder.
-fn folder_menu(cx: &mut Context<Panel>) -> AnyElement {
-    let weak = cx.entity().downgrade();
-    let menu = move |menu: gpui_kit::component::menu::PopupMenu, _: &mut Window, _: &mut Context<_>| {
-        let (export_view, import_view) = (weak.clone(), weak.clone());
-        menu.item(PopupMenuItem::new("Export…").on_click(move |_, window, cx| {
-            let _ = export_view.update(cx, |panel, cx| export(panel, window, cx));
-        }))
-        .item(PopupMenuItem::new("Import…").on_click(move |_, window, cx| {
-            let _ = import_view.update(cx, |_, cx| import(window, cx));
-        }))
-    };
-    ui::secondary("folder-more", "…", cx)
-        .accessibility_label("Export or import settings")
-        .dropdown_menu(menu)
-        .into_any_element()
-}
-
 /// The Files and troubleshooting section, around the debug log switch.
-fn files_section(debug_log: Stateful<Div>, p: Palette, cx: &mut Context<Panel>) -> AnyElement {
-    let folder = div()
-        .flex()
-        .gap(px(8.))
-        .child(ui::secondary("open-folder", "Open", cx).on_click(|_, _, _| open_folder()))
-        .child(folder_menu(cx));
-    let folder_path = text_style(div(), tokens::MONO)
-        .font_family(cx.theme().mono_font_family.clone())
-        .text_color(p.text_secondary)
-        .child(folder_label());
+fn files_section(panel: &Panel, debug_log: Stateful<Div>, p: Palette, cx: &mut Context<Panel>) -> AnyElement {
     section(
         "Files and troubleshooting",
         card(
             vec![
-                row_with("Settings folder", Some(folder_path.into_any_element()), folder),
+                row_with("Settings folder", Some(folder::about(panel, p, cx)), folder::control(panel, cx)),
                 row("Debug log", Some("Writes remaps and screen changes to seam.log".into()), debug_log, p),
             ],
             p,

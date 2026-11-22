@@ -103,7 +103,7 @@ impl Panel {
                         {
                             this.show(page, None, window, cx);
                         }
-                        if event.kind == "workspace.switched" && std::mem::take(&mut this.awaiting_switch) {
+                        if event.kind == "workspace.switched" && event.data["from_panel"].as_bool() == Some(true) {
                             this.say_screens_gone(&event.data, window, cx);
                         }
                         // A moved window of another workspace changes nothing on show.
@@ -156,8 +156,7 @@ impl Panel {
             .filter_map(|s| Some((s["app"].as_str()?.to_string(), s["reason"].as_str()?.to_string())))
             .collect();
         let Some(body) = seam::workspace::screen_gone_note(&skipped) else { return };
-        let title = format!("Switched to {}", switched["name"].as_str().unwrap_or_default());
-        window.push_notification(Notification::new().title(title).message(body), cx);
+        window.push_notification(Notification::new().message(body), cx);
     }
 
     /// Take the tray's state and config. False when the config couldn't be read, and was left as it was.

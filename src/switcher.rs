@@ -44,7 +44,7 @@ mod stages;
 
 use bind::{bind, bindings, bound_windows, match_rows, unbind};
 use launch::{earlier_launch, launch, launch_key, note_launch, place_kind};
-use place::{destination, in_place, now_of, place_all, restack, screen_gone, to_focus};
+use place::{destination, in_place, now_of, place_all, restack, to_focus};
 use rows::move_opened;
 use run::pin_again;
 use stages::{place_rules, run_stages, usable_place};

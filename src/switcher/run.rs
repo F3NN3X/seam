@@ -271,6 +271,15 @@ fn place_then_start(run: &Run, mine: u64, waits: &mut Waits, starts: &mut Starts
     let ws = run.ws;
     let action = |i: usize| workspace::row_action(&ws.windows[i], waits.found[i], ws.open_windows, run.put_back);
     let running: Vec<usize> = (0..waits.found.len()).filter(|i| action(*i) == RowAction::Place).collect();
+    // A window left where it is still has its row, so auto-apply doesn't give the row to a second window.
+    if let Some(key) = run.stamp {
+        let left = (0..waits.found.len()).filter(|i| action(*i) == RowAction::Leave);
+        for i in left {
+            if let Some(hwnd) = waits.found[i] {
+                winutil::set_ws_stamp(hwnd_of(hwnd), key, i);
+            }
+        }
+    }
     place_rules(run, waits.found, &running, waits.seen, tally);
     if (run.cancelled)() {
         return None;

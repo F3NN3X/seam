@@ -296,7 +296,8 @@ pub(super) fn switched(app: &mut App) {
     let skipped: Vec<Value> =
         done.skipped.iter().map(|(app, reason)| json!({ "app": app, "reason": reason })).collect();
     let data = json!({
-        "id": done.id, "name": done.name, "launched": done.launched, "placed": done.placed, "skipped": skipped
+        "id": done.id, "name": done.name, "launched": done.launched, "placed": done.placed, "skipped": skipped,
+        "from_panel": done.from_panel
     });
     api_server::broadcast("workspace.switched", &data);
     // The Seam window shows the same words itself.

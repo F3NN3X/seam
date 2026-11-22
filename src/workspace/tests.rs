@@ -754,3 +754,46 @@ fn a_switch_that_cant_place_says_so_once_per_app() {
         Some("3 apps stayed where they are, because their screen isn't connected")
     );
 }
+
+#[test]
+fn all_in_place_ignores_off_rows() {
+    let row = |rule_index, state| RowStatus { rule_index, state };
+    // An off row neither makes the workspace drift nor stops it reading as in place.
+    let mixed = [row(0, RowState::InPlace), row(1, RowState::Off)];
+    assert!(all_in_place(&mixed));
+    assert!(!drifted(&mixed));
+    // With nothing but off rows there is nothing running, so it isn't taken for the one in use.
+    let all_off = [row(0, RowState::Off), row(1, RowState::Off)];
+    assert!(!all_in_place(&all_off));
+    assert!(!drifted(&all_off));
+}
+
+#[test]
+fn an_off_row_with_a_bound_window_frees_it_for_the_next_row() {
+    let off = Rule { off: true, ..rule("a.exe", None, "", "") };
+    let on = rule("a.exe", None, "", "");
+    let wins = [win(7, "a.exe", None, "", "", 0)];
+    let bound = [Some(Bound::Alive(7)), Some(Bound::Unbound)];
+    let found = assign_bound(&[off, on], &wins, &bound, &HashSet::new());
+    assert_eq!(found, [None, Some(7)]);
+}
+
+#[test]
+fn moving_counts_only_readable_workspaces() {
+    let saved = vec![to_value(&named("a")), json!("junk"), to_value(&named("b")), to_value(&named("c"))];
+    let ids = |list: &[Value]| -> Vec<String> { list.iter().filter_map(parse).map(|w| w.id).collect() };
+    // Number 2 is "b", the second readable one, though the junk entry sits between.
+    assert_eq!(ids(&moved_to(&saved, "c", 2).unwrap()), ["a", "c", "b"]);
+    assert_eq!(ids(&moved_to(&saved, "a", 3).unwrap()), ["b", "c", "a"]);
+    assert_eq!(moved_to(&saved, "a", 4), Err(MoveError::OutOfRange));
+}
+
+#[test]
+fn a_row_whose_screen_isnt_connected_is_reported() {
+    let placed = Rule { target: Target::Zone { zone: 1, span_to: None }, ..rule("a.exe", None, "", "") };
+    assert!(screen_gone(&placed, ["x", "y"].into_iter()));
+    assert!(!screen_gone(&placed, ["x", "m"].into_iter()));
+    // A row that sends its window nowhere has no screen to miss.
+    let keeps = Rule { target: Target::State { state: WinState::Keep }, ..placed };
+    assert!(!screen_gone(&keeps, ["x"].into_iter()));
+}

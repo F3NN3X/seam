@@ -273,7 +273,7 @@ Subscribe with `events.subscribe` and a list of topics. An event belongs to the 
 | Topic | `type` | `data` | When |
 |---|---|---|---|
 | `state` | `state.changed` | The full [State](#the-state-object) | Any change. At most about one per 100 ms |
-| `workspace` | `workspace.switched` | `{id, name, launched, placed, skipped: [{app, reason}]}` | A switch ended. `launched` apps were started, `placed` windows were put in place, and `skipped` lists apps that couldn't be |
+| `workspace` | `workspace.switched` | `{id, name, launched, placed, skipped: [{app, reason}], from_panel}` | A switch ended. `launched` apps were started, `placed` windows were put in place, and `skipped` lists apps that couldn't be |
 | `workspace` | `workspace.moved` | `{id}` | A window of that workspace was moved or minimized, or a window was put in place when it opened |
 | `desk` | `desk.changed` | `{sig, name}` | Screens were connected or disconnected, so the desk changed |
 | `update` | `update.ready` | `{version}` | An update is downloaded and ready. Not in the Store build |

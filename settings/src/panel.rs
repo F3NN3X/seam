@@ -192,8 +192,10 @@ pub struct Panel {
     /// A shortcut that works but types characters on some keyboards.
     pub hotkey_warning: Option<String>,
     pub toast_generation: u64,
-    /// A switch this window asked for hasn't ended yet, so its result is ours to show.
-    pub awaiting_switch: bool,
+    /// A workspace move is on its way to the tray, so another one waits.
+    pub moving: bool,
+    /// The workspace whose list item takes the keyboard focus once, after a move.
+    pub focus_workspace: Option<String>,
     /// What the updater left in its state file, read when the tray says it changed.
     pub update_file: UpdateFile,
     pub update_ui: UpdateUi,
@@ -332,7 +334,8 @@ impl Panel {
             shortcut_filter,
             hotkey_warning: None,
             toast_generation: 0,
-            awaiting_switch: false,
+            moving: false,
+            focus_workspace: None,
             update_file: updates::read(),
             update_ui: UpdateUi::Idle,
             startup: None,

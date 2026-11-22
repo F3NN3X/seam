@@ -89,13 +89,23 @@ pub fn on_desk(panel: &Panel) -> Vec<Workspace> {
 fn move_workspace(panel: &mut Panel, id: &str, to: usize, window: &mut Window, cx: &mut Context<Panel>) {
     let list = all(panel);
     let Some(from) = list.iter().position(|w| w.id == id) else { return };
-    if from + 1 == to {
+    if from + 1 == to || panel.moving {
         return;
     }
+    panel.moving = true;
     let (name, id) = (list[from].name.clone(), id.to_string());
     panel.call("workspace.move", json!({ "id": id, "to": to }), window, cx, move |panel, result, window, cx| {
+        panel.moving = false;
         match result {
             Ok(_) => {
+                // The list shows the new order now, not after the reload, so the next move reads it right.
+                let sig = desk_sig(panel);
+                if let Ok(moved) = workspace::moved_to(&saved(panel), &id, to)
+                    && let Some(desk) = panel.config_mut().desks.get_mut(&sig)
+                {
+                    desk.workspaces = moved;
+                }
+                panel.focus_workspace = Some(id.clone());
                 panel.reload_config(window, cx);
                 let (id, back) = (id.clone(), from + 1);
                 let undo = move |panel: &mut Panel, window: &mut Window, cx: &mut Context<Panel>| {
@@ -379,8 +389,7 @@ fn in_use(panel: &Panel, ws: &Workspace) -> bool {
 
 /// Move the windows of the workspace in use back to where it puts them.
 fn put_back(panel: &mut Panel, count: usize, window: &mut Window, cx: &mut Context<Panel>) {
-    panel.awaiting_switch = true;
-    panel.call("workspace.snap_back", json!({}), window, cx, move |panel, result, window, cx| match result {
+    panel.call("workspace.snap_back", json!({}), window, cx, move |_, result, window, cx| match result {
         Ok(_) => {
             let said = match count {
                 0 => "Put windows back".to_string(),
@@ -389,16 +398,12 @@ fn put_back(panel: &mut Panel, count: usize, window: &mut Window, cx: &mut Conte
             };
             window.push_notification(Notification::new().message(said), cx);
         }
-        Err(e) => {
-            panel.awaiting_switch = false;
-            window.push_notification(refusal("Windows left as they were", &error_text(&e)), cx)
-        }
+        Err(e) => window.push_notification(refusal("Windows left as they were", &error_text(&e)), cx),
     });
 }
 
 /// Switch to the workspace. Undo goes back to the one that was in use, when there was another.
 fn switch_to(panel: &mut Panel, ws: &Workspace, window: &mut Window, cx: &mut Context<Panel>) {
-    panel.awaiting_switch = true;
     let name = ws.name.clone();
     let before = panel.state.as_ref().and_then(|s| s.workspace.as_ref()).map(|w| w.id.clone());
     let undoable = before.is_some_and(|id| id != ws.id);
@@ -410,10 +415,7 @@ fn switch_to(panel: &mut Panel, ws: &Workspace, window: &mut Window, cx: &mut Co
             panel.offer_undo(format!("Switched to {name}"), undo, window, cx);
         }
         Ok(_) => window.push_notification(Notification::new().message(format!("Switched to {name}")), cx),
-        Err(e) => {
-            panel.awaiting_switch = false;
-            window.push_notification(refusal("Seam can't do that", &error_text(&e)), cx)
-        }
+        Err(e) => window.push_notification(refusal("Seam can't do that", &error_text(&e)), cx),
     });
 }
 
@@ -613,10 +615,12 @@ pub fn render(panel: &mut Panel, window: &mut Window, cx: &mut Context<Panel>) -
                 },
                 (true, false) => Moved::Some,
             });
-            let marks = Marks { picked, active: moved, default: default.as_deref() == Some(ws.id.as_str()) };
+            let focus = panel.focus_workspace.as_deref() == Some(ws.id.as_str());
+            let marks = Marks { picked, active: moved, default: default.as_deref() == Some(ws.id.as_str()), focus };
             list::item((i, count), ws, &panel.icons, marks, p, window, cx)
         })
         .collect();
+    panel.focus_workspace = None;
     let sidebar = div()
         .flex()
         .flex_col()

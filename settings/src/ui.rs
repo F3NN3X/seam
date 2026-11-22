@@ -497,10 +497,6 @@ pub fn item_focus(id: impl Into<ElementId>, window: &mut Window, cx: &mut App) -
 /// Up and Down on `item` move focus to the item before or after it in a list we drew ourselves.
 pub fn arrow_keys<E: InteractiveElement>(item: E, before: Option<FocusHandle>, after: Option<FocusHandle>) -> E {
     item.on_key_down(move |e: &KeyDownEvent, window, cx| {
-        // Alt+arrow moves the item itself, which its list handles.
-        if e.keystroke.modifiers.alt {
-            return;
-        }
         let to = match e.keystroke.key.as_str() {
             "up" => &before,
             "down" => &after,

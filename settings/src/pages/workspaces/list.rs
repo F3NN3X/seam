@@ -45,6 +45,15 @@ pub(super) fn number_after(from: usize, before: usize, count: usize) -> usize {
     at.min(count.saturating_sub(1)) + 1
 }
 
+/// The number (from 1) Alt+Up or Alt+Down gives the workspace at place `i` of `count`, if it can move.
+pub(super) fn alt_target(key: &str, i: usize, count: usize) -> Option<usize> {
+    match key {
+        "up" if i > 0 => Some(i),
+        "down" if i + 1 < count => Some(i + 2),
+        _ => None,
+    }
+}
+
 /// The handle a workspace is dragged by, shown on hover and focus.
 fn grip(i: usize, ws: &Workspace, shown: bool, group: SharedString, p: Palette) -> Stateful<Div> {
     let drag = DragWorkspace { id: ws.id.clone(), title: ws.name.clone().into() };
@@ -112,6 +121,8 @@ pub(super) struct Marks {
     /// Some while it's the workspace in use: how many of its windows moved, if that's known.
     pub active: Option<Moved>,
     pub default: bool,
+    /// A move just ended: the keyboard focus goes to this item, which now has the workspace the user holds.
+    pub focus: bool,
 }
 
 /// Whether the windows of the workspace in use are where it puts them.
@@ -157,6 +168,10 @@ pub(super) fn item(
     let (id, moving) = (ws.id.clone(), ws.id.clone());
     let view = cx.entity();
     let focus = ui::item_focus(("workspace", i), window, cx);
+    if marks.focus {
+        let to_focus = focus.clone();
+        window.defer(cx, move |window, cx| to_focus.focus(window, cx));
+    }
     let group = SharedString::from(format!("workspace-item-{i}"));
     let grip = grip(i, ws, ui::focused(&focus, window), group.clone(), p);
     // Up and Down walk the list, which ends with "New empty workspace".
@@ -199,25 +214,22 @@ pub(super) fn item(
     let item =
         ui::selectable_ringed(("workspace", i), label.join(", "), picked, (tokens::RADIUS_10, 1.), window, cx, pick)
             .role(Role::ListItem);
+    // Alt+arrow moves the workspace. It goes first, so the arrow keys' focus move doesn't see it.
+    let item = item.on_key_down(cx.listener(move |panel, e: &KeyDownEvent, window, cx| {
+        if !e.keystroke.modifiers.alt {
+            return;
+        }
+        if let Some(to) = alt_target(e.keystroke.key.as_str(), i, count) {
+            cx.stop_propagation();
+            // A move still on its way leaves the list as it was, so a press now would act on a stale one.
+            if !panel.moving {
+                super::move_workspace(panel, &moving, to, window, cx);
+            }
+        }
+    }));
     ui::arrow_keys(item, before, Some(after))
         .relative()
         .group(group)
-        .on_key_down(cx.listener(move |panel, e: &KeyDownEvent, window, cx| {
-            if !e.keystroke.modifiers.alt {
-                return;
-            }
-            let to = match e.keystroke.key.as_str() {
-                "up" if i > 0 => Some(i),
-                "down" if i + 1 < count => Some(i + 2),
-                _ => None,
-            };
-            if let Some(to) = to {
-                cx.stop_propagation();
-                super::move_workspace(panel, &moving, to, window, cx);
-                // The focus follows the workspace, so the next Alt+arrow moves it again.
-                ui::item_focus(("workspace", to - 1), window, cx).focus(window, cx);
-            }
-        }))
         .drag_over::<DragWorkspace>(move |d, _, _, _| d.bg(p.surface_raised))
         .on_drop(cx.listener(move |panel, drag: &DragWorkspace, window, cx| {
             super::dropped(panel, &drag.id, i, window, cx);
@@ -286,7 +298,16 @@ pub(super) fn new_empty(
 
 #[cfg(test)]
 mod tests {
-    use super::number_after;
+    use super::{alt_target, number_after};
+
+    #[test]
+    fn alt_arrows_move_a_workspace_only_inside_the_list() {
+        assert_eq!(alt_target("up", 0, 3), None);
+        assert_eq!(alt_target("up", 2, 3), Some(2));
+        assert_eq!(alt_target("down", 0, 3), Some(2));
+        assert_eq!(alt_target("down", 2, 3), None);
+        assert_eq!(alt_target("left", 1, 3), None);
+    }
 
     #[test]
     fn dropping_before_a_workspace_gives_the_number_it_takes() {

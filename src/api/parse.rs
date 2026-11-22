@@ -428,7 +428,9 @@ fn assistant_allowed(command: &Command, peer: Peer) -> Result<(), RpcError> {
         Command::WorkspaceEdit {
             edit: Edit::Row { change: workspace::RowChange { off: Some(false), .. }, .. },
             ..
-        } if peer.assistants_edit => Err(RpcError::new(INVALID_PARAMS, "off can only be turned on, never off")),
+        } if peer.assistants_edit => {
+            Err(RpcError::new(INVALID_PARAMS, "A row can only be turned off here, never back on"))
+        }
         // Quick save adds a row for every window on screen, so it is an edit.
         Command::WorkspaceCreate { .. } | Command::WorkspaceEdit { .. } | Command::WorkspaceQuickSave
             if peer.assistants_edit =>

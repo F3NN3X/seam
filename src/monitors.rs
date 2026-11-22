@@ -106,9 +106,11 @@ pub fn inactive() -> Vec<(String, String)> {
         }
         paths.truncate(np as usize);
         for p in &paths {
-            let available = p.targetInfo.targetAvailable.as_bool();
+            if !p.targetInfo.targetAvailable.as_bool() {
+                continue;
+            }
             let Some((path, name)) = target_info(p.targetInfo.adapterId, p.targetInfo.id) else { continue };
-            all.push(TargetFacts { path, name, available });
+            all.push(TargetFacts { path, name, available: true });
         }
     }
     let active: Vec<String> = target_names().into_iter().map(|(_, path, _)| path).collect();

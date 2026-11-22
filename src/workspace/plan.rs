@@ -22,6 +22,11 @@ pub fn takes_part(rule: &Rule) -> bool {
     !rule.off
 }
 
+/// The rule sends its window to a screen that isn't among the `connected` ones.
+pub fn screen_gone<'a>(rule: &Rule, mut connected: impl Iterator<Item = &'a str>) -> bool {
+    rule.moves() && !connected.any(|id| id == rule.monitor)
+}
+
 /// What a switch does with a row, given the window it found. With the workspace's
 /// `open_windows` at Leave, windows already open stay put, unless `put_back` (Snap
 /// back) asks for them. A row with launch off is placed but never started.

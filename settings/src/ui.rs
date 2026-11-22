@@ -594,8 +594,10 @@ pub fn note_with(text: impl Into<SharedString>, action: Option<AnyElement>, p: P
         .border_dashed()
         .border_color(p.hairline_strong)
         .rounded(px(tokens::RADIUS_12))
-        .child(text_style(div().flex_1(), tokens::LABEL).text_color(p.text_secondary).child(text.into()))
-        .children(action)
+        // `min_w_0` lets the text wrap: a flex item is never narrower than its content otherwise, so a long
+        // line, such as one with a file name in it, pushed the action out of the note.
+        .child(text_style(div().flex_1().min_w_0(), tokens::LABEL).text_color(p.text_secondary).child(text.into()))
+        .children(action.map(|action| div().flex_none().child(action)))
 }
 
 /// Status is always a dot and a word. Filled for good, hollow otherwise.

@@ -445,6 +445,29 @@ pub enum RestoreApps {
     Seam,
 }
 
+/// What Update from screen does with a row whose app isn't open.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ClosedApps {
+    /// The row stays, and a switch starts the app.
+    Keep,
+    /// The row stays, with the app off.
+    TurnOff,
+    /// The row goes.
+    Remove,
+}
+
+impl ClosedApps {
+    /// The patch that sets the choice. It writes the older flag too, true only for
+    /// Remove, so a Seam from before the choice does the closest thing.
+    pub fn patch(self) -> serde_json::Value {
+        serde_json::json!({
+            "workspaces_update_closed": self,
+            "workspaces_update_removes_closed": self == ClosedApps::Remove,
+        })
+    }
+}
+
 /// What Seam does when I sign in.
 #[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -625,6 +648,10 @@ pub struct Config {
     /// window for are removed from the workspace, with Undo. Off keeps them. Only
     /// Update from screen; a quick save never removes a row.
     pub workspaces_update_removes_closed: bool,
+    /// What Update from screen does with an app that isn't open, to start each one at.
+    /// `None` reads `workspaces_update_removes_closed`, so an older file behaves as before.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workspaces_update_closed: Option<ClosedApps>,
     /// "Where apps open": an app's window goes to its place whenever it opens, with
     /// or without a workspace. Raw JSON like workspaces, so an entry this build
     /// can't read is kept as it is and ignored.
@@ -678,6 +705,7 @@ impl Default for Config {
             auto_apply: false,
             workspaces_remember_places: false,
             workspaces_update_removes_closed: false,
+            workspaces_update_closed: None,
             app_rules: Vec::new(),
             custom_layouts: Vec::new(),
             cursor_easing_asked: false,
@@ -749,6 +777,15 @@ impl Desk {
 }
 
 impl Config {
+    /// What each app that isn't open starts at in Update from screen.
+    pub fn closed_apps(&self) -> ClosedApps {
+        self.workspaces_update_closed.unwrap_or(if self.workspaces_update_removes_closed {
+            ClosedApps::Remove
+        } else {
+            ClosedApps::Keep
+        })
+    }
+
     /// Whether the desk keeps a last session.
     pub fn keeps_session(&self, sig: &str) -> bool {
         self.desks.get(sig).is_some_and(|d| d.choice().mode == SignInMode::LastSession)

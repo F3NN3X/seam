@@ -23,6 +23,7 @@ use std::rc::Rc;
 
 mod close;
 mod list;
+mod review;
 mod sections;
 
 pub use close::ask as ask_to_close;
@@ -162,39 +163,13 @@ pub fn finish_naming(panel: &mut Panel, window: &mut Window, cx: &mut Context<Pa
 
 // ---- Actions
 
+/// Capture current windows: list them first, then save the ones ticked.
 pub fn capture(panel: &mut Panel, window: &mut Window, cx: &mut Context<Panel>) {
-    panel.call("workspace.capture", json!({}), window, cx, |panel, result, window, cx| match result {
-        Ok(done) => {
-            shortcuts::stop_recording(panel);
-            panel.workspace = done["id"].as_str().map(String::from);
-            start_naming(panel, cx);
-            panel.reload_config(window, cx);
-        }
-        Err(e) => window.push_notification(refusal("Nothing captured", &error_text(&e)), cx),
-    });
+    review::open(panel, window, cx);
 }
 
 fn update_from_screen(panel: &Panel, ws: &Workspace, window: &mut Window, cx: &mut Context<Panel>) {
-    let before = ws.clone();
-    panel.call(
-        "workspace.capture",
-        json!({ "into": ws.id }),
-        window,
-        cx,
-        move |panel, result, window, cx| match result {
-            Ok(_) => {
-                panel.reload_config(window, cx);
-                let undo = {
-                    let before = before.clone();
-                    move |panel: &mut Panel, window: &mut Window, cx: &mut Context<Panel>| {
-                        workspace_editor::update(panel, &before.id, None, window, cx, |ws| *ws = before.clone())
-                    }
-                };
-                panel.offer_undo(format!("Updated {} from the screen", before.name), undo, window, cx);
-            }
-            Err(e) => window.push_notification(refusal("Workspace left as it was", &error_text(&e)), cx),
-        },
-    );
+    review::update(panel, ws, window, cx);
 }
 
 /// A copy of the workspace with a name of its own, and no shortcut.

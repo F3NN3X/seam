@@ -319,9 +319,9 @@ const ENTRIES: &[Entry] = &[
     ),
     entry(
         Page::Workspaces,
-        "Update from screen removes apps that aren't open",
-        "Off keeps them, so a closed app still starts when you switch",
-        "update capture remove closed delete keep",
+        "Apps that aren't open",
+        "What Update from screen picks for each one first. You choose for each app when you update",
+        "update capture remove closed delete keep turn off",
     ),
     entry(
         Page::Workspaces,

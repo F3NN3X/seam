@@ -410,13 +410,13 @@ pub const TOPICS: &[Topic] = &[
                 "A workspace saves which app is on which screen and in which zone, how each window shows, and which one had the focus, for the desk you have connected.",
             ),
             List(&[
-                "**Capture current windows** saves the windows open now. Only app windows with a taskbar button count.",
+                "**Capture current windows** lists the windows it will save, with the ones usually open only for a moment already unticked. Untick any other, name the workspace and save. Only app windows with a taskbar button count.",
                 "**Switch now**, the workspace's shortcut or **Workspaces** in the tray menu puts each app back. Windows already in place aren't touched.",
                 "**Open alongside**, on a workspace's menu, switches once and leaves the other windows alone, whatever **Other windows** says",
                 "When a switch can't start or move an app, a notice names it and says why, and the workspace's page keeps the note until you switch again or Seam restarts. Press **Esc**, or click the notice, to stop a switch that is starting apps: it starts no more, windows already placed stay, and **Other windows** isn't applied.",
                 "**Start missing apps** starts the ticked apps that aren't running, and **Other windows** leaves, minimizes or closes the rest. Close only asks, so an app with unsaved work stays open.",
                 "**Bring back minimized windows** brings back a window that was minimized at capture, onto its place or maximized. It counts as moved while it's minimized, so Snap back and auto-apply restore it.",
-                "**Update from screen** saves the windows as they are now, and keeps your edits and the apps that aren't open, unless **Update from screen removes apps that aren't open** is on",
+                "**Update from screen** saves the windows as they are now and keeps your edits. When some of the workspace's apps aren't open, it asks what to do with each: **Keep**, **Turn off** or **Remove**",
             ]),
             Text(
                 "The table is an editor, and each change saves at once with Undo. Pick where an app goes and how it shows. The rows are the start order: drag one by its grip, or press Alt+Up and Alt+Down. Click an app's name for a delay and **Wait for this app's window before opening the next**. **Add an app** picks one from the open windows or the Start menu.",
@@ -440,7 +440,7 @@ pub const TOPICS: &[Topic] = &[
                 "**Open with**, under an app's name, makes a switch that starts the app open something I type: a full path on this PC's own drives, which goes to the app as its one argument, or a link that starts with http, https, obsidian, vscode, vscode-insiders or spotify, which opens in whatever app handles it. A path is also refused for a script host such as cmd, PowerShell or Python, which would run it, though that list is no guarantee. Anything else is refused and shows under the app when the switch ends, as does an app that can't start there. It is never captured, Export leaves it out, import drops it, and only this window sees it. An app that's already open is never sent anywhere.",
             ),
             Text(
-                "**Update from screen removes apps that aren't open** is off until you turn it on. Then **Update from screen** removes the apps with no window open instead of keeping them, and a notification offers Undo for 8 seconds, which puts them back in the same place, as long as you haven't changed the workspace since. An app stays when it has a window Seam didn't take, such as on another desktop, off every screen or already held by another row (a suspended app's window can count too), and nothing is removed when no app of the workspace is open. **Save windows to the active workspace** keeps them either way.",
+                "**Apps that aren't open**, on All workspaces, is what each app starts at when **Update from screen** asks about the apps with no window open: **Keep** starts it when you switch, **Turn off** keeps it but leaves it out, **Remove** takes it out. It starts at **Keep**, and a notification offers Undo for 8 seconds, which puts everything back in the same place, as long as you haven't changed the workspace since. An app counts as open when it has a window Seam didn't take, such as on another desktop, off every screen or already held by another row (a suspended app's window can count too), and nothing is removed or turned off when no app of the workspace is open. **Save windows to the active workspace** keeps them either way.",
             ),
             Text(
                 "**Save windows to the active workspace** is a shortcut that saves into the workspace in use without opening Seam. Click its notification within 8 seconds to undo it.",
@@ -457,11 +457,7 @@ pub const TOPICS: &[Topic] = &[
         ],
         settings: &[
             Setting { title: "Put apps in place when they open", page: Page::Workspaces, section: "All workspaces" },
-            Setting {
-                title: "Update from screen removes apps that aren't open",
-                page: Page::Workspaces,
-                section: "All workspaces",
-            },
+            Setting { title: "Apps that aren't open", page: Page::Workspaces, section: "All workspaces" },
             Setting {
                 title: "Bring back minimized windows",
                 page: Page::Workspaces,

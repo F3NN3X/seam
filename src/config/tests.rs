@@ -389,3 +389,31 @@ fn hotkeys_without_close_and_minimize_load_unchanged() {
     assert_eq!(set.hotkeys.close_workspace.as_deref(), Some("Ctrl+Alt+X"));
     assert_eq!(set.hotkeys.minimize_workspace.as_deref(), Some("Ctrl+Alt+M"));
 }
+
+#[test]
+fn old_removes_flag_maps_to_the_choice() {
+    let read = |v: serde_json::Value| serde_json::from_value::<Config>(v).unwrap().closed_apps();
+    assert_eq!(read(json!({ "workspaces_update_removes_closed": true })), ClosedApps::Remove);
+    assert_eq!(read(json!({ "workspaces_update_removes_closed": false })), ClosedApps::Keep);
+    assert_eq!(read(json!({})), ClosedApps::Keep);
+    // The choice wins over the flag once it is there.
+    let both = json!({ "workspaces_update_closed": "turn_off", "workspaces_update_removes_closed": true });
+    assert_eq!(read(both), ClosedApps::TurnOff);
+}
+
+#[test]
+fn writing_a_choice_writes_the_old_flag() {
+    for (choice, flag) in [(ClosedApps::Keep, false), (ClosedApps::TurnOff, false), (ClosedApps::Remove, true)] {
+        let c = Config::default().patched(&choice.patch()).unwrap();
+        assert_eq!((c.closed_apps(), c.workspaces_update_removes_closed), (choice, flag));
+    }
+}
+
+#[test]
+fn new_field_is_skipped_when_unset() {
+    let written = serde_json::to_value(Config::default()).unwrap();
+    assert!(written.get("workspaces_update_closed").is_none());
+    assert_eq!(written["workspaces_update_removes_closed"], false);
+    let set = serde_json::to_value(Config::default().patched(&ClosedApps::TurnOff.patch()).unwrap()).unwrap();
+    assert_eq!(set["workspaces_update_closed"], "turn_off");
+}

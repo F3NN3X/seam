@@ -9,9 +9,15 @@ use crate::theme::tokens;
 use crate::ui::{self, Row, card, row, section, segmented, switch};
 use gpui_kit::component::WindowExt;
 use gpui_kit::*;
+use seam::config::ClosedApps;
 use seam::workspace::{self, OpenWindows, OtherWindows, Workspace};
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
+
+/// What Update from screen can do with an app that isn't open, in the order the
+/// Segmented shows them.
+pub(super) const CLOSED_CHOICES: [(ClosedApps, &str); 3] =
+    [(ClosedApps::Keep, "Keep"), (ClosedApps::TurnOff, "Turn off"), (ClosedApps::Remove, "Remove")];
 
 /// Slot of the shortcut row's buttons, past the Shortcuts page's own.
 const SHORTCUT_SLOT: usize = 7000;
@@ -145,26 +151,23 @@ fn places_row(panel: &Panel, window: &mut Window, cx: &mut Context<Panel>) -> Ro
     )
 }
 
-/// "Update from screen removes apps that aren't open": off keeps the rows of closed apps.
-fn removes_row(panel: &Panel, window: &mut Window, cx: &mut Context<Panel>) -> Row {
+/// "Apps that aren't open": what each one starts at in Update from screen's list.
+fn closed_row(panel: &Panel, window: &mut Window, cx: &mut Context<Panel>) -> Row {
     let p = crate::theme::palette(cx);
     let view = cx.entity();
-    let title = "Update from screen removes apps that aren't open";
-    let toggle = switch(
-        "update-removes",
-        title,
-        panel.config.workspaces_update_removes_closed,
-        window,
-        cx,
-        move |on, window, cx| {
-            view.update(cx, |panel, cx| panel.patch(json!({ "workspaces_update_removes_closed": on }), window, cx));
-        },
-    );
-    row(title, Some("Off keeps them, so a closed app still starts when you switch".into()), toggle, p)
+    let title = "Apps that aren't open";
+    let selected = CLOSED_CHOICES.iter().position(|(choice, _)| *choice == panel.config.closed_apps()).unwrap_or(0);
+    let labels: Vec<&'static str> = CLOSED_CHOICES.iter().map(|(_, label)| *label).collect();
+    let choose = segmented("update-closed", title, &labels, selected, window, cx, move |i, window, cx| {
+        let choice = CLOSED_CHOICES[i.min(CLOSED_CHOICES.len() - 1)].0;
+        view.update(cx, |panel, cx| panel.patch(choice.patch(), window, cx));
+    });
+    let about = "What Update from screen picks for each one first. You choose for each app when you update";
+    row(title, Some(about.into()), choose, p)
 }
 
 /// "All workspaces": what holds whichever one is in use.
 pub(super) fn all_section(panel: &Panel, p: Palette, window: &mut Window, cx: &mut Context<Panel>) -> AnyElement {
-    let rows = vec![auto_apply_row(panel, window, cx), places_row(panel, window, cx), removes_row(panel, window, cx)];
+    let rows = vec![auto_apply_row(panel, window, cx), places_row(panel, window, cx), closed_row(panel, window, cx)];
     section("All workspaces", card(rows, p), p)
 }

@@ -247,6 +247,20 @@ pub(super) fn notify(app: &mut App, title: &str, body: &str, click: BalloonActio
     }
 }
 
+/// Take down the balloon that is up, if the shell still shows it.
+pub(super) fn clear_balloon(app: &mut App) {
+    if app.balloon_action == BalloonAction::CancelSwitch {
+        app.balloon_action = BalloonAction::None;
+    }
+    unsafe {
+        let mut nid = tray_data(app);
+        nid.uFlags |= NIF_INFO;
+        nid.szInfoTitle = wide("");
+        nid.szInfo = wide("");
+        let _ = Shell_NotifyIconW(NIM_MODIFY, &nid);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

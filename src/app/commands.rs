@@ -178,6 +178,8 @@ pub(super) fn run_command(app: &mut App, queued: Queued) {
             }
             None => Err(RpcError::new(api::NOT_FOUND, "no such workspace on this desk")),
         },
+        Command::WorkspaceCancel => Ok(json!({ "cancelled": switcher::cancel() })),
+        Command::WorkspaceLastSwitch { id } => Ok(last_switch(app, &id)),
         Command::WorkspaceQuickSave => {
             if let Some(refusal) = quick_save(app, Some(reply.clone())) {
                 let _ = reply.send(refusal);

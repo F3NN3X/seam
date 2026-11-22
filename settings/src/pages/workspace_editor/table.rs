@@ -345,7 +345,12 @@ fn row_grip(ws: &Workspace, row: &AppRow, title: &str, p: Palette) -> Stateful<D
 }
 
 /// The app's name, and under it where it runs from, how many windows, and whether a switch starts it.
-fn name_cell(ws: &Workspace, row: &AppRow, title: &str, state: Option<RowState>, p: Palette) -> Stateful<Div> {
+fn name_cell(
+    ws: &Workspace,
+    row: &AppRow,
+    (title, state, problem): (&str, Option<RowState>, Option<&str>),
+    p: Palette,
+) -> Stateful<Div> {
     let first = row.windows[0];
     let rule = &ws.windows[first];
     // What will run is shown in full on hover.
@@ -363,6 +368,10 @@ fn name_cell(ws: &Workspace, row: &AppRow, title: &str, state: Option<RowState>,
     let off = row.windows.iter().all(|i| ws.windows[*i].off);
     if off {
         meta = format!("{meta}, off");
+    }
+    // What the last switch couldn't do with it.
+    if let Some(problem) = problem {
+        meta = format!("{meta}, {problem}");
     }
     div()
         .id(("app-name", first))
@@ -452,6 +461,14 @@ fn app_row(
     // A row that is off says so at once, before the tray has been asked.
     let state_of = |i: &usize| if ws.windows[*i].off { Some(RowState::Off) } else { row_state(panel, ws, *i) };
     let states: Vec<Option<RowState>> = row.windows.iter().map(state_of).collect();
+    let problem = panel.last_switch.as_ref().filter(|(id, _)| *id == ws.id).and_then(|(_, last)| {
+        let apps: Vec<(usize, String)> = row
+            .windows
+            .iter()
+            .map(|i| (*i, seam::workspace::report::app_name(&ws.windows[*i].exe, &ws.windows[*i].title_hint)))
+            .collect();
+        last.problem_of(&apps)
+    });
     let near = Neighbours {
         before: at.checked_sub(1).map(|n| group.rows[n].windows[0]),
         after: group.rows.get(at + 1).and_then(|r| r.windows.last().copied()),
@@ -466,7 +483,12 @@ fn app_row(
         .py(px(tokens::SPACE_8))
         .child(row_grip(ws, row, &title, p))
         .child(app_icon(rule, &panel.icons, p))
-        .child(name_cell(ws, row, &title, states.first().copied().flatten().filter(|_| states.len() == 1), p))
+        .child(name_cell(
+            ws,
+            row,
+            (&title, states.first().copied().flatten().filter(|_| states.len() == 1), problem),
+            p,
+        ))
         .child(div().flex_none().w(px(GOES_TO_WIDTH)).child(goes_select(panel, ws, row, screens, &title, cx)))
         .child(div().flex().flex_none().w(px(STATUS_WIDTH)).child(status_cell(first, &states, p)))
         .child(div().flex().flex_none().justify_end().w(px(MORE_WIDTH)).child(more_menu(ws, row, merge, &title, cx)));

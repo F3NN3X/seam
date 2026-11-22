@@ -408,18 +408,14 @@ fn put_back(panel: &mut Panel, count: usize, window: &mut Window, cx: &mut Conte
 
 /// Switch to the workspace. Undo goes back to the one that was in use, when there was another.
 fn switch_to(panel: &mut Panel, ws: &Workspace, window: &mut Window, cx: &mut Context<Panel>) {
-    let name = ws.name.clone();
     let before = panel.state.as_ref().and_then(|s| s.workspace.as_ref()).map(|w| w.id.clone());
-    let undoable = before.is_some_and(|id| id != ws.id);
-    panel.call("workspace.switch", json!({ "id": ws.id }), window, cx, move |panel, result, window, cx| match result {
-        Ok(_) if undoable => {
-            let undo = |panel: &mut Panel, window: &mut Window, cx: &mut Context<Panel>| {
-                panel.command("workspace.switch_back", json!({}), window, cx)
-            };
-            panel.offer_undo(format!("Switched to {name}"), undo, window, cx);
+    // The notice comes when the switch ends, so what it says is ready before the tray starts.
+    panel.expect_switch(ws.id.clone(), ws.name.clone(), before.is_some_and(|id| id != ws.id));
+    panel.call("workspace.switch", json!({ "id": ws.id }), window, cx, move |panel, result, window, cx| {
+        if let Err(e) = result {
+            panel.asked = None;
+            window.push_notification(refusal("Seam can't do that", &error_text(&e)), cx);
         }
-        Ok(_) => window.push_notification(Notification::new().message(format!("Switched to {name}")), cx),
-        Err(e) => window.push_notification(refusal("Seam can't do that", &error_text(&e)), cx),
     });
 }
 
@@ -441,7 +437,9 @@ fn detail(panel: &mut Panel, ws: Workspace, window: &mut Window, cx: &mut Contex
     let p = palette(cx);
     let header = detail_header(panel, &ws, p, window, cx);
 
-    let mut rows = vec![header];
+    let mut rows = Vec::new();
+    rows.extend(problems_note(panel, &ws, p, cx));
+    rows.push(header);
     rows.extend(workspace_editor::rows(panel, &ws, window, cx));
     let id = ws.id.clone();
     let add_app: app_picker::Add =
@@ -461,6 +459,35 @@ fn detail(panel: &mut Panel, ws: Workspace, window: &mut Window, cx: &mut Contex
     );
     let switching = sections::switch_section(panel, &ws, p, window, cx);
     div().flex().flex_col().gap(px(ui::SECTION_GAP)).flex_1().min_w_0().child(card(rows, p)).child(switching)
+}
+
+/// The note at the top of the card when the workspace's last switch had problems (D713): it
+/// goes when the workspace is switched again or its button is pressed.
+fn problems_note(panel: &Panel, ws: &Workspace, p: Palette, cx: &mut Context<Panel>) -> Option<AnyElement> {
+    let (id, last) = panel.last_switch.as_ref()?;
+    if *id != ws.id || panel.note_gone.as_ref() == Some(&(ws.id.clone(), last.at)) {
+        return None;
+    }
+    let count = last.problems().len();
+    if count == 0 {
+        return None;
+    }
+    let at = last.at;
+    let again = ui::secondary("switch-again", "Switch again", cx).on_click({
+        let ws = ws.clone();
+        cx.listener(move |panel, _, window, cx| {
+            panel.note_gone = Some((ws.id.clone(), at));
+            switch_to(panel, &ws, window, cx);
+        })
+    });
+    let text = format!("{} had a problem the last time you switched", seam::workspace::report::apps(count));
+    Some(
+        div()
+            .px(px(tokens::SPACE_16))
+            .py(px(tokens::SPACE_12))
+            .child(ui::note(text, Some(again), p))
+            .into_any_element(),
+    )
 }
 
 /// The name, with Update from screen, the primary action and the more menu.

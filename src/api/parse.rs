@@ -72,6 +72,8 @@ fn command(method: &str, p: &Value) -> Result<Command, RpcError> {
         "workspace.status" => Command::WorkspaceStatus {
             id: str_param(p, "id")?.ok_or_else(|| RpcError::new(INVALID_PARAMS, "id is required"))?,
         },
+        "workspace.cancel" => Command::WorkspaceCancel,
+        "workspace.last_switch" => Command::WorkspaceLastSwitch { id: id_param(p)? },
         "workspace.snap_back" => Command::WorkspaceSnapBack { alongside: false },
         "workspace.switch_back" => Command::WorkspaceSwitchBack { alongside: false },
         "workspace.quick_save" => Command::WorkspaceQuickSave,
@@ -444,6 +446,7 @@ fn assistant_allowed(command: &Command, peer: Peer) -> Result<(), RpcError> {
         | Command::WorkspaceGet { .. }
         | Command::WorkspaceStatus { .. }
         | Command::WorkspaceSwitch { .. }
+        | Command::WorkspaceCancel
         | Command::WorkspaceSnapBack { .. }
         | Command::WorkspaceSwitchBack { .. }
         | Command::EventsSubscribe(_) => Ok(()),
@@ -638,6 +641,12 @@ mod tests {
             (request("workspace.snap_back", "{}"), anyone, Command::WorkspaceSnapBack { alongside: false }),
             (request("workspace.switch_back", "{}"), anyone, Command::WorkspaceSwitchBack { alongside: false }),
             (request("workspace.quick_save", "{}"), anyone, Command::WorkspaceQuickSave),
+            (request("workspace.cancel", "{}"), anyone, Command::WorkspaceCancel),
+            (
+                request("workspace.last_switch", r#"{"id":"ws_1"}"#),
+                anyone,
+                Command::WorkspaceLastSwitch { id: "ws_1".into() },
+            ),
             (request("workspace.windows", r#"{"id":"ws_1"}"#), anyone, Command::WorkspaceWindows { id: "ws_1".into() }),
             (
                 request("workspace.close", r#"{"id":"ws_1","hwnds":[4660,22]}"#),
@@ -781,6 +790,9 @@ mod tests {
             code(&request("workspace.switch_back", "{}"), assistant(false)),
             Ok(Command::WorkspaceSwitchBack { alongside: true })
         );
+        // Cancel only stops things, so an assistant may, even with the second switch off.
+        assert_eq!(code(&request("workspace.cancel", "{}"), assistant(false)), Ok(Command::WorkspaceCancel));
+        assert_eq!(code(&request("workspace.cancel", "{}"), off).map_err(|e| e.0), Err(DISABLED));
         // Quick save is an edit, and needs the second switch.
         let quick = request("workspace.quick_save", "{}");
         assert_eq!(code(&quick, assistant(false)).map_err(|e| e.0), Err(FORBIDDEN));
@@ -820,6 +832,7 @@ mod tests {
             ("workspace.close", r#"{"id":"ws_1","hwnds":[4660]}"#),
             ("workspace.minimize", "{}"),
             ("workspace.minimize_undo", "{}"),
+            ("workspace.last_switch", r#"{"id":"ws_1"}"#),
         ];
         for (method, params) in forbidden {
             let got = code(&request(method, params), assistant(true)).map_err(|e| e.0);

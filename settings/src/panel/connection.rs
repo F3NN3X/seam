@@ -108,12 +108,17 @@ impl Panel {
                             && let Some(page) = event.data["page"].as_str().and_then(Page::from_arg)
                         {
                             this.show(page, None, window, cx);
+                            if let Some(id) = event.data["select"].as_str() {
+                                this.workspace = Some(id.to_string());
+                            }
                             if let Some(id) = event.data["close"].as_str() {
                                 pages::workspaces::ask_to_close(this, id, window, cx);
                             }
                         }
-                        if event.kind == "workspace.switched" && event.data["from_panel"].as_bool() == Some(true) {
-                            this.say_screens_gone(&event.data, window, cx);
+                        match event.kind.as_str() {
+                            "workspace.switching" => this.switching(&event.data, window, cx),
+                            "workspace.switched" => this.switched(&event.data, window, cx),
+                            _ => {}
                         }
                         // A moved window of another workspace changes nothing on show.
                         let moved_here = event.kind == "workspace.moved"
@@ -153,19 +158,6 @@ impl Panel {
                 }
             }
         })
-    }
-
-    /// After a switch this window asked for, say so when apps stayed put because their screen
-    /// isn't connected. The tray shows nothing then.
-    fn say_screens_gone(&self, switched: &Value, window: &mut Window, cx: &mut Context<Self>) {
-        let skipped: Vec<(String, String)> = switched["skipped"]
-            .as_array()
-            .into_iter()
-            .flatten()
-            .filter_map(|s| Some((s["app"].as_str()?.to_string(), s["reason"].as_str()?.to_string())))
-            .collect();
-        let Some(body) = seam::workspace::screen_gone_note(&skipped) else { return };
-        window.push_notification(Notification::new().message(body), cx);
     }
 
     /// Take the tray's state and config. False when the config couldn't be read, and was left as it was.
@@ -301,15 +293,20 @@ impl Panel {
         let params = json!({ "id": id });
         let answer = cx.background_executor().spawn(async move {
             let mut client = client.lock().ok()?;
-            client.call("workspace.status", params).ok().and_then(|rows| serde_json::from_value(rows).ok())
+            let rows = client.call("workspace.status", params.clone()).ok();
+            let last = client.call("workspace.last_switch", params).ok();
+            Some((rows.and_then(|rows| serde_json::from_value(rows).ok()), last))
         });
         cx.spawn(async move |this, cx| {
-            let rows: Option<Vec<RowStatus>> = answer.await;
+            let answered: Option<(Option<Vec<RowStatus>>, Option<Value>)> = answer.await;
+            let (rows, last) = answered.unwrap_or_default();
             let _ = this.update(cx, |this, cx| {
                 this.asking_status = None;
+                let last = last.as_ref().and_then(super::switch::LastSwitch::from_value).map(|l| (id.clone(), l));
                 let next = Some((id, rows.unwrap_or_default()));
                 // Only an answer that differs redraws the page.
-                let changed = this.status != next;
+                let changed = this.status != next || this.last_switch != last;
+                this.last_switch = last;
                 this.status = next;
                 if std::mem::take(&mut this.status_again) {
                     this.ask_status(cx);
@@ -330,11 +327,24 @@ impl Panel {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.offer_undo_titled(None, message, undo, window, cx);
+    }
+
+    /// `offer_undo` with a title above the message.
+    pub fn offer_undo_titled(
+        &mut self,
+        title: Option<String>,
+        message: String,
+        undo: impl Fn(&mut Panel, &mut Window, &mut Context<Panel>) + 'static,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         struct Undo;
         let view = cx.entity().downgrade();
         self.toast_generation += 1;
         let generation = self.toast_generation;
         let note = ui::undo_notice::<Undo>(
+            title,
             message,
             generation,
             UNDO_FOR,

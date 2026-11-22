@@ -39,17 +39,3 @@ pub fn row_action(rule: &Rule, found: Option<isize>, open_windows: OpenWindows, 
         None => RowAction::Leave,
     }
 }
-
-/// The tray's notice after a switch that left apps where they were because their screen
-/// isn't connected (D696): the body, or `None` when no app was left. Counts apps, not windows.
-pub fn screen_gone_note(skipped: &[(String, String)]) -> Option<String> {
-    let mut apps: Vec<&str> =
-        skipped.iter().filter(|(_, why)| why == SCREEN_GONE).map(|(app, _)| app.as_str()).collect();
-    apps.sort_unstable();
-    apps.dedup();
-    match apps.as_slice() {
-        [] => None,
-        [app] => Some(format!("{app} stayed where it is, because its screen isn't connected")),
-        many => Some(format!("{} apps stayed where they are, because their screen isn't connected", many.len())),
-    }
-}

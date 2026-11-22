@@ -21,7 +21,7 @@ pub(super) fn place_rules(run: &Run, found: &[Option<isize>], which: &[usize], s
         // A screen that isn't connected, or a window to keep where it is, isn't moved.
         let Some((geo, kind, note)) = destination(rule, &run.geos, h, run.size_mode, true, ws.show_all) else {
             if workspace::screen_gone(rule, run.geos.iter().map(|g| g.id.as_str())) {
-                tally.skipped.push((app_name(rule), SCREEN_GONE.into()));
+                tally.skipped.push(Skip::row(*i, rule, SCREEN_GONE));
             }
             continue;
         };
@@ -29,12 +29,12 @@ pub(super) fn place_rules(run: &Run, found: &[Option<isize>], which: &[usize], s
         let pin = winutil::pin_bits(h);
         if stays(pin, run.pins_stay) {
             let why = if pin & winutil::PIN_STICKY != 0 { "sticky" } else { "pinned" };
-            tally.skipped.push((app, why.into()));
+            tally.skipped.push(Skip::row(*i, rule, why));
             continue;
         }
         let elevated = seen.iter().find(|s| s.cand.hwnd == hwnd).map(|s| s.elevated);
         if elevated.unwrap_or_else(|| winutil::is_elevated_over_us(h)) {
-            tally.skipped.push((app, "elevated".into()));
+            tally.skipped.push(Skip::row(*i, rule, "elevated"));
             continue;
         }
         let Some(now) = now_of(h, geo.dpi) else { continue };
@@ -51,7 +51,17 @@ pub(super) fn place_rules(run: &Run, found: &[Option<isize>], which: &[usize], s
         if let Some(note) = note {
             log::info!("{note}");
         }
-        moves.push(Move { hwnd, app, kind, was: now.shown, on_screen, crosses, dpi: geo.dpi, before: now.window });
+        moves.push(Move {
+            hwnd,
+            row: Some(*i),
+            app,
+            kind,
+            was: now.shown,
+            on_screen,
+            crosses,
+            dpi: geo.dpi,
+            before: now.window,
+        });
     }
     tally.plan += started.elapsed();
     tally.moves += moves.len();
@@ -87,7 +97,7 @@ impl Starts {
                 self.started.push(i);
                 self.waiting.push((i, Instant::now()));
             }
-            Err(reason) => tally.skipped.push((app_name(rule), reason.into())),
+            Err(reason) => tally.skipped.push(Skip::row(i, rule, reason)),
         }
     }
 
@@ -131,6 +141,7 @@ fn catch(run: &Run, cands: Vec<Candidate>, waits: &mut Waits, starts: &mut Start
 /// Apps in a stage start together, each after its own delay. The next stage
 /// starts when the stage's waiting apps have a window or took too long. Windows
 /// come from `seam-wm`'s shown events, with a look every second as the fallback.
+/// Stops starting and waiting when the user cancels (D714), and says so in `tally`.
 /// Returns `None` if a newer switch replaced this one.
 pub(super) fn run_stages(
     run: &Run,
@@ -142,20 +153,29 @@ pub(super) fn run_stages(
 ) -> Option<()> {
     let ws = run.ws;
     let stages = workspace::stages(&ws.windows, starting);
+    begin_starting(run, mine, starting.len());
     let shown = crate::wm::watch_shown(mine);
     let delay = |i: usize| Duration::from_millis(workspace::tame_delay(ws.windows[i].delay_ms) as u64);
     let (mut stage, mut stage_began) = (0, Instant::now());
     let mut due: Vec<(usize, Instant)> = stages[0].iter().map(|&i| (i, stage_began + delay(i))).collect();
     let (mut looked, mut late) = (Instant::now(), Vec::new());
     let finished = loop {
+        if stopped(mine) {
+            leave_unstarted(run, starting, starts, tally);
+            break true;
+        }
         let now = Instant::now();
         for (i, _) in due.iter().filter(|(_, at)| *at <= now) {
+            // The rest of the stage is left for the top of the loop to report as cancelled.
+            if stopped(mine) {
+                break;
+            }
             starts.start(ws, *i, mine, run.places, tally);
         }
         due.retain(|(_, at)| *at > now);
         // Each app's time runs from when it started.
         for (i, _) in starts.waiting.iter().filter(|(_, since)| since.elapsed() >= LAUNCH_WAIT) {
-            tally.skipped.push((app_name(&ws.windows[*i]), TOOK_TOO_LONG.into()));
+            tally.skipped.push(Skip::row(*i, &ws.windows[*i], TOOK_TOO_LONG));
             late.push(*i);
             // Nothing catches its window after this, so the next switch matches the
             // row by app and binds the window that showed late (D336).
@@ -190,7 +210,7 @@ pub(super) fn run_stages(
             .chain([looked + LAUNCH_POLL])
             .min()
             .unwrap_or(looked + LAUNCH_POLL);
-        let left = wake.saturating_duration_since(Instant::now());
+        let left = wake.saturating_duration_since(Instant::now()).min(CANCEL_LOOK);
         let mut hwnds = Vec::new();
         match shown.recv_timeout(left) {
             Ok(h) => hwnds.push(h),
@@ -218,7 +238,31 @@ pub(super) fn run_stages(
         }
     };
     crate::wm::unwatch_shown(mine);
+    // A cancel that came after the last look still counts, as long as it was answered true.
+    end_starting(run, mine);
+    if finished && !tally.cancelled && stopped(mine) {
+        leave_unstarted(run, starting, starts, tally);
+    }
     finished.then_some(())
+}
+
+/// The user stopped the switch: every row it hadn't started says so, and the apps it started
+/// are no longer waited for.
+fn leave_unstarted(run: &Run, starting: &[usize], starts: &mut Starts, tally: &mut Tally) {
+    let ws = run.ws;
+    tally.cancelled = true;
+    for &i in starting.iter().filter(|i| !starts.started.contains(i)) {
+        if !tally.skipped.iter().any(|s| s.row == Some(i)) {
+            tally.skipped.push(Skip::row(i, &ws.windows[i], CANCELLED));
+        }
+    }
+    // Nothing catches their windows after this, so the next switch matches by app, as for one that took too long.
+    for (i, _) in starts.waiting.drain(..) {
+        if run.bound[i].is_some() {
+            unbind(&ws.id, i);
+        }
+    }
+    log::info!("{}: stopped, {} apps not started", ws.name, starting.len().saturating_sub(starts.started.len()));
 }
 
 /// The row's place, if it's one a switch can open: a folder on an Explorer row, a page

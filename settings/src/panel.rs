@@ -32,6 +32,7 @@ mod connection;
 mod new_screen;
 mod regions;
 mod setup;
+mod switch;
 mod view;
 
 actions!(seam_panel, [FocusSearch, ClearSearch, GoBack, NextRegion, PreviousRegion]);
@@ -126,6 +127,14 @@ pub struct Panel {
     pub screen_window: Option<pages::screen_editor::Shown>,
     /// The workspace the Workspaces page shows, by id. `None` shows the first.
     pub workspace: Option<String>,
+    /// What the last switch of the shown workspace did, by workspace id. The tray keeps it.
+    pub last_switch: Option<(String, switch::LastSwitch)>,
+    /// The switch whose Note the user has dealt with: the workspace and when it was switched.
+    pub note_gone: Option<(String, u64)>,
+    /// A switch this window asked for, until it ends.
+    pub asked: Option<switch::Asked>,
+    /// Counts the switches that began starting apps, so a notice for an ended one never shows.
+    starting_generation: u64,
     /// App icons for the workspace list, loaded as they are first needed.
     pub icons: crate::icons::Icons,
     /// The name field is open on the selected workspace.
@@ -340,6 +349,10 @@ impl Panel {
             moving: false,
             focus_workspace: None,
             close_ask: None,
+            last_switch: None,
+            note_gone: None,
+            asked: None,
+            starting_generation: 0,
             update_file: updates::read(),
             update_ui: UpdateUi::Idle,
             startup: None,

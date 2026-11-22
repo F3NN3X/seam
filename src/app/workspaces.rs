@@ -7,6 +7,7 @@ mod assist;
 mod capture;
 mod close;
 mod in_use;
+mod notice;
 mod order;
 mod window;
 
@@ -19,6 +20,7 @@ pub(super) use in_use::{
     choose_in_use, detected_in_use, drift_checked, drift_due, forget_deleted, live_of, set_default, snap_back,
     switch_back, sync_live, ws_moved,
 };
+pub(super) use notice::{LastSwitch, ended, last_switch, open_switched, skipped_json, started, starting, starting_due};
 pub(super) use order::move_workspace;
 pub(super) use window::{
     aside, other_wm_changed, queue_window, set_spotlight, show_spotlight, start_focus_only, start_group, start_window,
@@ -280,7 +282,7 @@ fn apply_zones(app: &mut App, workspace: &Workspace) {
 
 /// A switch finished: say which workspace is in use, and how it went.
 pub(super) fn switched(app: &mut App) {
-    let Some(done) = switcher::take_switched() else { return };
+    let Some(mut done) = switcher::take_switched() else { return };
     log::info!(
         "workspace {}: {} launched, {} placed, {} skipped",
         done.name,
@@ -298,19 +300,16 @@ pub(super) fn switched(app: &mut App) {
     // Apps opened by hand during the switch go to their places now.
     live::switch_ended();
     snap::tiling_switch_ended();
-    snap::rebuild_stacks(done.stacks);
+    snap::rebuild_stacks(std::mem::take(&mut done.stacks));
     focus_only::forget();
     windows_changed(app);
     publish(app);
-    let skipped: Vec<Value> =
-        done.skipped.iter().map(|(app, reason)| json!({ "app": app, "reason": reason })).collect();
+    let skipped = skipped_json(&done.skipped);
+    let problems = skipped.iter().filter(|s| !s["why"].is_null()).count();
     let data = json!({
         "id": done.id, "name": done.name, "launched": done.launched, "placed": done.placed, "skipped": skipped,
-        "from_panel": done.from_panel
+        "problems": problems, "cancelled": done.cancelled, "from_panel": done.from_panel
     });
     api_server::broadcast("workspace.switched", &data);
-    // The Seam window shows the same words itself.
-    if let (false, Some(body)) = (done.from_panel, workspace::screen_gone_note(&done.skipped)) {
-        notify(app, &format!("Switched to {}", done.name), &body, BalloonAction::OpenPanel("workspaces"));
-    }
+    ended(app, &done);
 }

@@ -1,6 +1,7 @@
 //! Tray app: owns config, tracks monitor changes, runs the hook and the overlay.
 
 mod commands;
+mod escape;
 mod messages;
 mod overview;
 mod pause;
@@ -29,7 +30,7 @@ use crate::snap::{self, WM_APP_REFIT, WM_APP_SNAP_BLOCKED};
 use crate::standby::{self, WM_APP_STANDBY};
 use crate::switcher::{
     self, AppRules, CaptureJob, LiveWorkspace, Screen as SwitchScreen, SwitchJob, WM_APP_CAPTURED, WM_APP_CLOSED,
-    WM_APP_SESSION, WM_APP_SWITCHED,
+    WM_APP_SESSION, WM_APP_SWITCH_STARTED, WM_APP_SWITCH_STARTING, WM_APP_SWITCHED,
 };
 use crate::tray::{CLASS, WM_APP_API, WM_APP_LINEUP, WM_APP_WINDOWS_CHANGED};
 use crate::wm::{Pinned, WM_APP_WS_MOVED};
@@ -66,7 +67,7 @@ use std::sync::mpsc::{Sender, channel};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tile::{fit_group, stacks_changed, start_tile, tile_finished, undo_tile};
-use tray_icon::{TrayIcons, add_icon, notify, show_menu, theme_changed, tray_data, update_tip};
+use tray_icon::{TrayIcons, add_icon, clear_balloon, notify, show_menu, theme_changed, tray_data, update_tip};
 use update::{
     arm_auto_install, auto_install, check_for_updates, clean_up_after_update, read_update_state, update_read,
 };
@@ -93,6 +94,7 @@ use workspaces::{
     show_spotlight, snap_back, start_capture, start_focus_only, start_switch, start_switch_job, start_window,
     switch_back, switched, sync_live, undo_quick_save, update_workspace, ws_moved,
 };
+use workspaces::{last_switch, open_switched, started, starting, starting_due};
 
 const WM_APP_TRAY: u32 = WM_APP + 1;
 /// A worker finished `arrangement.align`.
@@ -135,6 +137,8 @@ const TIMER_DRIFT: usize = 11;
 const DRIFT_AFTER_MS: u32 = 400;
 /// Retries window control's plan that the app was too busy for.
 const TIMER_WINDOW: usize = 13;
+/// A switch has been starting apps long enough to say so.
+const TIMER_STARTING: usize = 14;
 /// How long a plan an API client waits for is kept for the app before it is dropped.
 const WINDOW_WAIT: Duration = Duration::from_secs(2);
 /// How long the end of a Windows session waits for the last session's capture.
@@ -241,6 +245,10 @@ enum BalloonAction {
     Reopen,
     /// Open the workspace offered at sign-in.
     OpenWorkspace,
+    /// Stop the switch that is starting apps (D716).
+    CancelSwitch,
+    /// Open the Seam window on the workspace last switched, to see what went wrong.
+    OpenSwitched,
     /// Restore the last session offered at sign-in (D120).
     RestoreSession,
     /// Put back what the last quick save changed.
@@ -355,6 +363,14 @@ struct App {
     links: Vec<Link>,
     taskbar_created: u32,
     balloon_action: BalloonAction,
+    /// The switch that is starting apps, for the notice and the Esc hook.
+    starting: Option<switcher::Starting>,
+    /// The balloon that says so is up.
+    starting_balloon: bool,
+    /// What each workspace's last switch did, until its next one or a restart.
+    last_switch: std::collections::HashMap<String, workspaces::LastSwitch>,
+    /// The workspace the last switch was to, for a click on its summary.
+    switched_id: Option<String>,
     /// Warn once per run if Windows may stop the pointer before Seam sees it.
     ease_warned: bool,
     /// Windows' "Ease cursor movement between displays" as last read, `None` where it doesn't exist.
@@ -508,22 +524,23 @@ fn pointer_watch(app: &App) {
 
 /// Start the panel, which raises the open one if there is one.
 fn open_panel(app: &mut App, page: Option<&str>) -> bool {
-    open_panel_with(app, page, None)
+    open_panel_with(app, page, None, None)
 }
 
 /// The Seam window on Workspaces, with the dialog of Close this workspace open for this workspace.
 fn open_panel_closing(app: &mut App, id: &str) -> bool {
-    open_panel_with(app, Some("workspaces"), Some(id))
+    open_panel_with(app, Some("workspaces"), Some(id), None)
 }
 
-/// `open_panel`, and with `close` the id of a workspace whose close dialog it opens.
-fn open_panel_with(app: &mut App, page: Option<&str>, close: Option<&str>) -> bool {
+/// `open_panel`, and with `close` the id of a workspace whose close dialog it opens, or with
+/// `select` the id of the workspace it shows.
+fn open_panel_with(app: &mut App, page: Option<&str>, close: Option<&str>, select: Option<&str>) -> bool {
     let panel = std::env::current_exe().map(|exe| exe.with_file_name("seam-settings.exe"));
     // Lets an already open panel come to the front.
     let _ = unsafe { AllowSetForegroundWindow(ASFW_ANY) };
     // An open panel switches page itself. One that's starting reads `--page`.
     if let Some(page) = page {
-        api_server::broadcast_to_panels("panel.show", &json!({ "page": page, "close": close }));
+        api_server::broadcast_to_panels("panel.show", &json!({ "page": page, "close": close, "select": select }));
     }
     let started = panel.and_then(|p| {
         let mut command = std::process::Command::new(p);
@@ -533,6 +550,9 @@ fn open_panel_with(app: &mut App, page: Option<&str>, close: Option<&str>) -> bo
         }
         if let Some(id) = close {
             command.args(["--close", id]);
+        }
+        if let Some(id) = select {
+            command.args(["--select", id]);
         }
         command.spawn()
     });

@@ -28,3 +28,28 @@ pub fn raise_open_panel() -> bool {
         true
     }
 }
+
+/// Whether the Seam window is on screen: not minimized or hidden.
+pub fn panel_visible() -> bool {
+    unsafe {
+        FindWindowW(None, w!("Seam")).is_ok_and(|panel| IsWindowVisible(panel).as_bool() && !IsIconic(panel).as_bool())
+    }
+}
+
+/// Whether the Seam window can be left to say it: it is connected, and someone can see it.
+pub fn panel_shows(connected: bool, visible: bool) -> bool {
+    connected && visible
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_connected_window_that_cant_be_seen_leaves_it_to_the_tray() {
+        assert!(panel_shows(true, true));
+        assert!(!panel_shows(true, false));
+        assert!(!panel_shows(false, true));
+        assert!(!panel_shows(false, false));
+    }
+}

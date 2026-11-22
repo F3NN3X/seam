@@ -413,6 +413,7 @@ pub const TOPICS: &[Topic] = &[
                 "**Capture current windows** saves the windows open now. Only app windows with a taskbar button count.",
                 "**Switch now**, the workspace's shortcut or **Workspaces** in the tray menu puts each app back. Windows already in place aren't touched.",
                 "**Open alongside**, on a workspace's menu, switches once and leaves the other windows alone, whatever **Other windows** says",
+                "When a switch can't start or move an app, a notice names it and says why, and the workspace's page keeps the note until you switch again or Seam restarts. Press **Esc**, or click the notice, to stop a switch that is starting apps: it starts no more, windows already placed stay, and **Other windows** isn't applied.",
                 "**Start missing apps** starts the ticked apps that aren't running, and **Other windows** leaves, minimizes or closes the rest. Close only asks, so an app with unsaved work stays open.",
                 "**Bring back minimized windows** brings back a window that was minimized at capture, onto its place or maximized. It counts as moved while it's minimized, so Snap back and auto-apply restore it.",
                 "**Update from screen** saves the windows as they are now, and keeps your edits and the apps that aren't open, unless **Update from screen removes apps that aren't open** is on",

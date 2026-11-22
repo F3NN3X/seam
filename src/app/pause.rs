@@ -37,6 +37,10 @@ pub(super) fn set_paused(app: &mut App, on: Option<bool>) -> bool {
 /// that holds something, so leaving is one rebuild of the handles, not one per feature.
 fn standby_changed(app: &mut App, before: Option<Standby>) {
     let now = standby::reason();
+    // Esc is the app in front's while Seam stands aside, even for a switch already starting apps.
+    if now.is_some() {
+        escape::remove();
+    }
     match (before, now) {
         (None, Some(_)) if spotlight::is_on() => {
             app.spotlight_resume = true;

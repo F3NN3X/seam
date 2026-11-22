@@ -15,6 +15,7 @@ use std::time::Duration;
 /// countdown, so the caller removes it when `lasts` is up. `generation` restarts the bar for each
 /// new notice. With Windows' Animation effects off there's no bar, only the notice and its timer.
 pub fn notice<T: 'static>(
+    title: Option<String>,
     message: String,
     generation: u64,
     lasts: Duration,
@@ -29,9 +30,12 @@ pub fn notice<T: 'static>(
         }
     });
     let p = palette(cx);
-    Notification::new()
-        .id::<T>()
-        .message(message)
+    let note = Notification::new().id::<T>();
+    let note = match title {
+        Some(title) => note.title(title),
+        None => note,
+    };
+    note.message(message)
         .bg(p.surface_raised)
         .border_color(p.hairline)
         .rounded(px(tokens::RADIUS_12))

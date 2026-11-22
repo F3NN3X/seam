@@ -18,6 +18,7 @@ mod geometry;
 mod matching;
 mod order;
 mod plan;
+pub mod report;
 #[cfg(test)]
 mod tests;
 
@@ -34,7 +35,7 @@ pub use export::{
 pub use geometry::{from_fractions, rect_for, target_of, to_fractions};
 pub use matching::{Bound, Candidate, assign, assign_bound, assign_bound_all};
 pub use order::{MoveError, moved_to};
-pub use plan::{RowAction, SCREEN_GONE, row_action, screen_gone, screen_gone_note, takes_part};
+pub use plan::{RowAction, SCREEN_GONE, row_action, screen_gone, takes_part};
 
 /// A window this close to a zone, in pixels, counts as being in it.
 const ZONE_TOLERANCE: i32 = 8;

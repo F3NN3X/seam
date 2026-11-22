@@ -185,6 +185,12 @@ pub enum Command {
     WorkspaceStatus {
         id: String,
     },
+    /// Stop the switch that is starting apps. Assistants may: it only stops things.
+    WorkspaceCancel,
+    /// What the workspace's last switch did, from this run of Seam.
+    WorkspaceLastSwitch {
+        id: String,
+    },
     /// Switch to the active workspace again, so drifted windows go back.
     WorkspaceSnapBack {
         /// Leave the other windows alone, which an assistant always does.

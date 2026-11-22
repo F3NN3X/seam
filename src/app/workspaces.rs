@@ -173,6 +173,11 @@ pub(super) fn start_switch_job(
     alongside: bool,
     via: Via,
 ) -> Reply {
+    if app.closing.is_some() {
+        return busy("Windows of a workspace are still being closed or minimized");
+    }
+    // What a minimize took belongs to the layout this switch changes.
+    app.minimized = None;
     log::info!("switching to workspace {}", workspace.name);
     // A hotkey gives the tray the right to take focus. For anyone else this is all it can do.
     let _ = unsafe { AllowSetForegroundWindow(std::process::id()) };

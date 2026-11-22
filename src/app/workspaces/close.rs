@@ -100,6 +100,18 @@ pub(in crate::app) fn closed(app: &mut App) {
             }
             return;
         }
+        Done::Failed => {
+            log::info!("workspace close: the worker stopped for {}", ws.id);
+            match reply {
+                Some(tx) => {
+                    let _ = tx.send(refused("Couldn't look at the windows"));
+                }
+                None => {
+                    notify(app, "Close this workspace", "Couldn't look at the windows", BalloonAction::None);
+                }
+            }
+            return;
+        }
         Done::Closed { asked, changed } => {
             log::info!("workspace close: {asked} of {} by {}", ws.id, client);
             api_server::broadcast("workspace.closed", &json!({ "id": ws.id, "asked": asked }));

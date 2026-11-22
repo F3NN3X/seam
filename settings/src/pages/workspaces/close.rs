@@ -30,19 +30,19 @@ fn listed(answer: &Value) -> Listed {
     let text = |v: &Value, key: &str| v[key].as_str().unwrap_or_default().to_string();
     let windows = answer["windows"].as_array().into_iter().flatten();
     let kept = answer["kept"].as_array().into_iter().flatten();
-    Listed {
-        windows: windows
-            .filter_map(|w| {
-                Some(Item {
-                    hwnd: w["hwnd"].as_i64()?,
-                    app: text(w, "app"),
-                    title: text(w, "title"),
-                    screen: w["screen"].as_u64(),
-                })
+    let mut windows: Vec<Item> = windows
+        .filter_map(|w| {
+            Some(Item {
+                hwnd: w["hwnd"].as_i64()?,
+                app: text(w, "app"),
+                title: text(w, "title"),
+                screen: w["screen"].as_u64(),
             })
-            .collect(),
-        kept: kept.map(|k| text(k, "why")).collect(),
-    }
+        })
+        .collect();
+    // Grouped by screen, in row order inside a group, and a screen that isn't connected last.
+    windows.sort_by_key(|w| w.screen.unwrap_or(u64::MAX));
+    Listed { windows, kept: kept.map(|k| text(k, "why")).collect() }
 }
 
 /// "App: window title", the title cut to one line, or the app alone when it has none.

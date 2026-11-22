@@ -22,6 +22,9 @@ pub(in crate::app) fn start_add_window(app: &mut App, which: Which, hwnd: Option
 }
 
 fn begin(app: &mut App, which: Which, hwnd: Option<isize>, reply: Option<Sender<Reply>>) -> Result<(), RpcError> {
+    if app.closing.is_some() {
+        return Err(RpcError::new(api::BUSY, "Windows of a workspace are still being closed or minimized"));
+    }
     let list = desk_workspaces(app);
     let found = match &which {
         Which::Number(n) => workspace::numbered(&list, *n)

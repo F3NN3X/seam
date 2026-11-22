@@ -51,6 +51,8 @@ pub enum Done {
     },
     /// The windows minimized, topmost first.
     Minimized(Vec<isize>),
+    /// The worker stopped before it could look.
+    Failed,
 }
 
 static DONE: Mutex<Option<Done>> = Mutex::new(None);
@@ -59,8 +61,25 @@ static DONE: Mutex<Option<Done>> = Mutex::new(None);
 pub fn start(job: CloseJob) -> bool {
     let spawned = std::thread::Builder::new().name("seam-close".into()).spawn(move || {
         let _com = Com::enter();
-        let owned = windows_of(&job.ws, &job.exclude, job.places);
-        let done = match job.verb {
+        let owner = job.owner;
+        // However the job ends, the main thread hears of it, or `app.closing` would stay set.
+        let done = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| run(job))).unwrap_or(Done::Failed);
+        *DONE.lock().unwrap_or_else(|e| e.into_inner()) = Some(done);
+        // A full message queue refuses the post, so try again a few times.
+        for _ in 0..20 {
+            if unsafe { PostMessageW(Some(hwnd_of(owner)), WM_APP_CLOSED, WPARAM(0), LPARAM(0)) }.is_ok() {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(100));
+        }
+    });
+    spawned.is_ok()
+}
+
+fn run(job: CloseJob) -> Done {
+    let owned = windows_of(&job.ws, &job.exclude, job.places);
+    {
+        match job.verb {
             Verb::List => Done::Listed(owned),
             Verb::Close(asked) => {
                 let fresh: Vec<isize> = owned.take.iter().map(|e| e.hwnd).collect();
@@ -74,13 +93,8 @@ pub fn start(job: CloseJob) -> bool {
                 let handles: Vec<isize> = by_z.iter().map(|e| e.hwnd).collect();
                 Done::Minimized(minimize(&handles))
             }
-        };
-        *DONE.lock().unwrap_or_else(|e| e.into_inner()) = Some(done);
-        unsafe {
-            let _ = PostMessageW(Some(hwnd_of(job.owner)), WM_APP_CLOSED, WPARAM(0), LPARAM(0));
         }
-    });
-    spawned.is_ok()
+    }
 }
 
 pub fn take_done() -> Option<Done> {

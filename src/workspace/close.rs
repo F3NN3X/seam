@@ -61,8 +61,13 @@ pub fn sort_out(rows: &[Rule], matched: &[Option<isize>], facts: &[Fact]) -> (Ve
 /// The windows asked for that a fresh look still matches, and how many it doesn't. Never
 /// a window the request didn't name.
 pub fn still_ours(asked: &[isize], fresh: &[isize]) -> (Vec<isize>, usize) {
-    let ours: Vec<isize> = asked.iter().copied().filter(|h| fresh.contains(h)).collect();
-    let changed = asked.len() - ours.len();
+    let mut ours: Vec<isize> = Vec::new();
+    for h in asked.iter().copied().filter(|h| fresh.contains(h)) {
+        if !ours.contains(&h) {
+            ours.push(h);
+        }
+    }
+    let changed = asked.iter().filter(|h| !fresh.contains(h)).count();
     (ours, changed)
 }
 
@@ -131,5 +136,18 @@ mod tests {
         assert_eq!(ours, [1, 3]);
         assert_eq!(changed, 1);
         assert_eq!(still_ours(&[], &[1, 2]), (vec![], 0));
+    }
+
+    #[test]
+    fn duplicates_are_asked_once() {
+        assert_eq!(still_ours(&[1, 1, 2, 2], &[1, 2]), (vec![1, 2], 0));
+        assert_eq!(still_ours(&[1, 1], &[1]), (vec![1], 0));
+    }
+
+    #[test]
+    fn a_matched_window_the_look_missed_is_dropped() {
+        let rows = [rule("a.exe", "")];
+        let (take, kept) = sort_out(&rows, &[Some(1)], &[]);
+        assert!(take.is_empty() && kept.is_empty());
     }
 }

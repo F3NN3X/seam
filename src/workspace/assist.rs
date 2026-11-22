@@ -1,6 +1,7 @@
 //! What an assistant may change in a workspace (D534): its name, whether it shows
-//! every window, and a row's place or how it is shown, or turning a row's launch off.
-//! Never a program, an AUMID, a hotkey or other windows, and never a launch on.
+//! every window, and a row's place or how it is shown, or turning a row's launch off or
+//! the row off. Never a program, an AUMID, a hotkey or other windows, and never a launch
+//! or a row on.
 //! The tray saves the result through the editor's own check, `checked_update`.
 
 use super::*;
@@ -17,6 +18,8 @@ pub struct RowChange {
     pub target: Option<Target>,
     pub shown: Option<Shown>,
     pub launch_off: bool,
+    /// Turn the row off (`true`) or on (`false`). An assistant may only turn one off.
+    pub off: Option<bool>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -77,6 +80,9 @@ pub fn edited(old: &Workspace, edit: &Edit) -> Result<Workspace, String> {
             if change.launch_off {
                 rule.launch = false;
             }
+            if let Some(off) = change.off {
+                rule.off = off;
+            }
         }
     }
     Ok(ws)
@@ -120,6 +126,7 @@ mod tests {
             target: Some(Target::Zone { zone: 2, span_to: None }),
             shown: Some(Shown::Minimized),
             launch_off: true,
+            off: Some(true),
         };
         let ws = edited(&two(), &Edit::Row { row: 1, change }).unwrap();
         assert_eq!(ws.windows[1].target, Target::Zone { zone: 2, span_to: None });

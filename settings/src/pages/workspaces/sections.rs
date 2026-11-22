@@ -9,7 +9,7 @@ use crate::theme::tokens;
 use crate::ui::{self, Row, card, row, section, segmented, switch};
 use gpui_kit::component::WindowExt;
 use gpui_kit::*;
-use seam::workspace::{self, OtherWindows, Workspace};
+use seam::workspace::{self, OpenWindows, OtherWindows, Workspace};
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
 
@@ -43,6 +43,23 @@ pub(super) fn switch_section(
             view.update(cx, |panel, cx| edit(panel, &id, window, cx, |ws| ws.show_all = on));
         }
     });
+    let open_selected = usize::from(ws.open_windows == OpenWindows::Leave);
+    let open = segmented(
+        "open-windows",
+        "Windows already open",
+        &["Move back", "Leave where they are"],
+        open_selected,
+        window,
+        cx,
+        {
+            let (view, id) = (view.clone(), id.clone());
+            move |i, window, cx| {
+                let id = id.clone();
+                let mode = [OpenWindows::Move, OpenWindows::Leave][i.min(1)];
+                view.update(cx, |panel, cx| edit(panel, &id, window, cx, |ws| ws.open_windows = mode));
+            }
+        },
+    );
     let selected = match ws.other_windows {
         OtherWindows::Leave => 0,
         OtherWindows::Minimize => 1,
@@ -59,6 +76,12 @@ pub(super) fn switch_section(
     let mut rows: Vec<ui::Row> = vec![
         shortcut,
         row("Start missing apps", Some("Apps that aren't open start, in the order above".into()), start_missing, p),
+        row(
+            "Windows already open",
+            Some("New windows always go to their place. Put windows back moves every window".into()),
+            open,
+            p,
+        ),
         row(
             "Bring back minimized windows",
             Some("A window saved minimized comes back, in its place".into()),

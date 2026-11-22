@@ -63,6 +63,7 @@ fn command(method: &str, p: &Value) -> Result<Command, RpcError> {
             let edit = Edit::Row { row: row_param(p)?, change: row_change(p)? };
             workspace_edit(p, edit)?
         }
+        "workspace.move" => workspace_move(p)?,
         "workspace.remove_row" => workspace_edit(p, Edit::RemoveRow(row_param(p)?))?,
         "workspace.set_show_all" => workspace_edit(p, Edit::ShowAll(on_param(p)?))?,
         "workspace.get" => Command::WorkspaceGet {
@@ -241,7 +242,8 @@ fn row_param(p: &Value) -> Result<usize, RpcError> {
         .ok_or_else(|| RpcError::new(INVALID_PARAMS, "row must be a row number"))
 }
 
-/// What `workspace.edit_row` may change: `target`, `shown` and `launch: false`.
+/// What `workspace.edit_row` may change: `target`, `shown`, `launch: false` and `off`.
+/// Only an assistant is held to `off: true`, in `assistant_allowed`.
 fn row_change(p: &Value) -> Result<workspace::RowChange, RpcError> {
     fn part<T: serde::de::DeserializeOwned>(p: &Value, key: &str, what: &str) -> Result<Option<T>, RpcError> {
         match p.get(key) {
@@ -256,10 +258,26 @@ fn row_change(p: &Value) -> Result<workspace::RowChange, RpcError> {
         Some(Value::Bool(false)) => true,
         Some(_) => return Err(RpcError::new(INVALID_PARAMS, "launch can only be turned off")),
     };
-    if target.is_none() && shown.is_none() && !launch_off {
+    let off = match p.get("off") {
+        None | Some(Value::Null) => None,
+        Some(Value::Bool(off)) => Some(*off),
+        Some(_) => return Err(RpcError::new(INVALID_PARAMS, "off must be true or false")),
+    };
+    if target.is_none() && shown.is_none() && !launch_off && off.is_none() {
         return Err(RpcError::new(INVALID_PARAMS, "nothing to change"));
     }
-    Ok(workspace::RowChange { target, shown, launch_off })
+    Ok(workspace::RowChange { target, shown, launch_off, off })
+}
+
+fn workspace_move(p: &Value) -> Result<Command, RpcError> {
+    let id = str_param(p, "id")?.ok_or_else(|| RpcError::new(INVALID_PARAMS, "id is required"))?;
+    let to = p
+        .get("to")
+        .and_then(Value::as_u64)
+        .and_then(|n| usize::try_from(n).ok())
+        .filter(|n| *n >= 1)
+        .ok_or_else(|| RpcError::new(INVALID_PARAMS, "to must be a workspace number, from 1"))?;
+    Ok(Command::WorkspaceMove { id, to })
 }
 
 fn workspace_edit(p: &Value, edit: Edit) -> Result<Command, RpcError> {
@@ -406,6 +424,13 @@ fn assistant_allowed(command: &Command, peer: Peer) -> Result<(), RpcError> {
         | Command::WorkspaceSnapBack { .. }
         | Command::WorkspaceSwitchBack { .. }
         | Command::EventsSubscribe(_) => Ok(()),
+        // Turning a row on can make a switch start a program, the same reason `launch` can only be turned off.
+        Command::WorkspaceEdit {
+            edit: Edit::Row { change: workspace::RowChange { off: Some(false), .. }, .. },
+            ..
+        } if peer.assistants_edit => {
+            Err(RpcError::new(INVALID_PARAMS, "A row can only be turned off here, never back on"))
+        }
         // Quick save adds a row for every window on screen, so it is an edit.
         Command::WorkspaceCreate { .. } | Command::WorkspaceEdit { .. } | Command::WorkspaceQuickSave
             if peer.assistants_edit =>
@@ -436,6 +461,7 @@ fn allowed(command: &Command, peer: Peer) -> Result<(), RpcError> {
         | Command::WorkspaceUpdate { .. }
         | Command::WorkspaceCreate { .. }
         | Command::WorkspaceEdit { .. }
+        | Command::WorkspaceMove { .. }
         | Command::CursorEasingSet(_)
         | Command::LayoutShow(_) => peer.panel,
         Command::AppQuit
@@ -648,6 +674,10 @@ mod tests {
             (request("screen.identify", r#"{"number":-1}"#), anyone, INVALID_PARAMS),
             (request("screen.rotate", r#"{"dir":"left"}"#), anyone, INVALID_PARAMS),
             (request("screen.rotate", r#"{"dir":5}"#), anyone, INVALID_PARAMS),
+            (request("workspace.move", r#"{"id":"ws_1","to":0}"#), panel, INVALID_PARAMS),
+            (request("workspace.move", r#"{"id":"ws_1"}"#), panel, INVALID_PARAMS),
+            (request("workspace.move", r#"{"to":2}"#), panel, INVALID_PARAMS),
+            (request("workspace.move", r#"{"id":"ws_1","to":2}"#), anyone, FORBIDDEN),
             (request("workspace.add_window", "{}"), anyone, INVALID_PARAMS),
             (request("workspace.add_window", r#"{"id":"ws_1","number":1}"#), anyone, INVALID_PARAMS),
             (request("workspace.add_window", r#"{"number":0}"#), anyone, INVALID_PARAMS),
@@ -737,6 +767,7 @@ mod tests {
             ("screen.rotate", "{}"),
             ("screen.reset_sizes", "{}"),
             ("workspace.add_window", r#"{"number":1}"#),
+            ("workspace.move", r#"{"id":"ws_1","to":2}"#),
             ("overview.show", "{}"),
             ("app.quit", "{}"),
             ("session.restore", "{}"),
@@ -766,6 +797,15 @@ mod tests {
         // A row edit can't turn launch on, set a program, or change nothing.
         let row = |params: &str| code(&request("workspace.edit_row", params), assistant(true)).map_err(|e| e.0);
         assert_eq!(row(r#"{"id":"a","row":0,"launch":true}"#), Err(INVALID_PARAMS));
+        // It can turn a row off but never on, as with launch. The Seam window can do both.
+        assert!(row(r#"{"id":"a","row":0,"off":true}"#).is_ok());
+        assert_eq!(row(r#"{"id":"a","row":0,"off":false}"#), Err(INVALID_PARAMS));
+        assert_eq!(row(r#"{"id":"a","row":0,"off":"yes"}"#), Err(INVALID_PARAMS));
+        let turn_on = request("workspace.edit_row", r#"{"id":"a","row":0,"off":false}"#);
+        assert_eq!(code(&turn_on, assistant(false)).map_err(|e| e.0), Err(FORBIDDEN));
+        assert!(code(&turn_on, panel).is_ok());
+        let moved = code(&request("workspace.move", r#"{"id":"a","to":2}"#), panel);
+        assert_eq!(moved, Ok(Command::WorkspaceMove { id: "a".into(), to: 2 }));
         assert_eq!(row(r#"{"id":"a","row":0}"#), Err(INVALID_PARAMS));
         assert_eq!(row(r#"{"id":"a","row":0,"shown":"hidden"}"#), Err(INVALID_PARAMS));
         // Fields it doesn't know, a program among them, are ignored.

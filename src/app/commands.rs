@@ -287,11 +287,12 @@ fn command_result(app: &mut App, command: Command, panel: bool) -> Reply {
             None => Err(RpcError::new(api::NOT_FOUND, "No last session is saved for this desk")),
         },
         Command::WorkspaceSwitch { id, name, alongside } => {
-            start_switch(app, id.as_deref(), name.as_deref(), alongside)
+            start_switch(app, id.as_deref(), name.as_deref(), alongside, Via { from_panel: panel, ..Via::default() })
         }
+        Command::WorkspaceMove { id, to } => move_workspace(app, &id, to),
         Command::WorkspaceUpdate { id, workspace } => update_workspace(app, &id, workspace),
-        Command::WorkspaceSnapBack { alongside } => snap_back(app, alongside),
-        Command::WorkspaceSwitchBack { alongside } => switch_back(app, alongside),
+        Command::WorkspaceSnapBack { alongside } => snap_back(app, alongside, panel),
+        Command::WorkspaceSwitchBack { alongside } => switch_back(app, alongside, panel),
         Command::WorkspaceSetDefault(id) => set_default(app, id),
         Command::CursorEasingSet(on) => set_cursor_easing(app, on),
         Command::AutoApplySet(on) => {

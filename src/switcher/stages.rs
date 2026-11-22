@@ -20,6 +20,9 @@ pub(super) fn place_rules(run: &Run, found: &[Option<isize>], which: &[usize], s
         }
         // A screen that isn't connected, or a window to keep where it is, isn't moved.
         let Some((geo, kind, note)) = destination(rule, &run.geos, h, run.size_mode, true, ws.show_all) else {
+            if workspace::screen_gone(rule, run.geos.iter().map(|g| g.id.as_str())) {
+                tally.skipped.push((app_name(rule), SCREEN_GONE.into()));
+            }
             continue;
         };
         let app = app_name(rule);

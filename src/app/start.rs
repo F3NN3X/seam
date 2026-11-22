@@ -123,6 +123,7 @@ unsafe fn new_app(hwnd: HWND, cfg: Config) -> App {
             tray: TrayIcons::default(),
             cfg,
             mons: Vec::new(),
+            inactive: Vec::new(),
             sig: String::new(),
             links: Vec::new(),
             taskbar_created: RegisterWindowMessageW(w!("TaskbarCreated")),

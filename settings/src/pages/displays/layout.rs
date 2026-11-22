@@ -31,6 +31,29 @@ fn legend(p: Palette) -> Div {
         .child(text_style(div(), tokens::LABEL).text_color(p.text_secondary).child("Click a border to see it"))
 }
 
+/// A screen that is connected but turned off in Windows, under the map: its state, its name
+/// and a button to Display settings, where it can be turned on.
+fn inactive_row(i: usize, screen: &InactiveScreen, p: Palette, cx: &mut Context<Panel>) -> Row {
+    let name = if screen.name.is_empty() { "Screen".to_string() } else { screen.name.clone() };
+    let status = div()
+        .flex()
+        .items_center()
+        .gap(px(tokens::SPACE_8))
+        .child(ui::dot(p.text_muted, true))
+        .child(text_style(div(), tokens::CAPTION).text_color(p.text_secondary).child("Inactive"));
+    let open =
+        ui::secondary(("open-display-settings-inactive", i), "Open Display settings", cx).on_click(|_, _, cx| {
+            cx.open_url("ms-settings:display");
+        });
+    let about =
+        ui::description("Connected but turned off in Windows, so Seam can't use it. Turn it on in Display settings", p);
+    row_with(
+        name,
+        Some(about.into_any_element()),
+        div().flex().items_center().gap(px(tokens::SPACE_16)).child(status).child(open),
+    )
+}
+
 /// The title and second line, the choice of view, and "Show on screens".
 fn header(panel: &Panel, desk_view: bool, p: Palette, window: &mut Window, cx: &mut Context<Panel>) -> Div {
     let caption = if desk_view {
@@ -87,14 +110,17 @@ pub(super) fn card_of(
 ) -> AnyElement {
     let desk_view = panel.layout_view == LayoutView::Seam;
     let head = header(panel, desk_view, p, window, cx);
+    let inactive: Vec<Row> =
+        state.screens_inactive.iter().enumerate().map(|(i, s)| inactive_row(i, s, p, cx)).collect();
     let mut body = div().flex().flex_col().gap(px(tokens::SPACE_12)).p(px(tokens::SPACE_16)).child(head);
     if panel.mons.len() < 2 {
         let text = "Only one screen is connected, so there's nothing to line up";
-        return card(vec![body.child(ui::description(text, p)).into_any_element()], p).into_any_element();
+        let body = Row::from(body.child(ui::description(text, p)).into_any_element());
+        return card(std::iter::once(body).chain(inactive).collect(), p).into_any_element();
     }
     body = body.child(map(panel, state, width, p, window, cx));
     if desk_view {
         body = body.children(borders::strip(panel, state, p, cx)).child(legend(p));
     }
-    card(vec![body.into_any_element()], p).into_any_element()
+    card(std::iter::once(Row::from(body.into_any_element())).chain(inactive).collect(), p).into_any_element()
 }

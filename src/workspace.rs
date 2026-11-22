@@ -15,6 +15,8 @@ mod capture;
 mod export;
 mod geometry;
 mod matching;
+mod order;
+mod plan;
 #[cfg(test)]
 mod tests;
 
@@ -28,7 +30,9 @@ pub use export::{
     safe_folder, safe_open_with, safe_url, without_open_with, without_places,
 };
 pub use geometry::{from_fractions, rect_for, target_of, to_fractions};
-pub use matching::{Bound, Candidate, assign, assign_bound};
+pub use matching::{Bound, Candidate, assign, assign_bound, assign_bound_all};
+pub use order::{MoveError, moved_to};
+pub use plan::{RowAction, SCREEN_GONE, row_action, screen_gone, screen_gone_note, takes_part};
 
 /// A window this close to a zone, in pixels, counts as being in it.
 const ZONE_TOLERANCE: i32 = 8;
@@ -44,6 +48,21 @@ pub enum OtherWindows {
     Leave,
     Minimize,
     Close,
+}
+
+/// Whether a switch moves the windows that are already open.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum OpenWindows {
+    #[default]
+    Move,
+    Leave,
+}
+
+impl OpenWindows {
+    pub fn is_move(&self) -> bool {
+        *self == OpenWindows::Move
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -182,6 +201,10 @@ pub struct Rule {
     /// An older Seam drops it, and the app is tiled like any other.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub float: bool,
+    /// Kept in the workspace but not started or placed by a switch. An older Seam drops
+    /// it, and the row is on again.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub off: bool,
 }
 
 impl Default for Rule {
@@ -208,6 +231,7 @@ impl Default for Rule {
             open_with: None,
             stack: None,
             float: false,
+            off: false,
         }
     }
 }
@@ -295,6 +319,10 @@ pub struct Workspace {
     pub hotkey: Option<String>,
     pub launch_missing: bool,
     pub other_windows: OtherWindows,
+    /// Whether a switch moves windows that are already open. An older Seam drops it, and
+    /// moves them.
+    #[serde(skip_serializing_if = "OpenWindows::is_move")]
+    pub open_windows: OpenWindows,
     /// A window saved minimized is shown, on its rect or maximized, and counts as drifted while it's minimized.
     pub show_all: bool,
     pub windows: Vec<Rule>,
@@ -313,6 +341,7 @@ impl Default for Workspace {
             hotkey: None,
             launch_missing: true,
             other_windows: OtherWindows::Leave,
+            open_windows: OpenWindows::Move,
             show_all: false,
             windows: Vec::new(),
             zones: BTreeMap::new(),
@@ -415,6 +444,7 @@ impl Session {
             hotkey: None,
             launch_missing: true,
             other_windows: OtherWindows::Leave,
+            open_windows: OpenWindows::Move,
             show_all: false,
             windows: self.windows,
             // A restore never changes a screen's layout.
@@ -444,6 +474,8 @@ pub enum RowState {
     Background,
     /// Runs as administrator, so Seam can't move it.
     CantMove,
+    /// The row is off: a switch leaves it alone.
+    Off,
 }
 
 /// One row of `workspace.status`.
@@ -461,8 +493,10 @@ pub fn drifted(rows: &[RowStatus]) -> bool {
 /// The workspace looks like the one in use: it has an app with a window, and every
 /// app with a window is where it puts it. One in the background counts as neither.
 pub fn all_in_place(rows: &[RowStatus]) -> bool {
-    let mut running =
-        rows.iter().filter(|r| !matches!(r.state, RowState::NotRunning | RowState::Background)).peekable();
+    let mut running = rows
+        .iter()
+        .filter(|r| !matches!(r.state, RowState::NotRunning | RowState::Background | RowState::Off))
+        .peekable();
     running.peek().is_some() && running.all(|r| r.state == RowState::InPlace)
 }
 

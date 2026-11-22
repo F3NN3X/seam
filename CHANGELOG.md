@@ -4,6 +4,16 @@ All notable changes to Seam. The format follows [Keep a Changelog](https://keepa
 
 ## [Unreleased]
 
+### Added
+
+- **Drag the workspace list into order.** Each item has a grip on hover and focus, Alt+Up and Alt+Down move it, and a notification offers Undo for 8 seconds. The order is the numbering: **Add window to workspace 1** to **9**, `workspace.add_window` with a `number` and the tray's Workspace items follow it. A new `workspace.move` method (the Seam window only) does the move, and the workspaces are moved as saved, so no key is lost.
+- **Turn off this app.** A row's **...** menu keeps the row but takes it out of switches, Put windows back, **Open alongside**, auto-apply and the sign-in workspace. It uses the new optional `off` on a row, left out of the file while it is false. **Update from screen** and **Add window to workspace** keep it. `workspace.get` and `workspace.edit_row` have `off` (an assistant may only turn a row off), and `workspace.status` gives the state `off`.
+- **Windows already open.** Each workspace chooses **Move back** or **Leave where they are** for the windows already open when you switch. **Put windows back** always moves them. It uses the new optional `open_windows` on a workspace, left out of the file while it is `move`.
+- **A switch says when a screen isn't connected.** An app whose saved screen isn't connected stays where it is, and the switch reports `screen not connected` in `skipped`, with a tray notice (or the Seam window's own, when it asked for the switch).
+- **Inactive screens on Displays.** A screen that is connected but turned off in Windows shows as "Inactive", with **Open Display settings**. `state.get` lists them as `screens_inactive`. Information only.
+
+Config: `off` on a workspace row and `open_windows` on a workspace are new and optional. An older Seam ignores them, and if it edits that workspace it drops them, so the row is on again and the workspace moves open windows, as before.
+
 ## [0.8.0] - 2026-11-16
 
 ### Added

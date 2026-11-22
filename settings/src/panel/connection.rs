@@ -55,6 +55,7 @@ impl Panel {
                 let Ok((client, events, state, config)) = session else {
                     let linked = this.update(cx, |this, cx| {
                         this.client = None;
+                        this.moving = false;
                         this.set_state(None);
                         this.setup_unlinked(cx);
                         cx.notify();
@@ -75,6 +76,7 @@ impl Panel {
                     }
                     this.was_linked = true;
                     this.client = Some(client.clone());
+                    this.moving = false;
                     if this.apply(state, config) {
                         this.open_setup(window, cx);
                     }
@@ -102,6 +104,9 @@ impl Panel {
                             && let Some(page) = event.data["page"].as_str().and_then(Page::from_arg)
                         {
                             this.show(page, None, window, cx);
+                        }
+                        if event.kind == "workspace.switched" && event.data["from_panel"].as_bool() == Some(true) {
+                            this.say_screens_gone(&event.data, window, cx);
                         }
                         // A moved window of another workspace changes nothing on show.
                         let moved_here = event.kind == "workspace.moved"
@@ -141,6 +146,19 @@ impl Panel {
                 }
             }
         })
+    }
+
+    /// After a switch this window asked for, say so when apps stayed put because their screen
+    /// isn't connected. The tray shows nothing then.
+    fn say_screens_gone(&self, switched: &Value, window: &mut Window, cx: &mut Context<Self>) {
+        let skipped: Vec<(String, String)> = switched["skipped"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|s| Some((s["app"].as_str()?.to_string(), s["reason"].as_str()?.to_string())))
+            .collect();
+        let Some(body) = seam::workspace::screen_gone_note(&skipped) else { return };
+        window.push_notification(Notification::new().message(body), cx);
     }
 
     /// Take the tray's state and config. False when the config couldn't be read, and was left as it was.

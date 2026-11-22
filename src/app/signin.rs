@@ -133,7 +133,7 @@ pub(super) fn cancel_sign_in(app: &mut App) {
 }
 
 fn switch_to(app: &mut App, id: &str) {
-    if let Err(e) = start_switch(app, Some(id), None, false) {
+    if let Err(e) = start_switch(app, Some(id), None, false, Via::default()) {
         log::info!("sign-in workspace: {}", e.message);
     }
 }

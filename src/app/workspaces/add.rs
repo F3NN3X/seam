@@ -149,13 +149,21 @@ fn save(app: &mut App, job: &Capturing, read: Result<(Rule, isize), String>) -> 
         in_use,
         until,
     });
-    let body = if added.new {
-        format!("{name} has a new row that won't start it. Click to undo")
-    } else {
-        format!("{name}'s row now has where it is. Click to undo")
+    let off = saved.windows.get(added.row).is_some_and(|r| r.off);
+    let (title, body) = match (added.new, off) {
+        (true, _) => {
+            (format!("Added to {}", saved.name), format!("{name} has a new row that won't start it. Click to undo"))
+        }
+        (false, true) => (
+            format!("Updated {name} in {}", saved.name),
+            "It's off, so a switch leaves it alone. Click to undo".to_string(),
+        ),
+        (false, false) => {
+            (format!("Added to {}", saved.name), format!("{name}'s row now has where it is. Click to undo"))
+        }
     };
     log::info!("add window: {name} {} {}", if added.new { "added to" } else { "updated in" }, saved.name);
-    notify(app, &format!("Added to {}", saved.name), &body, BalloonAction::UndoQuickSave);
+    notify(app, &title, &body, BalloonAction::UndoQuickSave);
     publish(app);
     Ok(json!({ "id": id, "row": added.row, "new": added.new }))
 }

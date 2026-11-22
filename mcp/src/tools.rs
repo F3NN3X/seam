@@ -107,7 +107,7 @@ pub const TOOLS: &[Tool] = &[
     Tool {
         name: "seam_edit_row",
         method: "workspace.edit_row",
-        about: "Change where one app of a workspace goes (target), how it is shown (shown), or stop Seam starting it (launch false). It can't change which program the row is, and can't turn starting on. Needs \"Let assistants change workspaces\" in Seam. The user can undo it from Seam's notice.",
+        about: "Change where one app of a workspace goes (target), how it is shown (shown), stop Seam starting it (launch false), or turn the row off (off true). It can't change which program the row is, can't turn starting on and can't turn a row back on. Needs \"Let assistants change workspaces\" in Seam. The user can undo it from Seam's notice.",
         kind: Kind::Act,
         args: &[
             ID,
@@ -119,6 +119,7 @@ pub const TOOLS: &[Tool] = &[
             ),
             ("shown", "string", "normal, minimized, maximized or fullscreen"),
             ("launch", "boolean", "Only false is accepted: Seam stops starting this app"),
+            ("off", "boolean", "Only true is accepted: a switch leaves this app alone"),
         ],
         required: &["id", "row"],
     },

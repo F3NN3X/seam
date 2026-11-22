@@ -8,6 +8,7 @@ pub(super) fn refresh(app: &mut App) {
         return;
     }
     app.mons = monitors::enumerate();
+    app.inactive = monitors::inactive().into_iter().map(|(id, name)| state::InactiveScreen { id, name }).collect();
     spotlight::screens_changed(&app.mons);
     // A display change can make a window cover its screen, or stop it.
     standby_check(app);
@@ -88,6 +89,7 @@ pub(super) fn snapshot(app: &App) -> Snapshot {
         },
         desk: DeskRef { sig: app.sig.clone(), name: saved_name.unwrap_or_else(|| desk::default_name(&app.mons)) },
         screens: screens.collect(),
+        screens_inactive: app.inactive.clone(),
         borders: desk::border_states(&app.mons, &app.links),
         hotkey_errors: app.hotkey_errors.clone(),
         last_align: app.last_align.clone(),

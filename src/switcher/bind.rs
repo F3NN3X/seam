@@ -40,7 +40,7 @@ pub(super) fn bind(id: &str, row: usize, hwnd: isize) {
 /// Bind the windows a capture read, each to its row, for the rows of `ws` with a place.
 pub fn bind_rows(ws: &Workspace, windows: &[(isize, usize)]) {
     for (hwnd, row) in windows {
-        if ws.windows.get(*row).is_some_and(|r| usable_place(r).is_some()) {
+        if ws.windows.get(*row).is_some_and(|r| workspace::takes_part(r) && usable_place(r).is_some()) {
             bind(&ws.id, *row, *hwnd);
         }
     }
@@ -103,7 +103,7 @@ fn prune(bound: &mut [(String, usize, Option<Held>)]) {
 }
 
 /// Each row's binding for `workspace::assign_bound`, `None` for a row without a usable
-/// place or with the setting off, and the windows bound to other workspaces' rows.
+/// place, a row that is off, or with the setting off, and the windows bound to other workspaces' rows.
 pub(super) fn bindings(ws: &Workspace, remember: bool) -> (Vec<Option<Bound>>, HashSet<isize>) {
     if !remember {
         return (vec![None; ws.windows.len()], HashSet::new());
@@ -115,7 +115,8 @@ pub(super) fn bindings(ws: &Workspace, remember: bool) -> (Vec<Option<Bound>>, H
         Some((_, _, None)) => Bound::Gone,
         None => Bound::Unbound,
     };
-    let rows = ws.windows.iter().enumerate().map(|(i, r)| usable_place(r).map(|_| of(i))).collect();
+    let bindable = |r: &Rule| workspace::takes_part(r) && usable_place(r).is_some();
+    let rows = ws.windows.iter().enumerate().map(|(i, r)| bindable(r).then(|| of(i))).collect();
     let elsewhere = bound.iter().filter(|(w, _, _)| *w != ws.id).filter_map(|(_, _, h)| h.map(|h| h.hwnd)).collect();
     (rows, elsewhere)
 }

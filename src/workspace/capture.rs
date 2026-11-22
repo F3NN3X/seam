@@ -20,7 +20,7 @@ fn as_candidates(fresh: &[Rule]) -> Vec<Candidate> {
 /// `bound` and `elsewhere` are the tray's bindings (D336) with windows as capture
 /// indices, so a place row pairs with its own window. Empty for plain matching.
 fn pair(old: &[Rule], fresh: &[Rule], bound: &[Option<Bound>], elsewhere: &HashSet<isize>) -> Vec<Option<isize>> {
-    assign_bound(old, &as_candidates(fresh), bound, elsewhere)
+    assign_bound_all(old, &as_candidates(fresh), bound, elsewhere)
 }
 
 /// What "Update from screen" makes of a workspace's rows.

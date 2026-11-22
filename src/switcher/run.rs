@@ -20,6 +20,10 @@ pub struct SwitchJob {
     pub alongside: bool,
     /// "Remember folders and pages": an app this switch starts opens on its row's folder or page.
     pub places: bool,
+    /// Snap back: windows already open are moved even when the workspace leaves them where they are.
+    pub put_back: bool,
+    /// The Seam window asked for it, which shows the result itself.
+    pub from_panel: bool,
 }
 
 /// How a switch went: what the event says.
@@ -33,6 +37,8 @@ pub struct Switched {
     /// The windows the rows put in one zone as a stack: the screen and zones, from 0,
     /// and the windows from the top.
     pub stacks: Vec<(Zones, Vec<isize>)>,
+    /// The Seam window asked for it, so the tray stays quiet.
+    pub from_panel: bool,
 }
 
 /// A screen's id and the first and last of its zones, from 0.
@@ -108,7 +114,8 @@ fn run_switch(job: &SwitchJob, mine: u64) -> Option<Switched> {
     let geos = geometry(&job.screens, job.gap);
     let (pins_stay, size_mode, places) = (job.pins_stay, job.size_mode, job.places);
     let (bound, elsewhere) = bindings(ws, places);
-    let run = Run { ws, geos, pins_stay, size_mode, cancelled: &cancelled, stamp, places, bound };
+    let put_back = job.put_back;
+    let run = Run { ws, geos, pins_stay, size_mode, cancelled: &cancelled, stamp, places, put_back, bound };
     let mut tally = Tally::default();
     let mut procs = Procs::new();
 
@@ -160,7 +167,7 @@ fn run_switch(job: &SwitchJob, mine: u64) -> Option<Switched> {
     let launched = starts.launched;
     let stacks = stacks_of(ws, &found);
     let (id, name, placed, skipped) = (ws.id.clone(), ws.name.clone(), tally.placed, tally.skipped);
-    Some(Switched { id, name, launched, placed, skipped, stacks })
+    Some(Switched { id, name, launched, placed, skipped, stacks, from_panel: job.from_panel })
 }
 
 /// The rows with a place in a stack, whose windows were found, grouped by screen and zones.
@@ -262,7 +269,17 @@ fn arrange_as_they_open(
 /// What is running already goes in one pass, then the missing apps start in stages.
 fn place_then_start(run: &Run, mine: u64, waits: &mut Waits, starts: &mut Starts, tally: &mut Tally) -> Option<()> {
     let ws = run.ws;
-    let running: Vec<usize> = (0..waits.found.len()).filter(|i| waits.found[*i].is_some()).collect();
+    let action = |i: usize| workspace::row_action(&ws.windows[i], waits.found[i], ws.open_windows, run.put_back);
+    let running: Vec<usize> = (0..waits.found.len()).filter(|i| action(*i) == RowAction::Place).collect();
+    // A window left where it is still has its row, so auto-apply doesn't give the row to a second window.
+    if let Some(key) = run.stamp {
+        let left = (0..waits.found.len()).filter(|i| action(*i) == RowAction::Leave);
+        for i in left {
+            if let Some(hwnd) = waits.found[i] {
+                winutil::set_ws_stamp(hwnd_of(hwnd), key, i);
+            }
+        }
+    }
     place_rules(run, waits.found, &running, waits.seen, tally);
     if (run.cancelled)() {
         return None;
@@ -270,9 +287,8 @@ fn place_then_start(run: &Run, mine: u64, waits: &mut Waits, starts: &mut Starts
     // A place row whose window is open but not one a switch takes (on another
     // desktop, say) isn't started a second time.
     let open = |i: usize| matches!(run.bound[i], Some(Bound::Alive(_)));
-    let wanted =
-        |(i, r): (usize, &Rule)| (ws.launch_missing && waits.found[i].is_none() && r.launch && !open(i)).then_some(i);
-    let starting: Vec<usize> = ws.windows.iter().enumerate().filter_map(wanted).collect();
+    let wanted = |i: usize| (ws.launch_missing && action(i) == RowAction::Start && !open(i)).then_some(i);
+    let starting: Vec<usize> = (0..ws.windows.len()).filter_map(wanted).collect();
     for &i in starting.iter().filter(|i| run.bound[**i] == Some(Bound::Gone)) {
         let (app, kind) = (app_name(&ws.windows[i]), usable_place(&ws.windows[i]).map_or("place", place_kind));
         log::info!("{app}: its window was closed, starting on its saved {kind}");
@@ -283,7 +299,11 @@ fn place_then_start(run: &Run, mine: u64, waits: &mut Waits, starts: &mut Starts
     // An app this switch doesn't start and that has no window is reported when its
     // program still runs, closed to the tray.
     let mut background = Background::default();
-    let idle = ws.windows.iter().enumerate().filter(|(i, _)| waits.found[*i].is_none() && !starting.contains(i));
+    let idle = ws
+        .windows
+        .iter()
+        .enumerate()
+        .filter(|(i, r)| workspace::takes_part(r) && waits.found[*i].is_none() && !starting.contains(i));
     for (_, rule) in idle {
         if background.runs(rule, waits.procs) {
             tally.skipped.push((app_name(rule), RUNS_IN_BACKGROUND.into()));
@@ -314,8 +334,11 @@ fn deal_with_others(
     let (mut exes, mut aumids): (HashSet<String>, HashSet<String>) = (HashSet::new(), HashSet::new());
     // A place row whose window is open but out of reach (on another desktop) still has its app here.
     let open = |i: usize| matches!(run.bound[i], Some(Bound::Alive(_)));
-    let mine_rules =
-        ws.windows.iter().enumerate().filter(|(i, _)| found[*i].is_some() || starts.started.contains(i) || open(*i));
+    let mine_rules = ws
+        .windows
+        .iter()
+        .enumerate()
+        .filter(|(i, r)| r.off || found[*i].is_some() || starts.started.contains(i) || open(*i));
     for (_, rule) in mine_rules {
         exes.insert(rule.exe.to_lowercase());
         aumids.extend(rule.aumid.clone());

@@ -84,6 +84,7 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{
 use windows::Win32::UI::Shell::*;
 use windows::Win32::UI::WindowsAndMessaging::*;
 use windows::core::{PCWSTR, w};
+use workspaces::{Via, move_workspace};
 use workspaces::{Which, create_workspace, edit_workspace, start_add_window, start_group, window_planned};
 use workspaces::{
     apply_hotkeys, aside, capture_job, captured, choose_in_use, desk_workspaces, detected_in_use, drift_checked,
@@ -339,6 +340,8 @@ struct App {
     tray: TrayIcons,
     cfg: Config,
     mons: Vec<Mon>,
+    /// Screens connected but turned off in Windows, as `monitors::inactive` found them.
+    inactive: Vec<state::InactiveScreen>,
     sig: String,
     links: Vec<Link>,
     taskbar_created: u32,

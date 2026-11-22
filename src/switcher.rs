@@ -15,8 +15,8 @@ use seam::desk;
 use seam::stack;
 use seam::winutil;
 use seam::workspace::{
-    self, Bound, Candidate, OpenWith, OtherWindows, Pin, Place, RowState, RowStatus, Rule, SESSION_ID, Shown, Target,
-    WinState, Workspace,
+    self, Bound, Candidate, OpenWith, OtherWindows, Pin, Place, RowAction, RowState, RowStatus, Rule, SCREEN_GONE,
+    SESSION_ID, Shown, Target, WinState, Workspace,
 };
 use seam::zones::{self, Rect, ZoneLayout};
 use std::collections::{BTreeMap, HashMap, HashSet};
@@ -351,6 +351,8 @@ struct Run<'a> {
     stamp: Option<u32>,
     /// Apps started open on their row's folder or page.
     places: bool,
+    /// Snap back: windows already open are moved whatever the workspace says.
+    put_back: bool,
     /// Each row's remembered window as the switch began, `None` for a row without a
     /// place (D336).
     bound: Vec<Option<Bound>>,

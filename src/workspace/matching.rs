@@ -64,29 +64,53 @@ pub enum Bound {
 /// window only, and one whose window was closed takes none, so it's started on its
 /// place. An unbound one matches by app, but never takes a window bound to a place
 /// row here or in `elsewhere` (other workspaces, or windows a launch must not take).
+///
+/// A row that is off matches nothing and takes no window (D693).
 pub fn assign_bound(
     rules: &[Rule],
     wins: &[Candidate],
     bound: &[Option<Bound>],
     elsewhere: &HashSet<isize>,
 ) -> Vec<Option<isize>> {
+    assign_rows(rules, wins, bound, elsewhere, true)
+}
+
+/// `assign_bound` for a capture, which pairs a row that is off with its window too, so
+/// the row's place is kept up to date.
+pub fn assign_bound_all(
+    rules: &[Rule],
+    wins: &[Candidate],
+    bound: &[Option<Bound>],
+    elsewhere: &HashSet<isize>,
+) -> Vec<Option<isize>> {
+    assign_rows(rules, wins, bound, elsewhere, false)
+}
+
+fn assign_rows(
+    rules: &[Rule],
+    wins: &[Candidate],
+    bound: &[Option<Bound>],
+    elsewhere: &HashSet<isize>,
+    skip_off: bool,
+) -> Vec<Option<isize>> {
+    let sits_out = |i: usize| skip_off && rules[i].off;
     let bound_of = |i: usize| bound.get(i).copied().flatten();
     let mine: HashSet<isize> = (0..rules.len())
         .filter_map(|i| match bound_of(i) {
-            Some(Bound::Alive(h)) => Some(h),
+            Some(Bound::Alive(h)) if !sits_out(i) => Some(h),
             _ => None,
         })
         .collect();
     let mut taken = vec![false; wins.len()];
     let mut found = vec![None; rules.len()];
     // Bound windows first, so no row before them in the order can take them.
-    for (i, r) in rules.iter().enumerate() {
+    for (i, r) in rules.iter().enumerate().filter(|(i, _)| !sits_out(*i)) {
         if let Some(Bound::Alive(h)) = bound_of(i) {
             found[i] = pick(r, wins, &mut taken, |w| wins[w].hwnd == h);
         }
     }
     let free = |w: usize| !mine.contains(&wins[w].hwnd);
-    for (i, r) in rules.iter().enumerate() {
+    for (i, r) in rules.iter().enumerate().filter(|(i, _)| !sits_out(*i)) {
         found[i] = match bound_of(i) {
             Some(Bound::Alive(_)) => found[i],
             Some(Bound::Gone) => None,

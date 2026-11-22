@@ -70,6 +70,28 @@ pub fn not_open(
     if closed.len() == old.windows.len() { Vec::new() } else { closed }
 }
 
+/// For each of `rows` (as `not_open` gives them), whether the app is running anyway: the
+/// capture paired a window to another row of the same app. Such a row only lacks its own
+/// window, so the review starts it at Keep. Arguments as `not_open`.
+pub fn running(
+    old: &Workspace,
+    fresh: &[Rule],
+    bound: &[Option<Bound>],
+    elsewhere: &HashSet<isize>,
+    rows: &[usize],
+) -> Vec<bool> {
+    let found = pair(&old.windows, fresh, bound, elsewhere);
+    let cands = as_candidates(fresh);
+    rows.iter()
+        .map(|row| {
+            found
+                .iter()
+                .enumerate()
+                .any(|(o, hit)| o != *row && hit.is_some_and(|i| app_open(&old.windows[*row], &[&cands[i as usize]])))
+        })
+        .collect()
+}
+
 /// What Update from screen did to the rows of apps that weren't open, for the balloon:
 /// "Removed 2 apps that weren't open", "Turned off 1 app that wasn't open" or both.
 pub fn closed_note(removed: usize, turned_off: usize) -> String {

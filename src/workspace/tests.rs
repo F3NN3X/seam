@@ -193,6 +193,25 @@ fn none_open_changes_nothing_whatever_the_choice() {
 }
 
 #[test]
+fn a_row_of_a_running_app_is_told_from_one_of_a_closed_app() {
+    // Two Chrome windows saved, one open now, and Slack closed.
+    let chrome = r"C:\Chrome.exe";
+    let old = Workspace {
+        windows: vec![
+            rule(chrome, None, "", "Docs"),
+            rule(chrome, None, "", "Hidden one"),
+            rule(r"C:\Slack.exe", None, "", ""),
+        ],
+        ..Workspace::default()
+    };
+    let fresh = [rule(chrome, None, "", "Docs")];
+    let none = HashSet::new();
+    let rows = review::not_open(&old, &fresh, &[], &none, &[]);
+    assert_eq!(rows, [1, 2]);
+    assert_eq!(review::running(&old, &fresh, &[], &none, &rows), [true, false]);
+}
+
+#[test]
 fn not_open_agrees_with_the_merge() {
     let (old, fresh) = three_apps();
     let none = HashSet::new();

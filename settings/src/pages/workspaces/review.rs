@@ -67,7 +67,8 @@ impl Review {
         let windows = answer["windows"].as_array().into_iter().flatten();
         self.items = windows
             .map(|w| Item {
-                app: text(w, "app"),
+                // The name the table gives the app, not the exe's stem.
+                app: app_title(&Rule { exe: text(w, "app"), title_hint: text(w, "title"), ..Rule::default() }),
                 title: text(w, "title"),
                 screen: w["screen"].as_u64(),
                 why: w["why"].as_str().map(String::from),
@@ -356,6 +357,29 @@ fn save_ticked(
 struct Closed {
     row: usize,
     screen: Option<u64>,
+    /// The app has another window open, so only this one is missing.
+    running: bool,
+}
+
+/// What a row of the list starts at: Keep for a window of a running app, else the default.
+fn start_choice(running: bool, default: ClosedApps) -> ClosedApps {
+    if running { ClosedApps::Keep } else { default }
+}
+
+/// The line under a row's app: its screen and the window's title.
+fn row_note(screen: Option<u64>, title: &str) -> String {
+    let screen = screen.map_or("Screen not connected".to_string(), |n| format!("Screen {n}"));
+    let title = title.trim();
+    format!("{screen}, {}", if title.is_empty() { "Another window" } else { title })
+}
+
+/// The dialog's body: "3 of its windows aren't open. Choose what happens to each".
+fn closed_body(count: usize) -> String {
+    if count == 1 {
+        "1 of its windows isn't open. Choose what happens to each".to_string()
+    } else {
+        format!("{count} of its windows aren't open. Choose what happens to each")
+    }
 }
 
 /// What Update from screen did, for the notification: "Turned off 1 app and removed 2",
@@ -385,7 +409,13 @@ pub fn update(panel: &Panel, ws: &Workspace, window: &mut Window, cx: &mut Conte
                     .as_array()
                     .into_iter()
                     .flatten()
-                    .filter_map(|r| Some(Closed { row: r["row"].as_u64()? as usize, screen: r["screen"].as_u64() }))
+                    .filter_map(|r| {
+                        Some(Closed {
+                            row: r["row"].as_u64()? as usize,
+                            screen: r["screen"].as_u64(),
+                            running: r["running"].as_bool() == Some(true),
+                        })
+                    })
                     .filter(|r| r.row < before.windows.len())
                     .collect();
                 if rows.is_empty() {
@@ -408,7 +438,7 @@ fn ask_closed(
     window: &mut Window,
     cx: &mut Context<Panel>,
 ) {
-    let chosen = Rc::new(RefCell::new(vec![default; rows.len()]));
+    let chosen = Rc::new(RefCell::new(rows.iter().map(|r| start_choice(r.running, default)).collect::<Vec<_>>()));
     let (before, rows, view) = (Rc::new(before), Rc::new(rows), cx.entity().downgrade());
     window.open_dialog(cx, move |dialog, window, cx| {
         let p = palette(cx);
@@ -421,7 +451,7 @@ fn ask_closed(
                 Some(view) => workspace_editor::app_icon(rule, &view.read(cx).icons, p),
                 None => workspace_editor::app_icon(rule, &Icons::default(), p),
             };
-            let screen = closed.screen.map_or("Screen not connected".to_string(), |n| format!("Screen {n}"));
+            let note = row_note(closed.screen, &rule.title_hint);
             let app = app_title(rule);
             let labels: Vec<&'static str> = CLOSED_CHOICES.iter().map(|(_, label)| *label).collect();
             let at = CLOSED_CHOICES.iter().position(|(c, _)| *c == now[k]).unwrap_or(0);
@@ -445,7 +475,7 @@ fn ask_closed(
                         .flex_1()
                         .min_w_0()
                         .child(text_style(div(), tokens::BODY).truncate().child(app))
-                        .child(ui::description(screen, p)),
+                        .child(ui::description(note, p).truncate()),
                 )
                 .child(pick);
             if k > 0 {
@@ -453,12 +483,7 @@ fn ask_closed(
             }
             list = list.child(line);
         }
-        let count = rows.len();
-        let about = if count == 1 {
-            "1 of its apps isn't open. Choose what happens to each".to_string()
-        } else {
-            format!("{count} of its apps aren't open. Choose what happens to each")
-        };
+        let about = closed_body(rows.len());
         let body = div()
             .flex()
             .flex_col()
@@ -530,7 +555,24 @@ fn send(
 
 #[cfg(test)]
 mod tests {
-    use super::{changes_note, ticked_note};
+    use super::{ClosedApps, changes_note, closed_body, row_note, start_choice, ticked_note};
+
+    #[test]
+    fn a_window_of_a_running_app_starts_at_keep() {
+        for default in [ClosedApps::Keep, ClosedApps::TurnOff, ClosedApps::Remove] {
+            assert_eq!(start_choice(true, default), ClosedApps::Keep);
+            assert_eq!(start_choice(false, default), default);
+        }
+    }
+
+    #[test]
+    fn a_row_says_its_screen_and_window() {
+        assert_eq!(row_note(Some(2), " Docs "), "Screen 2, Docs");
+        assert_eq!(row_note(Some(1), ""), "Screen 1, Another window");
+        assert_eq!(row_note(None, "Docs"), "Screen not connected, Docs");
+        assert_eq!(closed_body(1), "1 of its windows isn't open. Choose what happens to each");
+        assert_eq!(closed_body(3), "3 of its windows aren't open. Choose what happens to each");
+    }
 
     #[test]
     fn the_notification_names_only_what_changed() {

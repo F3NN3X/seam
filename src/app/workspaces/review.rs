@@ -47,12 +47,14 @@ pub(super) fn previewed(app: &mut App, job: Capturing, got: switcher::Captured) 
     if let Some(old) = old {
         let (bound, elsewhere) = switcher::capture_bindings(old, &got.hwnds, app.cfg.workspaces_remember_places);
         let rows = workspace::review::not_open(old, &got.rules, &bound, &elsewhere, &got.others);
+        let running = workspace::review::running(old, &got.rules, &bound, &elsewhere, &rows);
         answer["not_open"] = rows
             .into_iter()
-            .map(|row| {
+            .zip(running)
+            .map(|(row, running)| {
                 let rule = &old.windows[row];
                 let app = workspace::report::app_name(&rule.exe, &rule.title_hint);
-                json!({ "row": row, "app": app, "screen": number(&rule.monitor) })
+                json!({ "row": row, "app": app, "screen": number(&rule.monitor), "running": running })
             })
             .collect();
     }

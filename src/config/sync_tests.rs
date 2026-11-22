@@ -616,3 +616,130 @@ fn absorb_then_push_keeps_the_other_pcs_row() {
     folder::point_at(None, None);
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+fn workspace_with(rows: Value) -> Value {
+    json!({ "version": 2, "desks": { "sig": { "name": "d", "workspaces": [{ "id": "w1", "name": "A", "windows": rows }] } } })
+}
+
+fn rows_of(file: &Value) -> Vec<Value> {
+    file["desks"]["sig"]["workspaces"][0]["windows"].as_array().cloned().unwrap_or_default()
+}
+
+#[test]
+fn acceptance_is_the_whole_identity_not_a_hash_of_it() {
+    let file = workspace_with(json!([{ "exe": r"C:\Windows\notepad.exe", "launch": true }]));
+    let set = accepted_of(&file);
+    assert_eq!(set.len(), 1);
+    let parts: Vec<String> = serde_json::from_str(set.iter().next().unwrap()).unwrap();
+    assert_eq!(parts.len(), 6);
+    assert_eq!(parts[0], "w1");
+    assert!(parts[1].contains("notepad.exe"));
+    // A workspace id that carries what looks like the next field doesn't make another row's identity.
+    let sneaky = json!({ "desks": { "sig": { "workspaces": [{ "id": "w1\u{1}\"C:\\Windows\\notepad.exe\"", "windows": [{ "launch": true }] }] } } });
+    assert!(accepted_of(&sneaky).is_disjoint(&set));
+    // Only an identical row passes, whatever else a file says.
+    let mut other = file.clone();
+    other["desks"]["sig"]["workspaces"][0]["windows"][0]["exe"] = json!(r"C:\Windows\notepad.exe ");
+    guard(&mut other, &set);
+    assert!(!launches(&other));
+}
+
+/// The other PC's file: a plain row and one with an "Open with" and a place, both launching.
+fn two_rows() -> (Value, Value) {
+    let plain = json!({ "exe": r"C:\Windows\notepad.exe", "launch": true });
+    let with = json!({ "exe": r"C:\Windows\calc.exe", "launch": true, "open_with": "C:\\a.txt", "place": { "folder": "C:\\p" } });
+    (workspace_with(json!([plain, with])), workspace_with(json!([plain])))
+}
+
+#[test]
+fn turning_a_held_row_on_changes_only_what_this_pc_changed() {
+    let (raw, accepts) = two_rows();
+    let mut held = raw.clone();
+    guard(&mut held, &accepted_of(&accepts));
+    assert_eq!(rows_of(&held)[1]["launch"], false);
+    // Off in the file, on here: the folder's row has it on already, so make it off there first.
+    let mut raw_off = raw.clone();
+    raw_off["desks"]["sig"]["workspaces"][0]["windows"][1]["launch"] = json!(false);
+    let mut held_off = raw_off.clone();
+    guard(&mut held_off, &accepted_of(&accepts));
+    let mut ours = held_off.clone();
+    ours["desks"]["sig"]["workspaces"][0]["windows"][1]["launch"] = json!(true);
+    let out = outgoing(&held_off, &ours, &raw_off);
+    let row = &rows_of(&out)[1];
+    assert_eq!(row["launch"], true);
+    assert_eq!(row["open_with"], "C:\\a.txt");
+    assert_eq!(row["place"]["folder"], "C:\\p");
+    assert_eq!(rows_of(&out)[0], rows_of(&raw_off)[0]);
+}
+
+#[test]
+fn deleting_or_moving_a_row_here_leaves_the_other_rows_as_the_folder_has_them() {
+    let (raw, accepts) = two_rows();
+    let mut held = raw.clone();
+    guard(&mut held, &accepted_of(&accepts));
+    let held_rows = rows_of(&held);
+    let raw_rows = rows_of(&raw);
+    // The row before the guarded one is deleted here.
+    let deleted = workspace_with(json!([held_rows[1]]));
+    assert_eq!(rows_of(&outgoing(&held, &deleted, &raw)), [raw_rows[1].clone()]);
+    // The two are swapped.
+    let swapped = workspace_with(json!([held_rows[1], held_rows[0]]));
+    assert_eq!(rows_of(&outgoing(&held, &swapped, &raw)), [raw_rows[1].clone(), raw_rows[0].clone()]);
+    // A new row goes in first.
+    let new = json!({ "exe": r"C:\Windows\mspaint.exe", "launch": true });
+    let added = workspace_with(json!([new, held_rows[0], held_rows[1]]));
+    assert_eq!(rows_of(&outgoing(&held, &added, &raw)), [new, raw_rows[0].clone(), raw_rows[1].clone()]);
+}
+
+#[test]
+fn this_pcs_own_file_over_the_limits_still_writes_and_reads() {
+    let _lock = folder::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let dir = std::env::temp_dir().join(format!("seam-test-{}-big", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    folder::point_at(Some(dir.clone()), None);
+    let mut config = Config::default();
+    let workspaces: Vec<Value> = (0..201).map(|n| json!({ "id": format!("w{n}"), "windows": [] })).collect();
+    config.desks.insert("sig".into(), Desk { workspaces, ..Desk::default() });
+    config.migrate_sign_in();
+    assert_eq!(folder::push(&config, 1), Push::Quiet);
+    let bytes = std::fs::read(dir.join("config.json")).unwrap();
+    // Another PC's copy of it is refused, this PC's is read, and a second save doesn't stop.
+    assert!(matches!(attempt(&bytes, 0), Attempt::GiveUp));
+    assert!(matches!(attempt_as(&bytes, 0, Some(&folder::computer_name())), Attempt::Take(_)));
+    config.enabled = false;
+    assert_eq!(folder::push(&config, 2), Push::Quiet);
+    let file: Value = serde_json::from_slice(&std::fs::read(dir.join("config.json")).unwrap()).unwrap();
+    assert_eq!(file["enabled"], false);
+    folder::point_at(None, None);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+struct Mount(&'static [char], &'static [char]);
+
+impl Drives for Mount {
+    fn fixed(&self, letter: char) -> bool {
+        self.0.contains(&letter)
+    }
+
+    fn mounted(&self, letter: char) -> bool {
+        self.1.contains(&letter)
+    }
+}
+
+#[test]
+fn a_folder_on_a_drive_that_isnt_mounted_yet_is_waited_for() {
+    let own = Path::new(r"C:\Users\x\AppData\Roaming\Seam");
+    // A drive with no volume: the disk may come back. Refused for good once it is there and isn't fixed.
+    assert!(may_appear(r"Z:\Sync\Seam", own, &Mount(&['C'], &['C'])));
+    assert!(!may_appear(r"Z:\Sync\Seam", own, &Mount(&['C'], &['C', 'Z'])));
+    assert!(!may_appear(r"\\server\share", own, &Mount(&['C'], &['C'])));
+    assert!(!may_appear(r"C:\..\x", own, &Mount(&['C'], &['C'])));
+    // A fixed drive's folder that isn't made yet.
+    let missing = std::env::temp_dir().join(format!("seam-test-{}-nothere", std::process::id()));
+    let letter = missing.to_string_lossy().chars().next().unwrap().to_ascii_uppercase();
+    let (fixed, mounted): (&'static [char], &'static [char]) =
+        (&['C', 'D', 'E', 'F', 'G', 'H'], &['C', 'D', 'E', 'F', 'G', 'H']);
+    assert!(fixed.contains(&letter));
+    assert!(may_appear(&missing.display().to_string(), own, &Mount(fixed, mounted)));
+}

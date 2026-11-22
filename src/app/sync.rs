@@ -80,8 +80,17 @@ struct FixedDrives;
 
 impl Drives for FixedDrives {
     fn fixed(&self, letter: char) -> bool {
-        unsafe { GetDriveTypeW(&HSTRING::from(format!("{letter}:\\"))) == DRIVE_FIXED }
+        drive_type(letter) == DRIVE_FIXED
     }
+
+    fn mounted(&self, letter: char) -> bool {
+        // DRIVE_UNKNOWN and DRIVE_NO_ROOT_DIR: no volume there (now).
+        drive_type(letter) > 1
+    }
+}
+
+fn drive_type(letter: char) -> u32 {
+    unsafe { GetDriveTypeW(&HSTRING::from(format!("{letter}:\\"))) }
 }
 
 // ---- the watcher ----
@@ -94,6 +103,18 @@ struct Watch {
 
 static WATCH: Mutex<Option<Watch>> = Mutex::new(None);
 
+/// Which watcher is the current one. A thread that is stopping, or was replaced, finds its number is
+/// no longer this and drops what it read instead of handing it to the tray.
+static WATCH_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+fn begin_watch() -> u64 {
+    WATCH_ID.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1
+}
+
+fn current(id: u64) -> bool {
+    WATCH_ID.load(std::sync::atomic::Ordering::SeqCst) == id
+}
+
 fn watching() -> std::sync::MutexGuard<'static, Option<Watch>> {
     WATCH.lock().unwrap_or_else(|e| e.into_inner())
 }
@@ -104,8 +125,9 @@ fn watch(folder: PathBuf, hwnd: isize) {
     let events = unsafe { (CreateEventW(None, true, false, None), CreateEventW(None, false, false, None)) };
     let (Ok(stop), Ok(wake)) = events else { return };
     let (stop_id, wake_id) = (stop.0 as isize, wake.0 as isize);
+    let id = begin_watch();
     let spawned =
-        std::thread::Builder::new().name("seam-sync".into()).spawn(move || run(&folder, hwnd, stop_id, wake_id));
+        std::thread::Builder::new().name("seam-sync".into()).spawn(move || run(&folder, hwnd, (stop_id, wake_id), id));
     match spawned {
         Ok(thread) => *watching() = Some(Watch { stop: stop_id, wake: wake_id, thread }),
         Err(_) => unsafe {
@@ -118,6 +140,7 @@ fn watch(folder: PathBuf, hwnd: isize) {
 /// Stop watching. The thread may sit in a read of a file that is still downloading, so another
 /// thread waits for it, and the tray never does.
 fn unwatch() {
+    begin_watch();
     let Some(watch) = watching().take() else { return };
     unsafe {
         let _ = SetEvent(HANDLE(watch.stop as *mut _));
@@ -182,7 +205,7 @@ fn now() -> Instant {
     Instant::now()
 }
 
-fn run(folder: &Path, hwnd: isize, stop: isize, wake: isize) {
+fn run(folder: &Path, hwnd: isize, (stop, wake): (isize, isize), id: u64) {
     let (stop, wake) = (HANDLE(stop as *mut _), HANDLE(wake as *mut _));
     let Ok(io) = (unsafe { CreateEventW(None, true, false, None) }) else { return };
     let mut overlapped = OVERLAPPED { hEvent: io, ..Default::default() };
@@ -232,6 +255,9 @@ fn run(folder: &Path, hwnd: isize, stop: isize, wake: isize) {
         let count = if armed { 3 } else { 2 };
         let woken =
             unsafe { WaitForMultipleObjects(&handles[..count], false, wait.as_millis().min(0xFFFF_FFFE) as u32) };
+        if !current(id) {
+            break;
+        }
         match woken.0.wrapping_sub(WAIT_OBJECT_0.0) {
             0 => break,
             1 => {
@@ -272,7 +298,7 @@ fn run(folder: &Path, hwnd: isize, stop: isize, wake: isize) {
             }
             _ if woken == WAIT_TIMEOUT => {
                 if due.is_some_and(|at| at <= now()) {
-                    due = read_once(folder, hwnd, &mut tries);
+                    due = read_once(folder, hwnd, &mut tries, id);
                     mark = file_mark(folder);
                     if folder::set_conflicts(folder::conflict_files(folder)) {
                         post(hwnd);
@@ -318,9 +344,22 @@ fn run(folder: &Path, hwnd: isize, stop: isize, wake: isize) {
 }
 
 /// Read the file once and hand what came of it to the tray. The time to read again, if it should.
-fn read_once(folder: &Path, hwnd: isize, tries: &mut u8) -> Option<Instant> {
+fn read_once(folder: &Path, hwnd: isize, tries: &mut u8, id: u64) -> Option<Instant> {
     let was_down = folder::state() == FolderState::Unavailable;
-    let bytes = match folder::read_theirs(folder) {
+    // The rules for a folder hold each time it is read: it may have become a link to somewhere else.
+    let refused = shared::folder_ok(&folder.to_string_lossy(), &package::settings_dir(), &FixedDrives)
+        .err()
+        .filter(|why| *why != shared::NOT_THERE);
+    let read = if refused.is_some() {
+        Err(std::io::Error::other("not a folder Seam may use"))
+    } else {
+        folder::read_theirs(folder)
+    };
+    // A watcher that was replaced or stopped while it read says nothing.
+    if !current(id) {
+        return None;
+    }
+    let bytes = match read {
         Err(_) => {
             // Gone, or locked: the copy on this PC carries on, and the folder is looked at every 30 s.
             if folder::set_state(FolderState::Unavailable) {
@@ -346,7 +385,7 @@ fn read_once(folder: &Path, hwnd: isize, tries: &mut u8) -> Option<Instant> {
         post(hwnd);
         return None;
     }
-    match shared::attempt(&bytes, *tries) {
+    match shared::attempt_as(&bytes, *tries, Some(&folder::computer_name())) {
         Attempt::Take(config) => {
             folder::synced_at(unix_now());
             inbox().seen = Some(Seen::File(config));
@@ -381,15 +420,15 @@ fn read_once(folder: &Path, hwnd: isize, tries: &mut u8) -> Option<Instant> {
 pub(super) fn start(app: &mut App) {
     let Some(path) = app.cfg.config_folder.clone() else { return };
     folder::point_at(Some(PathBuf::from(&path)), folder::load_base());
-    // What this PC already launches is what it accepts, with what it accepted before.
-    folder::set_accepted(folder::load_accepted());
-    folder::accept(&app.cfg, true);
-    // The same rules as when it was chosen. A folder that isn't there yet is polled for.
+    // What this PC launches now is what it accepts. The file of it is only ever written.
+    folder::accept(&app.cfg);
+    // The same rules as when it was chosen. A folder that isn't there yet, or on a drive that isn't
+    // mounted yet, is looked for every 30 s.
     let own = package::settings_dir();
     if let Err(why) = shared::folder_ok(&path, &own, &FixedDrives)
-        && why != shared::NOT_THERE
+        && !shared::may_appear(&path, &own, &FixedDrives)
     {
-        log::info!("sync: the settings folder in config.json isn't a folder Seam may use");
+        log::info!("sync: the settings folder in config.json isn't a folder Seam may use: {why}");
         folder::set_state(FolderState::Unavailable);
         return;
     }
@@ -575,10 +614,10 @@ fn read_choice(chosen: PathBuf, take: Option<FolderTake>, ours: String, hwnd: is
     // The side the choice replaces is kept first.
     let kept = match (&found, take, &bytes) {
         (Found::Config(_), Some(FolderTake::Here), Ok(Some(bytes))) => {
-            std::fs::write(chosen.join("config.before-sync.json"), bytes)
+            folder::write_safe(&chosen, "config.before-sync.json", bytes)
         }
         (Found::Config(_), Some(FolderTake::Folder), _) => {
-            std::fs::write(folder::local_dir().join("config.before-sync.json"), ours)
+            folder::write_safe(&folder::local_dir(), "config.before-sync.json", ours.as_bytes())
         }
         _ => Ok(()),
     };
@@ -641,7 +680,9 @@ fn turn_off(app: &mut App) {
     inbox().seen = None;
     app.cfg.config_folder = None;
     folder::point_at(None, None);
-    let _ = std::fs::remove_file(folder::local_dir().join("config.sync-base.json"));
+    for name in ["config.sync-base.json", "config.sync-accepted.json"] {
+        let _ = std::fs::remove_file(folder::local_dir().join(name));
+    }
     app.sync_warned = false;
     persist(app);
     publish(app);
@@ -650,6 +691,9 @@ fn turn_off(app: &mut App) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The watcher and its number are one for the process.
+    static LOCK: Mutex<()> = Mutex::new(());
 
     #[test]
     fn names_are_read_out_of_the_change_buffer() {
@@ -680,6 +724,7 @@ mod tests {
 
     #[test]
     fn the_watcher_reads_the_file_first_and_then_each_change() {
+        let _lock = LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let dir = std::env::temp_dir().join(format!("seam-test-{}-watch", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
@@ -703,5 +748,17 @@ mod tests {
         unwatch();
         folder::point_at(None, None);
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_watcher_that_was_replaced_or_stopped_is_no_longer_current() {
+        let _lock = LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let first = begin_watch();
+        assert!(current(first));
+        let second = begin_watch();
+        assert!(current(second) && !current(first));
+        // Stopping makes the running one stale too, so what it read late is dropped.
+        unwatch();
+        assert!(!current(second));
     }
 }

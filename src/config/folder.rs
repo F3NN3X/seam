@@ -156,29 +156,16 @@ pub fn set_base(base: Value, held: Value) {
     status.base_dirty = true;
 }
 
-/// What this PC accepted of the shared part, as it kept it last time.
-pub fn load_accepted() -> BTreeSet<String> {
-    let read = std::fs::read(local_dir().join(ACCEPTED_FILE)).ok();
-    read.and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or_default()
-}
-
-pub fn set_accepted(set: BTreeSet<String>) {
-    lock().accepted = set;
-}
-
 pub fn accepted() -> BTreeSet<String> {
     lock().accepted.clone()
 }
 
 /// Take what this PC accepts from its own config: every row that launches and every workspace that
 /// closes other windows in it. A row the folder brought with its launch off is not in it, until the
-/// user turns it on. `keep` adds what was accepted before, which a start does.
-pub fn accept(config: &Config, keep: bool) {
-    let mut now = sync::accepted_of(&shared_of(config));
+/// user turns it on. Nothing is read back from the file the set is written to.
+pub fn accept(config: &Config) {
+    let now = sync::accepted_of(&shared_of(config));
     let mut status = lock();
-    if keep {
-        now.extend(status.accepted.iter().cloned());
-    }
     if status.accepted != now {
         status.accepted = now;
         status.accepted_dirty = true;
@@ -284,7 +271,7 @@ pub fn shared_of(config: &Config) -> Value {
     shared
 }
 
-fn computer_name() -> String {
+pub fn computer_name() -> String {
     std::env::var("COMPUTERNAME").unwrap_or_default()
 }
 
@@ -303,6 +290,23 @@ fn write_shared(folder: &Path, shared: &Value, unix: u64) -> std::io::Result<()>
     std::io::Write::write_all(&mut file, text.as_bytes())?;
     drop(file);
     replace(&tmp, &dest).inspect_err(|_| {
+        let _ = std::fs::remove_file(&tmp);
+    })
+}
+
+/// Write a file in `dir` the way the shared file is: through a new temp file with a name nobody can have
+/// planted, onto the name, never through a link that is already there.
+pub fn write_safe(dir: &Path, name: &str, bytes: &[u8]) -> std::io::Result<()> {
+    let dest = dir.join(name);
+    if std::fs::symlink_metadata(&dest).is_ok_and(|m| m.file_type().is_symlink()) {
+        return Err(std::io::Error::other("the file is a link"));
+    }
+    let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.subsec_nanos());
+    let tmp = dir.join(format!("{name}.{}-{nanos}.tmp", std::process::id()));
+    let mut file = std::fs::OpenOptions::new().write(true).create_new(true).open(&tmp)?;
+    std::io::Write::write_all(&mut file, bytes)?;
+    drop(file);
+    std::fs::rename(&tmp, &dest).inspect_err(|_| {
         let _ = std::fs::remove_file(&tmp);
     })
 }
@@ -367,7 +371,7 @@ pub fn push(config: &Config, unix: u64) -> Push {
     let there = match read {
         Err(_) => return down(),
         Ok(None) => None,
-        Ok(Some(bytes)) => match sync::attempt(&bytes, 0) {
+        Ok(Some(bytes)) => match sync::attempt_as(&bytes, 0, Some(&computer_name())) {
             Attempt::Take(theirs) => Some(shared_of(&theirs)),
             Attempt::Newer => return if set_problem(Some(Problem::Newer)) { Push::Changed } else { Push::Quiet },
             Attempt::Retry | Attempt::GiveUp => return Push::Wake,
@@ -405,6 +409,6 @@ pub static TEST_LOCK: Mutex<()> = Mutex::new(());
 pub fn keep_conflict(ours: &Value, unix: u64) -> Option<String> {
     let name = format!("config.sync-conflict-{}.json", sync::stamp(unix));
     let text = serde_json::to_string_pretty(ours).ok()?;
-    std::fs::write(local_dir().join(&name), text).ok()?;
+    write_safe(&local_dir(), &name, text.as_bytes()).ok()?;
     Some(name)
 }

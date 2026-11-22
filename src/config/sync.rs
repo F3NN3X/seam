@@ -190,11 +190,27 @@ const MAX_WORKSPACES: usize = 200;
 const MAX_ROWS: usize = 100;
 const MAX_TABS: usize = 8;
 const MAX_TOTAL_ROWS: usize = 2_000;
+const MAX_RULES: usize = 1_000;
+const MAX_LAYOUTS: usize = 200;
+/// Screens of a desk (zones, tiling, margins, screens) and borders between them.
+const MAX_SCREENS: usize = 64;
+const MAX_BORDERS: usize = 256;
 
 /// Whether the counts of a config in JSON are within the limits above.
 pub fn within_limits(cfg: &Value) -> bool {
     let desks = cfg.get("desks").and_then(Value::as_object);
     if desks.is_some_and(|d| d.len() > MAX_DESKS) {
+        return false;
+    }
+    let size =
+        |v: Option<&Value>| v.map_or(0, |v| v.as_array().map_or_else(|| v.as_object().map_or(0, Map::len), Vec::len));
+    if size(cfg.get("app_rules")) > MAX_RULES || size(cfg.get("custom_layouts")) > MAX_LAYOUTS {
+        return false;
+    }
+    if desks.into_iter().flat_map(|d| d.values()).any(|d| {
+        ["zones", "tiling", "margins", "screens"].iter().any(|k| size(d.get(*k)) > MAX_SCREENS)
+            || size(d.get("borders")) > MAX_BORDERS
+    }) {
         return false;
     }
     let mut total = 0;
@@ -216,17 +232,13 @@ pub fn within_limits(cfg: &Value) -> bool {
     true
 }
 
-/// FNV-1a, so what is remembered across runs doesn't change with the compiler.
-fn fnv(text: &str) -> String {
-    let hash = text.bytes().fold(0xcbf2_9ce4_8422_2325u64, |h, b| (h ^ u64::from(b)).wrapping_mul(0x100_0000_01b3));
-    format!("{hash:016x}")
-}
-
 /// What a row can start or open, with its workspace: the app, the item, "Open with" and the folder or page.
-/// This is what this PC accepts, or doesn't, before a row from the folder may launch.
-fn identity(ws_id: &str, row: &Value) -> String {
+/// This is what this PC accepts, or doesn't, before a row from the folder may launch. It is the whole
+/// identity as a JSON array of strings, compared for equality: nothing a file can be made to collide with.
+pub(super) fn identity(ws_id: &str, row: &Value) -> String {
     let part = |key: &str| row.get(key).map_or_else(String::new, Value::to_string);
-    fnv(&[ws_id.to_string(), part("exe"), part("aumid"), part("item"), part("open_with"), part("place")].join("\u{1}"))
+    let parts = [ws_id.to_string(), part("exe"), part("aumid"), part("item"), part("open_with"), part("place")];
+    serde_json::to_string(&parts).unwrap_or_default()
 }
 
 fn close_mark(ws_id: &str) -> String {
@@ -332,22 +344,69 @@ fn unguard(mine: &Value, held: &Value, base: &Value) -> Value {
                 }
             }
         }
-        let (held_rows, raw_rows) =
-            (was.get("windows").and_then(Value::as_array), raw.get("windows").and_then(Value::as_array));
-        if let (Some(rows), Some(held_rows), Some(raw_rows)) =
-            (ws.get_mut("windows").and_then(Value::as_array_mut), held_rows, raw_rows)
-        {
-            for (i, row) in rows.iter_mut().enumerate() {
-                if let (Some(was), Some(raw)) = (held_rows.get(i), raw_rows.get(i))
-                    && row == was
-                {
-                    *row = raw.clone();
-                }
-            }
+        let rows_of = |w: &Value| w.get("windows").and_then(Value::as_array).cloned().unwrap_or_default();
+        let (held_rows, raw_rows) = (rows_of(was), rows_of(raw));
+        if let Some(rows) = ws.get_mut("windows").and_then(Value::as_array_mut) {
+            unguard_rows(rows, &held_rows, &raw_rows);
         }
         ws
     });
     Value::Array(list.collect())
+}
+
+/// Rows this PC has, put back as the folder had them where this PC left them alone. A row is paired
+/// with the held row it equals (the first one not used), wherever it stands now, so a row deleted,
+/// moved or added here doesn't change any other. A row that differs from every held row, such as one
+/// the user turned on, is paired with the unused held row of the same app and item, and only the
+/// fields that differ from that held row are put on the folder's own row.
+fn unguard_rows(rows: &mut [Value], held: &[Value], raw: &[Value]) {
+    let mut used = vec![false; held.len()];
+    let mut exact: HashMap<String, Vec<usize>> = HashMap::new();
+    let mut alike: HashMap<String, Vec<usize>> = HashMap::new();
+    let app = |row: &Value| {
+        [row.get("exe"), row.get("aumid"), row.get("item")]
+            .map(|v| v.map_or_else(String::new, Value::to_string))
+            .join("\u{1}")
+    };
+    for (j, row) in held.iter().enumerate() {
+        exact.entry(row.to_string()).or_default().push(j);
+        alike.entry(app(row)).or_default().push(j);
+    }
+    let take = |list: Option<&Vec<usize>>, used: &mut Vec<bool>| {
+        let j = list?.iter().copied().find(|j| !used[*j])?;
+        used[j] = true;
+        Some(j)
+    };
+    let mut paired: Vec<Option<usize>> = rows.iter().map(|row| take(exact.get(&row.to_string()), &mut used)).collect();
+    for (row, pair) in rows.iter().zip(paired.iter_mut()) {
+        if pair.is_none() {
+            *pair = take(alike.get(&app(row)), &mut used);
+        }
+    }
+    for (row, pair) in rows.iter_mut().zip(paired) {
+        let Some(j) = pair else { continue };
+        let Some(raw) = raw.get(j) else { continue };
+        if *row == held[j] {
+            *row = raw.clone();
+            continue;
+        }
+        let (mut out, mine) = (raw.clone(), row.clone());
+        let keys: BTreeSet<&String> = fields(&mine).chain(fields(&held[j])).map(|(k, _)| k).collect();
+        for key in keys {
+            if mine.get(key) != held[j].get(key) {
+                match (mine.get(key), out.as_object_mut()) {
+                    (Some(v), Some(o)) => {
+                        o.insert(key.clone(), v.clone());
+                    }
+                    (None, Some(o)) => {
+                        o.remove(key);
+                    }
+                    _ => {}
+                }
+            }
+        }
+        *row = out;
+    }
 }
 
 /// A key to merge: a top-level shared field, or one shared field of one desk.
@@ -457,6 +516,12 @@ pub enum Attempt {
 
 /// Judge the bytes of the file in the folder, `tries` being the reads already made before this one.
 pub fn attempt(bytes: &[u8], tries: u8) -> Attempt {
+    attempt_as(bytes, tries, None)
+}
+
+/// `attempt`, for a file that may be this PC's own, by the name it stamped: such a file isn't held to the
+/// counts, since Seam must be able to read what it wrote (the byte cap and the linear merge still hold).
+pub fn attempt_as(bytes: &[u8], tries: u8, own_pc: Option<&str>) -> Attempt {
     if bytes.len() > MAX_READ {
         return Attempt::GiveUp;
     }
@@ -465,7 +530,8 @@ pub fn attempt(bytes: &[u8], tries: u8) -> Attempt {
     if value.get("version").and_then(Value::as_u64).is_some_and(|v| v > u64::from(CURRENT_VERSION)) {
         return Attempt::Newer;
     }
-    if !within_limits(&value) {
+    let own = own_pc.is_some_and(|pc| value.pointer("/sync/pc").and_then(Value::as_str) == Some(pc));
+    if !own && !within_limits(&value) {
         return Attempt::GiveUp;
     }
     let Ok(mut config) = serde_json::from_value::<Config>(value) else { return again };
@@ -479,6 +545,21 @@ pub fn attempt(bytes: &[u8], tries: u8) -> Attempt {
 /// Which drives are on this PC's own disks. A trait so a test can say.
 pub trait Drives {
     fn fixed(&self, letter: char) -> bool;
+    /// Whether the drive has a volume at all. One that doesn't may be a disk that isn't plugged in yet.
+    fn mounted(&self, _letter: char) -> bool {
+        true
+    }
+}
+
+/// Whether a folder that can't be used now may become one: it isn't there on a drive that is, or its
+/// drive isn't mounted. The settings folder is watched for that, and a folder that is refused for
+/// good (a network or removable drive, a link to a share, Seam's own folder) is not.
+pub fn may_appear(path: &str, own: &Path, drives: &dyn Drives) -> bool {
+    match folder_ok(path, own, drives) {
+        Err(NOT_THERE) => true,
+        Err(NOT_LOCAL) => shape_ok(path).is_ok_and(|letter| !drives.mounted(letter)),
+        _ => false,
+    }
 }
 
 /// The drive letter of a path that has the shape D760 asks for: absolute with a drive letter, no
@@ -508,12 +589,11 @@ pub fn folder_ok(path: &str, own: &Path, drives: &dyn Drives) -> Result<PathBuf,
         return Err(NOT_THERE);
     }
     // A junction or link on a fixed drive can lead to a network share: the real path has to pass too.
-    if let Ok(real) = std::fs::canonicalize(&folder) {
-        let text = real.to_string_lossy().replace('/', "\\");
-        let plain = text.strip_prefix(r"\\?\").unwrap_or(&text);
-        if plain.starts_with(r"UNC\") || plain.starts_with(r"\\") || !shape_ok(plain).is_ok_and(|l| drives.fixed(l)) {
-            return Err(NOT_LOCAL);
-        }
+    let Ok(real) = std::fs::canonicalize(&folder) else { return Err(NOT_LOCAL) };
+    let text = real.to_string_lossy().replace('/', "\\");
+    let plain = text.strip_prefix(r"\\?\").unwrap_or(&text);
+    if plain.starts_with(r"UNC\") || plain.starts_with(r"\\") || !shape_ok(plain).is_ok_and(|l| drives.fixed(l)) {
+        return Err(NOT_LOCAL);
     }
     if same_folder(&folder, own) {
         return Err(OWN_FOLDER);

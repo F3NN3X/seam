@@ -268,7 +268,18 @@ pub(super) fn menu_items(
 
 #[cfg(test)]
 mod tests {
-    use super::{LABEL_MAX, close_label, closed_note, minimized_note, not_closed, window_label};
+    use super::{LABEL_MAX, close_label, closed_note, listed, minimized_note, not_closed, window_label};
+
+    #[test]
+    fn the_list_is_grouped_by_screen_in_row_order() {
+        let at = |hwnd: i64, screen: Option<u64>| serde_json::json!({ "hwnd": hwnd, "app": "A", "title": "", "screen": screen });
+        let answer = serde_json::json!({
+            "windows": [at(1, Some(2)), at(2, None), at(3, Some(1)), at(4, Some(2)), at(5, Some(1))],
+            "kept": [],
+        });
+        let order: Vec<i64> = listed(&answer).windows.iter().map(|w| w.hwnd).collect();
+        assert_eq!(order, [3, 5, 1, 4, 2]);
+    }
 
     #[test]
     fn the_button_follows_the_ticks() {

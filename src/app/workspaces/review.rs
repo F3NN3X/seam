@@ -62,15 +62,23 @@ pub(super) fn previewed(app: &mut App, job: Capturing, got: switcher::Captured) 
     };
     answer["token"] = json!(token);
     let (sig, into, tx) = (job.sig.clone(), job.into.clone(), reply.clone());
-    let rows = old.map_or(0, |w| w.windows.len());
+    let rows = old.map_or_else(Vec::new, row_keys);
     // A new preview replaces the one before it.
     app.preview = Some(Preview { token, sig, into, rows, captured: got, expires: Instant::now() + PREVIEW_FOR });
     let _ = tx.send(Ok(answer));
 }
 
+/// What makes a row the same row: its app and the window it was captured from.
+pub(in crate::app) type RowKey = (String, Option<String>, String, String);
+
+fn row_keys(ws: &Workspace) -> Vec<RowKey> {
+    let key = |r: &Rule| (r.exe.clone(), r.aumid.clone(), r.class.clone(), r.title_hint.clone());
+    ws.windows.iter().map(key).collect()
+}
+
 /// Whether `p` is the preview a save names: the same token, desk and workspace, not
 /// past its time, and the workspace still has the rows it had.
-fn live(p: &Preview, (token, sig, into): (&str, &str, &Option<String>), rows: usize, now: Instant) -> bool {
+fn live(p: &Preview, (token, sig, into): (&str, &str, &Option<String>), rows: &[RowKey], now: Instant) -> bool {
     p.token == token && p.sig == sig && p.into == *into && p.rows == rows && p.expires > now
 }
 
@@ -125,9 +133,11 @@ pub(in crate::app) fn save_preview(
     if app.preview.as_ref().is_some_and(|p| p.token == save.token && p.expires <= now) {
         app.preview = None;
     }
-    let rows =
-        into.as_ref().map_or(0, |id| desk_workspaces(app).iter().find(|w| w.id == *id).map_or(0, |w| w.windows.len()));
-    let Some(preview) = app.preview.as_ref().filter(|p| live(p, (&save.token, &app.sig, &into), rows, now)) else {
+    let rows = into
+        .as_ref()
+        .and_then(|id| desk_workspaces(app).iter().find(|w| w.id == *id).map(row_keys))
+        .unwrap_or_default();
+    let Some(preview) = app.preview.as_ref().filter(|p| live(p, (&save.token, &app.sig, &into), &rows, now)) else {
         return Some(refused(api::PREVIEW_EXPIRED));
     };
     let ticked = match ticked_subset(&preview.captured, &save.take, into.is_some()) {
@@ -171,12 +181,16 @@ mod tests {
         }
     }
 
+    fn keys(names: &[&str]) -> Vec<RowKey> {
+        names.iter().map(|n| (n.to_string(), None, String::new(), String::new())).collect()
+    }
+
     fn preview(now: Instant) -> Preview {
         Preview {
             token: "t".into(),
             sig: "desk".into(),
             into: Some("ws".into()),
-            rows: 3,
+            rows: keys(&["a", "b", "c"]),
             captured: captured(&["a.exe"]),
             expires: now + PREVIEW_FOR,
         }
@@ -188,9 +202,9 @@ mod tests {
         let p = preview(now);
         let into = Some("ws".to_string());
         let key = ("t", "desk", &into);
-        assert!(live(&p, key, 3, now));
-        assert!(live(&p, key, 3, now + PREVIEW_FOR - Duration::from_millis(1)));
-        assert!(!live(&p, key, 3, now + PREVIEW_FOR));
+        assert!(live(&p, key, &keys(&["a", "b", "c"]), now));
+        assert!(live(&p, key, &keys(&["a", "b", "c"]), now + PREVIEW_FOR - Duration::from_millis(1)));
+        assert!(!live(&p, key, &keys(&["a", "b", "c"]), now + PREVIEW_FOR));
     }
 
     #[test]
@@ -199,12 +213,15 @@ mod tests {
         let p = preview(now);
         let (ws, other, none) = (Some("ws".to_string()), Some("other".to_string()), None);
         // A token already used is gone from the slot, so only a different one is left to refuse.
-        assert!(!live(&p, ("used", "desk", &ws), 3, now));
-        assert!(!live(&p, ("t", "elsewhere", &ws), 3, now));
-        assert!(!live(&p, ("t", "desk", &other), 3, now));
-        assert!(!live(&p, ("t", "desk", &none), 3, now));
+        assert!(!live(&p, ("used", "desk", &ws), &keys(&["a", "b", "c"]), now));
+        assert!(!live(&p, ("t", "elsewhere", &ws), &keys(&["a", "b", "c"]), now));
+        assert!(!live(&p, ("t", "desk", &other), &keys(&["a", "b", "c"]), now));
+        assert!(!live(&p, ("t", "desk", &none), &keys(&["a", "b", "c"]), now));
         // Rows added or removed by another client since the preview.
-        assert!(!live(&p, ("t", "desk", &ws), 2, now));
+        // Removed, reordered, and one removed with another added.
+        for changed in [["a", "b"].as_slice(), &["b", "a", "c"], &["a", "b", "d"], &["a", "c", "d", "b"]] {
+            assert!(!live(&p, ("t", "desk", &ws), &keys(changed), now), "{changed:?}");
+        }
     }
 
     #[test]

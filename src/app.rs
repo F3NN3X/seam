@@ -322,8 +322,8 @@ struct Preview {
     /// The desk and workspace it was captured for.
     sig: String,
     into: Option<String>,
-    /// How many rows `into` had, so a save after another client changed them is refused.
-    rows: usize,
+    /// Which rows `into` had, in order, so a save after another client changed them is refused.
+    rows: Vec<workspaces::RowKey>,
     captured: switcher::Captured,
     expires: Instant,
 }

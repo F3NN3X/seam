@@ -154,8 +154,12 @@ pub fn open(panel: &mut Panel, window: &mut Window, cx: &mut Context<Panel>) {
         let ticked = state.borrow().ticked.iter().filter(|t| **t).count();
         // The field is drawn by now, so it can take the focus and select the suggested name.
         if stage == Stage::Ready && std::mem::take(&mut state.borrow_mut().focus_pending) {
-            name.update(cx, |input, cx| input.focus(window, cx));
-            window.defer(cx, |window, cx| window.dispatch_action(Box::new(SelectAll), cx));
+            // One frame on, so the Input exists to take the focus and the selection.
+            let name = name.clone();
+            window.on_next_frame(move |window, cx| {
+                name.update(cx, |input, cx| input.focus(window, cx));
+                window.dispatch_action(Box::new(SelectAll), cx);
+            });
         }
         let saving = state.borrow().saving;
         let body = match stage {

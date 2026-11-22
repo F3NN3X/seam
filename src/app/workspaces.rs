@@ -23,7 +23,7 @@ pub(super) use in_use::{
 };
 pub(super) use notice::{LastSwitch, ended, last_switch, open_switched, skipped_json, started, starting, starting_due};
 pub(super) use order::move_workspace;
-pub(super) use review::{save_preview, start_preview};
+pub(super) use review::{RowKey, save_preview, start_preview};
 pub(super) use window::{
     aside, other_wm_changed, queue_window, set_spotlight, show_spotlight, start_focus_only, start_group, start_window,
     window_planned,

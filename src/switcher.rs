@@ -35,6 +35,7 @@ use windows::core::{PCWSTR, w};
 
 mod bind;
 mod capture;
+mod close;
 mod launch;
 mod place;
 mod rows;
@@ -54,12 +55,15 @@ pub use capture::{
     CaptureJob, capture, capture_added, capture_session, capture_window, take_added, take_captured, take_session,
     wait_session,
 };
+pub use close::{CloseJob, Done, Owned, Verb, restore, start as start_close, take_done};
 pub use rows::{LiveWorkspace, place_opened, status};
 pub use rules::{AppRules, closed_name, pin_by_rules, place_by_rule, reopen};
 pub use run::{SwitchJob, outside, switch, switching, take_switched};
 
 /// A worker finished a switch.
 pub const WM_APP_SWITCHED: u32 = WM_APP + 16;
+/// A worker finished closing or minimizing a workspace's windows.
+pub const WM_APP_CLOSED: u32 = WM_APP + 42;
 /// A worker finished a capture.
 pub const WM_APP_CAPTURED: u32 = WM_APP + 17;
 /// A worker finished capturing the last session.

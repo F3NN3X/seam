@@ -48,6 +48,8 @@ unsafe fn add_workspaces(app: &App, menu: HMENU, workspaces: &[Workspace]) {
         }
         let back = if active.is_some() { MF_STRING } else { MF_STRING | MF_GRAYED };
         add_text(menu, back, ID_PUT_BACK, "Put windows back");
+        add_text(menu, back, ID_MINIMIZE_WS, "Minimize this workspace");
+        add_text(menu, back, ID_CLOSE_WS, "Close this workspace…");
     }
 }
 
@@ -165,6 +167,8 @@ pub(in crate::app) fn show_menu(app: &mut App) {
                     notify(app, "Put windows back", &e.message, BalloonAction::None);
                 }
             }
+            ID_MINIMIZE_WS => start_close_here(app, "Minimize this workspace", Ask::Minimize),
+            ID_CLOSE_WS => start_close_here(app, "Close this workspace", Ask::List),
             ID_SWITCH_BACK => {
                 if let Err(e) = switch_back(app, false, false) {
                     log::info!("workspace menu: {}", e.message);

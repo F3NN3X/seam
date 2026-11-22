@@ -237,4 +237,10 @@ mod tests {
         assert_eq!(arguments["error"]["code"], INVALID_PARAMS);
         assert!(fake.calls.is_empty());
     }
+
+    #[test]
+    fn no_tool_closes_or_minimizes_a_workspace() {
+        let methods = ["workspace.windows", "workspace.close", "workspace.minimize", "workspace.minimize_undo"];
+        assert!(tools::TOOLS.iter().all(|t| !methods.contains(&t.method)));
+    }
 }

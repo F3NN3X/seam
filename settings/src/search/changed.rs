@@ -82,6 +82,8 @@ const ROWS: &[(Page, &str, &[&str])] = &[
     (Page::Shortcuts, "Switch back to the previous workspace", &["/hotkeys/switch_back"]),
     (Page::Shortcuts, "Snap back to this workspace", &["/hotkeys/snap_back"]),
     (Page::Shortcuts, "Save windows to the active workspace", &["/hotkeys/quick_save"]),
+    (Page::Shortcuts, "Minimize this workspace", &["/hotkeys/minimize_workspace"]),
+    (Page::Shortcuts, "Close this workspace", &["/hotkeys/close_workspace"]),
     (Page::General, "Offer to line up new screens", &["/ask_new_desks"]),
     (Page::General, "Who reopens the apps", &["/restore_apps"]),
     (Page::General, "Clicking the tray icon", &["/tray_click"]),

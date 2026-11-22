@@ -196,6 +196,9 @@ pub struct Panel {
     pub moving: bool,
     /// The workspace whose list item takes the keyboard focus once, after a move.
     pub focus_workspace: Option<String>,
+    /// The workspace whose Close this workspace list opens once the tray has answered, when the tray
+    /// started this window for it.
+    pub close_ask: Option<String>,
     /// What the updater left in its state file, read when the tray says it changed.
     pub update_file: UpdateFile,
     pub update_ui: UpdateUi,
@@ -336,6 +339,7 @@ impl Panel {
             toast_generation: 0,
             moving: false,
             focus_workspace: None,
+            close_ask: None,
             update_file: updates::read(),
             update_ui: UpdateUi::Idle,
             startup: None,

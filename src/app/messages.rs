@@ -41,6 +41,10 @@ pub(super) unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARA
                 with_app(captured);
                 LRESULT(0)
             }
+            WM_APP_CLOSED => {
+                with_app(closed);
+                LRESULT(0)
+            }
             WM_APP_WS_MOVED => {
                 with_app(|a| ws_moved(a, wparam.0 as u32));
                 LRESULT(0)
@@ -354,6 +358,9 @@ unsafe fn on_balloon_click(hwnd: HWND) {
             Some(BalloonAction::UndoQuickSave) => {
                 with_app(undo_quick_save);
             }
+            Some(BalloonAction::UndoMinimize) => {
+                with_app(undo_minimize);
+            }
             Some(BalloonAction::UndoTile) => {
                 with_app(undo_tile);
             }
@@ -412,6 +419,12 @@ unsafe fn on_hotkey(id: i32) {
                         notify(a, "Switch back", &e.message, BalloonAction::None);
                     }
                 });
+            }
+            HOTKEY_CLOSE_WORKSPACE => {
+                with_app(|a| start_close_here(a, "Close this workspace", Ask::List));
+            }
+            HOTKEY_MINIMIZE_WORKSPACE => {
+                with_app(|a| start_close_here(a, "Minimize this workspace", Ask::Minimize));
             }
             HOTKEY_FOCUS_ONLY => {
                 with_app(|a| start_focus_only(a, FocusScope::Screen, None));

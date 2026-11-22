@@ -184,6 +184,29 @@ pub(super) fn run_command(app: &mut App, queued: Queued) {
             }
             return;
         }
+        Command::WorkspaceWindows { id } => {
+            let from = (Some(reply.clone()), client.as_str());
+            if let Some(refusal) = start_close(app, Some(&id), (Ask::List, Vec::new()), from) {
+                let _ = reply.send(refusal);
+            }
+            return;
+        }
+        Command::WorkspaceClose { id, hwnds } => {
+            let from = (Some(reply.clone()), client.as_str());
+            if let Some(refusal) = start_close(app, Some(&id), (Ask::Close, hwnds), from) {
+                let _ = reply.send(refusal);
+            }
+            return;
+        }
+        Command::WorkspaceMinimize { id } => {
+            let from = (Some(reply.clone()), client.as_str());
+            if let Some(refusal) = start_close(app, id.as_deref(), (Ask::Minimize, Vec::new()), from) {
+                let _ = reply.send(refusal);
+            }
+            return;
+        }
+        Command::WorkspaceMinimizeUndo if undo_minimize(app) => Ok(json!({ "ok": true })),
+        Command::WorkspaceMinimizeUndo => refused("Nothing to undo"),
         Command::WorkspaceAddWindow { id, number, hwnd } => {
             let which = match id {
                 Some(id) => Which::Id(id),

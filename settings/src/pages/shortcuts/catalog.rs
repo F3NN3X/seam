@@ -113,7 +113,7 @@ impl Group {
             Group::Scrolling => "Scroll left and right, Move column left and right, Column width",
             Group::Pins => "Pin window on top, Keep window out of workspace switches, Release pinned windows",
             Group::Workspaces => {
-                "Switch to each workspace, Capture current windows, Add window to workspace 1 to 9 and 3 more"
+                "Switch to each workspace, Capture current windows, Add window to workspace 1 to 9 and 5 more"
             }
         }
     }
@@ -186,6 +186,8 @@ pub fn items(panel: &Panel) -> Vec<Item> {
     add("Snap back to this workspace", "snap_back", keys.snap_back.as_ref(), 20 + on_desk.len(), section);
     add("Save windows to the active workspace", "quick_save", keys.quick_save.as_ref(), 21 + on_desk.len(), section);
     add("Switch back to the previous workspace", "switch_back", keys.switch_back.as_ref(), 22 + on_desk.len(), section);
+    add("Minimize this workspace", "minimize_workspace", keys.minimize_workspace.as_ref(), 23 + on_desk.len(), section);
+    add("Close this workspace", "close_workspace", keys.close_workspace.as_ref(), 24 + on_desk.len(), section);
     // Workspaces and "Add window to workspace" are numbered, so their keys are too.
     for (n, item) in out.iter_mut().filter(|i| i.action.starts_with("workspace:")).enumerate() {
         item.preferred = (n < 9).then(|| format!("Ctrl+Shift+Alt+{}", n + 1));

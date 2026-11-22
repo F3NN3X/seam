@@ -995,6 +995,20 @@ Turn the debug log on, and **Remember folders and pages** on at the bottom of Wo
 - [ ] **Forget.** With the setting off, the row **Saved folders and pages** shows with **Forget saved folders and pages**. Press it: every `place` is gone from `config.json`, on every desk, and the row goes. With the setting on, or with none saved, the row isn't there.
 - [ ] **Last session.** With **Offer my last session** set, sign out and back in: the last session in `config.json` has no `place`.
 
+### Close and minimize a workspace
+
+- [ ] **Unsaved work stays.** Type into Notepad without saving, put it in a workspace, then **Close this workspace** from the workspace's **...** menu. The list shows every window ticked, with the count on the button ("Close 4 windows"). Close: Notepad asks to save, and when you cancel, it stays open. Seam doesn't ask again.
+- [ ] **Only the workspace's windows.** Open a second Chrome window that no row of the workspace describes. Close the workspace: the second window stays.
+- [ ] **Not closed.** Pin one window on top and keep another out of workspace switches, with **Pins stay on switch** off, then run an elevated app of the workspace. The list says "Not closed: 1 pinned window, 1 kept out of switches, 1 running as administrator", and those three stay open after the close. Turn a row off: its window isn't in the list either.
+- [ ] **Untick keeps it.** Untick one window and close: it stays. Untick all: the primary button is disabled, and its tooltip says "Tick a window to close it".
+- [ ] **Changed under the list.** With the dialog open, close one listed window by hand, then choose the button: the notification says "1 had changed, so Seam left it", and no other window closed.
+- [ ] **Nothing open.** With none of the workspace's windows open, **Minimize this workspace** and **Close this workspace...** on the **...** menu are dimmed with "None of its windows are open".
+- [ ] **Minimize and Undo.** **Minimize this workspace** minimizes at once, and the notification "Minimized 5 windows of <name>" offers Undo for 8 seconds. Undo brings them back in their old stacking, and a window that was maximized is maximized again. Close one by hand first: Undo skips it.
+- [ ] **Tray.** With no workspace in use, **Minimize this workspace** and **Close this workspace...** are grayed. With one in use, Minimize shows the balloon "Minimized 5 windows of <name>. Click to undo", and clicking it restores them. Close opens the Seam window on Workspaces with the list. With the Seam window already open it switches there. With nothing open the balloon says "Nothing of <name> is open".
+- [ ] **Shortcuts.** Set **Minimize this workspace** and **Close this workspace** on Shortcuts: neither has a key by default, and **Use suggested keys** doesn't fill them. The close key opens the dialog, and with no workspace in use a notice says "No workspace in use".
+- [ ] **Assistants.** An MCP client has no tool that closes or minimizes. Calling `workspace.close`, `workspace.windows` or `workspace.minimize` through `seam-mcp.exe`'s pipe answers `4` ("Assistants can't do that").
+- [ ] **During a switch.** Start a switch and choose Close at once: the tray answers that a switch is still running, and nothing closes.
+
 ## Settings panel
 
 - [ ] **Open.** Choose **Open Seam** in the tray menu. The panel opens in your Windows theme on the last page you used, and the sidebar's status card shows the current remap state.

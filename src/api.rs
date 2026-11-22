@@ -195,6 +195,23 @@ pub enum Command {
     },
     /// Save the windows on screen into the workspace in use, or a new one (§7).
     WorkspaceQuickSave,
+    /// `workspace.windows`: the windows a close or minimize would take, and the ones it
+    /// would keep. Never for an assistant.
+    WorkspaceWindows {
+        id: String,
+    },
+    /// `workspace.close`: ask these windows to close, the ones a fresh look still matches
+    /// to the workspace (D704). Never for an assistant.
+    WorkspaceClose {
+        id: String,
+        hwnds: Vec<isize>,
+    },
+    /// `workspace.minimize`: the workspace in use when `id` is left out. Never for an assistant.
+    WorkspaceMinimize {
+        id: Option<String>,
+    },
+    /// Put back the windows the last minimize took (D705).
+    WorkspaceMinimizeUndo,
     /// The workspace taken as in use at start when none is remembered, or none.
     WorkspaceSetDefault(Option<String>),
     /// "Put apps in place when they open".

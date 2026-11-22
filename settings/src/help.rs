@@ -445,6 +445,9 @@ pub const TOPICS: &[Topic] = &[
                 "**Save windows to the active workspace** is a shortcut that saves into the workspace in use without opening Seam. Click its notification within 8 seconds to undo it.",
             ),
             Text(
+                "**Close this workspace** and **Minimize this workspace** are in the **…** menu of a workspace, in the tray menu under **Workspaces**, and on Shortcuts. They take the windows the workspace's apps match, and no others: a second window of the same app that no row describes stays open. Windows that are pinned, kept out of workspace switches or running as administrator are never taken. **Close this workspace** lists the windows first, so you can untick any you want to keep, then asks each to close the way its close button does, so an app with unsaved work asks you first. Seam never ends a process. **Minimize this workspace** doesn't ask, and a notification offers Undo for 8 seconds.",
+            ),
+            Text(
                 "**Add window to workspace 1** to **9** on Shortcuts add the focused window to that workspace, counted in the order of the list. A window with no row there gets a new one at the end with where it is now and **Start if it's closed** off, so a switch places it but never starts it. A window that already has a row there updates that row's place and keeps its start details and order. It never takes the window out of another workspace. Seam's own windows, apps under Left alone, apps running as administrator, windows kept out of workspace switches and windows with no taskbar button are refused, and a notice says why. A notification offers Undo for 8 seconds. None has a key until you set one.",
             ),
             Text(

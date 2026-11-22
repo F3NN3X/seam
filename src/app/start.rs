@@ -140,6 +140,8 @@ unsafe fn new_app(hwnd: HWND, cfg: Config) -> App {
             moved: Vec::new(),
             recheck: false,
             capturing: None,
+            closing: None,
+            minimized: None,
             quick_undo: None,
             tile_undo: None,
             tiling_wait: Vec::new(),

@@ -59,9 +59,17 @@ pub const TOOLS: &[Tool] = &[
     Tool {
         name: "seam_switch_workspace",
         method: "workspace.switch",
-        about: "Switch to a workspace by name or id. Windows it doesn't mention are left alone and nothing is closed, but apps it lists that aren't running may be started.",
+        about: "Switch to a workspace by name or id. Windows it doesn't mention are left alone and nothing is closed, but apps it lists that aren't running may be started. seam_cancel_switch stops one that is starting apps.",
         kind: Kind::Act,
         args: &[("name", "string", "The workspace's name, matched without regard to case"), ID],
+        required: &[],
+    },
+    Tool {
+        name: "seam_cancel_switch",
+        method: "workspace.cancel",
+        about: "Stop the workspace switch that is starting apps. It starts nothing more; windows already placed stay, and nothing is closed. Answers cancelled false when no switch is starting apps.",
+        kind: Kind::Act,
+        args: &[],
         required: &[],
     },
     Tool {

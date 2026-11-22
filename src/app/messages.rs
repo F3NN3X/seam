@@ -37,6 +37,18 @@ pub(super) unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARA
                 with_app(switched);
                 LRESULT(0)
             }
+            WM_APP_SWITCH_STARTING => {
+                with_app(starting);
+                LRESULT(0)
+            }
+            WM_APP_SWITCH_STARTED => {
+                with_app(|a| started(a, wparam.0 as u64));
+                LRESULT(0)
+            }
+            WM_TIMER if wparam.0 == TIMER_STARTING => {
+                with_app(starting_due);
+                LRESULT(0)
+            }
             WM_APP_CAPTURED => {
                 with_app(captured);
                 LRESULT(0)
@@ -366,6 +378,12 @@ unsafe fn on_balloon_click(hwnd: HWND) {
             }
             Some(BalloonAction::UndoFree) => {
                 with_app(tiling::undo_free);
+            }
+            Some(BalloonAction::CancelSwitch) => {
+                switcher::cancel();
+            }
+            Some(BalloonAction::OpenSwitched) => {
+                with_app(open_switched);
             }
             Some(BalloonAction::OpenWorkspace) => {
                 with_app(open_offered);

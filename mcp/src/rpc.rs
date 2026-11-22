@@ -225,6 +225,16 @@ mod tests {
     }
 
     #[test]
+    fn cancelling_a_switch_is_an_act_that_calls_workspace_cancel() {
+        let tool = tools::TOOLS.iter().find(|t| t.name == "seam_cancel_switch").unwrap();
+        assert_eq!(tool.method, "workspace.cancel");
+        assert!(matches!(tool.kind, tools::Kind::Act));
+        let mut fake = Fake::default();
+        ask(&mut fake, r#"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"seam_cancel_switch"}}"#);
+        assert_eq!(fake.calls, vec![("workspace.cancel".to_string(), json!({}))]);
+    }
+
+    #[test]
     fn bad_calls_are_protocol_errors() {
         let mut fake = Fake::default();
         let unknown =

@@ -126,10 +126,10 @@ fn pause(cancelled: &dyn Fn() -> bool, d: Duration) -> bool {
 }
 
 /// The calls that wait on the app are skipped for one that has stopped answering.
-fn answering(m: &Move, skipped: &mut Vec<(String, String)>) -> bool {
+fn answering(m: &Move, skipped: &mut Vec<Skip>) -> bool {
     let hung = winutil::is_hung(hwnd_of(m.hwnd));
     if hung {
-        skipped.push((m.app.clone(), "timeout".into()));
+        skipped.push(Skip::of(m, "timeout"));
     }
     !hung
 }
@@ -148,7 +148,7 @@ fn landed(h: HWND, kind: &Kind) -> bool {
 /// with another DPI, or a maximized one that changes screens, takes a second step
 /// after the apps have had a moment to react (D8), and only those are checked and
 /// retried once. Returns how many moved.
-pub(super) fn place_all(moves: &[Move], skipped: &mut Vec<(String, String)>, cancelled: &dyn Fn() -> bool) -> usize {
+pub(super) fn place_all(moves: &[Move], skipped: &mut Vec<Skip>, cancelled: &dyn Fn() -> bool) -> usize {
     let mut moved = 0;
     let mut later: Vec<&Move> = Vec::new();
     for m in moves {
@@ -176,7 +176,7 @@ pub(super) fn place_all(moves: &[Move], skipped: &mut Vec<(String, String)>, can
                 later.push(m);
             }
             // A window that has its caption back isn't full screen any more.
-            Kind::Full(_) if winutil::has_caption(h) => skipped.push((m.app.clone(), "not full screen".into())),
+            Kind::Full(_) if winutil::has_caption(h) => skipped.push(Skip::of(m, "not full screen")),
             Kind::Rect(r) | Kind::Full(r) => {
                 if restoring {
                     if !answering(m, skipped) || !winutil::place_restored(h, r, m.dpi) {
@@ -225,8 +225,8 @@ pub(super) fn place_all(moves: &[Move], skipped: &mut Vec<(String, String)>, can
         }
         if landed(h, &m.kind) || winutil::window_rect(h).is_some_and(|now| now != m.before) {
             moved += 1;
-        } else if !skipped.iter().any(|(app, _)| *app == m.app) {
-            skipped.push((m.app.clone(), "didn't move".into()));
+        } else if !skipped.iter().any(|s| s.app == m.app) {
+            skipped.push(Skip::of(m, "didn't move"));
         }
     }
     moved

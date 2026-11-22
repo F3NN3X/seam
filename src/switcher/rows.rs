@@ -116,7 +116,8 @@ pub(super) fn move_opened(h: HWND, rule: &Rule, geos: &[Geo], mode: WindowSize, 
             let on_screen = geo.bounds.contains(centre(now.window).0, centre(now.window).1);
             let crosses = winutil::monitor_dpi(h) != geo.dpi;
             let (was, before, dpi) = (now.shown, now.window, geo.dpi);
-            let m = Move { hwnd: h.0 as isize, app: app_name(rule), kind, was, on_screen, crosses, dpi, before };
+            let m =
+                Move { hwnd: h.0 as isize, row: None, app: app_name(rule), kind, was, on_screen, crosses, dpi, before };
             // A switch that starts meanwhile has the last word.
             place_all(std::slice::from_ref(&m), &mut Vec::new(), &switching) > 0
         }

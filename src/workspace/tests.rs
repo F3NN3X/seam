@@ -741,21 +741,6 @@ fn moving_keeps_unknown_keys() {
 }
 
 #[test]
-fn a_switch_that_cant_place_says_so_once_per_app() {
-    let skip = |app: &str, why: &str| (app.to_string(), why.to_string());
-    assert_eq!(screen_gone_note(&[skip("Slack", "elevated")]), None);
-    assert_eq!(
-        screen_gone_note(&[skip("Slack", SCREEN_GONE)]).as_deref(),
-        Some("Slack stayed where it is, because its screen isn't connected")
-    );
-    let three = [skip("a", SCREEN_GONE), skip("a", SCREEN_GONE), skip("b", SCREEN_GONE), skip("c", SCREEN_GONE)];
-    assert_eq!(
-        screen_gone_note(&three).as_deref(),
-        Some("3 apps stayed where they are, because their screen isn't connected")
-    );
-}
-
-#[test]
 fn all_in_place_ignores_off_rows() {
     let row = |rule_index, state| RowStatus { rule_index, state };
     // An off row neither makes the workspace drift nor stops it reading as in place.

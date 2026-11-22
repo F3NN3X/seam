@@ -14,6 +14,7 @@ use seam::config::WindowSize;
 use seam::desk;
 use seam::stack;
 use seam::winutil;
+use seam::workspace::report::{CANCELLED, RUNS_IN_BACKGROUND, TOOK_TOO_LONG};
 use seam::workspace::{
     self, Bound, Candidate, OpenWith, OtherWindows, Pin, Place, RowAction, RowState, RowStatus, Rule, SCREEN_GONE,
     SESSION_ID, Shown, Target, WinState, Workspace,
@@ -48,6 +49,7 @@ use launch::{earlier_launch, launch, launch_key, note_launch, place_kind};
 use place::{destination, in_place, now_of, place_all, restack, to_focus};
 use rows::move_opened;
 use run::pin_again;
+use run::{begin_starting, end_starting, stopped};
 use stages::{place_rules, run_stages, usable_place};
 
 pub use bind::{bind_rows, capture_bindings, keep_bindings, rebind};
@@ -58,10 +60,14 @@ pub use capture::{
 pub use close::{CloseJob, Done, Owned, Verb, restore, start as start_close, take_done};
 pub use rows::{LiveWorkspace, place_opened, status};
 pub use rules::{AppRules, closed_name, pin_by_rules, place_by_rule, reopen};
-pub use run::{SwitchJob, outside, switch, switching, take_switched};
+pub use run::{Skip, Starting, SwitchJob, Switched, cancel, outside, switch, switching, take_starting, take_switched};
 
 /// A worker finished a switch.
 pub const WM_APP_SWITCHED: u32 = WM_APP + 16;
+/// A switch begins starting apps.
+pub const WM_APP_SWITCH_STARTING: u32 = WM_APP + 43;
+/// A switch is done starting apps. Its generation is in `wparam`.
+pub const WM_APP_SWITCH_STARTED: u32 = WM_APP + 44;
 /// A worker finished closing or minimizing a workspace's windows.
 pub const WM_APP_CLOSED: u32 = WM_APP + 42;
 /// A worker finished a capture.
@@ -75,10 +81,8 @@ const POLL: Duration = Duration::from_millis(250);
 /// While a switch waits for windows, how often it looks for itself, for an app
 /// whose window shows without the event (or before it has a title).
 const LAUNCH_POLL: Duration = Duration::from_secs(1);
-/// What `skipped` says about an app whose window didn't show in time.
-const TOOK_TOO_LONG: &str = "Took too long to open";
-/// What `skipped` says about an app whose program runs with no window.
-const RUNS_IN_BACKGROUND: &str = "Running in background";
+/// How often a switch that starts apps looks whether it was cancelled while it waits.
+const CANCEL_LOOK: Duration = Duration::from_millis(100);
 /// How often an arranging switch looks for windows that have appeared.
 const ARRANGE_POLL: Duration = Duration::from_millis(500);
 /// Time for an app to react to a move before the next step.
@@ -308,6 +312,8 @@ type Planned<'g> = (&'g Geo, Kind, Option<String>);
 /// One window on its way to its place.
 struct Move {
     hwnd: isize,
+    /// The row it belongs to, for the problem it may report.
+    row: Option<usize>,
     app: String,
     kind: Kind,
     /// How it's shown before the move.
@@ -324,8 +330,9 @@ struct Move {
 /// How the switch is going, for the log and the event.
 #[derive(Default)]
 struct Tally {
-    /// App and reason.
-    skipped: Vec<(String, String)>,
+    skipped: Vec<Skip>,
+    /// The user stopped the switch while it started apps (D714).
+    cancelled: bool,
     placed: usize,
     moves: usize,
     in_place: usize,
@@ -346,6 +353,10 @@ struct Stacked {
 
 /// What every step of a switch reads.
 struct Run<'a> {
+    /// The tray's window, which hears when the start phase begins and ends.
+    owner: isize,
+    /// The Seam window asked for the switch, and shows its own notice.
+    from_panel: bool,
     ws: &'a Workspace,
     geos: Vec<Geo>,
     pins_stay: bool,

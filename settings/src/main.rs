@@ -149,10 +149,12 @@ fn main() {
         };
         let page = page.as_deref().and_then(Page::from_arg);
         let close = arg_after("--close");
+        let select = arg_after("--select");
         open_window(options, cx, move |window, cx| {
             cx.new(|cx| {
                 let mut panel = Panel::new(page, token, window, cx);
                 panel.close_ask = close;
+                panel.workspace = select;
                 panel
             })
         })

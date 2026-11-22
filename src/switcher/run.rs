@@ -32,12 +32,41 @@ pub struct Switched {
     pub name: String,
     pub launched: usize,
     pub placed: usize,
-    /// App and reason.
-    pub skipped: Vec<(String, String)>,
+    pub skipped: Vec<Skip>,
     /// The windows the rows put in one zone as a stack: the screen and zones, from 0,
     /// and the windows from the top.
     pub stacks: Vec<(Zones, Vec<isize>)>,
     /// The Seam window asked for it, so the tray stays quiet.
+    pub from_panel: bool,
+    /// The user stopped it while it started apps.
+    pub cancelled: bool,
+}
+
+/// An app a switch couldn't start or move, or left alone on purpose.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Skip {
+    /// The row, from 0, or `None` for Other windows.
+    pub row: Option<usize>,
+    pub app: String,
+    pub reason: String,
+}
+
+impl Skip {
+    pub(super) fn row(row: usize, rule: &Rule, reason: &str) -> Skip {
+        Skip { row: Some(row), app: app_name(rule), reason: reason.into() }
+    }
+
+    pub(super) fn of(m: &Move, reason: &str) -> Skip {
+        Skip { row: m.row, app: m.app.clone(), reason: reason.into() }
+    }
+}
+
+/// A switch that begins starting apps, for the notice and the Esc hook.
+pub struct Starting {
+    pub generation: u64,
+    pub id: String,
+    pub name: String,
+    pub apps: usize,
     pub from_panel: bool,
 }
 
@@ -48,6 +77,57 @@ pub type Zones = (String, usize, usize);
 static SWITCH_GEN: AtomicU64 = AtomicU64::new(0);
 
 static SWITCHED: Mutex<Option<Switched>> = Mutex::new(None);
+
+static STARTING: Mutex<Option<Starting>> = Mutex::new(None);
+
+/// The switch whose start phase runs now, 0 for none.
+static STARTING_GEN: AtomicU64 = AtomicU64::new(0);
+
+/// The switch the user asked to stop.
+static CANCEL: AtomicU64 = AtomicU64::new(0);
+
+/// A switch starts the app it is at unless it was cancelled.
+fn should_start(generation: u64, cancel_gen: u64) -> bool {
+    generation != cancel_gen
+}
+
+/// Stop the switch that is starting apps: it starts nothing more and waits for nothing.
+/// False when none is (D714).
+pub fn cancel() -> bool {
+    let running = STARTING_GEN.load(Ordering::SeqCst);
+    if running != 0 {
+        CANCEL.store(running, Ordering::SeqCst);
+    }
+    running != 0
+}
+
+pub fn take_starting() -> Option<Starting> {
+    STARTING.lock().unwrap_or_else(|e| e.into_inner()).take()
+}
+
+/// The start phase begins: tell the tray, and let a cancel reach this switch.
+pub(super) fn begin_starting(run: &Run, generation: u64, apps: usize) {
+    let ws = run.ws;
+    let (id, name, from_panel) = (ws.id.clone(), ws.name.clone(), run.from_panel);
+    *STARTING.lock().unwrap_or_else(|e| e.into_inner()) = Some(Starting { generation, id, name, apps, from_panel });
+    STARTING_GEN.store(generation, Ordering::SeqCst);
+    unsafe {
+        let _ = PostMessageW(Some(hwnd_of(run.owner)), WM_APP_SWITCH_STARTING, WPARAM(generation as usize), LPARAM(0));
+    }
+}
+
+/// The start phase is over, however it ended.
+pub(super) fn end_starting(run: &Run, generation: u64) {
+    let _ = STARTING_GEN.compare_exchange(generation, 0, Ordering::SeqCst, Ordering::SeqCst);
+    unsafe {
+        let _ = PostMessageW(Some(hwnd_of(run.owner)), WM_APP_SWITCH_STARTED, WPARAM(generation as usize), LPARAM(0));
+    }
+}
+
+/// Whether the user stopped this switch.
+pub(super) fn stopped(generation: u64) -> bool {
+    !should_start(generation, CANCEL.load(Ordering::SeqCst))
+}
 
 /// Switches running now. A replaced one counts until its thread has stopped.
 static RUNNING: AtomicUsize = AtomicUsize::new(0);
@@ -115,7 +195,19 @@ fn run_switch(job: &SwitchJob, mine: u64) -> Option<Switched> {
     let (pins_stay, size_mode, places) = (job.pins_stay, job.size_mode, job.places);
     let (bound, elsewhere) = bindings(ws, places);
     let put_back = job.put_back;
-    let run = Run { ws, geos, pins_stay, size_mode, cancelled: &cancelled, stamp, places, put_back, bound };
+    let run = Run {
+        owner: job.owner,
+        from_panel: job.from_panel,
+        ws,
+        geos,
+        pins_stay,
+        size_mode,
+        cancelled: &cancelled,
+        stamp,
+        places,
+        put_back,
+        bound,
+    };
     let mut tally = Tally::default();
     let mut procs = Procs::new();
 
@@ -148,10 +240,11 @@ fn run_switch(job: &SwitchJob, mine: u64) -> Option<Switched> {
     // Other windows on this desk's screens: only ones that were there before the switch began,
     // and never anything that belongs to an app this workspace has or has started, whose
     // splash screens, updaters and real main window may open late.
-    let other_windows = if job.alongside { OtherWindows::Leave } else { ws.other_windows };
+    // A cancelled switch leaves them alone: the user stopped it (D714).
+    let other_windows = if job.alongside || tally.cancelled { OtherWindows::Leave } else { ws.other_windows };
     if other_windows != OtherWindows::Leave && found.iter().all(Option::is_none) {
         // Without a single match the workspace says nothing about what is on screen.
-        tally.skipped.push(("Other windows".into(), "nothing matched".into()));
+        tally.skipped.push(Skip { row: None, app: "Other windows".into(), reason: "nothing matched".into() });
     } else if other_windows != OtherWindows::Leave {
         deal_with_others(job, &run, other_windows, (&found, &known, &seen), &starts);
     }
@@ -167,7 +260,8 @@ fn run_switch(job: &SwitchJob, mine: u64) -> Option<Switched> {
     let launched = starts.launched;
     let stacks = stacks_of(ws, &found);
     let (id, name, placed, skipped) = (ws.id.clone(), ws.name.clone(), tally.placed, tally.skipped);
-    Some(Switched { id, name, launched, placed, skipped, stacks, from_panel: job.from_panel })
+    let cancelled = tally.cancelled;
+    Some(Switched { id, name, launched, placed, skipped, stacks, from_panel: job.from_panel, cancelled })
 }
 
 /// The rows with a place in a stack, whose windows were found, grouped by screen and zones.
@@ -254,14 +348,15 @@ fn arrange_as_they_open(
         }
     }
     let found = &*waits.found;
-    let absent: Vec<&Rule> = ws.windows.iter().zip(found).filter(|(_, h)| h.is_none()).map(|(r, _)| r).collect();
-    let names: Vec<String> = absent.iter().map(|r| app_name(r)).collect();
+    let absent: Vec<(usize, &Rule)> =
+        ws.windows.iter().enumerate().zip(found).filter(|(_, h)| h.is_none()).map(|(r, _)| r).collect();
+    let names: Vec<String> = absent.iter().map(|(_, r)| app_name(r)).collect();
     let shown = found.iter().flatten().count();
     log::info!("{}: placed {shown} of {}, never showed: {}", ws.name, found.len(), names.join(", "));
     let mut background = Background::default();
-    for rule in absent {
+    for (i, rule) in absent {
         let why = if background.runs(rule, waits.procs) { RUNS_IN_BACKGROUND } else { "timeout" };
-        tally.skipped.push((app_name(rule), why.into()));
+        tally.skipped.push(Skip::row(i, rule, why));
     }
     Some(())
 }
@@ -304,9 +399,9 @@ fn place_then_start(run: &Run, mine: u64, waits: &mut Waits, starts: &mut Starts
         .iter()
         .enumerate()
         .filter(|(i, r)| workspace::takes_part(r) && waits.found[*i].is_none() && !starting.contains(i));
-    for (_, rule) in idle {
+    for (i, rule) in idle {
         if background.runs(rule, waits.procs) {
-            tally.skipped.push((app_name(rule), RUNS_IN_BACKGROUND.into()));
+            tally.skipped.push(Skip::row(i, rule, RUNS_IN_BACKGROUND));
         }
     }
     Some(())
@@ -412,5 +507,21 @@ pub(super) fn pin_again(hwnd: isize, pin: Pin) {
     }
     if pin.bits() & winutil::PIN_STICKY != 0 {
         crate::wm::pin(PinKind::Sticky, Some(true), hwnd, None);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_cancel_stops_only_the_switch_it_names() {
+        // Nothing cancelled yet, or a cancel for an earlier switch.
+        assert!(should_start(5, 0));
+        assert!(should_start(5, 4));
+        // The switch the cancel names stops starting, and stays stopped.
+        assert!(!should_start(5, 5));
+        // A newer switch isn't held by an older cancel.
+        assert!(should_start(6, 5));
     }
 }

@@ -273,6 +273,10 @@ pub(super) fn run_command(app: &mut App, queued: Queued) {
             }
             return;
         }
+        Command::ConfigSetFolder { path, take } => {
+            sync::set_folder(app, path, take, reply.clone());
+            return;
+        }
         other => command_result(app, other, panel),
     };
     let _ = reply.send(result);

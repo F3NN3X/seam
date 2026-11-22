@@ -134,6 +134,15 @@ pub struct Save {
     pub closed: BTreeMap<usize, ClosedApps>,
 }
 
+/// Whose settings a folder that already has some goes by.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FolderTake {
+    /// The folder's, for every shared setting.
+    Folder,
+    /// This PC's, written over the folder's.
+    Here,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub enum Command {
     Hello {
@@ -145,6 +154,12 @@ pub enum Command {
     StateGet,
     ConfigGet,
     ConfigPatch(Value),
+    /// Keep the settings in this folder, or on this PC only (`None`).
+    ConfigSetFolder {
+        path: Option<String>,
+        take: Option<FolderTake>,
+    },
+    ConfigFolder,
     DesksList,
     WorkspacesList {
         desk: Option<String>,
@@ -411,9 +426,13 @@ pub fn desks_list(snapshot: &Snapshot) -> Value {
 
 /// `config.get` for a client that isn't the panel: the config without what I typed in
 /// "Open with", which only the panel sees, and with each item reduced to its kind, so no
-/// folder, address, profile or startup command leaves the panel (D737).
+/// folder, address, profile or startup command leaves the panel (D737). The settings folder is
+/// the panel's alone too (D759).
 pub fn config_for_others(config: &Value) -> Value {
     let mut config = config.clone();
+    if let Some(fields) = config.as_object_mut() {
+        fields.remove("config_folder");
+    }
     let desks = config.get_mut("desks").and_then(Value::as_object_mut);
     for desk in desks.into_iter().flat_map(|d| d.values_mut()) {
         if let Some(list) = desk.get_mut("workspaces").and_then(Value::as_array_mut) {

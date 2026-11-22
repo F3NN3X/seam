@@ -551,6 +551,7 @@ pub fn check_main() -> i32 {
     if package::is_packaged() {
         return 0;
     }
+    // The local copy only: update choices stay on this PC, so the settings folder isn't read.
     let prerelease = seam::config::Config::load().updates.prerelease;
     i32::from(check(prerelease, &mut |_| {}).is_err())
 }

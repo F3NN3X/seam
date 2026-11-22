@@ -39,6 +39,31 @@ fn on_param(params: &Value) -> Result<bool, RpcError> {
     params.get("on").and_then(Value::as_bool).ok_or_else(|| RpcError::new(INVALID_PARAMS, "on must be true or false"))
 }
 
+/// A patch can't point Seam at a folder or write the shared file's stamp: only `config.set_folder`
+/// chooses the folder (D759), and only Seam stamps the file.
+fn without_folder(mut patch: Value) -> Value {
+    if let Some(fields) = patch.as_object_mut() {
+        fields.remove("config_folder");
+        fields.remove("sync");
+    }
+    patch
+}
+
+fn config_set_folder(p: &Value) -> Result<Command, RpcError> {
+    let path = match p.get("path") {
+        Some(Value::Null) => None,
+        Some(Value::String(path)) => Some(path.clone()),
+        _ => return Err(RpcError::new(INVALID_PARAMS, "path must be a folder or null")),
+    };
+    let take = match str_param(p, "take")?.as_deref() {
+        None => None,
+        Some("folder") => Some(FolderTake::Folder),
+        Some("here") => Some(FolderTake::Here),
+        Some(_) => return Err(RpcError::new(INVALID_PARAMS, "take must be folder or here")),
+    };
+    Ok(Command::ConfigSetFolder { path, take })
+}
+
 fn command(method: &str, p: &Value) -> Result<Command, RpcError> {
     Ok(match method {
         "hello" => hello(p)?,
@@ -49,8 +74,11 @@ fn command(method: &str, p: &Value) -> Result<Command, RpcError> {
             p.get("patch")
                 .filter(|v| v.is_object())
                 .cloned()
+                .map(without_folder)
                 .ok_or_else(|| RpcError::new(INVALID_PARAMS, "patch must be an object"))?,
         ),
+        "config.set_folder" => config_set_folder(p)?,
+        "config.folder" => Command::ConfigFolder,
         "desks.list" => Command::DesksList,
         "workspaces.list" => Command::WorkspacesList { desk: str_param(p, "desk")? },
         "workspace.switch" => workspace_switch(p)?,
@@ -529,6 +557,7 @@ fn allowed(command: &Command, peer: Peer) -> Result<(), RpcError> {
     }
     let permitted = match command {
         Command::ConfigPatch(_)
+        | Command::ConfigSetFolder { .. }
         | Command::ZonesPick { .. }
         | Command::WorkspaceUpdate { .. }
         | Command::WorkspaceCreate { .. }
@@ -544,6 +573,7 @@ fn allowed(command: &Command, peer: Peer) -> Result<(), RpcError> {
         | Command::WorkspaceSetDefault(_)
         | Command::WorkspaceMinimizeUndo => peer.panel || peer.own_image,
         Command::UpdateReady => peer.own_image,
+        Command::ConfigFolder => peer.panel || peer.own_image,
         _ => true,
     };
     permitted.then_some(()).ok_or_else(|| RpcError::new(FORBIDDEN, "Only Seam can do that"))
@@ -579,6 +609,14 @@ pub fn parse_request(line: &str, peer: Peer) -> Result<(Value, Command), Rejecte
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn config_patch_ignores_config_folder() {
+        let panel = Peer { panel: true, api_enabled: true, ..Peer::default() };
+        let line = r#"{"jsonrpc":"2.0","id":1,"method":"config.patch","params":{"patch":{"config_folder":"D:\\Sync","sync":{"pc":"X","at":1},"enabled":false}}}"#;
+        let (_, command) = parse_request(line, panel).unwrap();
+        assert_eq!(command, Command::ConfigPatch(json!({ "enabled": false })));
+    }
 
     #[test]
     fn request_lines_become_commands_or_the_right_error() {
@@ -717,6 +755,18 @@ mod tests {
             (request("config.patch", r#"{"patch":{"enabled":false}}"#), panel, {
                 Command::ConfigPatch(json!({ "enabled": false }))
             }),
+            (request("config.folder", "{}"), panel, Command::ConfigFolder),
+            (request("config.folder", "{}"), own, Command::ConfigFolder),
+            (
+                request("config.set_folder", r#"{"path":"D:\\Sync","take":"here"}"#),
+                panel,
+                Command::ConfigSetFolder { path: Some("D:\\Sync".into()), take: Some(FolderTake::Here) },
+            ),
+            (
+                request("config.set_folder", r#"{"path":null}"#),
+                panel,
+                Command::ConfigSetFolder { path: None, take: None },
+            ),
             (
                 request("workspace.update", r#"{"id":"ws_1","workspace":{"id":"ws_1"}}"#),
                 panel,
@@ -814,6 +864,11 @@ mod tests {
             (request("autoapply.set", "{}"), anyone, INVALID_PARAMS),
             (request("config.patch", r#"{"patch":3}"#), panel, INVALID_PARAMS),
             (request("config.patch", r#"{"patch":{}}"#), anyone, FORBIDDEN),
+            (request("config.set_folder", r#"{"path":null}"#), anyone, FORBIDDEN),
+            (request("config.set_folder", r#"{"path":null}"#), own, FORBIDDEN),
+            (request("config.set_folder", "{}"), panel, INVALID_PARAMS),
+            (request("config.set_folder", r#"{"path":"D:\\Sync","take":"both"}"#), panel, INVALID_PARAMS),
+            (request("config.folder", "{}"), anyone, FORBIDDEN),
             (request("workspace.update", r#"{"id":"ws_1","workspace":{}}"#), anyone, FORBIDDEN),
             (request("workspace.capture", r#"{"row":1}"#), panel, INVALID_PARAMS),
             (request("workspace.capture", r#"{"token":"t"}"#), panel, INVALID_PARAMS),
@@ -894,6 +949,8 @@ mod tests {
         // Nothing outside the list: no closing, no settings, no Open with, no full workspace write.
         let forbidden = [
             ("config.patch", r#"{"patch":{}}"#),
+            ("config.set_folder", r#"{"path":null}"#),
+            ("config.folder", "{}"),
             ("workspace.update", r#"{"id":"ws_1","workspace":{}}"#),
             ("workspace.capture", r#"{"into":"ws_1"}"#),
             ("workspace.capture_preview", r#"{"into":"ws_1"}"#),

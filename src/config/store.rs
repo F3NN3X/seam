@@ -29,12 +29,21 @@ impl Config {
                 }
                 c.migrate_sign_in();
                 c.clean_items();
+                // Only the shared file has a stamp.
+                c.sync = None;
                 c
             }
             Err(_) => {
                 // Set it aside: the next save would otherwise destroy the layouts in it.
                 let _ = std::fs::rename(p, p.with_extension("json.corrupt"));
-                Config::default()
+                // The folder, if one was set, still holds the shared part: keep the pointer to it.
+                let folder = serde_json::from_slice::<serde_json::Value>(&bytes)
+                    .ok()
+                    .and_then(|v| v.get("config_folder")?.as_str().map(str::to_string));
+                if folder.is_some() {
+                    log::info!("config.json was unreadable, so the shared part is rebuilt from the settings folder");
+                }
+                Config { config_folder: folder, ..Config::default() }
             }
         }
     }
@@ -58,6 +67,8 @@ impl Config {
             c.migrate_v1();
         }
         c.migrate_sign_in();
+        // A settings file shouldn't point this PC at another one's folder.
+        (c.config_folder, c.sync) = (None, None);
         for desk in c.desks.values_mut() {
             let clean = |saved: &[serde_json::Value]| {
                 let typed = crate::workspace::without_open_with(&crate::workspace::without_places(saved));

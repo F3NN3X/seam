@@ -48,18 +48,17 @@ fn rename(sig: String, current: String, window: &mut Window, cx: &mut Context<Pa
 }
 
 /// The desks not seen for `STALE_DAYS`, other than the one in use. A desk the tray never saw
-/// connected has no date, so it stays. Without the desk in use there's nothing safe to forget.
+/// connected has no date, so it stays: with the settings in a synced folder that is every desk of
+/// another PC, since `last_seen` stays on each PC. Without the desk in use there's nothing safe to forget.
 fn stale(panel: &Panel) -> Vec<(String, Desk)> {
     let Some(active) = panel.state.as_ref().map(|s| s.desk.sig.as_str()) else { return vec![] };
-    let before = now().saturating_sub(STALE_DAYS * 24 * 60 * 60);
+    stale_desks(&panel.config.desks, active, now())
+}
+
+fn stale_desks(desks: &std::collections::BTreeMap<String, Desk>, active: &str, now: u64) -> Vec<(String, Desk)> {
+    let before = now.saturating_sub(STALE_DAYS * 24 * 60 * 60);
     let old = |d: &Desk| d.last_seen != 0 && d.last_seen < before;
-    panel
-        .config
-        .desks
-        .iter()
-        .filter(|(sig, d)| sig.as_str() != active && old(d))
-        .map(|(s, d)| (s.clone(), d.clone()))
-        .collect()
+    desks.iter().filter(|(sig, d)| sig.as_str() != active && old(d)).map(|(s, d)| (s.clone(), d.clone())).collect()
 }
 
 /// "Home", "Home and Office" or "Home, Office and Den".
@@ -114,11 +113,13 @@ fn forget_old(panel: &Panel, window: &mut Window, cx: &mut Context<Panel>) {
     });
 }
 
-/// "4 screens, in use" or "4 screens, last here 9 Nov".
-fn meta(sig: &str, desk: &Desk, in_use: bool) -> String {
+/// "4 screens, in use" or "4 screens, last here 9 Nov". With the settings in a synced folder, a
+/// desk this PC never saw is "4 screens, on another PC".
+fn meta(sig: &str, desk: &Desk, in_use: bool, synced: bool) -> String {
     let screens = count(sig.split('|').count());
     match (in_use, desk.last_seen) {
         (true, _) => format!("{screens}, in use"),
+        (false, 0) if synced => format!("{screens}, on another PC"),
         (false, 0) => screens,
         (false, seen) => match short_date(seen) {
             Some(date) => format!("{screens}, last here {date}"),
@@ -150,6 +151,7 @@ pub(super) fn desk_menu(panel: &Panel, cx: &mut Context<Panel>) -> impl IntoElem
     let mut desks: Vec<(String, Desk)> = panel.config.desks.iter().map(|(s, d)| (s.clone(), d.clone())).collect();
     desks.sort_by_key(|(sig, d)| (*sig != active, std::cmp::Reverse(d.last_seen)));
     let (current, name) = (active.clone(), panel.desk_name());
+    let synced = panel.config.config_folder.is_some();
     let view = cx.entity().downgrade();
     Button::new("desk-menu")
         .ghost()
@@ -163,7 +165,7 @@ pub(super) fn desk_menu(panel: &Panel, cx: &mut Context<Panel>) -> impl IntoElem
                 .max_w(px(300.))
                 .item(PopupMenuItem::label("Desks Seam knows. It picks one by the screens it finds"));
             for (sig, desk) in &desks {
-                menu = menu.item(desk_item(desk.name.clone(), meta(sig, desk, *sig == active), *sig == active));
+                menu = menu.item(desk_item(desk.name.clone(), meta(sig, desk, *sig == active, synced), *sig == active));
             }
             let (renaming, forgetting) = (view.clone(), view.clone());
             let (sig, name) = (current.clone(), name.clone());
@@ -176,4 +178,27 @@ pub(super) fn desk_menu(panel: &Panel, cx: &mut Context<Panel>) -> impl IntoElem
                     let _ = forgetting.update(cx, |panel, cx| forget_old(panel, window, cx));
                 }))
         })
+}
+
+#[cfg(test)]
+mod tests {
+    // Not `super::*`: it would bring in gpui's own `test` attribute.
+    use super::{Desk, meta, stale_desks};
+
+    #[test]
+    fn forget_old_desks_keeps_desks_this_pc_never_saw() {
+        let day = 24 * 60 * 60;
+        let desk = |last_seen| Desk { last_seen, ..Desk::default() };
+        let desks = std::collections::BTreeMap::from([
+            ("here".to_string(), desk(10 * day)),
+            ("old".to_string(), desk(20 * day)),
+            ("recent".to_string(), desk(90 * day)),
+            // The other PC's desk: its `last_seen` stays on that PC, so it is 0 here.
+            ("other-pc".to_string(), desk(0)),
+        ]);
+        let gone: Vec<String> = stale_desks(&desks, "here", 100 * day).into_iter().map(|(sig, _)| sig).collect();
+        assert_eq!(gone, ["old"]);
+        assert_eq!(meta("a|b", &desk(0), false, true), "2 screens, on another PC");
+        assert_eq!(meta("a|b", &desk(0), false, false), "2 screens");
+    }
 }

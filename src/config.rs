@@ -7,8 +7,12 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
+pub mod folder;
 mod migrate;
 mod store;
+pub mod sync;
+#[cfg(test)]
+mod sync_tests;
 #[cfg(test)]
 mod tests;
 
@@ -705,6 +709,22 @@ pub struct Config {
     /// v1 only. Read for migration, never written.
     #[serde(skip_serializing)]
     pub layouts: BTreeMap<String, Vec<SavedBorder>>,
+    /// Folder that holds the shared part of the config (brief G). None: settings live on this PC only.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub config_folder: Option<String>,
+    /// Who last wrote the shared file, for the "Use the settings in this folder?" dialog. Only the
+    /// shared file has it: a local file's is ignored and a loaded config never keeps one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sync: Option<SyncStamp>,
+}
+
+/// Who wrote the shared file, and when.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct SyncStamp {
+    /// COMPUTERNAME.
+    pub pc: String,
+    /// Unix seconds.
+    pub at: u64,
 }
 
 fn setup_done_in_old_files() -> bool {
@@ -745,6 +765,8 @@ impl Default for Config {
             desks: BTreeMap::new(),
             seen: Vec::new(),
             layouts: BTreeMap::new(),
+            config_folder: None,
+            sync: None,
         }
     }
 }

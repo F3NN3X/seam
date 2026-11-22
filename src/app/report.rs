@@ -104,6 +104,7 @@ pub(super) fn snapshot(app: &App) -> Snapshot {
         windows_cursor_easing: app.cursor_easing,
         stacks: snap::stacks().into_iter().filter_map(stack).collect(),
         tiling: tiling::tiling_state(app),
+        config_sync: state::ConfigSync { state: seam::config::folder::state() },
     };
     Snapshot { state, config: serde_json::to_value(&app.cfg).unwrap_or_default() }
 }

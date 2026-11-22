@@ -29,6 +29,11 @@ pub(in crate::app) fn last_switch(app: &App, id: &str) -> Value {
     json!({ "at": last.at, "cancelled": last.cancelled, "skipped": skipped_json(&last.skipped) })
 }
 
+/// The Seam window is connected and on screen, so it says it itself.
+fn panel_open(app: &App) -> bool {
+    crate::tray::panel_shows(app.clients.iter().any(|c| c == "panel"), crate::tray::panel_visible())
+}
+
 /// A switch begins starting apps: Esc stops it from now on, and the balloon follows if it takes a while.
 pub(in crate::app) fn starting(app: &mut App) {
     let Some(starting) = switcher::take_starting() else { return };
@@ -66,7 +71,7 @@ pub(in crate::app) fn starting_due(app: &mut App) {
     }
     let Some(Starting { name, apps, .. }) = &app.starting else { return };
     // The Seam window has its own notice with a button, so one stop is enough.
-    if app.clients.iter().any(|c| c == "panel") {
+    if panel_open(app) {
         return;
     }
     let (title, body) = report::starting(name, *apps, true);
@@ -87,7 +92,7 @@ pub(in crate::app) fn ended(app: &mut App, done: &Switched) {
         app.last_switch.insert(done.id.clone(), last);
     }
     // The Seam window shows the result itself, while it is open.
-    let panel_shows = done.from_panel && app.clients.iter().any(|c| c == "panel");
+    let panel_shows = done.from_panel && panel_open(app);
     let notice = if session || panel_shows { None } else { report::summary(&done.name, &problems, left) };
     let shown = std::mem::take(&mut app.starting_balloon);
     // A click on the summary opens the workspace it names, not a later one.

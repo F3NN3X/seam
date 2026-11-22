@@ -1,38 +1,54 @@
 //! Esc stops a switch that is starting apps (D715). A low-level keyboard hook that is in place
-//! only for that long, on the tray thread: all it does is set a flag. Esc is never swallowed,
+//! only for that long, on a thread of its own: all it does is set a flag. Esc is never swallowed,
 //! so the app in front still gets it.
 
 use crate::{log, switcher};
-use std::cell::Cell;
+use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::mpsc::channel;
 use windows::Win32::Foundation::{LPARAM, LRESULT, WPARAM};
+use windows::Win32::System::Threading::GetCurrentThreadId;
 use windows::Win32::UI::Input::KeyboardAndMouse::{
     GetAsyncKeyState, VIRTUAL_KEY, VK_CONTROL, VK_ESCAPE, VK_LWIN, VK_MENU, VK_RWIN, VK_SHIFT,
 };
 use windows::Win32::UI::WindowsAndMessaging::*;
 
-thread_local! {
-    static HOOK: Cell<Option<HHOOK>> = const { Cell::new(None) };
-}
+/// The hook thread's id while one runs, else 0.
+static THREAD: AtomicU32 = AtomicU32::new(0);
 
-/// Watch for Esc until `remove`. Nothing happens if the hook is already in place or can't be made.
+/// Watch for Esc until `remove`, with a fresh hook on a thread of its own, so one Windows dropped
+/// for being slow is replaced at every start phase. The hook never waits on the tray thread.
 pub(super) fn install() {
-    HOOK.with(|hook| {
-        if hook.get().is_some() {
-            return;
+    remove();
+    let (ready, wait) = channel();
+    let spawned = std::thread::Builder::new().name("seam-esc".into()).spawn(move || unsafe {
+        let mut msg = MSG::default();
+        // Creates this thread's queue, so a stop from now on reaches it.
+        let _ = PeekMessageW(&mut msg, None, 0, 0, PM_NOREMOVE);
+        let hook = SetWindowsHookExW(WH_KEYBOARD_LL, Some(key_proc), None, 0);
+        match &hook {
+            Ok(_) => {
+                let _ = ready.send(GetCurrentThreadId());
+            }
+            Err(e) => {
+                log::info!("switch: no Esc hook: {e}");
+                let _ = ready.send(0);
+            }
         }
-        match unsafe { SetWindowsHookExW(WH_KEYBOARD_LL, Some(key_proc), None, 0) } {
-            Ok(h) => hook.set(Some(h)),
-            Err(e) => log::info!("switch: no Esc hook: {e}"),
+        if let Ok(hook) = hook {
+            while GetMessageW(&mut msg, None, 0, 0).as_bool() {}
+            let _ = UnhookWindowsHookEx(hook);
         }
     });
+    if spawned.is_ok() {
+        THREAD.store(wait.recv().unwrap_or(0), Ordering::SeqCst);
+    }
 }
 
 pub(super) fn remove() {
-    HOOK.with(|hook| {
-        if let Some(h) = hook.take() {
-            let _ = unsafe { UnhookWindowsHookEx(h) };
-        }
-    });
+    let id = THREAD.swap(0, Ordering::SeqCst);
+    if id != 0 {
+        let _ = unsafe { PostThreadMessageW(id, WM_QUIT, WPARAM(0), LPARAM(0)) };
+    }
 }
 
 /// Esc on its own cancels. With Ctrl, Alt, Shift or Win it belongs to the app.

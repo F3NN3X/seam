@@ -279,8 +279,7 @@ fn shown_of(h: HWND) -> Shown {
 
 /// What to call an app in a message: its exe's name, or failing that its window title.
 fn app_name(rule: &Rule) -> String {
-    let stem = Path::new(&rule.exe).file_stem().map(|s| s.to_string_lossy().into_owned());
-    stem.filter(|s| !s.is_empty()).unwrap_or_else(|| rule.title_hint.clone())
+    workspace::report::app_name(&rule.exe, &rule.title_hint)
 }
 
 /// Where a window goes, and how it's shown there.
@@ -355,8 +354,6 @@ struct Stacked {
 struct Run<'a> {
     /// The tray's window, which hears when the start phase begins and ends.
     owner: isize,
-    /// The Seam window asked for the switch, and shows its own notice.
-    from_panel: bool,
     ws: &'a Workspace,
     geos: Vec<Geo>,
     pins_stay: bool,

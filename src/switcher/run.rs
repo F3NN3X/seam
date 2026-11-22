@@ -67,7 +67,6 @@ pub struct Starting {
     pub id: String,
     pub name: String,
     pub apps: usize,
-    pub from_panel: bool,
 }
 
 /// A screen's id and the first and last of its zones, from 0.
@@ -108,8 +107,8 @@ pub fn take_starting() -> Option<Starting> {
 /// The start phase begins: tell the tray, and let a cancel reach this switch.
 pub(super) fn begin_starting(run: &Run, generation: u64, apps: usize) {
     let ws = run.ws;
-    let (id, name, from_panel) = (ws.id.clone(), ws.name.clone(), run.from_panel);
-    *STARTING.lock().unwrap_or_else(|e| e.into_inner()) = Some(Starting { generation, id, name, apps, from_panel });
+    let (id, name) = (ws.id.clone(), ws.name.clone());
+    *STARTING.lock().unwrap_or_else(|e| e.into_inner()) = Some(Starting { generation, id, name, apps });
     STARTING_GEN.store(generation, Ordering::SeqCst);
     unsafe {
         let _ = PostMessageW(Some(hwnd_of(run.owner)), WM_APP_SWITCH_STARTING, WPARAM(generation as usize), LPARAM(0));
@@ -195,19 +194,8 @@ fn run_switch(job: &SwitchJob, mine: u64) -> Option<Switched> {
     let (pins_stay, size_mode, places) = (job.pins_stay, job.size_mode, job.places);
     let (bound, elsewhere) = bindings(ws, places);
     let put_back = job.put_back;
-    let run = Run {
-        owner: job.owner,
-        from_panel: job.from_panel,
-        ws,
-        geos,
-        pins_stay,
-        size_mode,
-        cancelled: &cancelled,
-        stamp,
-        places,
-        put_back,
-        bound,
-    };
+    let run =
+        Run { owner: job.owner, ws, geos, pins_stay, size_mode, cancelled: &cancelled, stamp, places, put_back, bound };
     let mut tally = Tally::default();
     let mut procs = Procs::new();
 

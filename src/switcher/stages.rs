@@ -166,6 +166,10 @@ pub(super) fn run_stages(
         }
         let now = Instant::now();
         for (i, _) in due.iter().filter(|(_, at)| *at <= now) {
+            // The rest of the stage is left for the top of the loop to report as cancelled.
+            if stopped(mine) {
+                break;
+            }
             starts.start(ws, *i, mine, run.places, tally);
         }
         due.retain(|(_, at)| *at > now);
@@ -234,7 +238,11 @@ pub(super) fn run_stages(
         }
     };
     crate::wm::unwatch_shown(mine);
+    // A cancel that came after the last look still counts, as long as it was answered true.
     end_starting(run, mine);
+    if finished && !tally.cancelled && stopped(mine) {
+        leave_unstarted(run, starting, starts, tally);
+    }
     finished.then_some(())
 }
 

@@ -461,8 +461,14 @@ fn app_row(
     // A row that is off says so at once, before the tray has been asked.
     let state_of = |i: &usize| if ws.windows[*i].off { Some(RowState::Off) } else { row_state(panel, ws, *i) };
     let states: Vec<Option<RowState>> = row.windows.iter().map(state_of).collect();
-    let problem =
-        panel.last_switch.as_ref().filter(|(id, _)| *id == ws.id).and_then(|(_, last)| last.problem_of(&row.windows));
+    let problem = panel.last_switch.as_ref().filter(|(id, _)| *id == ws.id).and_then(|(_, last)| {
+        let apps: Vec<(usize, String)> = row
+            .windows
+            .iter()
+            .map(|i| (*i, seam::workspace::report::app_name(&ws.windows[*i].exe, &ws.windows[*i].title_hint)))
+            .collect();
+        last.problem_of(&apps)
+    });
     let near = Neighbours {
         before: at.checked_sub(1).map(|n| group.rows[n].windows[0]),
         after: group.rows.get(at + 1).and_then(|r| r.windows.last().copied()),

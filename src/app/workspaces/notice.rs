@@ -7,7 +7,7 @@ use seam::workspace::report;
 
 /// What the last switch of a workspace did, kept in memory until its next switch or a restart (D713).
 pub(in crate::app) struct LastSwitch {
-    /// Seconds since 1970.
+    /// Milliseconds since 1970.
     at: u64,
     cancelled: bool,
     skipped: Vec<Skip>,
@@ -64,8 +64,9 @@ pub(in crate::app) fn starting_due(app: &mut App) {
     unsafe {
         let _ = KillTimer(Some(app.hwnd), TIMER_STARTING);
     }
-    let Some(Starting { name, apps, from_panel, .. }) = &app.starting else { return };
-    if *from_panel && app.clients.iter().any(|c| c == "panel") {
+    let Some(Starting { name, apps, .. }) = &app.starting else { return };
+    // The Seam window has its own notice with a button, so one stop is enough.
+    if app.clients.iter().any(|c| c == "panel") {
         return;
     }
     let (title, body) = report::starting(name, *apps, true);
@@ -79,26 +80,24 @@ pub(in crate::app) fn ended(app: &mut App, done: &Switched) {
     let session = done.id == SESSION_ID;
     let named = done.skipped.iter().map(|s| (s.app.as_str(), s.reason.as_str()));
     let problems = if session { Vec::new() } else { report::problems(named) };
-    let left = done.cancelled.then(|| {
-        let mut rows: Vec<Option<usize>> =
-            done.skipped.iter().filter(|s| s.reason == report::CANCELLED).map(|s| s.row).collect();
-        rows.sort_unstable();
-        rows.dedup();
-        rows.len()
-    });
+    let left = done.cancelled.then(|| report::left_unstarted(done.skipped.iter().map(|s| (s.row, s.reason.as_str()))));
     if !session {
-        let at = SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.as_secs());
+        let at = SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.as_millis() as u64);
         let last = LastSwitch { at, cancelled: done.cancelled, skipped: done.skipped.clone() };
         app.last_switch.insert(done.id.clone(), last);
-        app.switched_id = Some(done.id.clone());
     }
     // The Seam window shows the result itself, while it is open.
     let panel_shows = done.from_panel && app.clients.iter().any(|c| c == "panel");
     let notice = if session || panel_shows { None } else { report::summary(&done.name, &problems, left) };
     let shown = std::mem::take(&mut app.starting_balloon);
+    // A click on the summary opens the workspace it names, not a later one.
+    app.switched_id = None;
     match notice {
         Some((title, body)) => {
             let click = if problems.is_empty() { BalloonAction::None } else { BalloonAction::OpenSwitched };
+            if !problems.is_empty() {
+                app.switched_id = Some(done.id.clone());
+            }
             notify(app, &title, &body, click);
         }
         None if shown => clear_balloon(app),

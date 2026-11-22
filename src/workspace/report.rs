@@ -46,6 +46,21 @@ pub fn problems<'a>(skipped: impl IntoIterator<Item = (&'a str, &'a str)>) -> Ve
     found
 }
 
+/// What a message calls an app: its exe's name without the extension, or failing that its window title.
+pub fn app_name(exe: &str, title_hint: &str) -> String {
+    let stem = std::path::Path::new(exe).file_stem().map(|s| s.to_string_lossy().into_owned());
+    stem.filter(|s| !s.is_empty()).unwrap_or_else(|| title_hint.to_string())
+}
+
+/// How many apps a cancel left unstarted, from the rows and reasons skipped.
+pub fn left_unstarted<'a>(skipped: impl IntoIterator<Item = (Option<usize>, &'a str)>) -> usize {
+    let mut rows: Vec<Option<usize>> =
+        skipped.into_iter().filter(|(_, reason)| *reason == CANCELLED).map(|(row, _)| row).collect();
+    rows.sort_unstable();
+    rows.dedup();
+    rows.len()
+}
+
 /// "1 app" or "3 apps".
 pub fn apps(n: usize) -> String {
     if n == 1 { "1 app".to_string() } else { format!("{n} apps") }
@@ -197,6 +212,15 @@ mod tests {
         let (_, body) = summary("Work", two, None).unwrap();
         assert!(body.ends_with("within 15 seconds. Click to see them"));
         assert!(!body.contains("more"));
+    }
+
+    #[test]
+    fn a_cancel_counts_rows_not_entries() {
+        let skipped = [(Some(3), CANCELLED), (Some(3), CANCELLED), (Some(4), CANCELLED), (Some(1), "timeout")];
+        assert_eq!(left_unstarted(skipped), 2);
+        assert_eq!(left_unstarted([]), 0);
+        assert_eq!(app_name("C:\\Apps\\slack.exe", "Slack"), "slack");
+        assert_eq!(app_name("", "Slack"), "Slack");
     }
 
     #[test]

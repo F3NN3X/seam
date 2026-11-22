@@ -45,23 +45,21 @@ impl LastSwitch {
     }
 
     /// The words for the problem one of these rules had, if any.
-    pub fn problem_of(&self, rules: &[usize]) -> Option<&'static str> {
-        let on_row = |s: &&Skipped| s.row.is_some_and(|r| rules.contains(&r));
+    /// Rows can be edited after a switch, so the app's name has to match too.
+    pub fn problem_of(&self, rules: &[(usize, String)]) -> Option<&'static str> {
+        let on_row = |s: &&Skipped| s.row.is_some_and(|r| rules.iter().any(|(i, app)| *i == r && *app == s.app));
         self.skipped.iter().filter(on_row).find_map(|s| report::words(&s.reason))
     }
 
     /// How many apps a cancel left unstarted.
     fn left(&self) -> Option<usize> {
-        let mut rows: Vec<Option<usize>> =
-            self.skipped.iter().filter(|s| s.reason == report::CANCELLED).map(|s| s.row).collect();
-        rows.sort_unstable();
-        rows.dedup();
-        self.cancelled.then_some(rows.len())
+        self.cancelled.then(|| report::left_unstarted(self.skipped.iter().map(|s| (s.row, s.reason.as_str()))))
     }
 }
 
 /// A switch this window asked for, until its result arrives.
 pub struct Asked {
+    pub id: String,
     pub name: String,
     /// Undo goes back to the workspace that was in use.
     pub undoable: bool,
@@ -71,8 +69,8 @@ struct Starting;
 
 impl Panel {
     /// A switch is about to be asked for, so its result gets the notice with Undo.
-    pub fn expect_switch(&mut self, name: String, undoable: bool) {
-        self.asked = Some(Asked { name, undoable });
+    pub fn expect_switch(&mut self, id: String, name: String, undoable: bool) {
+        self.asked = Some(Asked { id, name, undoable });
     }
 
     /// `workspace.switching`: a switch began starting apps. Say so if it takes a while.
@@ -101,7 +99,8 @@ impl Panel {
         if data["from_panel"].as_bool() != Some(true) {
             return;
         }
-        let asked = self.asked.take();
+        // Only for the switch it was asked for: a replaced one leaves nothing behind.
+        let asked = self.asked.take().filter(|a| data["id"].as_str() == Some(a.id.as_str()));
         let name = data["name"].as_str().unwrap_or_default().to_string();
         let last = LastSwitch::from_value(data);
         let summary = last.as_ref().and_then(|l| report::panel_summary(&name, &l.problems(), l.left()));
@@ -143,4 +142,47 @@ fn cancel_button(view: WeakEntity<Panel>, cx: &mut Context<Notification>) -> But
             note.dismiss(window, cx);
         },
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::LastSwitch;
+    use serde_json::{Value, json};
+
+    fn last() -> LastSwitch {
+        let skipped = vec![
+            json!({ "row": 1, "app": "slack", "reason": "not installed", "why": "x" }),
+            json!({ "row": null, "app": "Other windows", "reason": "nothing matched", "why": null }),
+            json!({ "row": 2, "app": "figma", "reason": "pinned", "why": null }),
+            json!({ "row": 3, "app": "zoom", "reason": "cancelled", "why": null }),
+            json!({ "app": "no row", "reason": "timeout" }),
+        ];
+        let value = json!({ "at": 5, "cancelled": true, "skipped": skipped });
+        LastSwitch::from_value(&value).unwrap()
+    }
+
+    #[test]
+    fn a_result_is_read_with_or_without_a_row() {
+        let last = last();
+        assert_eq!((last.at, last.cancelled, last.skipped.len()), (5, true, 5));
+        assert_eq!(last.skipped[1].row, None);
+        assert_eq!(last.skipped[4].row, None);
+        assert_eq!(LastSwitch::from_value(&Value::Null), None);
+        assert_eq!(last.left(), Some(1));
+    }
+
+    #[test]
+    fn a_row_gets_words_only_for_its_own_app_and_a_problem() {
+        let last = last();
+        let rows = |i: usize, app: &str| vec![(i, app.to_string())];
+        assert_eq!(last.problem_of(&rows(1, "slack")), Some("isn't installed, or Seam can't find it"));
+        // A merged row names any of its windows.
+        assert!(last.problem_of(&[(0, "chrome".into()), (1, "slack".into())]).is_some());
+        // The row moved to another app since the switch.
+        assert_eq!(last.problem_of(&rows(1, "figma")), None);
+        // On purpose, and no row.
+        assert_eq!(last.problem_of(&rows(2, "figma")), None);
+        assert_eq!(last.problem_of(&rows(0, "no row")), None);
+        assert_eq!(last.problems().len(), 2);
+    }
 }

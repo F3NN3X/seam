@@ -410,7 +410,7 @@ fn put_back(panel: &mut Panel, count: usize, window: &mut Window, cx: &mut Conte
 fn switch_to(panel: &mut Panel, ws: &Workspace, window: &mut Window, cx: &mut Context<Panel>) {
     let before = panel.state.as_ref().and_then(|s| s.workspace.as_ref()).map(|w| w.id.clone());
     // The notice comes when the switch ends, so what it says is ready before the tray starts.
-    panel.expect_switch(ws.name.clone(), before.is_some_and(|id| id != ws.id));
+    panel.expect_switch(ws.id.clone(), ws.name.clone(), before.is_some_and(|id| id != ws.id));
     panel.call("workspace.switch", json!({ "id": ws.id }), window, cx, move |panel, result, window, cx| {
         if let Err(e) = result {
             panel.asked = None;

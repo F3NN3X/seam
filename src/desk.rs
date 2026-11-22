@@ -1,7 +1,7 @@
 //! A desk is one set of connected screens. The tray and the panel both resolve
 //! it from here, so they always agree on what's lined up.
 
-use crate::config::{Config, Desk, SavedBorder, WindowSize};
+use crate::config::{Config, Desk, DeskScreen, SavedBorder, WindowSize};
 use crate::geom::{EdgeMap, Rect, Side, corridor, facing, facing_gap, predict_centred, touching};
 use crate::layout::Link;
 use crate::log;
@@ -422,6 +422,34 @@ pub fn note_active(cfg: &mut Config, sig: &str, mons: &[Mon], now: u64) {
     desk.last_seen = now;
 }
 
+/// The screens as a desk remembers them: where Windows has each, and where it stands on the
+/// desk (in mm) once the desk is lined up. Without links there is no physical position.
+pub fn screens_of(mons: &[Mon], links: &[Link]) -> Vec<DeskScreen> {
+    let placed = if links.is_empty() { Vec::new() } else { physical_layout(mons, links) };
+    mons.iter()
+        .enumerate()
+        .map(|(i, m)| DeskScreen {
+            id: m.id.clone(),
+            number: i as u32 + 1,
+            name: m.name.clone(),
+            rect: [m.rect.left, m.rect.top, m.rect.width(), m.rect.height()],
+            primary: m.primary,
+            mm: placed.iter().find(|p| p.index == i).map(|p| [p.x as f32, p.y as f32, p.w as f32, p.h as f32]),
+        })
+        .collect()
+}
+
+/// Write the connected desk's screens when they differ from what it has. Returns whether it changed.
+pub fn note_screens(cfg: &mut Config, sig: &str, mons: &[Mon], links: &[Link]) -> bool {
+    let Some(desk) = cfg.desks.get_mut(sig) else { return false };
+    let screens = screens_of(mons, links);
+    if desk.screens == screens {
+        return false;
+    }
+    desk.screens = screens;
+    true
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -429,6 +457,36 @@ mod tests {
     /// A screen with no reported size, so only the pixel layout can place it.
     fn mon(id: &str, rect: Rect) -> Mon {
         Mon { id: id.into(), gdi: String::new(), name: id.into(), named: true, rect, raw_dpi: 0.0, primary: false }
+    }
+
+    #[test]
+    fn screens_are_remembered_with_a_place_in_mm_only_when_lined_up() {
+        let mut left = mon("a", Rect::new(0, 0, 1000, 1000));
+        left.primary = true;
+        let right = mon("b", Rect::new(1000, 0, 1000, 1000));
+        let mons = [left, right];
+        let plain = screens_of(&mons, &[]);
+        assert_eq!(plain.iter().map(|s| s.number).collect::<Vec<_>>(), [1, 2]);
+        assert!(plain[0].primary && !plain[1].primary);
+        assert_eq!(plain[1].rect, [1000, 0, 1000, 1000]);
+        assert!(plain.iter().all(|s| s.mm.is_none()));
+        let link =
+            Link { a: 0, b: 1, side: Side::Right, map: EdgeMap { s: 1.0, o: 0.0 }, glued: false, not_on_desk: false };
+        let lined = screens_of(&mons, &[link]);
+        assert!(lined[0].mm.is_some() && lined[1].mm.is_some());
+    }
+
+    #[test]
+    fn note_screens_writes_only_when_they_changed() {
+        let mons = [mon("a", Rect::new(0, 0, 1000, 1000))];
+        let mut cfg = Config::default();
+        assert!(!note_screens(&mut cfg, "a", &mons, &[]), "an unknown desk is left alone");
+        cfg.desks.insert("a".into(), Desk::default());
+        assert!(note_screens(&mut cfg, "a", &mons, &[]));
+        assert!(!note_screens(&mut cfg, "a", &mons, &[]));
+        let moved = [mon("a", Rect::new(0, 0, 2000, 1000))];
+        assert!(note_screens(&mut cfg, "a", &moved, &[]));
+        assert_eq!(cfg.desks["a"].screens[0].rect, [0, 0, 2000, 1000]);
     }
 
     #[test]

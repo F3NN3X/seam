@@ -197,6 +197,10 @@ pub enum Command {
         id: String,
         to: usize,
     },
+    /// `workspace.copy_from_desk`: the workspaces of another desk, copied onto this empty one.
+    WorkspaceCopyFromDesk {
+        from: String,
+    },
     /// `workspace.get`: the rows of one workspace on this desk, read from the snapshot.
     WorkspaceGet {
         id: String,
@@ -398,6 +402,7 @@ pub fn desks_list(snapshot: &Snapshot) -> Value {
             "sig": sig,
             "name": desk["name"],
             "screens": sig.split('|').count(),
+            "workspaces": desk["workspaces"].as_array().map_or(0, Vec::len),
             "active": sig == active,
         })
     });
@@ -534,6 +539,20 @@ pub fn zones_layouts(snapshot: &Snapshot, number: Option<u32>, pointer: (i32, i3
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn desks_list_counts_screens_and_workspaces() {
+        let mut snapshot = Snapshot::default();
+        snapshot.state.desk.sig = "a|b".into();
+        snapshot.config = json!({ "desks": {
+            "a|b": { "name": "Home", "workspaces": [{ "id": "w1" }, { "id": "w2" }] },
+            "c": { "name": "Laptop" },
+        } });
+        let list = desks_list(&snapshot);
+        assert_eq!((list[0]["screens"].as_u64(), list[0]["workspaces"].as_u64()), (Some(2), Some(2)));
+        assert_eq!(list[0]["active"], true);
+        assert_eq!((list[1]["screens"].as_u64(), list[1]["workspaces"].as_u64()), (Some(1), Some(0)));
+    }
 
     #[test]
     fn workspace_get_shows_open_with_only_to_the_panel() {

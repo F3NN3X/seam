@@ -187,4 +187,5 @@ pub(in crate::app) fn drift_checked(app: &mut App) {
         app.drifted = drift.drifted;
         publish(app);
     }
+    restore_checked(app, &drift.id, drift.drifted);
 }

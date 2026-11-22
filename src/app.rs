@@ -7,6 +7,7 @@ mod overview;
 mod pause;
 mod pointer;
 mod report;
+mod restore;
 mod session;
 mod share;
 mod signin;
@@ -26,7 +27,7 @@ use crate::layout::{Link, Live};
 use crate::live::{WM_APP_DETECTED, WM_APP_DRIFT};
 use crate::log;
 use crate::monitors::{self, Mon};
-use crate::snap::{self, WM_APP_REFIT, WM_APP_SNAP_BLOCKED};
+use crate::snap::{self, WM_APP_REFIT, WM_APP_REFIT_DONE, WM_APP_SNAP_BLOCKED};
 use crate::standby::{self, WM_APP_STANDBY};
 use crate::switcher::{
     self, AppRules, CaptureJob, LiveWorkspace, Screen as SwitchScreen, SwitchJob, WM_APP_CAPTURED, WM_APP_CLOSED,
@@ -43,6 +44,10 @@ use messages::wndproc;
 use pause::{set_paused, standby_check, standby_configure};
 use pointer::{lineup_done, set_cursor_easing, set_remap, start_lineup, warn_about_ease};
 use report::{publish, refresh, send_state_event, snapshot};
+use restore::{
+    arm_restore_offer, balloon_faded, cancel_restore_offer, refit_ended, restore_checked, restore_look,
+    restore_offered, settle_restore_offer,
+};
 use seam::api::{self, Client, Command, FocusScope, GroupVerb, PinKind, Reply, RpcError, WindowVerb};
 use seam::config::{ClosedApps, RestoreApps, TrayClick};
 use seam::direction::Dir;
@@ -87,7 +92,7 @@ use windows::Win32::UI::Shell::*;
 use windows::Win32::UI::WindowsAndMessaging::*;
 use windows::core::{PCWSTR, w};
 use workspaces::{Ask, Closing, Minimized, closed, start_close, start_close_here, undo_minimize};
-use workspaces::{Via, move_workspace};
+use workspaces::{Via, copy_from_desk, move_workspace};
 use workspaces::{Which, create_workspace, edit_workspace, start_add_window, start_group, window_planned};
 use workspaces::{
     apply_hotkeys, aside, capture_job, captured, choose_in_use, desk_workspaces, detected_in_use, drift_checked,
@@ -141,6 +146,14 @@ const DRIFT_AFTER_MS: u32 = 400;
 const TIMER_WINDOW: usize = 13;
 /// A switch has been starting apps long enough to say so.
 const TIMER_STARTING: usize = 14;
+/// Looks whether the workspace in use needs the restore offer, once the screens have settled.
+const TIMER_RESTORE_OFFER: usize = 15;
+/// How long after the refresh, with Keep windows in their zones off.
+const RESTORE_OFFER_AFTER_MS: u32 = 3_000;
+/// The same with it on, in case its run never ends: normally its end starts the look.
+const RESTORE_OFFER_FALLBACK_MS: u32 = 10_000;
+/// How long the answer of the live check counts for the restore offer.
+const RESTORE_CHECK_FOR: Duration = Duration::from_secs(10);
 /// How long a plan an API client waits for is kept for the app before it is dropped.
 const WINDOW_WAIT: Duration = Duration::from_secs(2);
 /// How long the end of a Windows session waits for the last session's capture.
@@ -253,6 +266,8 @@ enum BalloonAction {
     OpenSwitched,
     /// Restore the last session offered at sign-in (D120).
     RestoreSession,
+    /// Put back the workspace in use after the screens changed (D748).
+    RestoreAfterScreens,
     /// Put back what the last quick save changed.
     UndoQuickSave,
     /// Put back the windows and layout of the last tile.
@@ -452,6 +467,20 @@ struct App {
     session_offer_tries: u8,
     /// The workspace offered at sign-in, for the notice's click.
     sign_in_offer: Option<(String, String)>,
+    /// The desk and workspace "Restore <name>?" was offered for, for the notice's click.
+    restore_offer: Option<(String, String)>,
+    /// The screens changed and the restore offer waits for them to settle, or for the re-fit.
+    restore_armed: bool,
+    /// When the sign-in "Open <name>?" notice was shown, to tell how long it can hold the restore offer back.
+    sign_in_offered_at: Option<Instant>,
+    /// When the screens last changed, so a re-fit that ends sooner than its debounce isn't this change's.
+    screens_changed_at: Option<Instant>,
+    /// A re-fit run has ended since the screens last changed.
+    refit_done: bool,
+    /// When the live check for the restore offer was asked for.
+    restore_check: Option<Instant>,
+    /// The latest refresh showed the new-desk notice, which has the one slot.
+    new_desk_shown: bool,
     /// The sign-in action of this start, while it waits.
     sign_in_run: Option<SignInRun>,
     /// A last-session capture is running, for the desk it started on.

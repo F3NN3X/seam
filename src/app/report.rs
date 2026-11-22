@@ -15,6 +15,7 @@ pub(super) fn refresh(app: &mut App) {
     let sig = signature(app.mons.iter().map(|m| m.id.as_str()));
     let arrived = sig != app.sig && !app.mons.is_empty();
     app.sig = sig;
+    app.new_desk_shown = false;
     if arrived {
         desk::note_active(&mut app.cfg, &app.sig, &app.mons, unix_now());
         persist(app);
@@ -23,6 +24,10 @@ pub(super) fn refresh(app: &mut App) {
         apply_hotkeys(app);
     }
     relink(app);
+    // Where each screen is, for another desk to copy workspaces by.
+    if desk::note_screens(&mut app.cfg, &app.sig, &app.mons, &app.links) {
+        persist(app);
+    }
     if arrived {
         choose_in_use(app);
     }
@@ -30,6 +35,7 @@ pub(super) fn refresh(app: &mut App) {
     // seen if the shell actually showed the prompt (it may not be up at login).
     if new_screen(app) && notify(app, "New screen setup", "Click here to line up your screens.", BalloonAction::LineUp)
     {
+        app.new_desk_shown = true;
         app.cfg.seen.push(app.sig.clone());
         persist(app);
     }

@@ -86,6 +86,7 @@ fn open_workspace(app: &mut App, chosen: &SignIn) -> bool {
     };
     if chosen.ask {
         app.sign_in_offer = Some((app.sig.clone(), workspace.id.clone()));
+        app.sign_in_offered_at = Some(Instant::now());
         let body = format!("Open {}? Click to open", workspace.name);
         return notify(app, "Workspace", &body, BalloonAction::OpenWorkspace) || waiting(app, "the notice didn't show");
     }

@@ -36,6 +36,7 @@ const ROWS: &[(Page, &str, &[&str])] = &[
     (Page::Windows, "Also when I drag a window to another screen", &["/window_size_on_drag"]),
     (Page::Windows, "Another window manager handles my windows", &["/windows/other_wm"]),
     (Page::Workspaces, "Put apps in place when they open", &["/auto_apply"]),
+    (Page::Workspaces, "Offer to restore after screens change", &["/workspaces_offer_restore"]),
     (Page::Workspaces, "Apps that aren't open", &["/workspaces_update_closed"]),
     (Page::Shortcuts, "Line up screens", &["/hotkeys/line_up"]),
     (Page::Shortcuts, "Pause or resume pointer remap", &["/hotkeys/pause"]),
@@ -99,10 +100,15 @@ const ROWS: &[(Page, &str, &[&str])] = &[
 
 /// `config` as JSON, with the choices that have an effective value written out: an
 /// unset `workspaces_update_closed` reads as what the older flag says, so a file that
-/// never set it and one that sets Keep compare equal.
+/// never set it and one that sets Keep compare equal. A switch that is left out of the file
+/// while it's off is written out as false.
 fn normalised(config: &Config) -> Value {
     let config = Config { workspaces_update_closed: Some(config.closed_apps()), ..config.clone() };
-    serde_json::to_value(config).unwrap_or_default()
+    let mut value = serde_json::to_value(config).unwrap_or_default();
+    if let Some(fields) = value.as_object_mut() {
+        fields.entry("workspaces_offer_restore").or_insert(Value::Bool(false));
+    }
+    value
 }
 
 static DEFAULT: LazyLock<Value> = LazyLock::new(|| normalised(&Config::default()));

@@ -580,6 +580,90 @@ fn more_button(panel: &Panel, ws: &Workspace, cx: &mut Context<Panel>) -> impl I
         })
 }
 
+/// "3 workspaces, last here 9 Nov", or where the desk was seen, for a desk's item in the copy menu.
+fn copy_meta(count: usize, last_seen: u64) -> String {
+    let workspaces = format!("{count} workspace{}", if count == 1 { "" } else { "s" });
+    match seam::winutil::local_date(last_seen).filter(|_| last_seen != 0) {
+        Some(date) => format!("{workspaces}, last here {}", seam::locale::month_day_local(date)),
+        None => format!("{workspaces}, on another PC"),
+    }
+}
+
+/// Copy another desk's workspaces onto this one. The first copy is shown, and Undo removes them all.
+fn copy_from(panel: &mut Panel, from: String, name: String, window: &mut Window, cx: &mut Context<Panel>) {
+    panel.call("workspace.copy_from_desk", json!({ "from": from }), window, cx, move |panel, result, window, cx| {
+        let ids: Vec<String> = match &result {
+            Ok(v) => v["ids"].as_array().into_iter().flatten().filter_map(|id| id.as_str().map(String::from)).collect(),
+            Err(e) => {
+                window.push_notification(refusal("Workspaces not copied", &error_text(e)), cx);
+                return;
+            }
+        };
+        panel.workspace = ids.first().cloned();
+        panel.focus_workspace = panel.workspace.clone();
+        panel.reload_config(window, cx);
+        let title = format!("Copied {} workspace{} from {name}", ids.len(), if ids.len() == 1 { "" } else { "s" });
+        let undo = move |panel: &mut Panel, window: &mut Window, cx: &mut Context<Panel>| {
+            let rest = saved(panel).into_iter().filter(|v| workspace::parse(v).is_none_or(|w| !ids.contains(&w.id)));
+            panel.workspace = None;
+            save(panel, rest.collect(), window, cx);
+        };
+        let message = "Each screen's apps went to the screen in the same place".to_string();
+        panel.offer_undo_titled(Some(title), message, undo, window, cx);
+    });
+}
+
+/// The note on an empty Workspaces page when another desk with the same number of screens has
+/// workspaces to copy (D742). Nothing is copied until a button is pressed.
+fn copy_note(panel: &Panel, p: Palette, cx: &mut Context<Panel>) -> Option<AnyElement> {
+    let sig = desk_sig(panel);
+    let here = panel.config.desks.get(&sig).map_or(0, |d| d.screens.len());
+    let sources = workspace::copy_sources(&panel.config, &sig, here);
+    let name_of = |sig: &String| panel.config.desks.get(sig).map(|d| d.name.clone()).unwrap_or_default();
+    let count = |sig: &String| panel.config.desks.get(sig).map_or(0, |d| workspace::list(&d.workspaces).len());
+    let seen = |sig: &String| panel.config.desks.get(sig).map_or(0, |d| d.last_seen);
+    let lead = "This desk has no workspaces yet.";
+    let view = cx.entity().downgrade();
+    let (text, action) = match sources.as_slice() {
+        [] => return None,
+        [only] => {
+            let name = name_of(only);
+            let text = format!("{lead} {name} has {} on the same number of screens", count(only));
+            let (from, from_name) = (only.clone(), name.clone());
+            let button = ui::secondary("copy-workspaces", format!("Copy workspaces from {name}"), cx).on_click(
+                cx.listener(move |panel, _, window, cx| copy_from(panel, from.clone(), from_name.clone(), window, cx)),
+            );
+            (text, button.into_any_element())
+        }
+        _ => {
+            let text = format!("{lead} {} other desks have workspaces on the same number of screens", sources.len());
+            let items: Vec<(String, String, String)> =
+                sources.iter().map(|s| (s.clone(), name_of(s), copy_meta(count(s), seen(s)))).collect();
+            let button =
+                ui::secondary("copy-workspaces", "Copy workspaces from…", cx).dropdown_menu(move |menu, _, _| {
+                    items.iter().fold(menu.min_w(px(300.)).max_w(px(300.)), |menu, (sig, name, meta)| {
+                        let (view, sig, from_name) = (view.clone(), sig.clone(), name.clone());
+                        let (title, about) = (name.clone(), meta.clone());
+                        let item = PopupMenuItem::element(move |_, cx| {
+                            let p = palette(cx);
+                            div()
+                                .flex()
+                                .flex_col()
+                                .child(text_style(div(), tokens::BODY).child(title.clone()))
+                                .child(text_style(div(), tokens::CAPTION).text_color(p.text_muted).child(about.clone()))
+                        });
+                        menu.item(item.on_click(move |_, window, cx| {
+                            let (sig, name) = (sig.clone(), from_name.clone());
+                            let _ = view.update(cx, |panel, cx| copy_from(panel, sig, name, window, cx));
+                        }))
+                    })
+                });
+            (text, button.into_any_element())
+        }
+    };
+    Some(ui::note_with(text, Some(action), p).into_any_element())
+}
+
 fn empty_state(panel: &Panel, p: Palette, cx: &mut Context<Panel>) -> Div {
     let capture = ui::primary("capture-empty", "Capture current windows")
         .on_click(cx.listener(|panel, _, window, cx| capture(panel, window, cx)));
@@ -609,7 +693,14 @@ pub fn render(panel: &mut Panel, window: &mut Window, cx: &mut Context<Panel>) -
         cx,
     );
     if list.is_empty() {
-        return div().flex().flex_col().gap(px(ui::SECTION_GAP)).child(header).child(empty_state(panel, p, cx));
+        let note = copy_note(panel, p, cx);
+        return div()
+            .flex()
+            .flex_col()
+            .gap(px(ui::SECTION_GAP))
+            .child(header)
+            .children(note)
+            .child(empty_state(panel, p, cx));
     }
     let capture = ui::secondary("capture", "Capture current windows", cx)
         .on_click(cx.listener(|panel, _, window, cx| capture(panel, window, cx)));

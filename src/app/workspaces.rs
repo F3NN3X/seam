@@ -6,6 +6,7 @@ mod add;
 mod assist;
 mod capture;
 mod close;
+mod copy;
 mod in_use;
 mod notice;
 mod order;
@@ -16,6 +17,7 @@ pub(super) use add::{Which, start_add_window};
 pub(super) use assist::{create_workspace, edit_workspace};
 pub(super) use capture::{captured, quick_save, start_capture, undo_quick_save, update_from_panel, update_workspace};
 pub(super) use close::{Ask, Closing, Minimized, closed, start_close, start_close_here, undo_minimize};
+pub(super) use copy::copy_from_desk;
 use in_use::{active_workspace, set_in_use};
 pub(super) use in_use::{
     choose_in_use, detected_in_use, drift_checked, drift_due, forget_deleted, live_of, set_default, snap_back,
@@ -323,6 +325,7 @@ pub(super) fn switched(app: &mut App) {
     // Apps opened by hand during the switch go to their places now.
     live::switch_ended();
     snap::tiling_switch_ended();
+    snap::switch_ended();
     snap::rebuild_stacks(std::mem::take(&mut done.stacks));
     focus_only::forget();
     windows_changed(app);

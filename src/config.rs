@@ -539,6 +539,30 @@ pub struct Desk {
     /// older Seam drops it, which gives the zones the whole work area again.
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     pub margins: BTreeMap<String, crate::margins::Margins>,
+    /// The screens of this desk as they were when it was last connected, so another desk
+    /// can copy its workspaces by where each screen is. Left out while empty, and an older
+    /// Seam drops it, which only means the desk isn't offered as a source until it's connected again.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub screens: Vec<DeskScreen>,
+}
+
+/// One screen of a desk, as it was the last time the desk was connected.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct DeskScreen {
+    /// Monitor device path.
+    pub id: String,
+    /// The Line Up number, from 1.
+    pub number: u32,
+    /// The name the screen reports.
+    pub name: String,
+    /// Where Windows has it, in physical pixels: x, y, width, height.
+    pub rect: [i32; 4],
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub primary: bool,
+    /// Where it stands on the desk when the desk is lined up, in mm: x, y, width, height.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mm: Option<[f32; 4]>,
 }
 
 /// Tiling off on every screen and virtual desktop of a desk, as quitting with Put windows back
@@ -652,6 +676,10 @@ pub struct Config {
     /// `None` reads `workspaces_update_removes_closed`, so an older file behaves as before.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub workspaces_update_closed: Option<ClosedApps>,
+    /// "Offer to restore after screens change": when the screens change or the PC wakes and
+    /// the windows of the workspace in use moved, ask before putting them back. Off by default.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub workspaces_offer_restore: bool,
     /// "Where apps open": an app's window goes to its place whenever it opens, with
     /// or without a workspace. Raw JSON like workspaces, so an entry this build
     /// can't read is kept as it is and ignored.
@@ -706,6 +734,7 @@ impl Default for Config {
             workspaces_remember_places: false,
             workspaces_update_removes_closed: false,
             workspaces_update_closed: None,
+            workspaces_offer_restore: false,
             app_rules: Vec::new(),
             custom_layouts: Vec::new(),
             cursor_easing_asked: false,

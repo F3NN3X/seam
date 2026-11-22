@@ -4,6 +4,8 @@ All notable changes to Seam. The format follows [Keep a Changelog](https://keepa
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-11-22
+
 ### Added
 
 - **Keep settings in a synced folder.** On General, in **Files and troubleshooting**, the **...** menu of the Settings folder row has **Keep settings in a folder...**: pick a folder in OneDrive, Dropbox or Google Drive (or any folder on this PC's own drives) and your settings follow you to another PC and survive a reinstall. Seam watches the folder and takes in a change made elsewhere within a few seconds. Shortcuts, the API and assistant switches, update choices and the tray's own bookkeeping stay on this PC, and so does the last time a desk was here, so a desk from the other PC shows as "on another PC" until it's connected here (**Copy workspaces from** brings its workspaces over). A startup command never goes into the folder, and a row that comes in with an app, item, **Open with** or folder or page this PC hasn't accepted arrives with launching off (turn it on here to accept it), and a workspace that closes other windows arrives leaving them. What this PC holds never changes what the other PCs have in the file. When both PCs changed the same setting, the folder's wins and this PC's is kept in `config.sync-conflict-...json`, with a note. If the folder isn't there, Seam carries on with the copy on this PC, says so once in the tray and on General, and catches up when it's back. **Change folder...** and **Keep settings on this PC only** move or undo the choice. Nothing changes for anyone who doesn't turn it on. New `config.set_folder` and `config.folder` methods (the Seam window only), `config.reloaded` event and `config_sync` in the state.

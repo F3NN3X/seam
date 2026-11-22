@@ -249,6 +249,8 @@ fn home() -> PathBuf {
 fn export(panel: &Panel, mut ws: Workspace, window: &mut Window, cx: &mut Context<Panel>) {
     // Folders and pages say where I've been, so they stay on this PC (D330).
     ws.windows.iter_mut().for_each(|r| (r.place, r.open_with) = (None, None));
+    // A folder, web links or an editor go with it, a startup command never does (D737).
+    ws.windows.iter_mut().for_each(|r| r.item = r.item.take().map(workspace::Item::without_commands));
     let refers = |id: &String| ws.windows.iter().any(|r| r.monitor == *id) || ws.zones.contains_key(id);
     let used: BTreeMap<String, ScreenInfo> = screen_infos(panel).into_iter().filter(|(id, _)| refers(id)).collect();
     let name: String = ws.name.chars().map(|c| if c.is_alphanumeric() || c == ' ' { c } else { '-' }).collect();
@@ -306,6 +308,12 @@ fn add_imported(panel: &mut Panel, file: Export, window: &mut Window, cx: &mut C
 
 /// "Windows Terminal" from `WindowsTerminal.exe`, "Firefox" from `firefox.exe`.
 pub fn app_title(rule: &Rule) -> String {
+    let app = app_name(rule);
+    app_picker::words::title(rule, &app).unwrap_or(app)
+}
+
+/// The app's own name, from its exe, for a row that has an item too.
+fn app_name(rule: &Rule) -> String {
     let stem = rule.exe.rsplit('\\').next().unwrap_or(&rule.exe);
     let stem = stem.strip_suffix(".exe").or_else(|| stem.strip_suffix(".EXE")).unwrap_or(stem);
     let mut title = String::new();
@@ -416,10 +424,14 @@ fn detail(panel: &mut Panel, ws: Workspace, window: &mut Window, cx: &mut Contex
     rows.extend(problems_note(panel, &ws, p, cx));
     rows.push(header);
     rows.extend(workspace_editor::rows(panel, &ws, window, cx));
-    let id = ws.id.clone();
+    let (id, item_for) = (ws.id.clone(), ws.id.clone());
     let add_app: app_picker::Add =
         Rc::new(move |panel, rule, hwnd, window, cx| workspace_editor::add_app(panel, &id, rule, hwnd, window, cx));
-    let add = app_picker::button(panel, &ws.windows, "In this workspace", add_app, cx);
+    // The Other tab's dialogs hand over a row with its item, which is added as any app is.
+    let add_item: app_picker::items::Done =
+        Rc::new(move |panel, rule, window, cx| workspace_editor::add_app(panel, &item_for, rule, None, window, cx));
+    let add =
+        app_picker::button(panel, &ws.windows, "In this workspace", add_app, Some((ws.name.clone(), add_item)), cx);
     let hint = ui::description("Drag an app onto another screen to move it there", p);
     rows.push(
         div()

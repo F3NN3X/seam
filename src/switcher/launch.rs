@@ -1,6 +1,7 @@
 //! Starting apps and opening places, without starting one twice.
 
 use super::*;
+use workspace::report::FOREIGN_COMMAND;
 
 /// Apps a switch has started and is still waiting on: key, when, and which switch. A
 /// newer switch that replaces it waits for these instead of starting a second copy.
@@ -48,11 +49,24 @@ fn shell_open(file: &str, parameters: Option<&str>) -> bool {
     }
 }
 
+fn steam_game(rule: &Rule) -> bool {
+    rule.exe.to_lowercase().contains(r"\steamapps\")
+}
+
+/// Start what a row opens when it has no window yet: its item (D731), or else its app. A
+/// `Some` answer is a reason to list the row as skipped though it started.
+pub(super) fn launch(rule: &Rule, places: bool) -> Result<Option<&'static str>, &'static str> {
+    match &rule.item {
+        Some(item) if !steam_game(rule) => open_item(rule, item),
+        _ => start_app(rule, places).map(|()| None),
+    }
+}
+
 /// Start an app that has no window yet. A packaged app, a PWA or a Squirrel app
 /// starts through its AUMID, because the exe that was running isn't the thing to start.
 /// With `places`, a row with a folder or page opens on it (D330).
-pub(super) fn launch(rule: &Rule, places: bool) -> Result<(), &'static str> {
-    if rule.exe.to_lowercase().contains(r"\steamapps\") {
+fn start_app(rule: &Rule, places: bool) -> Result<(), &'static str> {
+    if steam_game(rule) {
         return Err("steam game");
     }
     // What I typed wins over a saved place, and a refusal never falls back to a plain start.
@@ -154,6 +168,65 @@ fn open_with(rule: &Rule, target: &str) -> Result<(), &'static str> {
             match shell_open(&rule.exe, Some(&workspace::explorer_arg(&path))) {
                 true => Ok(()),
                 false => refused("it didn't start"),
+            }
+        }
+    }
+}
+
+/// Start an item (D734), checked again here whatever saved it. Each kind's arguments come from
+/// `workspace`'s pure builders. Only a row with no window gets here, so an open window is never
+/// sent anywhere new.
+fn open_item(rule: &Rule, item: &Item) -> Result<Option<&'static str>, &'static str> {
+    let app = app_name(rule);
+    let refused = |why: &str| {
+        log::info!("{app}: item not used, {why}");
+        Err("item refused")
+    };
+    let item = match workspace::check_item(item, &rule.exe, rule.aumid.as_deref()) {
+        Ok(item) => item,
+        Err(why) => return refused(why),
+    };
+    let started = |ok: bool| if ok { Ok(None) } else { refused("it didn't start") };
+    // The program a Folder item or an editor starts, from a drive of this PC.
+    let program = |rule: &Rule| {
+        let there = workspace::safe_exe(&rule.exe) && !is_network_drive(&rule.exe) && places::local_drive(&rule.exe);
+        there && Path::new(&rule.exe).is_file()
+    };
+    let folder_there = |folder: &str| places::local_drive(folder) && Path::new(folder).is_dir();
+    match &item {
+        Item::Folder { folder } => match folder_there(folder) {
+            true => started(shell_open(&explorer_path(), Some(&workspace::explorer_arg(folder)))),
+            false => refused("the folder isn't on this PC or is gone"),
+        },
+        Item::Editor { folder } => match (program(rule), folder_there(folder)) {
+            (true, true) => started(shell_open(&rule.exe, Some(&workspace::editor_args(folder)))),
+            (false, _) => refused("the editor can't be started from there"),
+            (_, false) => refused("the folder isn't on this PC or is gone"),
+        },
+        Item::Web { urls } => match (program(rule), workspace::web_args(&rule.exe, urls)) {
+            (true, Ok(args)) => started(shell_open(&rule.exe, Some(&args))),
+            (false, _) => refused("the browser can't be started from there"),
+            (_, Err(why)) => refused(why),
+        },
+        Item::Terminal { tabs } => {
+            let wt = seam::apps::terminal_alias().filter(|wt| std::fs::symlink_metadata(wt).is_ok());
+            let Some(wt) = wt else { return refused("Windows Terminal isn't installed") };
+            if tabs.iter().filter_map(|t| t.folder.as_deref()).any(|f| !folder_there(f)) {
+                return refused("a tab's folder isn't on this PC or is gone");
+            }
+            // Only a command sealed for this account runs. One that doesn't open is dropped, and
+            // its tab opens without it.
+            let commands: Vec<Option<String>> =
+                tabs.iter().map(|t| t.command_sealed.as_deref().and_then(seam::seal::unseal)).collect();
+            let dropped = tabs
+                .iter()
+                .zip(&commands)
+                .any(|(t, c)| c.is_none() && (t.command_sealed.is_some() || t.command.is_some()));
+            let (profiles, _) = seam::apps::terminal_profiles();
+            match workspace::terminal_args(tabs, &profiles, &commands) {
+                Ok(args) if shell_open(&wt, Some(&args)) => Ok(dropped.then_some(FOREIGN_COMMAND)),
+                Ok(_) => refused("it didn't start"),
+                Err(why) => refused(why),
             }
         }
     }

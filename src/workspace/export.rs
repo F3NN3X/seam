@@ -91,7 +91,7 @@ pub enum OpenWith {
 
 /// A link with the user name and password before its host cut out, or `None` when
 /// nothing is left of it to open.
-fn without_credentials(link: &str) -> Option<String> {
+pub(super) fn without_credentials(link: &str) -> Option<String> {
     let (scheme, rest) = link.split_once(':')?;
     let Some(after) = rest.strip_prefix("//") else { return (!rest.is_empty()).then(|| link.to_string()) };
     let end = after.find(['/', '?', '#']).unwrap_or(after.len());
@@ -102,12 +102,12 @@ fn without_credentials(link: &str) -> Option<String> {
 }
 
 /// The longest "Open with" kept.
-const MAX_OPEN_WITH: usize = 1024;
+pub(super) const MAX_OPEN_WITH: usize = 1024;
 
 /// Programs that run a file, script or command they're given, so a path "Open with" on
 /// one would run it. A link is no argument to them, so it still works. This covers
 /// the common script hosts, which is no guarantee that no program will run a path.
-const LAUNCHERS: &[&str] = &[
+pub(super) const LAUNCHERS: &[&str] = &[
     "cmd",
     "powershell",
     "powershell_ise",
@@ -142,7 +142,7 @@ const LAUNCHERS: &[&str] = &[
 ];
 
 /// Launchers that come with a version in their name (`python3.12`, `pwsh-preview`).
-const LAUNCHER_PREFIXES: [&str; 2] = ["python", "pwsh"];
+pub(super) const LAUNCHER_PREFIXES: [&str; 2] = ["python", "pwsh"];
 
 /// Whether a name is a DOS device (`CON`, `NUL`, `COM1`, `CONIN$`...), with or without an extension.
 fn is_device(name: &str) -> bool {
@@ -154,7 +154,7 @@ fn is_device(name: &str) -> bool {
 }
 
 /// Characters that show as nothing, or reorder what is shown, so a link can hide what it opens.
-fn invisible(c: char) -> bool {
+pub(super) fn invisible(c: char) -> bool {
     matches!(c, '\u{ad}' | '\u{200b}'..='\u{200f}' | '\u{202a}'..='\u{202e}' | '\u{2060}'..='\u{2064}' | '\u{2066}'..='\u{2069}' | '\u{feff}')
 }
 
@@ -167,7 +167,7 @@ fn only_escapes(text: &str) -> bool {
 
 /// What a path may not have beyond `safe_folder`: a `:` after the drive (a stream), a
 /// name ending in `.` or a space, or a device name for any part.
-fn plain_path(path: &str) -> Result<(), &'static str> {
+pub(super) fn plain_path(path: &str) -> Result<(), &'static str> {
     if path[2..].contains(':') {
         return Err("A path can't have a : after the drive");
     }
@@ -412,6 +412,11 @@ pub fn import(file: Export, here: &BTreeMap<String, ScreenInfo>, names: &[String
         rule.place = None;
         // Nor is what a file says to open (D520).
         rule.open_with = None;
+        // Folders, addresses and editors are kept if they pass their check, a startup
+        // command never (D737).
+        let item = rule.item.take();
+        rule.item =
+            item.and_then(|i| check_item(&i, &rule.exe, rule.aumid.as_deref()).ok()).map(Item::without_commands);
     }
     workspace.launch_missing = false;
     // Close and Minimize are the user's opt-in, so a file can't arm them.

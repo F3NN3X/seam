@@ -91,7 +91,11 @@ impl Starts {
             return;
         }
         match launch(rule, places) {
-            Ok(()) => {
+            Ok(note) => {
+                // Started, but not as it was saved: the row says why.
+                if let Some(reason) = note {
+                    tally.skipped.push(Skip::row(i, rule, reason));
+                }
                 note_launch(key, mine);
                 self.launched += 1;
                 self.started.push(i);

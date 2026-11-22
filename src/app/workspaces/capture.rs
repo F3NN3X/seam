@@ -413,7 +413,11 @@ pub(super) fn update_rows(app: &mut App, id: &str, sent: Value, only: Option<usi
     };
     let others: Vec<String> =
         workspace::list(&desk.workspaces).into_iter().filter(|w| w.id != id).map(|w| w.name).collect();
-    let checked = Workspace { name: workspace::unique_name(&checked.name, &others), ..checked };
+    let mut checked = Workspace { name: workspace::unique_name(&checked.name, &others), ..checked };
+    // A startup command is saved sealed for this account, and only ever from the panel (D736).
+    if let Err(why) = workspace::seal_commands(&mut checked, &seam::seal::seal) {
+        return refused(why);
+    }
     let list: Vec<Value> = desk
         .workspaces
         .iter()

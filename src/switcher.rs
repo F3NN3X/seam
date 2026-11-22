@@ -16,8 +16,8 @@ use seam::stack;
 use seam::winutil;
 use seam::workspace::report::{CANCELLED, RUNS_IN_BACKGROUND, TOOK_TOO_LONG};
 use seam::workspace::{
-    self, Bound, Candidate, OpenWith, OtherWindows, Pin, Place, RowAction, RowState, RowStatus, Rule, SCREEN_GONE,
-    SESSION_ID, Shown, Target, WinState, Workspace,
+    self, Bound, Candidate, Item, OpenWith, OtherWindows, Pin, Place, RowAction, RowState, RowStatus, Rule,
+    SCREEN_GONE, SESSION_ID, Shown, Target, WinState, Workspace,
 };
 use seam::zones::{self, Rect, ZoneLayout};
 use std::collections::{BTreeMap, HashMap, HashSet};

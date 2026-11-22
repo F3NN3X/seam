@@ -957,7 +957,10 @@ mod tests {
                 },
             },
         };
-        let evil = r#"{"id":"a","row":0,"target":{"zone":2},"exe":"c:\\evil.exe","open_with":"x"}"#;
-        assert_eq!(code(&request("workspace.edit_row", evil), assistant(true)), Ok(want));
+        // Nor can an item with a startup command be set through it (D737).
+        let item = r#"{"kind":"terminal","tabs":[{"command":"calc","command_sealed":"x"}]}"#;
+        let evil =
+            format!(r#"{{"id":"a","row":0,"target":{{"zone":2}},"exe":"c:\\evil.exe","open_with":"x","item":{item}}}"#);
+        assert_eq!(code(&request("workspace.edit_row", &evil), assistant(true)), Ok(want));
     }
 }

@@ -719,6 +719,16 @@ pub fn file_name(path: &str) -> String {
     path.rsplit('\\').next().unwrap_or(path).to_lowercase()
 }
 
+/// Whether the path is on a fixed or removable drive of this PC, not a mapped one.
+pub fn local_drive(path: &str) -> bool {
+    use windows::Win32::Storage::FileSystem::GetDriveTypeW;
+    // `GetDriveTypeW` answers for a removable and a fixed drive.
+    const DRIVE_REMOVABLE: u32 = 2;
+    const DRIVE_FIXED: u32 = 3;
+    let root: Vec<u16> = path.chars().take(2).chain(['\\']).map(|c| c as u16).chain([0]).collect();
+    matches!(unsafe { GetDriveTypeW(PCWSTR(root.as_ptr())) }, DRIVE_FIXED | DRIVE_REMOVABLE)
+}
+
 /// Whether a window is a real app window, one with a taskbar button, by the
 /// capture rules but without anyone's exclude list. `own_pid` keeps Seam's windows out.
 pub fn is_capturable(h: HWND, own_pid: u32) -> bool {

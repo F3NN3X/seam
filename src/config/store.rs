@@ -48,7 +48,9 @@ impl Config {
         c.migrate_sign_in();
         for desk in c.desks.values_mut() {
             let clean = |saved: &[serde_json::Value]| {
-                crate::workspace::without_open_with(&crate::workspace::without_places(saved))
+                let typed = crate::workspace::without_open_with(&crate::workspace::without_places(saved));
+                // An item that passes its check stays, a startup command never does (D737).
+                crate::workspace::clean_imported_items(&typed)
             };
             desk.workspaces = clean(&desk.workspaces);
             // The last session never saves them, so one in a file is dropped too.

@@ -894,3 +894,190 @@ fn a_row_whose_screen_isnt_connected_is_reported() {
     let keeps = Rule { target: Target::State { state: WinState::Keep }, ..placed };
     assert!(!screen_gone(&keeps, ["x"].into_iter()));
 }
+
+const WT: &str = "Microsoft.WindowsTerminal_8wekyb3d8bbwe!App";
+const WT_EXE: &str = r"C:\Users\me\AppData\Local\Microsoft\WindowsApps\wt.exe";
+
+fn terminal(sealed: Option<&str>) -> Rule {
+    let tab = Tab {
+        profile: Some("PowerShell".into()),
+        folder: Some(r"C:\Projects".into()),
+        command_sealed: sealed.map(Into::into),
+        ..Tab::default()
+    };
+    Rule {
+        exe: WT_EXE.into(),
+        aumid: Some(WT.into()),
+        item: Some(Item::Terminal { tabs: vec![tab] }),
+        ..Rule::default()
+    }
+}
+
+fn folder_row() -> Rule {
+    Rule {
+        exe: r"C:\Windows\explorer.exe".into(),
+        item: Some(Item::Folder { folder: r"C:\Projects\seam".into() }),
+        ..Rule::default()
+    }
+}
+
+#[test]
+fn old_rows_without_item_are_unchanged() {
+    let older: Rule = serde_json::from_str(r#"{"exe":"C:\\a.exe","open_with":"C:\\x"}"#).unwrap();
+    assert_eq!(older.item, None);
+    assert_eq!(older.open_with.as_deref(), Some(r"C:\x"));
+    assert!(serde_json::to_value(&older).unwrap().get("item").is_none());
+    let back: Rule = serde_json::from_value(serde_json::to_value(terminal(Some("c2Vh"))).unwrap()).unwrap();
+    assert_eq!(back, terminal(Some("c2Vh")));
+}
+
+#[test]
+fn unknown_item_kind_reads_as_none() {
+    for item in [r#"{"kind":"hologram","tabs":3}"#, r#"{"kind":"folder"}"#, "3", "null"] {
+        let row: Rule = serde_json::from_str(&format!(r#"{{"exe":"C:\\a.exe","item":{item}}}"#)).unwrap();
+        assert_eq!(row.item, None, "{item}");
+    }
+    let row: Rule = serde_json::from_str(r#"{"exe":"C:\\a.exe","item":{"kind":"folder","folder":"C:\\p"}}"#).unwrap();
+    assert_eq!(row.item, Some(Item::Folder { folder: r"C:\p".into() }));
+}
+
+#[test]
+fn import_drops_startup_commands_and_keeps_checked_items() {
+    let web = Rule {
+        exe: r"C:\Windows\notepad.exe".into(),
+        item: Some(Item::Web { urls: vec!["https://a.com".into()] }),
+        ..Rule::default()
+    };
+    let windows = vec![terminal(Some("c2Vh")), folder_row(), web];
+    let workspace = Workspace { id: "w".into(), name: "A".into(), windows, ..Workspace::default() };
+    let file = Export { seam_workspace: Export::VERSION, workspace, screens: BTreeMap::new() };
+    let got = import(file, &BTreeMap::new(), &[], &[]);
+    let Some(Item::Terminal { tabs }) = &got.windows[0].item else { panic!("the terminal went") };
+    assert_eq!((tabs[0].command_sealed.as_deref(), tabs[0].command.as_deref()), (None, None));
+    assert_eq!(tabs[0].folder.as_deref(), Some(r"C:\Projects"));
+    assert_eq!(got.windows[1].item, folder_row().item);
+    // A browser item on a program that isn't a browser doesn't pass its check.
+    assert_eq!(got.windows[2].item, None);
+    assert!(got.windows.iter().all(|r| !r.launch));
+    // The same for a whole settings file's list of workspaces.
+    let ws = Workspace { id: "w".into(), windows: vec![terminal(Some("c2Vh")), folder_row()], ..Workspace::default() };
+    let cleaned = clean_imported_items(&[to_value(&ws)]);
+    assert!(cleaned[0]["windows"][0]["item"]["tabs"][0].get("command_sealed").is_none());
+    assert_eq!(cleaned[0]["windows"][1]["item"]["kind"], "folder");
+}
+
+#[test]
+fn exports_leave_out_startup_commands() {
+    let mut clear = terminal(Some("c2Vh"));
+    if let Some(Item::Terminal { tabs }) = &mut clear.item {
+        tabs[0].command = Some("npm run dev".into());
+    }
+    let workspace = Workspace { id: "w".into(), windows: vec![clear.clone(), folder_row()], ..Workspace::default() };
+    let settings = without_commands(&[to_value(&workspace)]);
+    let text = serde_json::to_string(&settings).unwrap();
+    assert!(!text.contains("command") && !text.contains("c2Vh") && !text.contains("npm"));
+    assert!(text.contains("PowerShell") && text.contains(r"C:\\Projects\\seam"));
+    // The single-workspace export strips the rows itself.
+    let Some(Item::Terminal { tabs }) = clear.item.map(Item::without_commands) else { panic!() };
+    assert_eq!(
+        tabs[0],
+        Tab { profile: Some("PowerShell".into()), folder: Some(r"C:\Projects".into()), ..Tab::default() }
+    );
+}
+
+#[test]
+fn update_clears_open_with_and_place_on_item_rows() {
+    let old = Workspace { id: "ws".into(), ..Workspace::default() };
+    let mut row = folder_row();
+    row.open_with = Some(r"C:\src".into());
+    row.place = Some(Place::Folder(r"C:\y".into()));
+    let new = Workspace { windows: vec![row], ..old.clone() };
+    let saved = checked_update(&old, new, &|_| 0).unwrap();
+    assert_eq!((saved.windows[0].open_with.clone(), saved.windows[0].place.clone()), (None, None));
+    assert!(saved.windows[0].item.is_some());
+    // An item that fails its check refuses the save.
+    let mut bad = folder_row();
+    bad.item = Some(Item::Folder { folder: r"\\server\share".into() });
+    assert!(checked_update(&old, Workspace { windows: vec![bad], ..old.clone() }, &|_| 0).is_err());
+}
+
+#[test]
+fn client_sent_command_sealed_is_ignored() {
+    let old = Workspace { id: "ws".into(), windows: vec![terminal(Some("mine"))], ..Workspace::default() };
+    let sealed_of = |ws: &Workspace| match &ws.windows[0].item {
+        Some(Item::Terminal { tabs }) => tabs[0].command_sealed.clone(),
+        _ => panic!(),
+    };
+    // A value planted from elsewhere doesn't stay.
+    let planted = Workspace { windows: vec![terminal(Some("planted"))], ..old.clone() };
+    assert_eq!(sealed_of(&checked_update(&old, planted, &|_| 0).unwrap()), None);
+    // The one this workspace holds does, so an edit of something else keeps a command.
+    let same = Workspace { windows: vec![terminal(Some("mine"))], ..old.clone() };
+    assert_eq!(sealed_of(&checked_update(&old, same, &|_| 0).unwrap()).as_deref(), Some("mine"));
+    // A command in clear replaces it, sealed by the tray before it's saved.
+    let mut typed = terminal(Some("planted"));
+    if let Some(Item::Terminal { tabs }) = &mut typed.item {
+        tabs[0].command = Some("  npm run dev ".into());
+    }
+    let new = Workspace { windows: vec![typed], ..old.clone() };
+    let mut saved = checked_update(&old, new, &|_| 0).unwrap();
+    assert_eq!(sealed_of(&saved), None);
+    seal_commands(&mut saved, &|c| Some(format!("sealed:{c}"))).unwrap();
+    assert_eq!(sealed_of(&saved).as_deref(), Some("sealed:npm run dev"));
+    assert!(!serde_json::to_string(&saved).unwrap().contains("\"command\""));
+    // A seal that fails refuses the save, so a command is never kept in clear.
+    let mut again = Workspace { windows: vec![terminal(None)], ..old.clone() };
+    if let Some(Item::Terminal { tabs }) = &mut again.windows[0].item {
+        tabs[0].command = Some("ls".into());
+    }
+    assert!(seal_commands(&mut again, &|_| None).is_err());
+}
+
+#[test]
+fn a_patch_seals_commands_and_drops_what_fails_its_check() {
+    let mut typed = terminal(Some("planted"));
+    if let Some(Item::Terminal { tabs }) = &mut typed.item {
+        tabs[0].command = Some("npm run dev".into());
+    }
+    let mut broken = folder_row();
+    broken.item = Some(Item::Folder { folder: "relative".into() });
+    broken.open_with = Some(r"C:\x".into());
+    let mut kept = folder_row();
+    kept.open_with = Some(r"C:\x".into());
+    let windows = vec![typed, broken, kept, terminal(Some("held"))];
+    let mut list = vec![to_value(&Workspace { id: "w".into(), windows, ..Workspace::default() })];
+    let held = HashSet::from(["held".to_string()]);
+    seal_patch(&mut list, &held, &|c| Some(format!("sealed:{c}")));
+    let rows = &list[0]["windows"];
+    assert_eq!(rows[0]["item"]["tabs"][0]["command_sealed"], "sealed:npm run dev");
+    assert!(rows[0]["item"]["tabs"][0].get("command").is_none());
+    assert!(rows[1].get("item").is_none());
+    assert!(rows[2].get("open_with").is_none() && rows[2]["item"]["kind"] == "folder");
+    assert_eq!(rows[3]["item"]["tabs"][0]["command_sealed"], "held");
+    assert_eq!(sealed_in(&list), HashSet::from(["sealed:npm run dev".to_string(), "held".to_string()]));
+}
+
+#[test]
+fn others_see_the_kind_of_an_item_and_the_panel_its_commands() {
+    let windows = vec![terminal(Some("mine")), terminal(Some("foreign")), folder_row()];
+    let list = [to_value(&Workspace { id: "w".into(), windows, ..Workspace::default() })];
+    let others = serde_json::to_string(&kind_only(&list)).unwrap();
+    assert!(others.contains(r#""item":{"kind":"terminal"}"#) && others.contains(r#""item":{"kind":"folder"}"#));
+    assert!(!others.contains("mine") && !others.contains("Projects") && !others.contains("PowerShell"));
+    let open = |s: &str| (s == "mine").then(|| "npm run dev".to_string());
+    let panel = for_panel(&list, &open);
+    assert_eq!(panel[0]["windows"][0]["item"]["tabs"][0]["command"], "npm run dev");
+    assert!(panel[0]["windows"][0]["item"]["tabs"][0].get("command_sealed").is_none());
+    assert_eq!(panel[0]["windows"][1]["item"]["tabs"][0]["unreadable"], true);
+}
+
+#[test]
+fn a_window_added_by_hand_never_updates_an_item_row() {
+    let item = folder_row();
+    let old = Workspace { id: "w".into(), windows: vec![item.clone()], ..Workspace::default() };
+    let fresh = Rule { exe: item.exe.clone(), class: "CabinetWClass".into(), monitor: "m".into(), ..Rule::default() };
+    let added = add_window(&old, fresh, &[None]);
+    assert!(added.new);
+    assert_eq!(added.workspace.windows.len(), 2);
+    assert_eq!(added.workspace.windows[0], item);
+}

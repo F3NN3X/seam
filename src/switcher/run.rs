@@ -370,7 +370,10 @@ fn place_then_start(run: &Run, mine: u64, waits: &mut Waits, starts: &mut Starts
     // A place row whose window is open but not one a switch takes (on another
     // desktop, say) isn't started a second time.
     let open = |i: usize| matches!(run.bound[i], Some(Bound::Alive(_)));
-    let wanted = |i: usize| (ws.launch_missing && action(i) == RowAction::Start && !open(i)).then_some(i);
+    // Snap back puts windows back and never starts an item that wasn't running (D740).
+    let item_left = |i: usize| run.put_back && ws.windows[i].item.is_some();
+    let wanted =
+        |i: usize| (ws.launch_missing && action(i) == RowAction::Start && !open(i) && !item_left(i)).then_some(i);
     let starting: Vec<usize> = (0..ws.windows.len()).filter_map(wanted).collect();
     for &i in starting.iter().filter(|i| run.bound[**i] == Some(Bound::Gone)) {
         let (app, kind) = (app_name(&ws.windows[i]), usable_place(&ws.windows[i]).map_or("place", place_kind));

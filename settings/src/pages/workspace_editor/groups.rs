@@ -39,7 +39,8 @@ pub fn group(windows: &[Rule], screens: &[Screen], split: impl Fn(&Rule) -> bool
     for monitor in monitors {
         let mut rows: Vec<(String, AppRow)> = Vec::new();
         for (i, rule) in windows.iter().enumerate().filter(|(_, r)| r.monitor == monitor) {
-            let app = icons::identity(rule);
+            // An item is a row of its own, whatever app it opens in (D731).
+            let app = if rule.item.is_some() { format!("item {i}") } else { icons::identity(rule) };
             match rows.iter_mut().find(|row| row.0 == app).filter(|_| !split(rule) && !app.is_empty()) {
                 Some((_, row)) => row.windows.push(i),
                 None => rows.push((app, AppRow { windows: vec![i] })),
@@ -95,6 +96,16 @@ mod tests {
         assert_eq!(groups.len(), 2);
         assert_eq!(groups[0].rows, vec![AppRow { windows: vec![0, 2] }, AppRow { windows: vec![1] }]);
         assert_eq!(groups[1].rows, vec![AppRow { windows: vec![3] }]);
+    }
+
+    #[test]
+    fn items_are_never_merged_with_a_row_of_the_same_app() {
+        let item =
+            Rule { item: Some(seam::workspace::Item::Folder { folder: r"C:\p".into() }), ..rule("explorer.exe", "m1") };
+        let windows = vec![item.clone(), rule("explorer.exe", "m1"), item, rule("explorer.exe", "m1")];
+        let groups = group(&windows, &[screen(1, "m1")], |_| false);
+        let rows: Vec<Vec<usize>> = groups[0].rows.iter().map(|r| r.windows.clone()).collect();
+        assert_eq!(rows, [vec![0], vec![1, 3], vec![2]]);
     }
 
     #[test]

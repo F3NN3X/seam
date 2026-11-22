@@ -15,11 +15,14 @@ mod capture;
 mod close;
 mod export;
 mod geometry;
+mod items;
 mod matching;
 mod order;
 mod plan;
 pub mod report;
 pub mod review;
+mod secrets;
+mod terminal;
 #[cfg(test)]
 mod tests;
 
@@ -34,9 +37,17 @@ pub use export::{
     safe_folder, safe_open_with, safe_url, without_open_with, without_places,
 };
 pub use geometry::{from_fractions, rect_for, target_of, to_fractions};
+pub use items::{
+    BROWSERS, EDITORS, MAX_ADDRESSES, MAX_COMMAND, MAX_TABS, TERMINAL_AUMIDS, address_ok, base64, check_item,
+    cmd_escape, command_ok, editor_args, encoded_command, folder_ok, terminal_args, unbase64, web_args,
+};
 pub use matching::{Bound, Candidate, assign, assign_bound, assign_bound_all};
 pub use order::{MoveError, moved_to};
 pub use plan::{RowAction, SCREEN_GONE, row_action, screen_gone, takes_part};
+pub use secrets::{
+    Seal, clean_imported_items, for_panel, kind_only, seal_commands, seal_patch, sealed_in, without_commands,
+};
+pub use terminal::{Profile, Shell, default_profile, profiles, shell_of, strip_jsonc};
 
 /// A window this close to a zone, in pixels, counts as being in it.
 const ZONE_TOLERANCE: i32 = 8;
@@ -143,6 +154,81 @@ pub enum Place {
     Url(String),
 }
 
+/// What a row starts instead of an app (D731): a folder, web links, a terminal or an
+/// editor folder. The row's `exe` is the app that opens it. An older Seam drops it, and the
+/// row starts its app with nothing.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum Item {
+    Folder {
+        folder: String,
+    },
+    /// The browser is the row's exe.
+    Web {
+        urls: Vec<String>,
+    },
+    /// The editor is the row's exe.
+    Editor {
+        folder: String,
+    },
+    /// Windows Terminal, by the row's AUMID.
+    Terminal {
+        tabs: Vec<Tab>,
+    },
+}
+
+impl Item {
+    /// What an API client that isn't the panel is told of it.
+    pub fn kind(&self) -> &'static str {
+        match self {
+            Item::Folder { .. } => "folder",
+            Item::Web { .. } => "web",
+            Item::Editor { .. } => "editor",
+            Item::Terminal { .. } => "terminal",
+        }
+    }
+
+    /// The item as an export or an import may carry it: a Terminal's tabs without their
+    /// startup commands (D737).
+    pub fn without_commands(self) -> Item {
+        match self {
+            Item::Terminal { tabs } => Item::Terminal {
+                tabs: tabs
+                    .into_iter()
+                    .map(|t| Tab { command_sealed: None, command: None, unreadable: false, ..t })
+                    .collect(),
+            },
+            other => other,
+        }
+    }
+}
+
+/// One tab of a Terminal item.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Tab {
+    /// A profile of Windows Terminal by name. `None` is its default profile.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub profile: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub folder: Option<String>,
+    /// The startup command, sealed for this PC and this account (D736), as base64.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub command_sealed: Option<String>,
+    /// The command in clear. Only between the panel and the tray, which seals it before
+    /// anything is saved, and unseals it for the panel alone (D737).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub command: Option<String>,
+    /// The panel is told the sealed command didn't open on this PC.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub unreadable: bool,
+}
+
+/// An item this build doesn't know reads as none, and the row starts its app.
+fn lenient_item<'de, D: Deserializer<'de>>(d: D) -> Result<Option<Item>, D::Error> {
+    Ok(Option::<Value>::deserialize(d)?.and_then(|v| serde_json::from_value(v).ok()))
+}
+
 /// The longest page address kept.
 const MAX_URL: usize = 2048;
 
@@ -196,6 +282,10 @@ pub struct Rule {
     /// `exe`, a link goes to the shell (`safe_open_with`).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub open_with: Option<String>,
+    /// A folder, web links, a terminal or an editor folder this row starts (D731). It wins
+    /// over `open_with` and `place`.
+    #[serde(skip_serializing_if = "Option::is_none", deserialize_with = "lenient_item")]
+    pub item: Option<Item>,
     /// The window's place in a stack in its zone at capture, 0 being the top. The rows
     /// with one in the same zone are a stack again after a switch. An older Seam drops
     /// it, and the windows only overlap in their zone.
@@ -233,6 +323,7 @@ impl Default for Rule {
             captured_on: None,
             place: None,
             open_with: None,
+            item: None,
             stack: None,
             float: false,
             off: false,
@@ -309,7 +400,7 @@ impl Rule {
         self.captured_on = from.captured_on.clone();
         self.stack = from.stack;
         // A capture that read no folder or page keeps the one saved.
-        if from.place.is_some() {
+        if from.place.is_some() && self.item.is_none() {
             self.place = from.place.clone();
         }
     }

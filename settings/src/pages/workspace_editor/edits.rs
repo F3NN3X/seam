@@ -2,9 +2,12 @@
 
 use super::groups::reorder;
 use super::*;
+use crate::pages::app_picker;
 use crate::pages::workspaces::all;
 use crate::panel::{error_text, refusal};
+use gpui_kit::component::notification::Notification;
 use serde_json::json;
+use std::rc::Rc;
 
 // ---- Saving
 
@@ -140,6 +143,31 @@ pub(super) fn set_open_with(panel: &mut Panel, window: &mut Window, cx: &mut Con
         None => format!("{title} opens as usual"),
     };
     update_row(panel, &id, i, note, window, cx, |rule| rule.open_with = open.clone());
+}
+
+/// Open the Other tab's dialog on the item of row `i`, to change it. It needs what the tab
+/// read about this PC, which is asked for when the row opens.
+pub(super) fn change_item(panel: &mut Panel, id: &str, i: usize, window: &mut Window, cx: &mut Context<Panel>) {
+    let Some(ws) = by_id(panel, id) else { return };
+    let Some(rule) = ws.windows.get(i).cloned() else { return };
+    let Some(kind) = rule.item.as_ref().map(app_picker::items::Kind::of) else { return };
+    let Some(extras) = panel.editing.picker.extras.clone() else {
+        app_picker::read_installed(panel, cx);
+        return window.push_notification(
+            Notification::new().message("Still reading what this PC has, try again in a moment"),
+            cx,
+        );
+    };
+    let id = id.to_string();
+    let done: app_picker::items::Done = Rc::new(move |panel, built, window, cx| {
+        let note = |title: &str| format!("Changed what {title} opens");
+        update_row(panel, &id, i, note, window, cx, |rule| {
+            rule.exe = built.exe.clone();
+            rule.aumid = built.aumid.clone();
+            rule.item = built.item.clone();
+        });
+    });
+    app_picker::items::open(kind, extras, (ws.name, Some(rule)), done, window, cx);
 }
 
 /// Move the windows of a row next to the window at `target`, in the start order.

@@ -10,6 +10,19 @@ pub(super) fn busy(message: &str) -> Reply {
     Err(RpcError::new(api::BUSY, message))
 }
 
+/// The panel's patch with its items checked and each startup command in it sealed, so none
+/// reaches config.json in clear and none is one the panel didn't have (D736).
+fn seal_items(app: &App, patch: &mut Value) {
+    let known: std::collections::HashSet<String> =
+        app.cfg.desks.values().flat_map(|d| workspace::sealed_in(&d.workspaces)).collect();
+    let desks = patch.get_mut("desks").and_then(Value::as_object_mut);
+    for desk in desks.into_iter().flat_map(|d| d.values_mut()) {
+        if let Some(list) = desk.get_mut("workspaces").and_then(Value::as_array_mut) {
+            workspace::seal_patch(list, &known, &seam::seal::seal);
+        }
+    }
+}
+
 /// Merge a patch into the settings, keep it only if the result is a valid
 /// config, and apply it live.
 pub(super) fn patch_config(app: &mut App, patch: &Value) -> Reply {
@@ -248,7 +261,10 @@ pub(super) fn run_command(app: &mut App, queued: Queued) {
 fn command_result(app: &mut App, command: Command, panel: bool) -> Reply {
     let ok = || Ok(json!({ "ok": true }));
     match command {
-        Command::ConfigPatch(patch) => patch_config(app, &patch),
+        Command::ConfigPatch(mut patch) => {
+            seal_items(app, &mut patch);
+            patch_config(app, &patch)
+        }
         Command::RemapSet(on) => {
             set_remap(app, on);
             Ok(json!({ "on": on }))

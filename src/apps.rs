@@ -4,15 +4,18 @@
 
 use crate::classify::{Verdict, classify};
 use crate::winutil;
-use crate::workspace::{Rule, safe_aumid, safe_exe};
+use crate::workspace::{
+    BROWSERS, EDITORS, Profile, Rule, TERMINAL_AUMIDS, default_profile, profiles, safe_aumid, safe_exe,
+};
 use std::collections::HashMap;
 use windows::Win32::Storage::EnhancedStorage::PKEY_Link_TargetParsingPath;
 use windows::Win32::System::Com::{COINIT_APARTMENTTHREADED, CoInitializeEx, CoTaskMemFree, CoUninitialize, IBindCtx};
+use windows::Win32::System::Registry::{HKEY_CURRENT_USER, RRF_RT_REG_SZ, RegGetValueW};
 use windows::Win32::UI::Shell::{
     BHID_EnumItems, FOLDERID_AppsFolder, IEnumShellItems, IShellItem, IShellItem2, KF_FLAG_DEFAULT,
     SHGetKnownFolderItem, SHGetKnownFolderPath, SIGDN_NORMALDISPLAY, SIGDN_PARENTRELATIVEPARSING,
 };
-use windows::core::{GUID, Interface, PWSTR};
+use windows::core::{GUID, Interface, PWSTR, w};
 
 /// Run `work` with COM up on this thread, for the property store and the shell.
 fn with_com<T>(work: impl FnOnce() -> T) -> T {
@@ -113,4 +116,145 @@ pub fn installed() -> Vec<Rule> {
         apps.sort_by_key(|r| r.title_hint.to_lowercase());
         apps
     })
+}
+
+/// Windows Terminal's launcher, the App Execution Alias in `WindowsApps`, as the one path a
+/// Terminal item starts (D734). It isn't a normal file, so `exists` can't tell if it's there.
+pub fn terminal_alias() -> Option<String> {
+    let local = std::env::var("LOCALAPPDATA").ok()?;
+    Some(format!(r"{local}\Microsoft\WindowsApps\wt.exe")).filter(|p| safe_exe(p))
+}
+
+/// Whether Windows Terminal is installed: its alias is there, or it's among `apps`, the
+/// Start menu's (D739).
+pub fn terminal_installed(apps: &[Rule]) -> bool {
+    let alias = terminal_alias().is_some_and(|p| std::fs::symlink_metadata(p).is_ok());
+    alias || apps.iter().any(|r| r.aumid.as_deref().is_some_and(|a| TERMINAL_AUMIDS.contains(&a)))
+}
+
+/// The Windows Terminal rule for a Terminal item's row: its AUMID, as among `apps` when it's
+/// there, and the alias as its exe.
+pub fn terminal_rule(apps: &[Rule]) -> Rule {
+    let found = apps.iter().find(|r| r.aumid.as_deref().is_some_and(|a| TERMINAL_AUMIDS.contains(&a)));
+    Rule {
+        exe: terminal_alias().unwrap_or_default(),
+        aumid: Some(found.and_then(|r| r.aumid.clone()).unwrap_or_else(|| TERMINAL_AUMIDS[0].to_string())),
+        title_hint: "Windows Terminal".into(),
+        class: "CASCADIA_HOSTING_WINDOW_CLASS".into(),
+        ..Rule::default()
+    }
+}
+
+/// The most of Windows Terminal's settings file that is read.
+const MAX_SETTINGS: u64 = 1 << 20;
+
+/// The text of Windows Terminal's `settings.json`, packaged, Preview or unpackaged, up to 1 MB.
+/// Blocks on the disk, so never on the main thread.
+fn terminal_settings() -> Option<String> {
+    use std::io::Read;
+    let local = std::env::var("LOCALAPPDATA").ok()?;
+    let places = [
+        r"Packages\Microsoft.WindowsTerminal_8wekyb3d8bbwe\LocalState\settings.json",
+        r"Packages\Microsoft.WindowsTerminalPreview_8wekyb3d8bbwe\LocalState\settings.json",
+        r"Microsoft\Windows Terminal\settings.json",
+    ];
+    places.iter().find_map(|rest| {
+        let mut text = String::new();
+        let file = std::fs::File::open(format!(r"{local}\{rest}")).ok()?;
+        file.take(MAX_SETTINGS + 1).read_to_string(&mut text).ok()?;
+        (text.len() as u64 <= MAX_SETTINGS).then_some(text)
+    })
+}
+
+/// Windows Terminal's profiles to offer, and the name of the one it opens by default. Empty
+/// when its settings can't be read (D739), so a tab then has the default profile and no command.
+pub fn terminal_profiles() -> (Vec<Profile>, Option<String>) {
+    let Some(text) = terminal_settings() else { return (Vec::new(), None) };
+    let list = profiles(&text);
+    let default = default_profile(&text, &list);
+    (list, default)
+}
+
+/// The apps among `apps` whose exe file name passes `wanted`, in the Start menu's order.
+fn with_name<'a>(apps: &'a [Rule], wanted: impl Fn(&str) -> bool + 'a) -> impl Iterator<Item = &'a Rule> {
+    apps.iter().filter(move |r| safe_exe(&r.exe) && wanted(&winutil::file_name(&r.exe)))
+}
+
+/// The editors among `apps` (D739).
+pub fn editors(apps: &[Rule]) -> Vec<Rule> {
+    let editor = |name: &str| EDITORS.contains(&name.strip_suffix(".exe").unwrap_or(name));
+    with_name(apps, editor).cloned().collect()
+}
+
+/// The browsers among `apps`, the default for http first when it can be told.
+pub fn browsers(apps: &[Rule]) -> Vec<Rule> {
+    let mut found: Vec<Rule> = with_name(apps, |name| BROWSERS.contains(&name)).cloned().collect();
+    let default = default_browser().unwrap_or_default();
+    found.sort_by_key(|r| winutil::file_name(&r.exe) != default);
+    found
+}
+
+/// The exe name of the browser a ProgId belongs to, by its prefix.
+pub fn browser_of_progid(progid: &str) -> Option<&'static str> {
+    let progid = progid.to_lowercase();
+    let known = [
+        ("chromehtml", "chrome.exe"),
+        ("msedgehtm", "msedge.exe"),
+        ("firefoxurl", "firefox.exe"),
+        ("bravehtml", "brave.exe"),
+        ("vivaldihtm", "vivaldi.exe"),
+        ("opera", "opera.exe"),
+        ("helium", "helium.exe"),
+    ];
+    known.iter().find(|(prefix, _)| progid.starts_with(prefix)).map(|(_, exe)| *exe)
+}
+
+/// The browser that is the default for http, as its exe name, if it's one Seam knows.
+fn default_browser() -> Option<&'static str> {
+    let key = w!(r"Software\Microsoft\Windows\Shell\Associations\UrlAssociations\http\UserChoice");
+    let mut buf = [0u16; 256];
+    let mut size = size_of_val(&buf) as u32;
+    let read = unsafe {
+        RegGetValueW(
+            HKEY_CURRENT_USER,
+            key,
+            w!("ProgId"),
+            RRF_RT_REG_SZ,
+            None,
+            Some(buf.as_mut_ptr().cast()),
+            Some(&mut size),
+        )
+    };
+    if read.0 != 0 {
+        return None;
+    }
+    let len = buf.iter().position(|&c| c == 0).unwrap_or(buf.len());
+    browser_of_progid(&String::from_utf16_lossy(&buf[..len]))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn default_browsers_are_told_by_progid_prefix() {
+        assert_eq!(browser_of_progid("MSEdgeHTM"), Some("msedge.exe"));
+        assert_eq!(browser_of_progid("FirefoxURL-308046B0AF4A39CB"), Some("firefox.exe"));
+        assert_eq!(browser_of_progid("ChromeHTML"), Some("chrome.exe"));
+        assert_eq!(browser_of_progid("SomethingElse"), None);
+    }
+
+    #[test]
+    fn editors_and_browsers_are_found_by_exe_stem() {
+        let rule = |exe: &str| Rule { exe: exe.into(), ..Rule::default() };
+        let apps = [
+            rule(r"C:\a\Code.exe"),
+            rule(r"C:\a\notepad.exe"),
+            rule(r"C:\b\msedge.exe"),
+            rule(r"C:\b\chrome.exe"),
+            rule(r"\\s\x\zed.exe"),
+        ];
+        assert_eq!(editors(&apps).len(), 1);
+        assert_eq!(browsers(&apps).len(), 2);
+    }
 }

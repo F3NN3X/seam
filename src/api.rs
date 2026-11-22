@@ -405,13 +405,27 @@ pub fn desks_list(snapshot: &Snapshot) -> Value {
 }
 
 /// `config.get` for a client that isn't the panel: the config without what I typed in
-/// "Open with", which only the panel sees.
+/// "Open with", which only the panel sees, and with each item reduced to its kind, so no
+/// folder, address, profile or startup command leaves the panel (D737).
 pub fn config_for_others(config: &Value) -> Value {
     let mut config = config.clone();
     let desks = config.get_mut("desks").and_then(Value::as_object_mut);
     for desk in desks.into_iter().flat_map(|d| d.values_mut()) {
         if let Some(list) = desk.get_mut("workspaces").and_then(Value::as_array_mut) {
-            *list = crate::workspace::without_open_with(list);
+            *list = crate::workspace::kind_only(&crate::workspace::without_open_with(list));
+        }
+    }
+    config
+}
+
+/// `config.get` for the panel: the startup commands opened for this account and in clear, the
+/// panel being the one place they're shown and typed (D737).
+pub fn config_for_panel(config: &Value, unseal: crate::workspace::Seal) -> Value {
+    let mut config = config.clone();
+    let desks = config.get_mut("desks").and_then(Value::as_object_mut);
+    for desk in desks.into_iter().flat_map(|d| d.values_mut()) {
+        if let Some(list) = desk.get_mut("workspaces").and_then(Value::as_array_mut) {
+            *list = crate::workspace::for_panel(list, unseal);
         }
     }
     config
@@ -439,12 +453,22 @@ pub fn workspaces_list(snapshot: &Snapshot, desk: Option<&str>) -> Reply {
 }
 
 /// `workspace.get`: one workspace's rows, with the app's file name and what a client
-/// may edit. The program's path, its AUMID and the folder or page it showed stay out.
-pub fn workspace_get(snapshot: &Snapshot, id: &str, panel: bool) -> Reply {
+/// may edit. The program's path, its AUMID and the folder or page it showed stay out, and
+/// so does an item but for its kind, unless the panel asks.
+pub fn workspace_get(snapshot: &Snapshot, id: &str, panel: Option<crate::workspace::Seal>) -> Reply {
     let desk = snapshot.config["desks"].get(&snapshot.state.desk.sig);
     let found = desk.and_then(|d| d["workspaces"].as_array()).and_then(|list| list.iter().find(|w| w["id"] == id));
     let Some(ws) = found else { return Err(RpcError::new(NOT_FOUND, "no such workspace on this desk")) };
-    let rows = ws["windows"].as_array().into_iter().flatten().enumerate().map(|(row, r)| {
+    // The panel's rows carry their items, commands opened; anyone else's only the item's kind.
+    let shown = {
+        let one = [json!({ "windows": ws["windows"] })];
+        let list = match panel {
+            Some(unseal) => crate::workspace::for_panel(&one, unseal),
+            None => crate::workspace::kind_only(&one),
+        };
+        list.first().and_then(|w| w["windows"].as_array().cloned()).unwrap_or_default()
+    };
+    let rows = shown.iter().enumerate().map(|(row, r)| {
         let exe = r["exe"].as_str().unwrap_or_default();
         let app = exe.rsplit('\\').next().filter(|n| !n.is_empty()).or_else(|| r["aumid"].as_str());
         let mut entry = json!({
@@ -458,8 +482,11 @@ pub fn workspace_get(snapshot: &Snapshot, id: &str, panel: bool) -> Reply {
             "off": r["off"].as_bool().unwrap_or(false),
         });
         // What I typed in "Open with" is the panel's alone, as in `config.get`.
-        if panel {
+        if panel.is_some() {
             entry["open_with"] = r["open_with"].clone();
+        }
+        if !r["item"].is_null() {
+            entry["item"] = r["item"].clone();
         }
         entry
     });
@@ -511,10 +538,25 @@ mod tests {
         snapshot.config = json!({ "desks": { "d": { "workspaces": [
             { "id": "ws_1", "name": "A", "windows": [{ "exe": "c:\\a\\code.exe", "open_with": "c:\\proj" }] }
         ] } } });
-        let others = workspace_get(&snapshot, "ws_1", false).unwrap().to_string();
+        let others = workspace_get(&snapshot, "ws_1", None).unwrap().to_string();
         assert!(!others.contains("open_with") && !others.contains("proj"));
         assert!(others.contains("code.exe"));
-        let panel = workspace_get(&snapshot, "ws_1", true).unwrap();
+        let panel = workspace_get(&snapshot, "ws_1", Some(&|_| None)).unwrap();
         assert_eq!(panel["rows"][0]["open_with"], "c:\\proj");
+    }
+    #[test]
+    fn workspace_get_shows_only_kind_to_other_clients() {
+        let mut snapshot = Snapshot::default();
+        snapshot.state.desk.sig = "d".into();
+        snapshot.config = json!({ "desks": { "d": { "workspaces": [
+            { "id": "ws_1", "name": "A", "windows": [{ "exe": "c:\\wt.exe", "item": { "kind": "terminal", "tabs": [
+                { "profile": "PowerShell", "folder": "c:\\proj", "command_sealed": "c2VhbGVk" }] } }] }
+        ] } } });
+        let others = workspace_get(&snapshot, "ws_1", None).unwrap();
+        assert_eq!(others["rows"][0]["item"], json!({ "kind": "terminal" }));
+        assert!(!others.to_string().contains("proj") && !others.to_string().contains("c2VhbGVk"));
+        let panel = workspace_get(&snapshot, "ws_1", Some(&|_| Some("npm run dev".into()))).unwrap();
+        assert_eq!(panel["rows"][0]["item"]["tabs"][0]["command"], "npm run dev");
+        assert!(panel["rows"][0]["item"]["tabs"][0].get("command_sealed").is_none());
     }
 }

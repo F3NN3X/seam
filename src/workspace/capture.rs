@@ -233,6 +233,36 @@ pub fn add_window(old: &Workspace, fresh: Rule, bound: &[Option<Bound>]) -> Adde
     Added { workspace, row, new, place }
 }
 
+/// What an app rule's join made of a workspace (brief I, D774).
+pub struct Joined {
+    /// The workspace with the window's row in it, unchanged when the app had one.
+    pub workspace: Workspace,
+    pub row: usize,
+    /// The app had no row, so the window got one at the end.
+    pub new: bool,
+    /// The folder or page the window showed, for a new row, as `Added` has it.
+    pub place: Option<Place>,
+}
+
+/// A new window of an app joins `old`: with no row of its app (an item is a row of its own) it
+/// gets one at the end, with launch off and no Open with, where it is now. An app's row, off
+/// or not, is the user's decision, so it is never changed, however many windows the app has.
+pub fn join_window(old: &Workspace, fresh: Rule) -> Joined {
+    let this = as_candidates(std::slice::from_ref(&fresh));
+    let held = (0..old.windows.len()).find(|i| {
+        let r = &old.windows[*i];
+        r.item.is_none() && matching::same_app(r, &this[0])
+    });
+    if let Some(row) = held {
+        return Joined { workspace: old.clone(), row, new: false, place: None };
+    }
+    let place = fresh.place.clone();
+    let mut workspace = old.clone();
+    let z = old.windows.len() as u32;
+    workspace.windows.push(Rule { launch: false, open_with: None, focused: false, z, place: None, ..fresh });
+    Joined { workspace, row: old.windows.len(), new: true, place }
+}
+
 /// Why a window can't be added to a workspace, in the notice's words. `skip` is the
 /// reason a capture leaves a window out, or one of `administrator`, `sticky` and `off screen`.
 pub fn why_not(skip: &str) -> &'static str {

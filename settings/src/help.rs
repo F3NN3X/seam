@@ -511,6 +511,9 @@ pub const TOPICS: &[Topic] = &[
             Text(
                 "**...**, **Edit** and **Leave out of smart tiling** on an app's row keep its windows floating on a screen where **Arrange new windows automatically** is on. Choose **Doesn't move** as its place to only do that.",
             ),
+            Text(
+                "**...**, **Edit** and **Send new windows to** on an app's row name a workspace: a new window of the app joins it as a row that doesn't start the app, whether or not **Put apps in place when they open** is on. While that workspace is in use the window goes where its row says; otherwise it stays where it opened, and the next switch to that workspace places it. An app that already has a row there keeps its row. The rule's own place isn't used then, and a rule for a workspace on another desk does nothing.",
+            ),
         ],
         settings: &[
             Setting { title: "Where apps open", page: Page::Windows, section: "Where apps open" },

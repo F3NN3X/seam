@@ -158,6 +158,7 @@ pub(in crate::app) fn save_preview(
         quick: false,
         add: None,
         move_from: None,
+        join: false,
         preview: false,
         closed: save.closed,
         from_panel,

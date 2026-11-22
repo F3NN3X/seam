@@ -5,6 +5,7 @@ use crate::theme::tokens::{self, text_style};
 use crate::ui::dot;
 use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::menu::{DropdownMenu, PopupMenuItem};
+use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 use std::rc::Rc;
 
@@ -14,15 +15,21 @@ pub struct Choice {
     key: String,
     label: SharedString,
     dot: Option<Hsla>,
+    /// Shown in muted text, for a value that no longer stands for anything on offer.
+    muted: bool,
 }
 
 impl Choice {
     pub fn new(key: impl Into<String>, label: impl Into<SharedString>) -> Choice {
-        Choice { key: key.into(), label: label.into(), dot: None }
+        Choice { key: key.into(), label: label.into(), dot: None, muted: false }
     }
 
     pub fn dot(self, colour: Option<Hsla>) -> Choice {
         Choice { dot: colour, ..self }
+    }
+
+    pub fn muted(self) -> Choice {
+        Choice { muted: true, ..self }
     }
 }
 
@@ -45,7 +52,11 @@ pub fn select(
         .items_center()
         .gap(px(tokens::SPACE_8))
         .children(current.and_then(|c| c.dot).map(|colour| dot(colour, true)))
-        .child(text_style(div(), tokens::LABEL).child(shown.clone()));
+        .child(
+            text_style(div(), tokens::LABEL)
+                .when(current.is_some_and(|c| c.muted), |d| d.text_color(p.text_muted))
+                .child(shown.clone()),
+        );
     let (pick, selected) = (Rc::new(pick), selected.to_string());
     Button::new(id)
         .secondary()

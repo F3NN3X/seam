@@ -144,6 +144,7 @@ unsafe fn new_app(hwnd: HWND, cfg: Config) -> App {
             bound: Vec::new(),
             workspace: None,
             step_to: None,
+            joining: VecDeque::new(),
             drifted: false,
             moved: Vec::new(),
             recheck: false,

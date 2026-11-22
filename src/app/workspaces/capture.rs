@@ -51,6 +51,7 @@ pub(super) fn begin_capture(
         quick: false,
         add: None,
         move_from: None,
+        join: false,
         preview,
         closed: BTreeMap::new(),
         from_panel: false,
@@ -342,7 +343,13 @@ fn finish_capture(
 }
 
 /// A capture finished: save it as a new workspace, or over the one it was asked to update.
+/// Then a window an app rule sent to a workspace may have its turn.
 pub(in crate::app) fn captured(app: &mut App) {
+    finished(app);
+    super::join::next_join(app);
+}
+
+fn finished(app: &mut App) {
     if app.capturing.as_ref().is_some_and(|job| job.add.is_some()) {
         return super::add::added(app);
     }

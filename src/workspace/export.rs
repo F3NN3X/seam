@@ -412,6 +412,8 @@ pub fn import(file: Export, here: &BTreeMap<String, ScreenInfo>, names: &[String
         rule.place = None;
         // Nor is what a file says to open (D520).
         rule.open_with = None;
+        // A workspace row never sends windows anywhere; only an app rule does (D771).
+        rule.send_to = None;
         // Folders, addresses and editors are kept if they pass their check, a startup
         // command never (D737).
         let item = rule.item.take();

@@ -318,6 +318,12 @@ Turn the debug log on. **Where apps open** is on the Windows page, with the capt
 - [ ] **A dialog isn't moved.** Press Ctrl+O in Notepad: the Open dialog stays where Windows puts it, while a new Notepad window still goes to the rule's zone.
 - [ ] **During a switch.** Start a workspace switch and open Notepad by hand while it runs: the switch owns it, and the rule doesn't move it afterwards.
 - [ ] **Full screen and Remove.** Change **Goes to** to "Screen 1, full": the next Notepad opens maximized on it. **...**, **Remove** deletes the rule with Undo, and the next Notepad opens untouched.
+- [ ] **Send new windows to.** Open the rule's **...**, **Edit**: **Send new windows to** lists **None** and the desk's workspaces. Choose Work: **Opens on** is dimmed with the tooltip "The workspace decides where it goes" and keeps its value, the row's line says "Sent to Work" (with "kept on top" after it when pinned), and a notification says "Notepad goes to Work" with Undo. Choose **None**: the line goes back to the place, and the notification says "Notepad no longer goes to a workspace".
+- [ ] **A workspace not in use.** Use another workspace, close Notepad and open it: it stays where it opened, Work gains a Notepad row with **Launch** off, there is no balloon, and the log has `app rule: notepad joined Work`. Switch to Work: the window goes to its row's place.
+- [ ] **The workspace in use.** With Work in use and **Put apps in place when they open** off, close Notepad and open it: it goes to its row's place at once. Open a second Notepad window: no row is added. An app that already has a row in Work (change its place first): the row doesn't change.
+- [ ] **Three at once.** Open three windows of an app with no row in Work together: Work gains one row.
+- [ ] **Another desk.** Edit `config.json` so the rule's `send_to` is an id this desk doesn't have: the Select shows **Not on this desk** in muted text, the row's line says "Workspace on another desk", and opening the app adds nothing and moves nothing (a pin still applies).
+- [ ] **Export and the file.** Export Work: the file has no `send_to`. A rule saved without a workspace has no `send_to` in `config.json`.
 - [ ] **Search and Help.** Searching "where apps open", "app rules" or "always open" finds the card, and "keep an app on top" finds its entry. Help has a **Where apps open** topic.
 
 #### Keep on top

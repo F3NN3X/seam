@@ -135,6 +135,18 @@ fn offer_restore_row(panel: &Panel, window: &mut Window, cx: &mut Context<Panel>
     row(title, Some(about.into()), toggle, p)
 }
 
+/// "Show the workspace name when I switch" (D770): on unless it is turned off.
+fn switch_label_row(panel: &Panel, window: &mut Window, cx: &mut Context<Panel>) -> Row {
+    let p = crate::theme::palette(cx);
+    let view = cx.entity();
+    let title = "Show the workspace name when I switch";
+    let on = panel.config.workspaces_switch_label;
+    let toggle = switch("switch-label", title, on, window, cx, move |on, window, cx| {
+        view.update(cx, |panel, cx| panel.patch(json!({ "workspaces_switch_label": on }), window, cx));
+    });
+    row(title, Some("A short label appears on each screen the switch changed".into()), toggle, p)
+}
+
 /// "Remember folders and pages" (D330), and while some are still saved, the button that
 /// forgets them on every desk.
 fn places_row(panel: &Panel, window: &mut Window, cx: &mut Context<Panel>) -> Row {
@@ -184,6 +196,7 @@ fn closed_row(panel: &Panel, window: &mut Window, cx: &mut Context<Panel>) -> Ro
 pub(super) fn all_section(panel: &Panel, p: Palette, window: &mut Window, cx: &mut Context<Panel>) -> AnyElement {
     let rows = vec![
         auto_apply_row(panel, window, cx),
+        switch_label_row(panel, window, cx),
         offer_restore_row(panel, window, cx),
         places_row(panel, window, cx),
         closed_row(panel, window, cx),

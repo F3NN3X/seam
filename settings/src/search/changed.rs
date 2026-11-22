@@ -37,6 +37,7 @@ const ROWS: &[(Page, &str, &[&str])] = &[
     (Page::Windows, "Another window manager handles my windows", &["/windows/other_wm"]),
     (Page::Workspaces, "Put apps in place when they open", &["/auto_apply"]),
     (Page::Workspaces, "Offer to restore after screens change", &["/workspaces_offer_restore"]),
+    (Page::Workspaces, "Show the workspace name when I switch", &["/workspaces_switch_label"]),
     (Page::Workspaces, "Apps that aren't open", &["/workspaces_update_closed"]),
     (Page::Shortcuts, "Line up screens", &["/hotkeys/line_up"]),
     (Page::Shortcuts, "Pause or resume pointer remap", &["/hotkeys/pause"]),
@@ -85,6 +86,10 @@ const ROWS: &[(Page, &str, &[&str])] = &[
     (Page::Shortcuts, "Save windows to the active workspace", &["/hotkeys/quick_save"]),
     (Page::Shortcuts, "Minimize this workspace", &["/hotkeys/minimize_workspace"]),
     (Page::Shortcuts, "Close this workspace", &["/hotkeys/close_workspace"]),
+    (Page::Shortcuts, "Switch to next workspace", &["/hotkeys/workspace_next"]),
+    (Page::Shortcuts, "Switch to previous workspace", &["/hotkeys/workspace_prev"]),
+    (Page::Shortcuts, "Move window to next workspace", &["/hotkeys/add_to_next"]),
+    (Page::Shortcuts, "Move window to previous workspace", &["/hotkeys/add_to_prev"]),
     (Page::General, "Offer to line up new screens", &["/ask_new_desks"]),
     (Page::General, "Who reopens the apps", &["/restore_apps"]),
     (Page::General, "Clicking the tray icon", &["/tray_click"]),
@@ -101,12 +106,20 @@ const ROWS: &[(Page, &str, &[&str])] = &[
 /// `config` as JSON, with the choices that have an effective value written out: an
 /// unset `workspaces_update_closed` reads as what the older flag says, so a file that
 /// never set it and one that sets Keep compare equal. A switch that is left out of the file
-/// while it's off is written out as false.
+/// while it's off is written out as false, and one that is left out while on as true. A key
+/// that is left out while unset is written out as null.
 fn normalised(config: &Config) -> Value {
     let config = Config { workspaces_update_closed: Some(config.closed_apps()), ..config.clone() };
     let mut value = serde_json::to_value(config).unwrap_or_default();
     if let Some(fields) = value.as_object_mut() {
         fields.entry("workspaces_offer_restore").or_insert(Value::Bool(false));
+        fields.entry("workspaces_switch_label").or_insert(Value::Bool(true));
+        // Keys with no default are left out of the file while unset.
+        if let Some(keys) = fields.get_mut("hotkeys").and_then(Value::as_object_mut) {
+            for key in ["workspace_next", "workspace_prev", "add_to_next", "add_to_prev"] {
+                keys.entry(key).or_insert(Value::Null);
+            }
+        }
     }
     value
 }

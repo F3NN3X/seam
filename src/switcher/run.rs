@@ -42,6 +42,8 @@ pub struct Switched {
     pub from_panel: bool,
     /// The user stopped it while it started apps.
     pub cancelled: bool,
+    /// Snap back: the same workspace again.
+    pub put_back: bool,
 }
 
 /// An app a switch couldn't start or move, or left alone on purpose.
@@ -262,7 +264,17 @@ fn run_switch(job: &SwitchJob, mine: u64) -> Option<Switched> {
     let stacks = stacks_of(ws, &found);
     let (id, name, placed, skipped) = (ws.id.clone(), ws.name.clone(), tally.placed, tally.skipped);
     let cancelled = tally.cancelled;
-    Some(Switched { id, name, launched, placed, skipped, stacks, from_panel: job.from_panel, cancelled })
+    Some(Switched {
+        id,
+        name,
+        launched,
+        placed,
+        skipped,
+        stacks,
+        from_panel: job.from_panel,
+        cancelled,
+        put_back: job.put_back,
+    })
 }
 
 /// The rows with a place in a stack, whose windows were found, grouped by screen and zones.

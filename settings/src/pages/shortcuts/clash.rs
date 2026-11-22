@@ -183,6 +183,18 @@ mod tests {
     }
 
     #[test]
+    fn the_step_shortcuts_clash_with_the_others_like_any_row() {
+        let items = [
+            item("switch_back", Some("Ctrl+Shift+Alt+B"), None),
+            item("workspace_next", None, None),
+            item("add_to_prev", Some("Ctrl+Shift+Alt+M"), None),
+        ];
+        assert_eq!(conflict("Ctrl+Shift+Alt+B", "workspace_next", &items).as_deref(), Some("Also used by SWITCH_BACK"));
+        assert_eq!(conflict("Ctrl+Shift+Alt+M", "add_to_next", &items).as_deref(), Some("Also used by ADD_TO_PREV"));
+        assert!(conflict("Ctrl+Shift+Alt+M", "add_to_prev", &items).is_none());
+    }
+
+    #[test]
     fn rotate_keeps_its_shift_variant_free() {
         let items = [item("rotate", Some("Ctrl+Alt+R"), None), item("grow", None, Some("Ctrl+Alt+Shift+R"))];
         assert_eq!(conflict("Ctrl+Alt+Shift+R", "grow", &items).as_deref(), Some("Also used by ROTATE"));

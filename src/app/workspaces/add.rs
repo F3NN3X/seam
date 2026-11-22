@@ -2,6 +2,7 @@
 //! key or `workspace.add_window`. The worker reads the window as a capture would, and the
 //! row is saved through the editor's checks, with Undo as a quick save has.
 
+use super::capture::{check_rows, write_checked};
 use super::*;
 use std::path::Path;
 
@@ -12,16 +13,38 @@ pub(in crate::app) enum Which {
 }
 
 const TITLE: &str = "Add window to workspace";
+const MOVE_TITLE: &str = "Move window to workspace";
 
 /// Start adding `hwnd`, or the window in front, to a workspace. An API client hears how
 /// it went through `reply`; a key shows a notice when it can't.
 pub(in crate::app) fn start_add_window(app: &mut App, which: Which, hwnd: Option<isize>, reply: Option<Sender<Reply>>) {
-    if let Err(e) = begin(app, which, hwnd, reply.clone()) {
-        answer(app, reply, Err(e));
+    start(app, which, hwnd, reply, false);
+}
+
+/// "Move window to next workspace" or "previous": the window in front joins a workspace as
+/// above, and its row goes from the workspace in use.
+pub(in crate::app) fn start_move_window(app: &mut App, which: Which) {
+    start(app, which, None, None, true);
+}
+
+/// A move's notice when there is no workspace to go to.
+pub(in crate::app) fn refuse_move(app: &mut App, why: &str) {
+    answer(app, None, Err(RpcError::new(api::NOT_FOUND, why)), true);
+}
+
+fn start(app: &mut App, which: Which, hwnd: Option<isize>, reply: Option<Sender<Reply>>, moving: bool) {
+    if let Err(e) = begin(app, which, hwnd, reply.clone(), moving) {
+        answer(app, reply, Err(e), moving);
     }
 }
 
-fn begin(app: &mut App, which: Which, hwnd: Option<isize>, reply: Option<Sender<Reply>>) -> Result<(), RpcError> {
+fn begin(
+    app: &mut App,
+    which: Which,
+    hwnd: Option<isize>,
+    reply: Option<Sender<Reply>>,
+    moving: bool,
+) -> Result<(), RpcError> {
     if app.closing.is_some() {
         return Err(RpcError::new(api::BUSY, "Windows of a workspace are still being closed or minimized"));
     }
@@ -42,6 +65,7 @@ fn begin(app: &mut App, which: Which, hwnd: Option<isize>, reply: Option<Sender<
         return Err(RpcError::new(api::REFUSED, "No window is in front"));
     }
     let into = Some(found.id.clone());
+    let move_from = if moving { super::moved::origin(app.workspace.as_deref(), app.step_to.as_deref()) } else { None };
     app.capturing = Some(Capturing {
         reply,
         name: None,
@@ -51,6 +75,7 @@ fn begin(app: &mut App, which: Which, hwnd: Option<isize>, reply: Option<Sender<
         sig: app.sig.clone(),
         quick: false,
         add: Some(hwnd),
+        move_from,
         preview: false,
         closed: BTreeMap::new(),
         from_panel: false,
@@ -64,14 +89,14 @@ fn begin(app: &mut App, which: Which, hwnd: Option<isize>, reply: Option<Sender<
 
 /// Say how it went: the answer for the API client if there is one, else a notice for a
 /// refusal. A save has its own notice.
-fn answer(app: &mut App, reply: Option<Sender<Reply>>, result: Reply) {
+fn answer(app: &mut App, reply: Option<Sender<Reply>>, result: Reply, moving: bool) {
     match (reply, result) {
         (Some(tx), result) => {
             let _ = tx.send(result);
         }
         (None, Err(e)) => {
             log::info!("add window: {}", e.message);
-            notify(app, TITLE, &e.message, BalloonAction::None);
+            notify(app, if moving { MOVE_TITLE } else { TITLE }, &e.message, BalloonAction::None);
         }
         (None, Ok(_)) => {}
     }
@@ -81,7 +106,7 @@ fn answer(app: &mut App, reply: Option<Sender<Reply>>, result: Reply) {
 pub(super) fn added(app: &mut App) {
     let (Some(read), Some(job)) = (switcher::take_added(), app.capturing.take()) else { return };
     let result = save(app, &job, read);
-    answer(app, job.reply, result);
+    answer(app, job.reply, result, job.move_from.is_some());
 }
 
 /// What to call the app in a notice: its program's name, or failing that its window's title.
@@ -111,6 +136,22 @@ fn store_place(app: &mut App, id: &str, row: usize, place: workspace::Place) {
     }
 }
 
+/// A move's workspace on the leaving side: as it is stored, and without the window's row,
+/// when it has one. `None` when it has no row for the window, so the move only adds.
+fn leaving(app: &App, from: &str, hwnd: isize, remember: bool) -> Option<Leaving> {
+    let before = stored(app, from)?;
+    let old = workspace::parse(&before)?;
+    let (bound, _) = switcher::capture_bindings(&old, &[hwnd], remember);
+    Some(Leaving { before, old, bound })
+}
+
+/// The workspace a move leaves, as stored, and what a switch has bound in it.
+struct Leaving {
+    before: Value,
+    old: Workspace,
+    bound: Vec<Option<workspace::Bound>>,
+}
+
 /// Fold the window into its workspace and save it the way an edit is saved, so the same
 /// checks apply, then keep what Undo puts back.
 fn save(app: &mut App, job: &Capturing, read: Result<(Rule, isize), String>) -> Reply {
@@ -126,8 +167,23 @@ fn save(app: &mut App, job: &Capturing, read: Result<(Rule, isize), String>) -> 
     let remember = app.cfg.workspaces_remember_places;
     let name = label(&rule);
     let (bound, _) = switcher::capture_bindings(&old, &[hwnd], remember);
-    let added = workspace::add_window(&old, rule, &bound);
-    super::capture::update_rows(app, id, workspace::to_value(&added.workspace), Some(added.row), false)?;
+    let going = job.move_from.as_deref().filter(|from| *from != id);
+    let source = going.and_then(|from| leaving(app, from, hwnd, remember));
+    let planned = super::moved::plan(&old, &bound, rule, source.as_ref().map(|s| (&s.old, s.bound.as_slice())));
+    let added = planned.added;
+    // Both workspaces are checked first and written once, so a move is whole or not at all.
+    let target = check_rows(app, id, workspace::to_value(&added.workspace), Some(added.row), false)?;
+    let moved = match (going, source, planned.out) {
+        (Some(from), Some(source), Some(out)) => {
+            let leaving = check_rows(app, from, workspace::to_value(&out.without), None, false)?;
+            write_checked(app, &[target, leaving])?;
+            stored(app, from).map(|after| super::moved::record(from, source.before, after, out.from))
+        }
+        _ => {
+            write_checked(app, &[target])?;
+            None
+        }
+    };
     if let Some(place) = added.place {
         store_place(app, id, added.row, place);
     }
@@ -154,9 +210,23 @@ fn save(app: &mut App, job: &Capturing, read: Result<(Rule, isize), String>) -> 
         from: Some(from),
         in_use,
         until,
+        source: moved,
     });
+    let left = app.quick_undo.as_ref().and_then(|u| u.source.as_ref()).and_then(|s| workspace::parse(&s.before));
+    if left.is_some() {
+        sync_live(app);
+    }
     let off = saved.windows.get(added.row).is_some_and(|r| r.off);
     let (title, body) = match (added.new, off) {
+        _ if left.is_some() => {
+            let from = left.map(|w| w.name).unwrap_or_default();
+            let body = if off {
+                "It's off, so a switch leaves it alone. Click to undo".to_string()
+            } else {
+                format!("{name} is no longer in {from}. Click to undo")
+            };
+            (format!("Moved to {}", saved.name), body)
+        }
         (true, _) => {
             (format!("Added to {}", saved.name), format!("{name} has a new row that won't start it. Click to undo"))
         }

@@ -377,6 +377,7 @@ fn command_result(app: &mut App, command: Command, panel: bool) -> Reply {
         Command::WorkspaceUpdate { id, workspace } => update_from_panel(app, &id, workspace),
         Command::WorkspaceSnapBack { alongside } => snap_back(app, alongside, Via::api(panel)),
         Command::WorkspaceSwitchBack { alongside } => switch_back(app, alongside, Via::api(panel)),
+        Command::WorkspaceStep { direction, alongside } => step(app, direction, None, alongside, Via::api(panel)),
         Command::WorkspaceSetDefault(id) => set_default(app, id),
         Command::CursorEasingSet(on) => set_cursor_easing(app, on),
         Command::AutoApplySet(on) => {

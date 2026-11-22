@@ -50,6 +50,7 @@ pub(super) fn begin_capture(
         sig: app.sig.clone(),
         quick: false,
         add: None,
+        move_from: None,
         preview,
         closed: BTreeMap::new(),
         from_panel: false,
@@ -88,8 +89,16 @@ pub(super) fn quick_saved(app: &mut App, saved: &Workspace, before: Option<Value
     sync_live(app);
     let until = Instant::now() + QUICK_UNDO_FOR;
     let after = workspace::to_value(saved);
-    app.quick_undo =
-        Some(QuickUndo { sig: app.sig.clone(), id: saved.id.clone(), before, after, from: None, in_use, until });
+    app.quick_undo = Some(QuickUndo {
+        sig: app.sig.clone(),
+        id: saved.id.clone(),
+        before,
+        after,
+        from: None,
+        in_use,
+        until,
+        source: None,
+    });
     let n = saved.windows.len();
     let body = if created {
         format!("{n} windows saved in a new workspace, now in use. Click to undo")
@@ -113,8 +122,16 @@ pub(super) fn update_removed(
     let until = Instant::now() + QUICK_UNDO_FOR;
     let in_use = app.workspace.clone();
     let after = workspace::to_value(saved);
-    app.quick_undo =
-        Some(QuickUndo { sig: app.sig.clone(), id: saved.id.clone(), before, after, from: Some(from), in_use, until });
+    app.quick_undo = Some(QuickUndo {
+        sig: app.sig.clone(),
+        id: saved.id.clone(),
+        before,
+        after,
+        from: Some(from),
+        in_use,
+        until,
+        source: None,
+    });
     let body = format!("{}. Click to undo", workspace::review::closed_note(removed, turned_off));
     log::info!("update from screen: {removed} removed and {turned_off} turned off in {}", saved.name);
     notify(app, &format!("Updated {}", saved.name), &body, BalloonAction::UndoQuickSave);
@@ -129,31 +146,28 @@ pub(in crate::app) fn undo_quick_save(app: &mut App) {
         return;
     }
     let Some(desk) = app.cfg.desks.get_mut(&undo.sig) else { return };
-    let same = |v: &Value| workspace::parse(v).is_some_and(|w| w.id == undo.id);
-    // Changed since the save, by an edit or another save: putting the old one back would lose that.
-    if !desk.workspaces.iter().any(|v| same(v) && *v == undo.after) {
+    // Changed since the save, by an edit or another save: putting the old one back would lose
+    // that. A move is undone whole or not at all, so a changed source stops it too.
+    let Some(list) = moved::undone(&desk.workspaces, &undo.id, &undo.after, undo.before.as_ref(), undo.source.as_ref())
+    else {
         log::info!("quick save: not undone, the workspace changed since");
         return;
+    };
+    desk.workspaces = list;
+    if undo.before.is_none() && app.workspace.as_deref() == Some(undo.id.as_str()) {
+        set_in_use(app, undo.in_use);
     }
-    match undo.before {
-        Some(before) => {
-            if let Some(slot) = desk.workspaces.iter_mut().find(|v| same(v)) {
-                *slot = before;
-            }
-        }
-        None => {
-            desk.workspaces.retain(|v| !same(v));
-            if app.workspace.as_deref() == Some(undo.id.as_str()) {
-                set_in_use(app, undo.in_use);
-            }
-        }
-    }
+    let source = undo.source;
     log::info!("quick save: undone");
     persist(app);
     // Rows an Update from screen removed come back, so the others move again.
     if let Some(from) = undo.from {
         switcher::rebind(&undo.id, &from);
         live::restamp(workspace::stamp_key(&undo.id), from);
+    }
+    if let Some(s) = source {
+        switcher::rebind(&s.id, &s.from);
+        live::restamp(workspace::stamp_key(&s.id), s.from);
     }
     sync_live(app);
     publish(app);
@@ -396,16 +410,35 @@ pub(in crate::app) fn update_from_panel(app: &mut App, id: &str, sent: Value) ->
 
 /// `update_workspace`; with `only` set, the Open with of the other rows isn't checked again.
 pub(super) fn update_rows(app: &mut App, id: &str, sent: Value, only: Option<usize>, sealing: bool) -> Reply {
-    let Some(desk) = app.cfg.desks.get(&app.sig) else { return refused("This desk has no workspaces") };
+    let edit = check_rows(app, id, sent, only, sealing)?;
+    write_checked(app, &[edit])
+}
+
+/// A workspace edit that passed the editor's checks and isn't saved yet.
+pub(super) struct Checked {
+    id: String,
+    old: Workspace,
+    checked: Workspace,
+}
+
+/// Run the editor's checks on `sent` as the new `id`, without saving it.
+pub(super) fn check_rows(
+    app: &App,
+    id: &str,
+    sent: Value,
+    only: Option<usize>,
+    sealing: bool,
+) -> Result<Checked, RpcError> {
+    let Some(desk) = app.cfg.desks.get(&app.sig) else {
+        return Err(RpcError::new(api::REFUSED, "This desk has no workspaces"));
+    };
     let Some(old) = workspace::list(&desk.workspaces).into_iter().find(|w| w.id == id) else {
         return Err(RpcError::new(api::NOT_FOUND, "no such workspace on this desk"));
     };
     // A client that doesn't know `zones` leaves the screen layouts as they were.
     let keeps_zones = sent.get("zones").is_none();
-    let mut sent: Workspace = match serde_json::from_value(sent) {
-        Ok(ws) => ws,
-        Err(e) => return refused(format!("That isn't a workspace: {e}")),
-    };
+    let mut sent: Workspace = serde_json::from_value(sent)
+        .map_err(|e| RpcError::new(api::REFUSED, format!("That isn't a workspace: {e}")))?;
     if keeps_zones {
         sent.zones = old.zones.clone();
     }
@@ -417,40 +450,42 @@ pub(super) fn update_rows(app: &mut App, id: &str, sent: Value, only: Option<usi
         let layout = desk.zones.get(monitor).and_then(zones::layout_of);
         layout.map_or(0, |l| zones::leaf_count(&l.tree))
     };
-    let checked = match workspace::checked_rows(&old, sent, &zones, only) {
-        Ok(ws) => ws,
-        Err(why) => return refused(why),
-    };
+    let checked = workspace::checked_rows(&old, sent, &zones, only).map_err(|why| RpcError::new(api::REFUSED, why))?;
     let others: Vec<String> =
         workspace::list(&desk.workspaces).into_iter().filter(|w| w.id != id).map(|w| w.name).collect();
     let mut checked = Workspace { name: workspace::unique_name(&checked.name, &others), ..checked };
     // A startup command is saved sealed for this account, and only ever from the panel (D736).
-    if let Err(why) = workspace::seal_commands(&mut checked, &seam::seal::seal) {
-        return refused(why);
-    }
+    workspace::seal_commands(&mut checked, &seam::seal::seal).map_err(|why| RpcError::new(api::REFUSED, why))?;
+    Ok(Checked { id: id.to_string(), old, checked })
+}
+
+/// Save checked edits of one or more workspaces in one write, so a move is whole or not at all.
+pub(super) fn write_checked(app: &mut App, edits: &[Checked]) -> Reply {
+    let Some(desk) = app.cfg.desks.get(&app.sig) else { return refused("This desk has no workspaces") };
     let list: Vec<Value> = desk
         .workspaces
         .iter()
-        .map(
-            |v| if workspace::parse(v).is_some_and(|w| w.id == id) { workspace::to_value(&checked) } else { v.clone() },
-        )
+        .map(|v| match edits.iter().find(|e| workspace::parse(v).is_some_and(|w| w.id == e.id)) {
+            Some(e) => workspace::to_value(&e.checked),
+            None => v.clone(),
+        })
         .collect();
     let patch = json!({ "desks": { app.sig.clone(): { "workspaces": list } } });
-    let moves = workspace::moved_rows(&old.windows, &checked.windows);
-    let reply = patch_config(app, &patch);
-    // Windows a switch or auto-apply stamped keep the app they were stamped for. The
-    // worker already has the new rows by now, so a window it stamps in between is
-    // remapped from the wrong row. That needs a window to open in those microseconds,
-    // and the next switch stamps everything again.
-    let unmoved = moves.len() == checked.windows.len() && moves.iter().enumerate().all(|(i, m)| *m == Some(i));
-    if reply.is_ok() && !unmoved {
-        // The windows place rows remember follow their rows the same way (D336).
-        switcher::rebind(id, &moves);
-        live::restamp(workspace::stamp_key(id), moves.clone());
-    }
-    // An item that was edited isn't what its window opened, so the next switch starts the new one (D733).
-    if reply.is_ok() {
+    let reply = patch_config(app, &patch)?;
+    for Checked { id, old, checked } in edits {
+        let moves = workspace::moved_rows(&old.windows, &checked.windows);
+        // Windows a switch or auto-apply stamped keep the app they were stamped for. The
+        // worker already has the new rows by now, so a window it stamps in between is
+        // remapped from the wrong row. That needs a window to open in those microseconds,
+        // and the next switch stamps everything again.
+        let unmoved = moves.len() == checked.windows.len() && moves.iter().enumerate().all(|(i, m)| *m == Some(i));
+        if !unmoved {
+            // The windows place rows remember follow their rows the same way (D336).
+            switcher::rebind(id, &moves);
+            live::restamp(workspace::stamp_key(id), moves.clone());
+        }
+        // An item that was edited isn't what its window opened, so the next switch starts the new one (D733).
         switcher::forget_edited(id, &workspace::edited_items(&old.windows, &checked.windows, &moves));
     }
-    reply
+    Ok(reply)
 }

@@ -516,3 +516,47 @@ fn offer_restore_defaults_off_and_is_skipped_when_off() {
     let older: Config = serde_json::from_value(json!({})).unwrap();
     assert!(!older.workspaces_offer_restore);
 }
+
+#[test]
+fn an_older_file_has_no_step_keys() {
+    let c: Config = serde_json::from_str(r#"{"hotkeys": {"line_up": "Ctrl+Alt+L"}}"#).unwrap();
+    let h = c.hotkeys;
+    assert_eq!((h.workspace_next, h.workspace_prev, h.add_to_next, h.add_to_prev), (None, None, None, None));
+}
+
+#[test]
+fn step_keys_round_trip_and_are_skipped_when_unset() {
+    let saved = serde_json::to_value(Config::default()).unwrap();
+    for key in ["workspace_next", "workspace_prev", "add_to_next", "add_to_prev"] {
+        assert!(saved["hotkeys"].get(key).is_none(), "{key} was written while unset");
+    }
+    let set: Config = serde_json::from_value(json!({ "hotkeys": {
+        "workspace_next": "Ctrl+Alt+Right", "workspace_prev": "Ctrl+Alt+Left",
+        "add_to_next": "Ctrl+Shift+Alt+Right", "add_to_prev": "Ctrl+Shift+Alt+Left"
+    } }))
+    .unwrap();
+    let back: Config = serde_json::from_value(serde_json::to_value(&set).unwrap()).unwrap();
+    assert_eq!(back.hotkeys.workspace_next.as_deref(), Some("Ctrl+Alt+Right"));
+    assert_eq!(back.hotkeys.workspace_prev.as_deref(), Some("Ctrl+Alt+Left"));
+    assert_eq!(back.hotkeys.add_to_next.as_deref(), Some("Ctrl+Shift+Alt+Right"));
+    assert_eq!(back.hotkeys.add_to_prev.as_deref(), Some("Ctrl+Shift+Alt+Left"));
+}
+
+#[test]
+fn switch_label_defaults_on_and_is_skipped_while_on() {
+    assert!(Config::default().workspaces_switch_label);
+    let saved = serde_json::to_value(Config::default()).unwrap();
+    assert!(saved.get("workspaces_switch_label").is_none());
+    let older: Config = serde_json::from_value(json!({})).unwrap();
+    assert!(older.workspaces_switch_label);
+}
+
+#[test]
+fn switch_label_off_round_trips() {
+    let off: Config = serde_json::from_value(json!({ "workspaces_switch_label": false })).unwrap();
+    assert!(!off.workspaces_switch_label);
+    let saved = serde_json::to_value(&off).unwrap();
+    assert_eq!(saved["workspaces_switch_label"], false);
+    let back: Config = serde_json::from_value(saved).unwrap();
+    assert!(!back.workspaces_switch_label);
+}

@@ -131,6 +131,18 @@ pub struct Hotkeys {
     pub add_to_7: Option<String>,
     pub add_to_8: Option<String>,
     pub add_to_9: Option<String>,
+    /// "Switch to next workspace" and "Switch to previous workspace": the next or previous one
+    /// in the desk's list, from the one in use. They wrap around.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub workspace_next: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub workspace_prev: Option<String>,
+    /// "Move window to next workspace" and "Move window to previous workspace": the focused
+    /// window's row goes from the workspace in use to the next or previous one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub add_to_next: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub add_to_prev: Option<String>,
     /// "Scroll left" and "Scroll right": on a Scrolling screen, the column next to the
     /// focused one takes the focus, and the strip scrolls to show it.
     pub scroll_left: Option<String>,
@@ -198,6 +210,10 @@ impl Default for Hotkeys {
             add_to_7: None,
             add_to_8: None,
             add_to_9: None,
+            workspace_next: None,
+            workspace_prev: None,
+            add_to_next: None,
+            add_to_prev: None,
             scroll_left: None,
             scroll_right: None,
             column_left: None,
@@ -684,6 +700,10 @@ pub struct Config {
     /// the windows of the workspace in use moved, ask before putting them back. Off by default.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub workspaces_offer_restore: bool,
+    /// "Show the workspace name when I switch": a short label names the workspace on each
+    /// screen the switch changed. On by default, and left out of the file while on.
+    #[serde(skip_serializing_if = "is_true")]
+    pub workspaces_switch_label: bool,
     /// "Where apps open": an app's window goes to its place whenever it opens, with
     /// or without a workspace. Raw JSON like workspaces, so an entry this build
     /// can't read is kept as it is and ignored.
@@ -727,6 +747,11 @@ pub struct SyncStamp {
     pub at: u64,
 }
 
+/// For `skip_serializing_if` on a field that defaults to on.
+fn is_true(b: &bool) -> bool {
+    *b
+}
+
 fn setup_done_in_old_files() -> bool {
     true
 }
@@ -755,6 +780,7 @@ impl Default for Config {
             workspaces_update_removes_closed: false,
             workspaces_update_closed: None,
             workspaces_offer_restore: false,
+            workspaces_switch_label: true,
             app_rules: Vec::new(),
             custom_layouts: Vec::new(),
             cursor_easing_asked: false,

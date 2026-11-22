@@ -467,6 +467,23 @@ unsafe fn on_hotkey(id: i32) {
                     }
                 });
             }
+            id @ (HOTKEY_WORKSPACE_NEXT | HOTKEY_WORKSPACE_PREV) => {
+                let (dir, title) = if id == HOTKEY_WORKSPACE_NEXT {
+                    (Step::Next, "Next workspace")
+                } else {
+                    (Step::Previous, "Previous workspace")
+                };
+                with_app(|a| {
+                    if let Err(e) = step(a, dir, None, false, Via::local()) {
+                        log::info!("workspace step hotkey: {}", e.message);
+                        notify(a, title, &e.message, BalloonAction::None);
+                    }
+                });
+            }
+            id @ (HOTKEY_ADD_TO_NEXT | HOTKEY_ADD_TO_PREV) => {
+                let dir = if id == HOTKEY_ADD_TO_NEXT { Step::Next } else { Step::Previous };
+                with_app(|a| step_add(a, dir));
+            }
             HOTKEY_CLOSE_WORKSPACE => {
                 with_app(|a| start_close_here(a, "Close this workspace", Ask::List));
             }

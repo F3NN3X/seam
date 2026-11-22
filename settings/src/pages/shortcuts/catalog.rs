@@ -188,16 +188,25 @@ pub fn items(panel: &Panel) -> Vec<Item> {
     add("Switch back to the previous workspace", "switch_back", keys.switch_back.as_ref(), 22 + on_desk.len(), section);
     add("Minimize this workspace", "minimize_workspace", keys.minimize_workspace.as_ref(), 23 + on_desk.len(), section);
     add("Close this workspace", "close_workspace", keys.close_workspace.as_ref(), 24 + on_desk.len(), section);
-    // Workspaces and "Add window to workspace" are numbered, so their keys are too.
+    add("Switch to next workspace", "workspace_next", keys.workspace_next.as_ref(), 1010, section);
+    add("Switch to previous workspace", "workspace_prev", keys.workspace_prev.as_ref(), 1011, section);
+    add("Move window to next workspace", "add_to_next", keys.add_to_next.as_ref(), 1012, section);
+    add("Move window to previous workspace", "add_to_prev", keys.add_to_prev.as_ref(), 1013, section);
+    suggest_numbered(&mut out);
+    out
+}
+
+/// Workspaces and "Add window to workspace" are numbered, so their suggested keys are too.
+/// Next and previous, switching or moving, have none.
+fn suggest_numbered(out: &mut [Item]) {
     for (n, item) in out.iter_mut().filter(|i| i.action.starts_with("workspace:")).enumerate() {
         item.preferred = (n < 9).then(|| format!("Ctrl+Shift+Alt+{}", n + 1));
     }
-    for item in &mut out {
-        if let Some(n) = item.action.strip_prefix("add_to_") {
+    for item in out {
+        if let Some(n) = item.action.strip_prefix("add_to_").filter(|n| n.chars().all(|c| c.is_ascii_digit())) {
             item.preferred = Some(format!("Shift+Win+Alt+{n}"));
         }
     }
-    out
 }
 
 /// The Windows section's rows. Slots far past the workspace rows, which count up from 20.
@@ -261,6 +270,17 @@ mod tests {
         assert!(!it.matches("alt k"));
         assert!(!item("Spotlight", None).matches("alt"));
         assert!(it.matches(""));
+    }
+
+    #[test]
+    fn next_and_previous_have_no_suggested_key() {
+        let mut items: Vec<Item> = ["add_to_3", "workspace_next", "workspace_prev", "add_to_next", "add_to_prev"]
+            .into_iter()
+            .map(|action| Item { action: action.into(), ..item("Row", None) })
+            .collect();
+        suggest_numbered(&mut items);
+        assert_eq!(items[0].preferred.as_deref(), Some("Shift+Win+Alt+3"));
+        assert!(items[1..].iter().all(|i| i.preferred.is_none()));
     }
 
     #[test]

@@ -38,6 +38,10 @@ fn caption(action: &str) -> Option<&'static str> {
         "column_left" => Some("Swap the focused window's column with the one on its left"),
         "column_right" => Some("Swap the focused window's column with the one on its right"),
         "column_width" => Some("Give the focused window's column the next width: a third, a half, two thirds or full"),
+        "workspace_next" => Some("Switch to the workspace after the one in use, going round at the end"),
+        "workspace_prev" => Some("Switch to the workspace before the one in use, going round at the start"),
+        "add_to_next" => Some("Take the focused window out of the workspace in use and add it to the next one"),
+        "add_to_prev" => Some("Take the focused window out of the workspace in use and add it to the previous one"),
         a if a.starts_with("add_to_") => {
             Some("Add the focused window to this workspace, counted in the order of the Workspaces page")
         }

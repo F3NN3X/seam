@@ -38,7 +38,7 @@ use crate::tray::{CLASS, WM_APP_API, WM_APP_LINEUP, WM_APP_WINDOWS_CHANGED};
 use crate::wm::{Pinned, WM_APP_WS_MOVED};
 use crate::{
     altdrag, arrange, dividers, ease, focus_only, hotkey, identify, live, mousewatch, overlay, quicklayout, showlayout,
-    spotlight, wincontrol, wm,
+    spotlight, switch_label, wincontrol, wm,
 };
 use commands::{align_finished, busy, drain_api, patch_config, refused};
 use messages::wndproc;
@@ -56,7 +56,7 @@ use seam::state::{
     self, AlignResult, DeskRef, HotkeyError, Remap, Screen, ScreenRect, SessionRef, Snapshot, StackRef, State,
     UpdateState, WmState, WorkspaceRef,
 };
-use seam::workspace::{self, Rule, SESSION_ID, Session, Workspace};
+use seam::workspace::{self, Rule, SESSION_ID, Session, Step, Workspace};
 use seam::zones;
 use seam::{autostart, install, package, process, restart_apps, updates};
 use serde_json::{Value, json};
@@ -93,7 +93,7 @@ use windows::Win32::UI::Shell::*;
 use windows::Win32::UI::WindowsAndMessaging::*;
 use windows::core::{PCWSTR, w};
 use workspaces::{Ask, Closing, Minimized, closed, start_close, start_close_here, undo_minimize};
-use workspaces::{Via, copy_from_desk, move_workspace};
+use workspaces::{Via, copy_from_desk, move_workspace, step, step_add};
 use workspaces::{Which, create_workspace, edit_workspace, start_add_window, start_group, window_planned};
 use workspaces::{
     apply_hotkeys, aside, capture_job, captured, choose_in_use, desk_workspaces, detected_in_use, drift_checked,
@@ -222,6 +222,12 @@ const HOTKEY_SCROLL_RIGHT: i32 = 90;
 const HOTKEY_COLUMN_LEFT: i32 = 91;
 const HOTKEY_COLUMN_RIGHT: i32 = 92;
 const HOTKEY_COLUMN_WIDTH: i32 = 93;
+/// Switch to the next or previous workspace, from the one in use.
+const HOTKEY_WORKSPACE_NEXT: i32 = 94;
+const HOTKEY_WORKSPACE_PREV: i32 = 95;
+/// Move the focused window's row to the next or previous workspace.
+const HOTKEY_ADD_TO_NEXT: i32 = 96;
+const HOTKEY_ADD_TO_PREV: i32 = 97;
 /// One hotkey id per workspace on the desk, from here up.
 const HOTKEY_WORKSPACE: i32 = 100;
 const NIN_KEYSELECT: u32 = NIN_SELECT | NINF_KEY;
@@ -326,6 +332,8 @@ struct Capturing {
     quick: bool,
     /// "Add window to workspace": the one window, going into `into`.
     add: Option<isize>,
+    /// "Move window to next workspace": the workspace whose row for that window goes once it is added.
+    move_from: Option<String>,
     /// The capture review: keep the result under a token instead of saving it.
     preview: bool,
     /// What the save does with each row of `into` whose app isn't open, by row. A row
@@ -367,6 +375,18 @@ struct QuickUndo {
     /// The workspace in use before a created one took over.
     in_use: Option<String>,
     until: Instant,
+    /// A move also took a row out of another workspace.
+    source: Option<MovedFrom>,
+}
+
+/// The workspace a move took a row out of, for Undo.
+struct MovedFrom {
+    id: String,
+    /// As it was, and as the move wrote it.
+    before: Value,
+    after: Value,
+    /// For each row it has now, the row of `before` it was.
+    from: Vec<Option<usize>>,
 }
 
 /// What Undo puts back after Tile windows.
@@ -428,6 +448,9 @@ struct App {
     bound: Vec<(i32, String, Option<String>)>,
     /// The workspace last switched to, if it's still on this desk.
     workspace: Option<String>,
+    /// The workspace the last Next or Previous asked for, until its switch ends, so quick
+    /// presses go on from there and not from the one still in use.
+    step_to: Option<String>,
     /// A window of that workspace is moved or minimized, so Snap back has work to do.
     drifted: bool,
     /// Keys of workspaces whose stamped windows moved, waiting for the drift timer.

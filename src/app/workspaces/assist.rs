@@ -14,7 +14,16 @@ fn offer_undo(app: &mut App, saved: &Workspace, before: Option<Value>, from: Opt
     let Some(after) = stored(app, &saved.id) else { return };
     let in_use = app.workspace.clone();
     let until = Instant::now() + QUICK_UNDO_FOR;
-    app.quick_undo = Some(QuickUndo { sig: app.sig.clone(), id: saved.id.clone(), before, after, from, in_use, until });
+    app.quick_undo = Some(QuickUndo {
+        sig: app.sig.clone(),
+        id: saved.id.clone(),
+        before,
+        after,
+        from,
+        in_use,
+        until,
+        source: None,
+    });
     notify(app, &format!("Changed {}", saved.name), &format!("{what}. Click to undo"), BalloonAction::UndoQuickSave);
 }
 

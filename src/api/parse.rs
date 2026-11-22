@@ -109,6 +109,12 @@ fn command(method: &str, p: &Value) -> Result<Command, RpcError> {
         "workspace.last_switch" => Command::WorkspaceLastSwitch { id: id_param(p)? },
         "workspace.snap_back" => Command::WorkspaceSnapBack { alongside: false },
         "workspace.switch_back" => Command::WorkspaceSwitchBack { alongside: false },
+        "workspace.step" => {
+            let direction = p.get("direction").and_then(Value::as_str).and_then(workspace::Step::parse);
+            let direction =
+                direction.ok_or_else(|| RpcError::new(INVALID_PARAMS, "direction must be next or previous"))?;
+            Command::WorkspaceStep { direction, alongside: false }
+        }
         "workspace.quick_save" => Command::WorkspaceQuickSave,
         "workspace.windows" => Command::WorkspaceWindows { id: id_param(p)? },
         "workspace.close" => workspace_close(p)?,
@@ -523,6 +529,7 @@ fn assistant_allowed(command: &Command, peer: Peer) -> Result<(), RpcError> {
         | Command::WorkspaceCancel
         | Command::WorkspaceSnapBack { .. }
         | Command::WorkspaceSwitchBack { .. }
+        | Command::WorkspaceStep { .. }
         | Command::EventsSubscribe(_) => Ok(()),
         // Turning a row on can make a switch start a program, the same reason `launch` can only be turned off.
         Command::WorkspaceEdit {
@@ -598,6 +605,7 @@ pub fn parse_request(line: &str, peer: Peer) -> Result<(Value, Command), Rejecte
         Command::WorkspaceSwitch { id, name, .. } if peer.mcp => Command::WorkspaceSwitch { id, name, alongside: true },
         Command::WorkspaceSnapBack { .. } if peer.mcp => Command::WorkspaceSnapBack { alongside: true },
         Command::WorkspaceSwitchBack { .. } if peer.mcp => Command::WorkspaceSwitchBack { alongside: true },
+        Command::WorkspaceStep { direction, .. } if peer.mcp => Command::WorkspaceStep { direction, alongside: true },
         c => c,
     });
     match parsed {
@@ -726,6 +734,16 @@ mod tests {
             (request("zones.layouts", "{}"), anyone, Command::ZonesLayouts(None)),
             (request("workspace.snap_back", "{}"), anyone, Command::WorkspaceSnapBack { alongside: false }),
             (request("workspace.switch_back", "{}"), anyone, Command::WorkspaceSwitchBack { alongside: false }),
+            (
+                request("workspace.step", r#"{"direction":"next"}"#),
+                anyone,
+                Command::WorkspaceStep { direction: workspace::Step::Next, alongside: false },
+            ),
+            (
+                request("workspace.step", r#"{"direction":"previous"}"#),
+                anyone,
+                Command::WorkspaceStep { direction: workspace::Step::Previous, alongside: false },
+            ),
             (request("workspace.quick_save", "{}"), anyone, Command::WorkspaceQuickSave),
             (request("workspace.cancel", "{}"), anyone, Command::WorkspaceCancel),
             (
@@ -928,6 +946,15 @@ mod tests {
             code(&request("workspace.switch_back", "{}"), assistant(false)),
             Ok(Command::WorkspaceSwitchBack { alongside: true })
         );
+        assert_eq!(
+            code(&request("workspace.step", r#"{"direction":"next"}"#), assistant(false)),
+            Ok(Command::WorkspaceStep { direction: workspace::Step::Next, alongside: true })
+        );
+        // A step has to say which way, and only next or previous.
+        for params in ["{}", r#"{"direction":"left"}"#, r#"{"direction":3}"#] {
+            let bad = code(&request("workspace.step", params), assistant(false));
+            assert_eq!(bad.map_err(|e| e.0), Err(INVALID_PARAMS), "{params}");
+        }
         // Cancel only stops things, so an assistant may, even with the second switch off.
         assert_eq!(code(&request("workspace.cancel", "{}"), assistant(false)), Ok(Command::WorkspaceCancel));
         assert_eq!(code(&request("workspace.cancel", "{}"), off).map_err(|e| e.0), Err(DISABLED));

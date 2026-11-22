@@ -4,6 +4,11 @@ All notable changes to Seam. The format follows [Keep a Changelog](https://keepa
 
 ## [Unreleased]
 
+### Added
+
+- **Next and previous workspace.** Four shortcuts with no key until you set one: **Switch to next workspace** and **Switch to previous workspace** step through the desk's list from the workspace in use and wrap round at the ends, and **Move window to next workspace** and **Move window to previous workspace** take the focused window's row out of the workspace in use and add it to the next or previous one, with Undo. Quick presses chain, and a desk with one workspace or none says so. `workspace.step` does the same switch in the API, and assistants may call it (it never closes windows). New optional `hotkeys.workspace_next`, `workspace_prev`, `add_to_next` and `add_to_prev`; older files load unchanged.
+- **Show the workspace name when I switch.** On by default, on Workspaces under **All workspaces**. A short label names the workspace and its number on each screen the switch changed, for about a second, and never takes focus. New optional `workspaces_switch_label`, left out of the file while it is on.
+
 ## [0.9.0] - 2026-11-22
 
 ### Added

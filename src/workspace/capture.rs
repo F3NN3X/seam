@@ -1,10 +1,11 @@
 //! Folding a fresh capture into a saved workspace, and checked edits.
 
 use super::*;
+use crate::config::ClosedApps;
 
 /// A capture's rules as the matcher sees windows, so a recapture finds the rows a
 /// switch would.
-fn as_candidates(fresh: &[Rule]) -> Vec<Candidate> {
+pub(super) fn as_candidates(fresh: &[Rule]) -> Vec<Candidate> {
     let cand = |(i, r): (usize, &Rule)| Candidate {
         hwnd: i as isize,
         exe: r.exe.clone(),
@@ -19,7 +20,12 @@ fn as_candidates(fresh: &[Rule]) -> Vec<Candidate> {
 /// The capture's window, by index, for each row of `old`, paired as a switch matches.
 /// `bound` and `elsewhere` are the tray's bindings (D336) with windows as capture
 /// indices, so a place row pairs with its own window. Empty for plain matching.
-fn pair(old: &[Rule], fresh: &[Rule], bound: &[Option<Bound>], elsewhere: &HashSet<isize>) -> Vec<Option<isize>> {
+pub(super) fn pair(
+    old: &[Rule],
+    fresh: &[Rule],
+    bound: &[Option<Bound>],
+    elsewhere: &HashSet<isize>,
+) -> Vec<Option<isize>> {
     assign_bound_all(old, &as_candidates(fresh), bound, elsewhere)
 }
 
@@ -33,10 +39,12 @@ pub struct Merged {
     pub rows: Vec<usize>,
     /// How many rows were removed.
     pub removed: usize,
+    /// How many rows were turned off, that weren't off already.
+    pub turned_off: usize,
 }
 
 /// Whether some window in `wins` is of the row's app: the same program, or the same AUMID.
-fn app_open(row: &Rule, wins: &[&Candidate]) -> bool {
+pub(super) fn app_open(row: &Rule, wins: &[&Candidate]) -> bool {
     wins.iter().any(|w| {
         (!row.exe.is_empty() && w.exe.eq_ignore_ascii_case(&row.exe))
             || row.aumid.as_ref().is_some_and(|a| w.aumid.as_ref() == Some(a))
@@ -45,56 +53,42 @@ fn app_open(row: &Rule, wins: &[&Candidate]) -> bool {
 
 /// "Update from screen": each row the capture has a window for takes where and how
 /// that window is now, and keeps its launch details and its place in the start
-/// order. A row with no window right now stays. With `removes` (the setting "Update
-/// from screen removes apps that aren't open") it goes instead, unless its app still
-/// has a window the capture didn't give a row: bound elsewhere, or in `others` (windows
-/// of the desk it made no rule of, such as on another desktop). Nothing is removed
-/// when that would leave no rows of `old`. New windows go at the end, topmost first.
-/// `bound` and `elsewhere` as `pair`.
+/// order. A row with no window right now stays. What `closed` says for it (by its row
+/// of `old`) decides: Keep leaves it, Turn off sets it off, Remove takes it out. That
+/// is only for a row whose app has no window the capture didn't give a row: bound
+/// elsewhere, or in `others` (windows of the desk it made no rule of, such as on
+/// another desktop). Nothing is removed or turned off when that would be every row of
+/// `old` (`review::not_open`). New windows go at the end, topmost first. `bound` and
+/// `elsewhere` as `pair`.
 pub fn merge_capture(
     old: &Workspace,
     fresh: Vec<Rule>,
     bound: &[Option<Bound>],
     elsewhere: &HashSet<isize>,
     others: &[Candidate],
-    removes: bool,
+    closed: &dyn Fn(usize) -> ClosedApps,
 ) -> Merged {
     let found = pair(&old.windows, &fresh, bound, elsewhere);
     let mut taken = vec![false; fresh.len()];
     for i in found.iter().flatten() {
         taken[*i as usize] = true;
     }
-    let cands = as_candidates(&fresh);
-    let unpaired = || cands.iter().zip(&taken).filter(|(_, t)| !**t).map(|(c, _)| c);
-    // A row whose own window was closed isn't kept by another window of its app, unless
-    // that one is held by another workspace's row or is one the capture made no row of.
-    let held: Vec<&Candidate> = unpaired().filter(|c| elsewhere.contains(&c.hwnd)).chain(others).collect();
-    let open: Vec<&Candidate> = unpaired().chain(others).collect();
-    let gone: Vec<bool> = old
-        .windows
-        .iter()
-        .zip(&found)
-        .enumerate()
-        .map(|(o, (row, hit))| {
-            let wins = match bound.get(o).copied().flatten() {
-                Some(Bound::Gone) => &held,
-                // Its own window is open, though the capture took none of it.
-                Some(Bound::Alive(_)) => return false,
-                _ => &open,
-            };
-            removes && hit.is_none() && !app_open(row, wins)
-        })
-        .collect();
-    // A capture that finds nothing of the workspace would only empty it.
-    let gone = if gone.iter().all(|g| *g) { vec![false; gone.len()] } else { gone };
+    let not_open = review::not_open(old, &fresh, bound, elsewhere, others);
+    let (mut removed, mut turned_off) = (0, 0);
     let mut windows = Vec::with_capacity(old.windows.len());
     let mut from = Vec::with_capacity(old.windows.len());
     let mut rows = vec![0; fresh.len()];
     for (o, (row, hit)) in old.windows.iter().zip(&found).enumerate() {
-        if gone[o] {
+        let choice = if not_open.contains(&o) { closed(o) } else { ClosedApps::Keep };
+        if choice == ClosedApps::Remove {
+            removed += 1;
             continue;
         }
         let mut row = row.clone();
+        if choice == ClosedApps::TurnOff {
+            turned_off += usize::from(!row.off);
+            row.off = true;
+        }
         match hit {
             Some(i) => {
                 rows[*i as usize] = windows.len();
@@ -114,8 +108,7 @@ pub fn merge_capture(
         windows.push(rule);
         from.push(None);
     }
-    let removed = gone.iter().filter(|g| **g).count();
-    Merged { windows, from, rows, removed }
+    Merged { windows, from, rows, removed, turned_off }
 }
 
 /// Where each row of `old` went in `new` after an edit reordered, removed or added

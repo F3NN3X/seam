@@ -13,14 +13,21 @@ pub struct CaptureJob {
     /// "Remember folders and pages": read each Explorer window's folder and each
     /// browser's page. Never for the last session.
     pub places: bool,
-    /// "Update from screen removes apps that aren't open": the capture also names the
-    /// other windows of the desk, which costs a look at their processes.
+    /// Update from screen may remove or turn off apps that aren't open: the capture also
+    /// names the other windows of the desk, which costs a look at their processes.
     pub removes: bool,
 }
 
 /// A capture's rules, the window each came from, and the other windows of the desk
 /// the capture made no rule of: sticky ones, off every screen, and on other desktops.
-type Captured = (Vec<Rule>, Vec<isize>, Vec<Candidate>);
+#[derive(Default)]
+pub struct Captured {
+    pub rules: Vec<Rule>,
+    pub hwnds: Vec<isize>,
+    pub others: Vec<Candidate>,
+    /// For each rule, whether its window runs as administrator. Empty when not read.
+    pub elevated: Vec<bool>,
+}
 
 static CAPTURED: Mutex<Option<Captured>> = Mutex::new(None);
 
@@ -56,7 +63,7 @@ pub fn capture_window(job: CaptureJob, hwnd: isize) -> bool {
                 rule.place = place;
             }
         }
-        *CAPTURED.lock().unwrap_or_else(|e| e.into_inner()) = Some((rules, hwnds, Vec::new()));
+        *CAPTURED.lock().unwrap_or_else(|e| e.into_inner()) = Some(Captured { rules, hwnds, ..Captured::default() });
         unsafe {
             let _ = PostMessageW(Some(hwnd_of(job.owner)), WM_APP_CAPTURED, WPARAM(0), LPARAM(0));
         }
@@ -140,7 +147,7 @@ fn stack_rank(rule: &Rule, hwnd: isize) -> Option<u32> {
 pub fn capture_session(job: CaptureJob) -> bool {
     let spawned = std::thread::Builder::new().name("seam-session".into()).spawn(move || {
         let _com = Com::enter();
-        let (rules, ..) = capture_rules(&job, true);
+        let Captured { rules, .. } = capture_rules(&job, true);
         *SESSION.lock().unwrap_or_else(|e| e.into_inner()) = Some(rules);
         unsafe {
             let _ = PostMessageW(Some(hwnd_of(job.owner)), WM_APP_SESSION, WPARAM(0), LPARAM(0));
@@ -180,7 +187,7 @@ fn capture_rules(job: &CaptureJob, session: bool) -> Captured {
     let (seen, away) = list_windows(job, session, &mut procs, &mut skips);
     let mut others = away_candidates(away, &mut procs);
     let foreground = unsafe { GetForegroundWindow() }.0 as isize;
-    let (mut rules, mut hwnds) = (Vec::new(), Vec::new());
+    let (mut rules, mut hwnds, mut elevated) = (Vec::new(), Vec::new(), Vec::new());
     // A sticky window belongs to no workspace. The last session keeps it, pinned.
     for seen in seen {
         if !session && seen.pin & winutil::PIN_STICKY != 0 {
@@ -196,6 +203,7 @@ fn capture_rules(job: &CaptureJob, session: bool) -> Captured {
             continue;
         };
         hwnds.push(seen.cand.hwnd);
+        elevated.push(seen.elevated);
         rules.push(rule);
     }
     // A window in a stack in its zone keeps its place in it, from the top.
@@ -219,7 +227,7 @@ fn capture_rules(job: &CaptureJob, session: bool) -> Captured {
     let skipped: Vec<String> = skips.iter().map(|(why, n)| format!("{why} {n}")).collect();
     let ms = started.elapsed().as_millis();
     log::info!("workspace capture: {} windows in {ms} ms, skipped {}", rules.len(), skipped.join(", "));
-    (rules, hwnds, others)
+    Captured { rules, hwnds, others, elevated }
 }
 
 /// The rule for a window as a capture saves it: where it is now on its screen, and how

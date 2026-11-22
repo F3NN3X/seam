@@ -9,6 +9,7 @@ mod close;
 mod in_use;
 mod notice;
 mod order;
+mod review;
 mod window;
 
 pub(super) use add::{Which, start_add_window};
@@ -22,6 +23,7 @@ pub(super) use in_use::{
 };
 pub(super) use notice::{LastSwitch, ended, last_switch, open_switched, skipped_json, started, starting, starting_due};
 pub(super) use order::move_workspace;
+pub(super) use review::{save_preview, start_preview};
 pub(super) use window::{
     aside, other_wm_changed, queue_window, set_spotlight, show_spotlight, start_focus_only, start_group, start_window,
     window_planned,
@@ -149,7 +151,7 @@ pub(super) fn capture_job(app: &App) -> CaptureJob {
     for s in screens.iter_mut().filter(|s| snap::is_tiled(&s.id)) {
         s.layout = None;
     }
-    let removes = app.cfg.workspaces_update_removes_closed;
+    let removes = app.cfg.closed_apps() != ClosedApps::Keep;
     CaptureJob { owner: app.hwnd.0 as isize, screens, gap, exclude, places, removes }
 }
 

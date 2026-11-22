@@ -47,11 +47,17 @@ fn listed(answer: &Value) -> Listed {
 
 /// "App: window title", the title cut to one line, or the app alone when it has none.
 fn window_label(app: &str, title: &str) -> String {
+    label_within(app, title, LABEL_MAX)
+}
+
+/// `window_label` with the whole label at most `max` characters, or a little more when
+/// the app's name is long.
+pub(super) fn label_within(app: &str, title: &str, max: usize) -> String {
     let title = title.trim();
     if title.is_empty() {
         return app.to_string();
     }
-    let room = LABEL_MAX.saturating_sub(app.chars().count() + 2).max(8);
+    let room = max.saturating_sub(app.chars().count() + 2).max(8);
     if title.chars().count() <= room {
         return format!("{app}: {title}");
     }

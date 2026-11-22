@@ -55,6 +55,7 @@ fn command(method: &str, p: &Value) -> Result<Command, RpcError> {
         "workspaces.list" => Command::WorkspacesList { desk: str_param(p, "desk")? },
         "workspace.switch" => workspace_switch(p)?,
         "workspace.capture" => workspace_capture(p)?,
+        "workspace.capture_preview" => Command::WorkspaceCapturePreview { into: str_param(p, "into")? },
         "workspace.update" => workspace_update(p)?,
         "workspace.add_window" => workspace_add_window(p)?,
         "workspace.create" => Command::WorkspaceCreate { name: name_param(p)? },
@@ -251,7 +252,48 @@ fn workspace_capture(p: &Value) -> Result<Command, RpcError> {
             Some(Pick { hwnd, exe: need("exe")?, class: need("class")? })
         }
     };
-    Ok(Command::WorkspaceCapture { name: str_param(p, "name")?, into, row, pick })
+    let save = capture_save(p)?;
+    if save.is_some() && (row.is_some() || pick.is_some()) {
+        return Err(RpcError::new(INVALID_PARAMS, "token saves a whole preview, so row and hwnd don't go with it"));
+    }
+    Ok(Command::WorkspaceCapture { name: str_param(p, "name")?, into, row, pick, save })
+}
+
+/// `token` with `take` and `closed`: save a preview as ticked. `take` and `closed`
+/// need the token, and the token needs `take`.
+fn capture_save(p: &Value) -> Result<Option<Save>, RpcError> {
+    let Some(token) = str_param(p, "token")? else {
+        return match (p.get("take"), p.get("closed")) {
+            (None | Some(Value::Null), None | Some(Value::Null)) => Ok(None),
+            _ => Err(RpcError::new(INVALID_PARAMS, "take and closed need token")),
+        };
+    };
+    let take = match p.get("take") {
+        Some(Value::Array(list)) => list
+            .iter()
+            .map(|v| v.as_u64().and_then(|n| usize::try_from(n).ok()))
+            .collect::<Option<Vec<usize>>>()
+            .ok_or_else(|| RpcError::new(INVALID_PARAMS, "take must list window numbers"))?,
+        _ => return Err(RpcError::new(INVALID_PARAMS, "token needs take")),
+    };
+    let mut closed = BTreeMap::new();
+    match p.get("closed") {
+        None | Some(Value::Null) => {}
+        Some(Value::Object(choices)) => {
+            for (row, choice) in choices {
+                let row = row.parse::<usize>().map_err(|_| RpcError::new(INVALID_PARAMS, "closed is by row number"))?;
+                let choice = match choice.as_str() {
+                    Some("keep") => ClosedApps::Keep,
+                    Some("turn_off") => ClosedApps::TurnOff,
+                    Some("remove") => ClosedApps::Remove,
+                    _ => return Err(RpcError::new(INVALID_PARAMS, "closed takes keep, turn_off or remove")),
+                };
+                closed.insert(row, choice);
+            }
+        }
+        Some(_) => return Err(RpcError::new(INVALID_PARAMS, "closed must be an object")),
+    }
+    Ok(Some(Save { token, take, closed }))
 }
 
 /// A workspace's `name`, trimmed and short.
@@ -492,6 +534,7 @@ fn allowed(command: &Command, peer: Peer) -> Result<(), RpcError> {
         | Command::LayoutShow(_) => peer.panel,
         Command::AppQuit
         | Command::WorkspaceCapture { .. }
+        | Command::WorkspaceCapturePreview { .. }
         | Command::SessionRestore
         | Command::WorkspaceSetDefault(_)
         | Command::WorkspaceMinimizeUndo => peer.panel || peer.own_image,
@@ -677,8 +720,35 @@ mod tests {
             (
                 request("workspace.capture", r#"{"into":"ws_1","row":2}"#),
                 panel,
-                Command::WorkspaceCapture { name: None, into: Some("ws_1".into()), row: Some(2), pick: None },
+                Command::WorkspaceCapture {
+                    name: None,
+                    into: Some("ws_1".into()),
+                    row: Some(2),
+                    pick: None,
+                    save: None,
+                },
             ),
+            (
+                request("workspace.capture", r#"{"token":"t","take":[0,2],"closed":{"1":"turn_off","3":"remove"}}"#),
+                panel,
+                Command::WorkspaceCapture {
+                    name: None,
+                    into: None,
+                    row: None,
+                    pick: None,
+                    save: Some(Save {
+                        token: "t".into(),
+                        take: vec![0, 2],
+                        closed: BTreeMap::from([(1, ClosedApps::TurnOff), (3, ClosedApps::Remove)]),
+                    }),
+                },
+            ),
+            (
+                request("workspace.capture_preview", r#"{"into":"ws_1"}"#),
+                panel,
+                Command::WorkspaceCapturePreview { into: Some("ws_1".into()) },
+            ),
+            (request("workspace.capture_preview", "{}"), own, Command::WorkspaceCapturePreview { into: None }),
             (request("cursor_easing.set", r#"{"on":true}"#), panel, Command::CursorEasingSet(true)),
             (request("layout.show", r#"{"view":"windows"}"#), panel, Command::LayoutShow(LayoutView::Windows)),
             (request("app.quit", "{}"), panel, Command::AppQuit),
@@ -739,6 +809,12 @@ mod tests {
             (request("config.patch", r#"{"patch":{}}"#), anyone, FORBIDDEN),
             (request("workspace.update", r#"{"id":"ws_1","workspace":{}}"#), anyone, FORBIDDEN),
             (request("workspace.capture", r#"{"row":1}"#), panel, INVALID_PARAMS),
+            (request("workspace.capture", r#"{"token":"t"}"#), panel, INVALID_PARAMS),
+            (request("workspace.capture", r#"{"take":[0]}"#), panel, INVALID_PARAMS),
+            (request("workspace.capture", r#"{"token":"t","take":["a"]}"#), panel, INVALID_PARAMS),
+            (request("workspace.capture", r#"{"token":"t","take":[0],"closed":{"1":"hide"}}"#), panel, INVALID_PARAMS),
+            (request("workspace.capture_preview", "{}"), anyone, FORBIDDEN),
+            (request("workspace.capture_preview", r#"{"into":3}"#), panel, INVALID_PARAMS),
             (request("app.quit", "{}"), anyone, FORBIDDEN),
             (request("cursor_easing.set", r#"{"on":true}"#), anyone, FORBIDDEN),
             (request("cursor_easing.set", r#"{"on":true}"#), own, FORBIDDEN),
@@ -813,6 +889,7 @@ mod tests {
             ("config.patch", r#"{"patch":{}}"#),
             ("workspace.update", r#"{"id":"ws_1","workspace":{}}"#),
             ("workspace.capture", r#"{"into":"ws_1"}"#),
+            ("workspace.capture_preview", r#"{"into":"ws_1"}"#),
             ("workspace.set_default", r#"{"id":"ws_1"}"#),
             ("window.fit", "{}"),
             ("window.stack_cycle", r#"{"dir":"next"}"#),

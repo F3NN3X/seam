@@ -51,6 +51,8 @@ fn begin(app: &mut App, which: Which, hwnd: Option<isize>, reply: Option<Sender<
         sig: app.sig.clone(),
         quick: false,
         add: Some(hwnd),
+        preview: false,
+        closed: BTreeMap::new(),
     });
     if switcher::capture_added(capture_job(app), hwnd) {
         return Ok(());

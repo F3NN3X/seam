@@ -36,7 +36,7 @@ const ROWS: &[(Page, &str, &[&str])] = &[
     (Page::Windows, "Also when I drag a window to another screen", &["/window_size_on_drag"]),
     (Page::Windows, "Another window manager handles my windows", &["/windows/other_wm"]),
     (Page::Workspaces, "Put apps in place when they open", &["/auto_apply"]),
-    (Page::Workspaces, "Update from screen removes apps that aren't open", &["/workspaces_update_removes_closed"]),
+    (Page::Workspaces, "Apps that aren't open", &["/workspaces_update_removes_closed"]),
     (Page::Shortcuts, "Line up screens", &["/hotkeys/line_up"]),
     (Page::Shortcuts, "Pause or resume pointer remap", &["/hotkeys/pause"]),
     (Page::Shortcuts, "Pause Seam", &["/hotkeys/pause_seam"]),

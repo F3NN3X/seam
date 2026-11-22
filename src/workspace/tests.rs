@@ -1,6 +1,14 @@
 //! The tests for the workspace logic.
 
 use super::*;
+use crate::config::ClosedApps;
+
+fn keep(_: usize) -> ClosedApps {
+    ClosedApps::Keep
+}
+fn remove(_: usize) -> ClosedApps {
+    ClosedApps::Remove
+}
 
 fn rule(exe: &str, aumid: Option<&str>, class: &str, title: &str) -> Rule {
     Rule {
@@ -79,22 +87,22 @@ fn rules_get_the_right_windows() {
     moved.target = Target::Zone { zone: 2, span_to: None };
     let fresh = vec![rule("notepad.exe", None, "", ""), moved];
     let none = HashSet::new();
-    let merged = merge_capture(&old, fresh.clone(), &[], &none, &[], false).windows;
+    let merged = merge_capture(&old, fresh.clone(), &[], &none, &[], &keep).windows;
     let rows: Vec<(&str, bool, u32, bool)> =
         merged.iter().map(|r| (r.exe.as_str(), r.launch, r.delay_ms, r.wait_for_window)).collect();
     assert_eq!(rows, [(ff, false, 1500, true), (spotify, true, 0, false), ("notepad.exe", true, 0, false)]);
     assert_eq!(merged[0].target, Target::Zone { zone: 2, span_to: None });
 
     // With the setting on, the row with no window goes, and the others say where they were.
-    let on = merge_capture(&old, fresh.clone(), &[], &none, &[], true);
+    let on = merge_capture(&old, fresh.clone(), &[], &none, &[], &remove);
     let exes: Vec<&str> = on.windows.iter().map(|r| r.exe.as_str()).collect();
     assert_eq!((exes, on.removed), ([ff, "notepad.exe"].to_vec(), 1));
     assert_eq!((on.from, on.rows), (vec![Some(0), None], vec![1, 0]));
     // It stays when its app has a window the capture made no row of, or nothing else is left.
     let other =
         Candidate { hwnd: 9, exe: spotify.into(), aumid: None, class: String::new(), title: String::new(), z: 0 };
-    assert_eq!(merge_capture(&old, fresh.clone(), &[], &none, &[other], true).removed, 0);
-    assert_eq!(merge_capture(&old, vec![rule("notepad.exe", None, "", "")], &[], &none, &[], true).removed, 0);
+    assert_eq!(merge_capture(&old, fresh.clone(), &[], &none, &[other], &remove).removed, 0);
+    assert_eq!(merge_capture(&old, vec![rule("notepad.exe", None, "", "")], &[], &none, &[], &remove).removed, 0);
 
     // Two Explorer place rows, the first one's window closed: it goes, the second keeps its
     // binding at row 0, and Undo's map gives the old row back.
@@ -105,12 +113,13 @@ fn rules_get_the_right_windows() {
     let old = Workspace { windows: vec![a, b], ..Workspace::default() };
     let open = rule(explorer, None, "CabinetWClass", "B");
     let bound = [Some(Bound::Gone), Some(Bound::Alive(0))];
-    let merged = merge_capture(&old, vec![open], &bound, &none, &[], true);
+    let merged = merge_capture(&old, vec![open], &bound, &none, &[], &remove);
     assert_eq!((merged.windows.len(), merged.removed, merged.from, merged.rows), (1, 1, vec![Some(1)], vec![0]));
     assert_eq!(merged.windows[0].place, old.windows[1].place);
     // Another Explorer window nobody holds doesn't keep the closed row.
     let extra = rule(explorer, None, "CabinetWClass", "C");
-    let both = merge_capture(&old, vec![rule(explorer, None, "CabinetWClass", "B"), extra], &bound, &none, &[], true);
+    let both =
+        merge_capture(&old, vec![rule(explorer, None, "CabinetWClass", "B"), extra], &bound, &none, &[], &remove);
     assert_eq!((both.removed, both.from), (1, vec![Some(1), None]));
 
     // Stages end at a row that waits for its window.
@@ -120,6 +129,90 @@ fn rules_get_the_right_windows() {
     assert_eq!(stages(&waits, &[0, 2]), vec![vec![0, 2]]);
     assert_eq!(stages(&waits, &[1, 4]), vec![vec![1], vec![4]]);
     assert_eq!((tame_delay(1200), tame_delay(99_000)), (1000, MAX_DELAY_MS));
+}
+
+/// Notepad is open; Spotify and Slack are not.
+fn three_apps() -> (Workspace, Vec<Rule>) {
+    let rules = vec![
+        rule("notepad.exe", None, "", "Notes"),
+        rule(r"C:\Spotify.exe", None, "", ""),
+        rule(r"C:\Slack.exe", None, "", ""),
+    ];
+    let old = Workspace { windows: rules.clone(), ..Workspace::default() };
+    (old, vec![rule("notepad.exe", None, "", "Notes")])
+}
+
+fn turn_off(_: usize) -> ClosedApps {
+    ClosedApps::TurnOff
+}
+
+#[test]
+fn turn_off_keeps_the_row_and_sets_off() {
+    let (old, fresh) = three_apps();
+    let merged = merge_capture(&old, fresh, &[], &HashSet::new(), &[], &turn_off);
+    assert_eq!((merged.removed, merged.turned_off), (0, 2));
+    let off: Vec<bool> = merged.windows.iter().map(|r| r.off).collect();
+    assert_eq!(off, [false, true, true]);
+    assert_eq!(merged.from, [Some(0), Some(1), Some(2)]);
+    // A row already off isn't counted again.
+    let mut old = old;
+    old.windows[1].off = true;
+    let (_, fresh) = three_apps();
+    assert_eq!(merge_capture(&old, fresh, &[], &HashSet::new(), &[], &turn_off).turned_off, 1);
+}
+
+#[test]
+fn per_row_choices_apply_to_their_rows() {
+    let (old, fresh) = three_apps();
+    let pick = |row: usize| if row == 1 { ClosedApps::TurnOff } else { ClosedApps::Remove };
+    let merged = merge_capture(&old, fresh, &[], &HashSet::new(), &[], &pick);
+    assert_eq!((merged.removed, merged.turned_off), (1, 1));
+    let rows: Vec<(&str, bool)> = merged.windows.iter().map(|r| (r.exe.as_str(), r.off)).collect();
+    assert_eq!(rows, [("notepad.exe", false), (r"C:\Spotify.exe", true)]);
+    assert_eq!(merged.from, [Some(0), Some(1)]);
+    // The choice for a row whose app is open is never asked for.
+    let (old, fresh) = three_apps();
+    let asked = std::cell::RefCell::new(Vec::new());
+    let note = |row: usize| {
+        asked.borrow_mut().push(row);
+        ClosedApps::Keep
+    };
+    merge_capture(&old, fresh, &[], &HashSet::new(), &[], &note);
+    assert_eq!(*asked.borrow(), [1, 2]);
+}
+
+#[test]
+fn none_open_changes_nothing_whatever_the_choice() {
+    let (old, _) = three_apps();
+    for choice in [remove, turn_off, keep] {
+        let merged = merge_capture(&old, vec![rule("calc.exe", None, "", "")], &[], &HashSet::new(), &[], &choice);
+        assert_eq!((merged.removed, merged.turned_off), (0, 0));
+        assert!(merged.windows[..3].iter().all(|r| !r.off));
+        assert_eq!(merged.windows.len(), 4);
+    }
+}
+
+#[test]
+fn not_open_agrees_with_the_merge() {
+    let (old, fresh) = three_apps();
+    let none = HashSet::new();
+    assert_eq!(review::not_open(&old, &fresh, &[], &none, &[]), [1, 2]);
+    let removed = merge_capture(&old, fresh.clone(), &[], &none, &[], &remove);
+    assert_eq!(removed.removed, 2);
+    // A window of the app the capture made no row of keeps its row, in both.
+    let slack = Candidate {
+        hwnd: 9,
+        exe: r"C:\Slack.exe".into(),
+        aumid: None,
+        class: String::new(),
+        title: String::new(),
+        z: 0,
+    };
+    assert_eq!(review::not_open(&old, &fresh, &[], &none, std::slice::from_ref(&slack)), [1]);
+    assert_eq!(merge_capture(&old, fresh, &[], &none, &[slack], &remove).removed, 1);
+    // With every app closed there is nothing to ask and nothing to change.
+    let nothing = [rule("calc.exe", None, "", "")];
+    assert!(review::not_open(&old, &nothing, &[], &none, &[]).is_empty());
 }
 
 // "No zones" and "Keep as is" must not be confused, or a switch takes a screen's zones away.
@@ -694,7 +787,7 @@ fn update_from_screen_keeps_off() {
     let old = Workspace { windows: vec![off], ..named("w") };
     let mut fresh = rule("a.exe", None, "A", "a");
     fresh.target = Target::Zone { zone: 2, span_to: None };
-    let merged = merge_capture(&old, vec![fresh], &[], &HashSet::new(), &[], false);
+    let merged = merge_capture(&old, vec![fresh], &[], &HashSet::new(), &[], &keep);
     assert_eq!(merged.windows.len(), 1);
     // The row's place is updated though it is off, and it stays off.
     assert!(merged.windows[0].off);

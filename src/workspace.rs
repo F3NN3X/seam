@@ -19,6 +19,7 @@ mod matching;
 mod order;
 mod plan;
 pub mod report;
+pub mod review;
 #[cfg(test)]
 mod tests;
 

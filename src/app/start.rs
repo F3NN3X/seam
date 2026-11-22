@@ -147,6 +147,7 @@ unsafe fn new_app(hwnd: HWND, cfg: Config) -> App {
             closing: None,
             minimized: None,
             quick_undo: None,
+            preview: None,
             tile_undo: None,
             tiling_wait: Vec::new(),
             free_undo: None,

@@ -39,6 +39,28 @@ const NOISE: [&str; 7] = [
     "gamebarftserver.exe",
 ];
 
+/// Apps usually open only for a moment, by exe name in lower case. Capture still takes
+/// them; the review starts them unticked.
+const BRIEF: &[&str] = &[
+    "systemsettings.exe",
+    "taskmgr.exe",
+    "mmc.exe",
+    "control.exe",
+    "msiexec.exe",
+    "snippingtool.exe",
+    "screenclippinghost.exe",
+    "gamebar.exe",
+];
+
+/// Parts of an exe name that mark an installer or updater.
+const BRIEF_STEMS: [&str; 4] = ["setup", "install", "uninst", "update"];
+
+/// Whether the app is usually open only for a moment, from its exe's file name.
+pub fn brief_window(exe: &str) -> bool {
+    let name = exe.rsplit(['\\', '/']).next().unwrap_or(exe).to_lowercase();
+    BRIEF.contains(&name.as_str()) || BRIEF_STEMS.iter().any(|stem| name.contains(stem))
+}
+
 /// What the rules look at, read from a top-level window.
 #[derive(Clone, Debug, Default)]
 pub struct WindowFacts {
@@ -112,4 +134,36 @@ pub fn classify(f: &WindowFacts, user_excluded: &dyn Fn(&str) -> bool) -> Verdic
         None
     };
     skip.map_or(Verdict::Capture, Verdict::Skip)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn brief_windows_are_recognised() {
+        for exe in [
+            r"C:\Windows\System32\Taskmgr.exe",
+            "SystemSettings.exe",
+            "mmc.exe",
+            "CONTROL.EXE",
+            "msiexec.exe",
+            "SnippingTool.exe",
+            "ScreenClippingHost.exe",
+            "GameBar.exe",
+            r"C:\Temp\VSSetup.exe",
+            "Install-Thing.exe",
+            "uninstall.exe",
+            r"C:\Users\me\AppData\Local\Programs\Updater.exe",
+        ] {
+            assert!(brief_window(exe), "{exe}");
+        }
+    }
+
+    #[test]
+    fn ordinary_apps_are_not_brief() {
+        for exe in ["Code.exe", "chrome.exe", "WindowsTerminal.exe", r"C:\Windows\explorer.exe", "notepad.exe", ""] {
+            assert!(!brief_window(exe), "{exe}");
+        }
+    }
 }

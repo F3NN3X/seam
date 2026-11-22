@@ -54,8 +54,8 @@ use stages::{place_rules, run_stages, usable_place};
 
 pub use bind::{bind_rows, capture_bindings, keep_bindings, rebind};
 pub use capture::{
-    CaptureJob, capture, capture_added, capture_session, capture_window, take_added, take_captured, take_session,
-    wait_session,
+    CaptureJob, Captured, capture, capture_added, capture_session, capture_window, take_added, take_captured,
+    take_session, wait_session,
 };
 pub use close::{CloseJob, Done, Owned, Verb, restore, start as start_close, take_done};
 pub use rows::{LiveWorkspace, place_opened, status};

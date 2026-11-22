@@ -44,7 +44,7 @@ use pause::{set_paused, standby_check, standby_configure};
 use pointer::{lineup_done, set_cursor_easing, set_remap, start_lineup, warn_about_ease};
 use report::{publish, refresh, send_state_event, snapshot};
 use seam::api::{self, Client, Command, FocusScope, GroupVerb, PinKind, Reply, RpcError, WindowVerb};
-use seam::config::{RestoreApps, TrayClick};
+use seam::config::{ClosedApps, RestoreApps, TrayClick};
 use seam::direction::Dir;
 use seam::state::{
     self, AlignResult, DeskRef, HotkeyError, Remap, Screen, ScreenRect, SessionRef, Snapshot, StackRef, State,
@@ -61,6 +61,7 @@ use session::{
 use signin::{SignInRun, arm, begin, cancel_sign_in, open_offered, sign_in_tick};
 pub use start::run;
 use std::cell::RefCell;
+use std::collections::BTreeMap;
 use std::os::windows::process::CommandExt;
 use std::sync::Mutex;
 use std::sync::mpsc::{Sender, channel};
@@ -95,6 +96,7 @@ use workspaces::{
     switch_back, switched, sync_live, undo_quick_save, update_workspace, ws_moved,
 };
 use workspaces::{last_switch, open_switched, started, starting, starting_due};
+use workspaces::{save_preview, start_preview};
 
 const WM_APP_TRAY: u32 = WM_APP + 1;
 /// A worker finished `arrangement.align`.
@@ -305,7 +307,25 @@ struct Capturing {
     quick: bool,
     /// "Add window to workspace": the one window, going into `into`.
     add: Option<isize>,
+    /// The capture review: keep the result under a token instead of saving it.
+    preview: bool,
+    /// What the save does with each row of `into` whose app isn't open, by row. A row
+    /// missing here takes the default.
+    closed: BTreeMap<usize, ClosedApps>,
 }
+
+/// A capture the review is showing, kept until it is saved or this long has passed.
+struct Preview {
+    token: String,
+    /// The desk and workspace it was captured for.
+    sig: String,
+    into: Option<String>,
+    captured: switcher::Captured,
+    expires: Instant,
+}
+
+/// How long a preview can still be saved.
+const PREVIEW_FOR: Duration = Duration::from_secs(120);
 
 /// How long a quick save can be undone.
 const QUICK_UNDO_FOR: Duration = Duration::from_secs(8);
@@ -398,6 +418,8 @@ struct App {
     minimized: Option<Minimized>,
     /// The last quick save, while it can still be undone.
     quick_undo: Option<QuickUndo>,
+    /// The capture the review is showing.
+    preview: Option<Preview>,
     /// The last tile, while it can still be undone.
     tile_undo: Option<TileUndo>,
     /// Smart tiling settings waiting to know which virtual desktop is in front.

@@ -1,6 +1,7 @@
 //! The local API: JSON-RPC over JSON Lines on a per-user named pipe. This is
 //! the protocol and the blocking client; the server is in the tray.
 
+use crate::config::ClosedApps;
 use crate::direction;
 use crate::groups::Side;
 use crate::library;
@@ -10,6 +11,7 @@ use crate::workspace;
 use crate::zones;
 use serde::Serialize;
 use serde_json::{Value, json};
+use std::collections::BTreeMap;
 
 pub const API_VERSION: u32 = 1;
 /// Longest accepted line, in bytes.
@@ -121,6 +123,15 @@ pub struct Pick {
     pub class: String,
 }
 
+/// What the capture review sends back to save a preview: the windows ticked, by their
+/// `i`, and what Update from screen does with the rows of apps that aren't open.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Save {
+    pub token: String,
+    pub take: Vec<usize>,
+    pub closed: BTreeMap<usize, ClosedApps>,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub enum Command {
     Hello {
@@ -144,11 +155,18 @@ pub enum Command {
     },
     /// `row` with `into` takes only that row's window ("Where it is now"). With `pick`
     /// too, the row only takes the folder or page of that one window ("Add an app").
+    /// With `save`, the preview it names is saved as ticked instead of a new capture.
     WorkspaceCapture {
         name: Option<String>,
         into: Option<String>,
         row: Option<usize>,
         pick: Option<Pick>,
+        save: Option<Save>,
+    },
+    /// `workspace.capture_preview`: capture as `workspace.capture` would, and keep the
+    /// result under a token for the review instead of saving it.
+    WorkspaceCapturePreview {
+        into: Option<String>,
     },
     /// `workspace.add_window`: the window in front, or `hwnd`, joins the workspace with this
     /// id, or the one with this number in the desk's list. Panel or any client, never an assistant.

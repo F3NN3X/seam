@@ -143,6 +143,7 @@ unsafe fn new_app(hwnd: HWND, cfg: Config) -> App {
             hotkey_errors: Vec::new(),
             bound: Vec::new(),
             workspace: None,
+            step_to: None,
             drifted: false,
             moved: Vec::new(),
             recheck: false,

@@ -11,9 +11,10 @@ mod in_use;
 mod notice;
 mod order;
 mod review;
+mod step;
 mod window;
 
-pub(super) use add::{Which, start_add_window};
+pub(super) use add::{Which, refuse_move, start_add_window, start_move_window};
 pub(super) use assist::{create_workspace, edit_workspace};
 pub(super) use capture::{captured, quick_save, start_capture, undo_quick_save, update_from_panel, update_workspace};
 pub(super) use close::{Ask, Closing, Minimized, closed, start_close, start_close_here, undo_minimize};
@@ -23,9 +24,12 @@ pub(super) use in_use::{
     choose_in_use, detected_in_use, drift_checked, drift_due, forget_deleted, live_of, set_default, snap_back,
     switch_back, sync_live, ws_moved,
 };
-pub(super) use notice::{LastSwitch, ended, last_switch, open_switched, skipped_json, started, starting, starting_due};
+pub(super) use notice::{
+    LastSwitch, ended, last_switch, open_switched, show_label, skipped_json, started, starting, starting_due,
+};
 pub(super) use order::move_workspace;
 pub(super) use review::{RowKey, save_preview, start_preview};
+pub(super) use step::{step, step_add};
 pub(super) use window::{
     aside, other_wm_changed, queue_window, set_spotlight, show_spotlight, start_focus_only, start_group, start_window,
     window_planned,
@@ -118,6 +122,12 @@ pub(super) fn apply_hotkeys(app: &mut App) {
         (HOTKEY_COLUMN_RIGHT, "column_right".to_string(), keys.column_right.clone()),
         (HOTKEY_COLUMN_WIDTH, "column_width".to_string(), keys.column_width.clone()),
     ];
+    wanted.extend([
+        (HOTKEY_WORKSPACE_NEXT, "workspace_next".to_string(), keys.workspace_next.clone()),
+        (HOTKEY_WORKSPACE_PREV, "workspace_prev".to_string(), keys.workspace_prev.clone()),
+        (HOTKEY_ADD_TO_NEXT, "add_to_next".to_string(), keys.add_to_next.clone()),
+        (HOTKEY_ADD_TO_PREV, "add_to_prev".to_string(), keys.add_to_prev.clone()),
+    ]);
     for (n, (id, combo)) in (HOTKEY_ADD_TO..).zip(keys.add_to_workspace()).enumerate() {
         wanted.push((id, format!("add_to_{}", n + 1), combo.cloned()));
     }
@@ -202,8 +212,9 @@ pub(super) fn start_switch_job(
     if app.closing.is_some() {
         return busy("Windows of a workspace are still being closed or minimized");
     }
-    // What a minimize took belongs to the layout this switch changes.
+    // What a minimize took belongs to the layout this switch changes. A step sets its own target after.
     app.minimized = None;
+    app.step_to = None;
     log::info!("switching to workspace {}", workspace.name);
     // A hotkey gives the tray the right to take focus. For anyone else this is all it can do.
     let _ = unsafe { AllowSetForegroundWindow(std::process::id()) };
@@ -318,6 +329,7 @@ pub(super) fn switched(app: &mut App) {
     // The last session isn't a workspace anyone can pick, so it never shows as the one in use.
     if done.id != SESSION_ID {
         set_in_use(app, Some(done.id.clone()));
+        app.step_to = None;
         sync_live(app);
         app.recheck = true;
         unsafe { SetTimer(Some(app.hwnd), TIMER_DRIFT, DRIFT_AFTER_MS, None) };
@@ -338,11 +350,30 @@ pub(super) fn switched(app: &mut App) {
     });
     api_server::broadcast("workspace.switched", &data);
     ended(app, &done);
+    show_label(app, &done);
 }
 
 #[cfg(test)]
 mod tests {
     use super::Via;
+    use super::step::step_target;
+    use seam::workspace::{Step, Workspace};
+
+    fn list(ids: &[&str]) -> Vec<Workspace> {
+        ids.iter().map(|id| Workspace { id: (*id).into(), ..Workspace::default() }).collect()
+    }
+
+    #[test]
+    fn quick_presses_chain_from_the_last_target() {
+        let l = list(&["a", "b", "c", "d"]);
+        // Nothing asked yet: from the one in use.
+        assert_eq!(step_target(&l, Some("a"), None, Step::Next), Some(1));
+        // A switch to b is still running, so the next press goes on from b, then c.
+        assert_eq!(step_target(&l, Some("a"), Some("b"), Step::Next), Some(2));
+        assert_eq!(step_target(&l, Some("a"), Some("c"), Step::Next), Some(3));
+        // Previous after a Next undoes it, whatever is still in use.
+        assert_eq!(step_target(&l, Some("a"), Some("b"), Step::Previous), Some(0));
+    }
 
     #[test]
     fn only_the_seam_window_and_seam_itself_may_run_startup_commands() {

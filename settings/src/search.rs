@@ -325,6 +325,12 @@ const ENTRIES: &[Entry] = &[
     ),
     entry(
         Page::Workspaces,
+        "Show the workspace name when I switch",
+        "A short label appears on each screen the switch changed",
+        "label overlay name banner toast popup notification",
+    ),
+    entry(
+        Page::Workspaces,
         "Apps that aren't open",
         "What Update from screen picks for each one first. You choose for each app when you update",
         "update capture remove closed delete keep turn off",
@@ -530,6 +536,30 @@ const ENTRIES: &[Entry] = &[
         "Add window to workspace",
         "Add the focused window to workspace 1 to 9, counted in the order of the Workspaces page",
         "hotkey keyboard workspace add send move window row numbered one two three",
+    ),
+    entry(
+        Page::Shortcuts,
+        "Switch to next workspace",
+        "Switch to the workspace after the one in use, in the order of the Workspaces page",
+        "hotkey keyboard workspace next forward cycle step",
+    ),
+    entry(
+        Page::Shortcuts,
+        "Switch to previous workspace",
+        "Switch to the workspace before the one in use, in the order of the Workspaces page",
+        "hotkey keyboard workspace previous back cycle step",
+    ),
+    entry(
+        Page::Shortcuts,
+        "Move window to next workspace",
+        "Take the focused window out of the workspace in use and add it to the next one",
+        "hotkey keyboard workspace add send move window row next forward",
+    ),
+    entry(
+        Page::Shortcuts,
+        "Move window to previous workspace",
+        "Take the focused window out of the workspace in use and add it to the previous one",
+        "hotkey keyboard workspace add send move window row previous back",
     ),
     entry(Page::General, "Start with Windows", "Seam waits in the tray after you sign in", "login autostart"),
     entry(Page::General, "Offer to line up new screens", "Asks once when a screen Seam hasn't seen connects", ""),

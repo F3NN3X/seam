@@ -23,6 +23,7 @@ mod plan;
 pub mod report;
 pub mod review;
 mod secrets;
+mod step;
 mod terminal;
 #[cfg(test)]
 mod tests;
@@ -53,6 +54,7 @@ pub use secrets::{
     Seal, clean_imported_items, for_panel, kind_only, seal_commands, seal_patch, sealed_in, without_clear,
     without_clear_commands, without_commands, without_items,
 };
+pub use step::{Step, screens_changed, stepped};
 pub use terminal::{Profile, Shell, default_profile, profiles, shell_of, strip_jsonc};
 
 /// A window this close to a zone, in pixels, counts as being in it.

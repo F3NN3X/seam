@@ -50,6 +50,7 @@ pub(super) fn begin_capture(
         sig: app.sig.clone(),
         quick: false,
         add: None,
+        move_from: None,
         preview,
         closed: BTreeMap::new(),
         from_panel: false,
@@ -88,8 +89,16 @@ pub(super) fn quick_saved(app: &mut App, saved: &Workspace, before: Option<Value
     sync_live(app);
     let until = Instant::now() + QUICK_UNDO_FOR;
     let after = workspace::to_value(saved);
-    app.quick_undo =
-        Some(QuickUndo { sig: app.sig.clone(), id: saved.id.clone(), before, after, from: None, in_use, until });
+    app.quick_undo = Some(QuickUndo {
+        sig: app.sig.clone(),
+        id: saved.id.clone(),
+        before,
+        after,
+        from: None,
+        in_use,
+        until,
+        source: None,
+    });
     let n = saved.windows.len();
     let body = if created {
         format!("{n} windows saved in a new workspace, now in use. Click to undo")
@@ -113,8 +122,16 @@ pub(super) fn update_removed(
     let until = Instant::now() + QUICK_UNDO_FOR;
     let in_use = app.workspace.clone();
     let after = workspace::to_value(saved);
-    app.quick_undo =
-        Some(QuickUndo { sig: app.sig.clone(), id: saved.id.clone(), before, after, from: Some(from), in_use, until });
+    app.quick_undo = Some(QuickUndo {
+        sig: app.sig.clone(),
+        id: saved.id.clone(),
+        before,
+        after,
+        from: Some(from),
+        in_use,
+        until,
+        source: None,
+    });
     let body = format!("{}. Click to undo", workspace::review::closed_note(removed, turned_off));
     log::info!("update from screen: {removed} removed and {turned_off} turned off in {}", saved.name);
     notify(app, &format!("Updated {}", saved.name), &body, BalloonAction::UndoQuickSave);
@@ -135,6 +152,13 @@ pub(in crate::app) fn undo_quick_save(app: &mut App) {
         log::info!("quick save: not undone, the workspace changed since");
         return;
     }
+    // A move's other workspace comes back too, unless it changed since.
+    let source = undo.source.filter(|s| desk.workspaces.contains(&s.after));
+    if let Some(s) = &source
+        && let Some(slot) = desk.workspaces.iter_mut().find(|v| **v == s.after)
+    {
+        *slot = s.before.clone();
+    }
     match undo.before {
         Some(before) => {
             if let Some(slot) = desk.workspaces.iter_mut().find(|v| same(v)) {
@@ -154,6 +178,10 @@ pub(in crate::app) fn undo_quick_save(app: &mut App) {
     if let Some(from) = undo.from {
         switcher::rebind(&undo.id, &from);
         live::restamp(workspace::stamp_key(&undo.id), from);
+    }
+    if let Some(s) = source {
+        switcher::rebind(&s.id, &s.from);
+        live::restamp(workspace::stamp_key(&s.id), s.from);
     }
     sync_live(app);
     publish(app);

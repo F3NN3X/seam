@@ -110,6 +110,35 @@ pub(in crate::app) fn ended(app: &mut App, done: &Switched) {
     }
 }
 
+/// Name the workspace a switch ended on, on each screen it changed (D768). Not with the toggle
+/// off, while Seam stands by, for a cancelled switch, the last session, Snap back, or when the
+/// Seam window asked and shows the result itself (D769).
+pub(in crate::app) fn show_label(app: &App, done: &Switched) {
+    let skip = !app.cfg.workspaces_switch_label
+        || standby::reason().is_some()
+        || done.cancelled
+        || done.put_back
+        || done.id == SESSION_ID
+        || (done.from_panel && panel_open(app));
+    if skip {
+        return;
+    }
+    let list = desk_workspaces(app);
+    let Some(at) = list.iter().position(|w| w.id == done.id) else { return };
+    let ids: Vec<&str> = app.mons.iter().map(|m| m.id.as_str()).collect();
+    let mut screens = workspace::screens_changed(&list[at], &ids);
+    if screens.is_empty() {
+        // Nothing of it is on a connected screen: the one under the pointer.
+        let mut pt = POINT::default();
+        unsafe {
+            let _ = GetCursorPos(&mut pt);
+        }
+        screens.extend(app.mons.iter().position(|m| m.rect.contains(pt.x, pt.y)));
+    }
+    let rects: Vec<_> = screens.into_iter().map(|i| app.mons[i].rect).collect();
+    switch_label::show(&done.name, &format!("{} of {}", at + 1, list.len()), &rects);
+}
+
 /// A click on the summary: the Seam window on the workspace that was switched.
 pub(in crate::app) fn open_switched(app: &mut App) {
     let id = app.switched_id.clone();

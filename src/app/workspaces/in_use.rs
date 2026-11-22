@@ -67,6 +67,9 @@ pub(in crate::app) fn forget_deleted(app: &mut App) -> bool {
     if gone(&app.workspace) {
         app.workspace = None;
     }
+    if gone(&app.step_to) {
+        app.step_to = None;
+    }
     let Some(desk) = app.cfg.desks.get_mut(&app.sig) else { return false };
     let mut changed = false;
     for slot in [&mut desk.active_workspace, &mut desk.previous_workspace, &mut desk.default_workspace] {

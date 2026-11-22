@@ -238,6 +238,12 @@ pub enum Command {
     WorkspaceSwitchBack {
         alongside: bool,
     },
+    /// Switch to the next or previous workspace of the desk, from the one in use.
+    WorkspaceStep {
+        direction: workspace::Step,
+        /// Leave the other windows alone, which an assistant always does.
+        alongside: bool,
+    },
     /// Save the windows on screen into the workspace in use, or a new one (§7).
     WorkspaceQuickSave,
     /// `workspace.windows`: the windows a close or minimize would take, and the ones it

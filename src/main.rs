@@ -47,6 +47,8 @@ mod spotlight;
 #[cfg(windows)]
 mod standby;
 #[cfg(windows)]
+mod switch_label;
+#[cfg(windows)]
 mod switcher;
 #[cfg(windows)]
 mod tiler;

@@ -21,6 +21,7 @@ pub(super) fn refresh(app: &mut App) {
         persist(app);
         // Workspaces and their shortcuts belong to the desk.
         app.workspace = None;
+        app.step_to = None;
         apply_hotkeys(app);
     }
     relink(app);

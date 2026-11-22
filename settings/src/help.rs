@@ -455,6 +455,9 @@ pub const TOPICS: &[Topic] = &[
                 "**Add window to workspace 1** to **9** on Shortcuts add the focused window to that workspace, counted in the order of the list. A window with no row there gets a new one at the end with where it is now and **Start if it's closed** off, so a switch places it but never starts it. A window that already has a row there updates that row's place and keeps its start details and order. It never takes the window out of another workspace. Seam's own windows, apps under Left alone, apps running as administrator, windows kept out of workspace switches and windows with no taskbar button are refused, and a notice says why. A notification offers Undo for 8 seconds. None has a key until you set one.",
             ),
             Text(
+                "**Switch to next workspace** and **Switch to previous workspace** on Shortcuts go through the desk's workspaces in the order of the list, from the one in use, and go round at the ends. **Move window to next workspace** and **Move window to previous workspace** take the focused window's row out of the workspace in use and add it to the next or previous one; the notification offers Undo for 8 seconds. None has a key until you set one. **Show the workspace name when I switch**, on All workspaces, names the workspace for a moment on each screen the switch changed.",
+            ),
+            Text(
                 "A desk with no workspaces yet offers to copy another desk's when that one has the same number of screens: **Copy workspaces from** puts each screen's apps on the screen in the same place, the same monitor first, then the main screen, then left to right. The workspace in use, the default and the sign-in choice stay behind, and a notification offers Undo for 8 seconds. Seam learns a desk's screens when it is connected, so a desk you haven't connected since this version isn't offered.",
             ),
             Text(
@@ -468,6 +471,11 @@ pub const TOPICS: &[Topic] = &[
             Setting { title: "Put apps in place when they open", page: Page::Workspaces, section: "All workspaces" },
             Setting {
                 title: "Offer to restore after screens change",
+                page: Page::Workspaces,
+                section: "All workspaces",
+            },
+            Setting {
+                title: "Show the workspace name when I switch",
                 page: Page::Workspaces,
                 section: "All workspaces",
             },
@@ -570,6 +578,7 @@ pub const TOPICS: &[Topic] = &[
                 "Pause Seam has no key until you set one, and pauses or resumes everything",
                 "Shift+Win+Alt+arrows move the focused window, and Ctrl+Shift+Alt+arrows focus the window that way",
                 "Swap, grow, shrink, two thirds, tile, next and previous zone, the pins, capture, Snap back, Switch back, quick save, Focus on this window and Spotlight have no key until you set one",
+                "Switch to next workspace, Switch to previous workspace, Move window to next workspace and Move window to previous workspace have no key until you set one, and go round the list from the workspace in use",
             ]),
             Text(
                 "Each workspace can have its own shortcut too. Press **Change** on a row, then the keys. Esc keeps the old ones and Backspace clears them. Ctrl+Shift+Alt plus a number is a good choice, since Ctrl+Alt alone types characters on many keyboards.",

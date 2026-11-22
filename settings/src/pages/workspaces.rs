@@ -21,8 +21,11 @@ use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::rc::Rc;
 
+mod close;
 mod list;
 mod sections;
+
+pub use close::ask as ask_to_close;
 
 const LIST_WIDTH: f32 = 200.;
 
@@ -512,11 +515,13 @@ fn detail_header(
         .into_any_element()
 }
 
-/// The menu behind the ellipsis: rename, default, duplicate, open alongside, export, import, delete.
+/// The menu behind the ellipsis: rename, default, duplicate, open alongside, minimize, close, export,
+/// import, delete.
 fn more_button(panel: &Panel, ws: &Workspace, cx: &mut Context<Panel>) -> impl IntoElement + use<> {
     let view = cx.entity().downgrade();
     let more_ws = ws.clone();
     let is_default = default_id(panel).as_deref() == Some(ws.id.as_str());
+    let open = close::any_open(panel, ws);
     ui::secondary("more-workspace", "", cx)
         .ghost()
         .icon(Icon::new(assets::IconName::Ellipsis))
@@ -528,24 +533,26 @@ fn more_button(panel: &Panel, ws: &Workspace, cx: &mut Context<Panel>) -> impl I
             let (alongside, alongside_id) = (view.clone(), more_ws.id.clone());
             let (defaulting, default_to) = (view.clone(), (!is_default).then(|| more_ws.id.clone()));
             let default_label = if is_default { "Stop being the default" } else { "Set as default" };
-            menu.item(PopupMenuItem::new("Rename").on_click(move |_, _, cx| {
-                let _ = rename.update(cx, start_naming);
-            }))
-            .item(PopupMenuItem::new(default_label).on_click(move |_, window, cx| {
-                let id = default_to.clone();
-                let _ = defaulting.update(cx, |panel, cx| set_default(panel, id, window, cx));
-            }))
-            .item(PopupMenuItem::new("Duplicate").on_click(move |_, window, cx| {
-                let ws = to_copy.clone();
-                let _ = copying.update(cx, |panel, cx| duplicate(panel, &ws, window, cx));
-            }))
-            .item(PopupMenuItem::new("Open alongside").on_click(move |_, window, cx| {
-                let id = alongside_id.clone();
-                let _ = alongside.update(cx, |panel, cx| {
-                    panel.command("workspace.switch", json!({ "id": id, "alongside": true }), window, cx);
-                });
-            }))
-            .item(PopupMenuItem::new("Export…").on_click(move |_, window, cx| {
+            let menu = menu
+                .item(PopupMenuItem::new("Rename").on_click(move |_, _, cx| {
+                    let _ = rename.update(cx, start_naming);
+                }))
+                .item(PopupMenuItem::new(default_label).on_click(move |_, window, cx| {
+                    let id = default_to.clone();
+                    let _ = defaulting.update(cx, |panel, cx| set_default(panel, id, window, cx));
+                }))
+                .item(PopupMenuItem::new("Duplicate").on_click(move |_, window, cx| {
+                    let ws = to_copy.clone();
+                    let _ = copying.update(cx, |panel, cx| duplicate(panel, &ws, window, cx));
+                }))
+                .item(PopupMenuItem::new("Open alongside").on_click(move |_, window, cx| {
+                    let id = alongside_id.clone();
+                    let _ = alongside.update(cx, |panel, cx| {
+                        panel.command("workspace.switch", json!({ "id": id, "alongside": true }), window, cx);
+                    });
+                }));
+            let menu = close::menu_items(menu, &view, &more_ws, open);
+            menu.item(PopupMenuItem::new("Export…").on_click(move |_, window, cx| {
                 let to_export = to_export.clone();
                 let _ = exporting.update(cx, |panel, cx| export(panel, to_export, window, cx));
             }))

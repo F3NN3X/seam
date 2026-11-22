@@ -28,8 +28,8 @@ use crate::monitors::{self, Mon};
 use crate::snap::{self, WM_APP_REFIT, WM_APP_SNAP_BLOCKED};
 use crate::standby::{self, WM_APP_STANDBY};
 use crate::switcher::{
-    self, AppRules, CaptureJob, LiveWorkspace, Screen as SwitchScreen, SwitchJob, WM_APP_CAPTURED, WM_APP_SESSION,
-    WM_APP_SWITCHED,
+    self, AppRules, CaptureJob, LiveWorkspace, Screen as SwitchScreen, SwitchJob, WM_APP_CAPTURED, WM_APP_CLOSED,
+    WM_APP_SESSION, WM_APP_SWITCHED,
 };
 use crate::tray::{CLASS, WM_APP_API, WM_APP_LINEUP, WM_APP_WINDOWS_CHANGED};
 use crate::wm::{Pinned, WM_APP_WS_MOVED};
@@ -84,6 +84,7 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{
 use windows::Win32::UI::Shell::*;
 use windows::Win32::UI::WindowsAndMessaging::*;
 use windows::core::{PCWSTR, w};
+use workspaces::{Ask, Closing, Minimized, closed, start_close, start_close_here, undo_minimize};
 use workspaces::{Via, move_workspace};
 use workspaces::{Which, create_workspace, edit_workspace, start_add_window, start_group, window_planned};
 use workspaces::{
@@ -166,6 +167,9 @@ const HOTKEY_GROW: i32 = 30;
 const HOTKEY_SHRINK: i32 = 31;
 const HOTKEY_PRIORITY: i32 = 32;
 const HOTKEY_SWITCH_BACK: i32 = 23;
+/// Close this workspace and Minimize this workspace, on the workspace in use.
+const HOTKEY_CLOSE_WORKSPACE: i32 = 24;
+const HOTKEY_MINIMIZE_WORKSPACE: i32 = 25;
 const HOTKEY_TILE_SCREEN: i32 = 50;
 const HOTKEY_QUICK_LAYOUT: i32 = 55;
 const HOTKEY_FOCUS_ONLY: i32 = 40;
@@ -208,6 +212,9 @@ const ID_RELEASE: usize = 3;
 /// The overview of every window.
 const ID_OVERVIEW: usize = 4;
 const ID_OPEN: usize = 6;
+/// Minimize or close the windows of the workspace in use.
+const ID_MINIMIZE_WS: usize = 7;
+const ID_CLOSE_WS: usize = 8;
 /// Snap back to the workspace in use.
 const ID_PUT_BACK: usize = 5;
 const ID_QUIT: usize = 9;
@@ -242,6 +249,8 @@ enum BalloonAction {
     UndoTile,
     /// Tile again the windows the last Free all let go.
     UndoFree,
+    /// Restore the windows the last Minimize this workspace took.
+    UndoMinimize,
 }
 
 /// Writes config.json on its own thread, so the main thread never does file I/O.
@@ -367,6 +376,10 @@ struct App {
     /// A switch finished, so the drift timer looks again whatever moved.
     recheck: bool,
     capturing: Option<Capturing>,
+    /// Close this workspace or Minimize this workspace, running on a worker.
+    closing: Option<Closing>,
+    /// The last Minimize this workspace, while it can still be undone.
+    minimized: Option<Minimized>,
     /// The last quick save, while it can still be undone.
     quick_undo: Option<QuickUndo>,
     /// The last tile, while it can still be undone.
@@ -495,18 +508,31 @@ fn pointer_watch(app: &App) {
 
 /// Start the panel, which raises the open one if there is one.
 fn open_panel(app: &mut App, page: Option<&str>) -> bool {
+    open_panel_with(app, page, None)
+}
+
+/// The Seam window on Workspaces, with the dialog of Close this workspace open for this workspace.
+fn open_panel_closing(app: &mut App, id: &str) -> bool {
+    open_panel_with(app, Some("workspaces"), Some(id))
+}
+
+/// `open_panel`, and with `close` the id of a workspace whose close dialog it opens.
+fn open_panel_with(app: &mut App, page: Option<&str>, close: Option<&str>) -> bool {
     let panel = std::env::current_exe().map(|exe| exe.with_file_name("seam-settings.exe"));
     // Lets an already open panel come to the front.
     let _ = unsafe { AllowSetForegroundWindow(ASFW_ANY) };
     // An open panel switches page itself. One that's starting reads `--page`.
     if let Some(page) = page {
-        api_server::broadcast_to_panels("panel.show", &json!({ "page": page }));
+        api_server::broadcast_to_panels("panel.show", &json!({ "page": page, "close": close }));
     }
     let started = panel.and_then(|p| {
         let mut command = std::process::Command::new(p);
         command.args(["--token", &app.token]);
         if let Some(page) = page {
             command.args(["--page", page]);
+        }
+        if let Some(id) = close {
+            command.args(["--close", id]);
         }
         command.spawn()
     });

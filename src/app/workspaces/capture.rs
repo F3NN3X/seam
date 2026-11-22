@@ -14,6 +14,9 @@ pub(in crate::app) fn start_capture(
     if app.capturing.is_some() {
         return Some(busy("Already capturing"));
     }
+    if app.closing.is_some() {
+        return Some(busy("Windows of a workspace are still being closed or minimized"));
+    }
     if pick.is_some() && !app.cfg.workspaces_remember_places {
         return Some(refused("Remember folders and pages is off"));
     }

@@ -5,6 +5,7 @@ use super::*;
 mod add;
 mod assist;
 mod capture;
+mod close;
 mod in_use;
 mod order;
 mod window;
@@ -12,6 +13,7 @@ mod window;
 pub(super) use add::{Which, start_add_window};
 pub(super) use assist::{create_workspace, edit_workspace};
 pub(super) use capture::{captured, quick_save, start_capture, undo_quick_save, update_workspace};
+pub(super) use close::{Ask, Closing, Minimized, closed, start_close, start_close_here, undo_minimize};
 use in_use::{active_workspace, set_in_use};
 pub(super) use in_use::{
     choose_in_use, detected_in_use, drift_checked, drift_due, forget_deleted, live_of, set_default, snap_back,
@@ -67,6 +69,8 @@ pub(super) fn apply_hotkeys(app: &mut App) {
         (HOTKEY_SHRINK, "shrink".to_string(), keys.shrink.clone()),
         (HOTKEY_PRIORITY, "priority".to_string(), keys.priority.clone()),
         (HOTKEY_SWITCH_BACK, "switch_back".to_string(), keys.switch_back.clone()),
+        (HOTKEY_CLOSE_WORKSPACE, "close_workspace".to_string(), keys.close_workspace.clone()),
+        (HOTKEY_MINIMIZE_WORKSPACE, "minimize_workspace".to_string(), keys.minimize_workspace.clone()),
         (HOTKEY_TILE_SCREEN, "tile_screen".to_string(), keys.tile_screen.clone()),
         (HOTKEY_QUICK_LAYOUT, "quick_layout".to_string(), keys.quick_layout.clone()),
         (HOTKEY_FOCUS_ONLY, "focus_only".to_string(), keys.focus_only.clone()),
@@ -169,6 +173,11 @@ pub(super) fn start_switch_job(
     alongside: bool,
     via: Via,
 ) -> Reply {
+    if app.closing.is_some() {
+        return busy("Windows of a workspace are still being closed or minimized");
+    }
+    // What a minimize took belongs to the layout this switch changes.
+    app.minimized = None;
     log::info!("switching to workspace {}", workspace.name);
     // A hotkey gives the tray the right to take focus. For anyone else this is all it can do.
     let _ = unsafe { AllowSetForegroundWindow(std::process::id()) };

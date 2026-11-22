@@ -80,6 +80,10 @@ impl Panel {
                     if this.apply(state, config) {
                         this.open_setup(window, cx);
                     }
+                    if let Some(id) = this.close_ask.take() {
+                        this.show(Page::Workspaces, None, window, cx);
+                        pages::workspaces::ask_to_close(this, &id, window, cx);
+                    }
                     cx.notify();
                     true
                 });
@@ -104,6 +108,9 @@ impl Panel {
                             && let Some(page) = event.data["page"].as_str().and_then(Page::from_arg)
                         {
                             this.show(page, None, window, cx);
+                            if let Some(id) = event.data["close"].as_str() {
+                                pages::workspaces::ask_to_close(this, id, window, cx);
+                            }
                         }
                         if event.kind == "workspace.switched" && event.data["from_panel"].as_bool() == Some(true) {
                             this.say_screens_gone(&event.data, window, cx);

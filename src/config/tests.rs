@@ -377,3 +377,15 @@ fn a_0_7_0_config_loads_with_its_values_and_counts_as_set_up() {
     assert!(desk.zones.contains_key("mon-a"));
     assert_eq!(desk.workspaces.len(), 1);
 }
+
+#[test]
+fn hotkeys_without_close_and_minimize_load_unchanged() {
+    let c: Config = serde_json::from_str(r#"{"hotkeys": {"line_up": "Ctrl+Alt+L"}}"#).unwrap();
+    assert_eq!((c.hotkeys.close_workspace, c.hotkeys.minimize_workspace), (None, None));
+    assert_eq!(c.hotkeys.line_up.as_deref(), Some("Ctrl+Alt+L"));
+    let set: Config =
+        serde_json::from_str(r#"{"hotkeys": {"close_workspace": "Ctrl+Alt+X", "minimize_workspace": "Ctrl+Alt+M"}}"#)
+            .unwrap();
+    assert_eq!(set.hotkeys.close_workspace.as_deref(), Some("Ctrl+Alt+X"));
+    assert_eq!(set.hotkeys.minimize_workspace.as_deref(), Some("Ctrl+Alt+M"));
+}

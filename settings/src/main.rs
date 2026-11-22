@@ -148,8 +148,15 @@ fn main() {
             ..kit
         };
         let page = page.as_deref().and_then(Page::from_arg);
-        open_window(options, cx, move |window, cx| cx.new(|cx| Panel::new(page, token, window, cx)))
-            .expect("failed to open the Seam window");
+        let close = arg_after("--close");
+        open_window(options, cx, move |window, cx| {
+            cx.new(|cx| {
+                let mut panel = Panel::new(page, token, window, cx);
+                panel.close_ask = close;
+                panel
+            })
+        })
+        .expect("failed to open the Seam window");
         if let Some(t) = target {
             // gpui only hears about the new size if it isn't mid-update when Win32
             // sends it, so this runs as a task of its own.

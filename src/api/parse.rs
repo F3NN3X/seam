@@ -75,6 +75,10 @@ fn command(method: &str, p: &Value) -> Result<Command, RpcError> {
         "workspace.snap_back" => Command::WorkspaceSnapBack { alongside: false },
         "workspace.switch_back" => Command::WorkspaceSwitchBack { alongside: false },
         "workspace.quick_save" => Command::WorkspaceQuickSave,
+        "workspace.windows" => Command::WorkspaceWindows { id: id_param(p)? },
+        "workspace.close" => workspace_close(p)?,
+        "workspace.minimize" => Command::WorkspaceMinimize { id: str_param(p, "id")? },
+        "workspace.minimize_undo" => Command::WorkspaceMinimizeUndo,
         "workspace.set_default" => Command::WorkspaceSetDefault(str_param(p, "id")?),
         "autoapply.set" => Command::AutoApplySet(on_param(p)?),
         "cursor_easing.set" => Command::CursorEasingSet(on_param(p)?),
@@ -177,6 +181,25 @@ fn workspace_switch(p: &Value) -> Result<Command, RpcError> {
     }
     let alongside = p.get("alongside").and_then(Value::as_bool).unwrap_or(false);
     Ok(Command::WorkspaceSwitch { id, name, alongside })
+}
+
+fn id_param(p: &Value) -> Result<String, RpcError> {
+    str_param(p, "id")?.ok_or_else(|| RpcError::new(INVALID_PARAMS, "id is required"))
+}
+
+fn workspace_close(p: &Value) -> Result<Command, RpcError> {
+    let id = id_param(p)?;
+    let hwnds: Vec<isize> = match p.get("hwnds") {
+        Some(Value::Array(list)) if !list.is_empty() => list
+            .iter()
+            .map(|v| v.as_i64().and_then(|n| isize::try_from(n).ok()))
+            .collect::<Option<_>>()
+            .ok_or_else(|| RpcError::new(INVALID_PARAMS, "hwnds must be window handles"))?,
+        _ => {
+            return Err(RpcError::new(INVALID_PARAMS, "hwnds must be a list of window handles from workspace.windows"));
+        }
+    };
+    Ok(Command::WorkspaceClose { id, hwnds })
 }
 
 fn workspace_add_window(p: &Value) -> Result<Command, RpcError> {
@@ -467,7 +490,8 @@ fn allowed(command: &Command, peer: Peer) -> Result<(), RpcError> {
         Command::AppQuit
         | Command::WorkspaceCapture { .. }
         | Command::SessionRestore
-        | Command::WorkspaceSetDefault(_) => peer.panel || peer.own_image,
+        | Command::WorkspaceSetDefault(_)
+        | Command::WorkspaceMinimizeUndo => peer.panel || peer.own_image,
         Command::UpdateReady => peer.own_image,
         _ => true,
     };
@@ -614,6 +638,19 @@ mod tests {
             (request("workspace.snap_back", "{}"), anyone, Command::WorkspaceSnapBack { alongside: false }),
             (request("workspace.switch_back", "{}"), anyone, Command::WorkspaceSwitchBack { alongside: false }),
             (request("workspace.quick_save", "{}"), anyone, Command::WorkspaceQuickSave),
+            (request("workspace.windows", r#"{"id":"ws_1"}"#), anyone, Command::WorkspaceWindows { id: "ws_1".into() }),
+            (
+                request("workspace.close", r#"{"id":"ws_1","hwnds":[4660,22]}"#),
+                anyone,
+                Command::WorkspaceClose { id: "ws_1".into(), hwnds: vec![4660, 22] },
+            ),
+            (request("workspace.minimize", "{}"), anyone, Command::WorkspaceMinimize { id: None }),
+            (
+                request("workspace.minimize", r#"{"id":"ws_1"}"#),
+                anyone,
+                Command::WorkspaceMinimize { id: Some("ws_1".into()) },
+            ),
+            (request("workspace.minimize_undo", "{}"), panel, Command::WorkspaceMinimizeUndo),
             (request("autoapply.set", r#"{"on":true}"#), anyone, Command::AutoApplySet(true)),
             (
                 request("events.subscribe", r#"{"topics":["state"]}"#),
@@ -700,6 +737,13 @@ mod tests {
             (request("layout.show", r#"{"view":"seam"}"#), anyone, FORBIDDEN),
             (request("layout.show", r#"{"view":"map"}"#), panel, INVALID_PARAMS),
             (request("state.get", "{}"), off, DISABLED),
+            (request("workspace.close", r#"{"id":"ws_1"}"#), anyone, INVALID_PARAMS),
+            (request("workspace.close", r#"{"id":"ws_1","hwnds":[]}"#), anyone, INVALID_PARAMS),
+            (request("workspace.close", r#"{"id":"ws_1","hwnds":"4660"}"#), anyone, INVALID_PARAMS),
+            (request("workspace.close", r#"{"hwnds":[1]}"#), anyone, INVALID_PARAMS),
+            (request("workspace.windows", "{}"), anyone, INVALID_PARAMS),
+            (request("workspace.minimize_undo", "{}"), anyone, FORBIDDEN),
+            (request("workspace.close", r#"{"id":"ws_1","hwnds":[1]}"#), off, DISABLED),
             (request("remap.set", r#"{"on":true}"#), off, DISABLED),
         ];
         for (line, peer, code) in rejected {
@@ -772,6 +816,10 @@ mod tests {
             ("app.quit", "{}"),
             ("session.restore", "{}"),
             ("layout.show", r#"{"view":"seam"}"#),
+            ("workspace.windows", r#"{"id":"ws_1"}"#),
+            ("workspace.close", r#"{"id":"ws_1","hwnds":[4660]}"#),
+            ("workspace.minimize", "{}"),
+            ("workspace.minimize_undo", "{}"),
         ];
         for (method, params) in forbidden {
             let got = code(&request(method, params), assistant(true)).map_err(|e| e.0);

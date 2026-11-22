@@ -81,6 +81,10 @@ pub struct Hotkeys {
     pub priority: Option<String>,
     /// "Switch back to the previous workspace" on this desk.
     pub switch_back: Option<String>,
+    /// "Close this workspace": list the windows of the workspace in use, then ask each to close.
+    pub close_workspace: Option<String>,
+    /// "Minimize this workspace": minimize the windows of the workspace in use.
+    pub minimize_workspace: Option<String>,
     /// "Tile this screen's windows", on the screen under the pointer.
     pub tile_screen: Option<String>,
     /// "Quick layout": pick the layout of the screen under the pointer from the keyboard.
@@ -165,6 +169,8 @@ impl Default for Hotkeys {
             shrink: None,
             priority: None,
             switch_back: None,
+            close_workspace: None,
+            minimize_workspace: None,
             tile_screen: None,
             quick_layout: None,
             focus_only: None,

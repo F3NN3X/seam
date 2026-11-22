@@ -509,6 +509,18 @@ const ENTRIES: &[Entry] = &[
     ),
     entry(
         Page::Shortcuts,
+        "Minimize this workspace",
+        "Minimize the windows of the workspace in use",
+        "hotkey keyboard workspace minimize put away hide",
+    ),
+    entry(
+        Page::Shortcuts,
+        "Close this workspace",
+        "Lists the windows of the workspace in use, then asks each to close",
+        "hotkey keyboard workspace close quit exit shut",
+    ),
+    entry(
+        Page::Shortcuts,
         "Add window to workspace",
         "Add the focused window to workspace 1 to 9, counted in the order of the Workspaces page",
         "hotkey keyboard workspace add send move window row numbered one two three",

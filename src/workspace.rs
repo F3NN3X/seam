@@ -12,6 +12,7 @@ use std::path::{Component, Path, Prefix};
 
 mod assist;
 mod capture;
+mod close;
 mod export;
 mod geometry;
 mod matching;
@@ -25,6 +26,7 @@ pub use capture::{
     Added, add_window, checked_rows, checked_update, merge_capture, moved_rows, numbered, recapture_row, stages,
     take_window_place, tame_delay, why_not,
 };
+pub use close::{Fact, Why, sort_out, still_ours};
 pub use export::{
     Export, OpenWith, ScreenInfo, explorer_arg, has_places, import, open_with_for, page_of, safe_aumid, safe_exe,
     safe_folder, safe_open_with, safe_url, without_open_with, without_places,

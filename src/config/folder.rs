@@ -34,6 +34,8 @@ pub enum Problem {
     Newer,
     /// It would not parse after every retry, or is too big.
     Unreadable,
+    /// This PC's own settings are over what a file in the folder may hold, so none is written.
+    TooBig,
 }
 
 /// What `config.folder` answers.
@@ -217,7 +219,10 @@ pub fn set_conflicts(files: Vec<String>) -> bool {
 pub fn synced_at(unix: u64) {
     let mut status = lock();
     status.info.state = FolderState::Synced;
-    status.info.problem = None;
+    // A config too big to write stays so until it shrinks.
+    if status.info.problem != Some(Problem::TooBig) {
+        status.info.problem = None;
+    }
     status.info.last_sync = Some(unix);
 }
 
@@ -271,7 +276,7 @@ pub fn shared_of(config: &Config) -> Value {
     shared
 }
 
-pub fn computer_name() -> String {
+fn computer_name() -> String {
     std::env::var("COMPUTERNAME").unwrap_or_default()
 }
 
@@ -353,15 +358,27 @@ pub enum Push {
 /// After a save: write the shared part to the folder if it changed, and only if the file there is
 /// still what this PC last saw. A file that changed meanwhile is the watcher's to read and the
 /// tray's to merge, never overwritten from an older base.
-pub fn push(config: &Config, unix: u64) -> Push {
+pub fn push(config: &Config, unix: u64, allowed: &dyn Fn(&Path) -> bool) -> Push {
     let Some(folder) = folder() else { return Push::Quiet };
+    let ours = shared_of(config);
+    // Seam never writes a file it would refuse to read: over the counts, nothing goes to the folder.
+    if !sync::within_limits(&ours) {
+        return if set_problem(Some(Problem::TooBig)) { Push::Changed } else { Push::Quiet };
+    }
+    let was_big = info().problem == Some(Problem::TooBig);
+    if was_big {
+        set_problem(None);
+    }
     if info().problem == Some(Problem::Newer) {
         return Push::Quiet;
     }
-    let ours = shared_of(config);
     let (base, held) = (base(), held());
     // The folder can't be reached or written: this PC carries on with its own copy.
     let down = || if set_state(FolderState::Unavailable) { Push::Changed } else { Push::Quiet };
+    // The folder is looked at again before this writes into it.
+    if !allowed(&folder) {
+        return down();
+    }
     let mut read = read_theirs(&folder);
     // A sync app may replace the file by deleting and creating it: look once more before writing over it.
     if matches!(read, Ok(None)) && base.is_some() {
@@ -371,7 +388,7 @@ pub fn push(config: &Config, unix: u64) -> Push {
     let there = match read {
         Err(_) => return down(),
         Ok(None) => None,
-        Ok(Some(bytes)) => match sync::attempt_as(&bytes, 0, Some(&computer_name())) {
+        Ok(Some(bytes)) => match sync::attempt(&bytes, 0) {
             Attempt::Take(theirs) => Some(shared_of(&theirs)),
             Attempt::Newer => return if set_problem(Some(Problem::Newer)) { Push::Changed } else { Push::Quiet },
             Attempt::Retry | Attempt::GiveUp => return Push::Wake,

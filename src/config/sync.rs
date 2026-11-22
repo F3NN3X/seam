@@ -355,10 +355,12 @@ fn unguard(mine: &Value, held: &Value, base: &Value) -> Value {
 }
 
 /// Rows this PC has, put back as the folder had them where this PC left them alone. A row is paired
-/// with the held row it equals (the first one not used), wherever it stands now, so a row deleted,
-/// moved or added here doesn't change any other. A row that differs from every held row, such as one
-/// the user turned on, is paired with the unused held row of the same app and item, and only the
-/// fields that differ from that held row are put on the folder's own row.
+/// with the held row it equals: the one at its own place if that is equal, else the next unused equal
+/// one in order (the Nth identical row pairs with the Nth), so a row deleted, moved or added here
+/// doesn't change any other. A row that differs from every held row, such as one the user turned on,
+/// is paired with the held row of the same app and item only when that is the one such row, and only
+/// the fields that differ from it are put on the folder's own row. With several rows of one app the
+/// row goes out as this PC has it, since there is no telling which is which. All of it is linear.
 fn unguard_rows(rows: &mut [Value], held: &[Value], raw: &[Value]) {
     let mut used = vec![false; held.len()];
     let mut exact: HashMap<String, Vec<usize>> = HashMap::new();
@@ -372,15 +374,35 @@ fn unguard_rows(rows: &mut [Value], held: &[Value], raw: &[Value]) {
         exact.entry(row.to_string()).or_default().push(j);
         alike.entry(app(row)).or_default().push(j);
     }
-    let take = |list: Option<&Vec<usize>>, used: &mut Vec<bool>| {
-        let j = list?.iter().copied().find(|j| !used[*j])?;
-        used[j] = true;
-        Some(j)
-    };
-    let mut paired: Vec<Option<usize>> = rows.iter().map(|row| take(exact.get(&row.to_string()), &mut used)).collect();
+    let mut paired: Vec<Option<usize>> = vec![None; rows.len()];
+    // The row where it was, when it is the same.
+    for (i, row) in rows.iter().enumerate() {
+        if held.get(i).is_some_and(|h| h == row) {
+            used[i] = true;
+            paired[i] = Some(i);
+        }
+    }
+    // The rest in order, each key with a cursor that only moves forward.
+    let mut cursor: HashMap<String, usize> = HashMap::new();
     for (row, pair) in rows.iter().zip(paired.iter_mut()) {
-        if pair.is_none() {
-            *pair = take(alike.get(&app(row)), &mut used);
+        let key = row.to_string();
+        let (Some(list), None) = (exact.get(&key), &pair) else { continue };
+        let at = cursor.entry(key).or_default();
+        while list.get(*at).is_some_and(|j| used[*j]) {
+            *at += 1;
+        }
+        if let Some(j) = list.get(*at) {
+            used[*j] = true;
+            *pair = Some(*j);
+            *at += 1;
+        }
+    }
+    for (row, pair) in rows.iter().zip(paired.iter_mut()) {
+        if let (None, Some([only])) = (&pair, alike.get(&app(row)).map(Vec::as_slice))
+            && !used[*only]
+        {
+            used[*only] = true;
+            *pair = Some(*only);
         }
     }
     for (row, pair) in rows.iter_mut().zip(paired) {
@@ -516,12 +538,6 @@ pub enum Attempt {
 
 /// Judge the bytes of the file in the folder, `tries` being the reads already made before this one.
 pub fn attempt(bytes: &[u8], tries: u8) -> Attempt {
-    attempt_as(bytes, tries, None)
-}
-
-/// `attempt`, for a file that may be this PC's own, by the name it stamped: such a file isn't held to the
-/// counts, since Seam must be able to read what it wrote (the byte cap and the linear merge still hold).
-pub fn attempt_as(bytes: &[u8], tries: u8, own_pc: Option<&str>) -> Attempt {
     if bytes.len() > MAX_READ {
         return Attempt::GiveUp;
     }
@@ -530,8 +546,7 @@ pub fn attempt_as(bytes: &[u8], tries: u8, own_pc: Option<&str>) -> Attempt {
     if value.get("version").and_then(Value::as_u64).is_some_and(|v| v > u64::from(CURRENT_VERSION)) {
         return Attempt::Newer;
     }
-    let own = own_pc.is_some_and(|pc| value.pointer("/sync/pc").and_then(Value::as_str) == Some(pc));
-    if !own && !within_limits(&value) {
+    if !within_limits(&value) {
         return Attempt::GiveUp;
     }
     let Ok(mut config) = serde_json::from_value::<Config>(value) else { return again };
@@ -589,7 +604,8 @@ pub fn folder_ok(path: &str, own: &Path, drives: &dyn Drives) -> Result<PathBuf,
         return Err(NOT_THERE);
     }
     // A junction or link on a fixed drive can lead to a network share: the real path has to pass too.
-    let Ok(real) = std::fs::canonicalize(&folder) else { return Err(NOT_LOCAL) };
+    // One that can't be resolved right now is treated as not there yet: nothing is read or written meanwhile.
+    let Ok(real) = std::fs::canonicalize(&folder) else { return Err(NOT_THERE) };
     let text = real.to_string_lossy().replace('/', "\\");
     let plain = text.strip_prefix(r"\\?\").unwrap_or(&text);
     if plain.starts_with(r"UNC\") || plain.starts_with(r"\\") || !shape_ok(plain).is_ok_and(|l| drives.fixed(l)) {

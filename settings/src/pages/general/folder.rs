@@ -108,6 +108,9 @@ pub(super) fn notes(panel: &Panel, p: Palette, cx: &mut Context<Panel>) -> Vec<D
             None,
             p,
         )),
+        Some(Problem::TooBig) => {
+            notes.push(ui::note("Too much to keep in the folder. Settings are saved on this PC only", None, p))
+        }
         Some(Problem::Unreadable) => notes.push(ui::note(
             "Seam can't read the settings file in your folder, so it keeps the settings it has",
             None,

@@ -517,7 +517,7 @@ fn push_writes_only_when_the_file_is_what_this_pc_saw() {
     folder::point_at(Some(dir.clone()), None);
     let mut config = Config { enabled: false, ..Config::default() };
     // No file there yet: this PC's shared part is written, with a stamp.
-    assert_eq!(folder::push(&config, 100), Push::Quiet);
+    assert_eq!(folder::push(&config, 100, &|_| true), Push::Quiet);
     let written: Value = serde_json::from_slice(&std::fs::read(&file).unwrap()).unwrap();
     assert_eq!(written["enabled"], false);
     assert_eq!(written["sync"]["at"], 100);
@@ -527,11 +527,11 @@ fn push_writes_only_when_the_file_is_what_this_pc_saw() {
     assert!(folder::is_own_write(&std::fs::read(&file).unwrap()));
     std::fs::write(dir.join("marker"), b"").unwrap();
     let before = std::fs::read(&file).unwrap();
-    assert_eq!(folder::push(&config, 200), Push::Quiet);
+    assert_eq!(folder::push(&config, 200, &|_| true), Push::Quiet);
     assert_eq!(std::fs::read(&file).unwrap(), before);
     // A change here is written.
     config.zones.enabled = !config.zones.enabled;
-    assert_eq!(folder::push(&config, 300), Push::Quiet);
+    assert_eq!(folder::push(&config, 300, &|_| true), Push::Quiet);
     assert_ne!(std::fs::read(&file).unwrap(), before);
     // Someone else changed the file meanwhile: nothing is written over it, the watcher is woken.
     let mut theirs: Value = serde_json::from_slice(&std::fs::read(&file).unwrap()).unwrap();
@@ -539,20 +539,20 @@ fn push_writes_only_when_the_file_is_what_this_pc_saw() {
     std::fs::write(&file, theirs.to_string()).unwrap();
     config.enabled = true;
     let there = std::fs::read(&file).unwrap();
-    assert_eq!(folder::push(&config, 400), Push::Wake);
+    assert_eq!(folder::push(&config, 400, &|_| true), Push::Wake);
     assert_eq!(std::fs::read(&file).unwrap(), there);
     // A file that doesn't parse is never written over.
     std::fs::write(&file, b"{\"enab").unwrap();
-    assert_eq!(folder::push(&config, 500), Push::Wake);
+    assert_eq!(folder::push(&config, 500, &|_| true), Push::Wake);
     assert_eq!(std::fs::read(&file).unwrap(), b"{\"enab");
     // A newer Seam's file isn't taken or written over, and the state says why.
     std::fs::write(&file, json!({ "version": CURRENT_VERSION + 1 }).to_string()).unwrap();
-    assert_eq!(folder::push(&config, 600), Push::Changed);
+    assert_eq!(folder::push(&config, 600, &|_| true), Push::Changed);
     assert_eq!(folder::info().problem, Some(folder::Problem::Newer));
     assert!(std::fs::read_to_string(&file).unwrap().contains("\"version\":"));
     // A folder that is gone is a state, not a crash.
     folder::point_at(Some(dir.join("gone")), None);
-    assert_eq!(folder::push(&config, 700), Push::Changed);
+    assert_eq!(folder::push(&config, 700, &|_| true), Push::Changed);
     assert_eq!(folder::state(), folder::FolderState::Unavailable);
     folder::point_at(None, None);
     let _ = std::fs::remove_dir_all(&dir);
@@ -568,13 +568,13 @@ fn changes_made_while_the_folder_was_away_are_written_when_it_is_back() {
     std::fs::create_dir_all(&dir).unwrap();
     folder::point_at(Some(dir.clone()), None);
     let mut config = Config::default();
-    assert_eq!(folder::push(&config, 1), Push::Quiet);
+    assert_eq!(folder::push(&config, 1, &|_| true), Push::Quiet);
     std::fs::rename(&dir, &gone).unwrap();
     config.enabled = false;
-    assert_eq!(folder::push(&config, 2), Push::Changed);
+    assert_eq!(folder::push(&config, 2, &|_| true), Push::Changed);
     assert_eq!(folder::state(), folder::FolderState::Unavailable);
     std::fs::rename(&gone, &dir).unwrap();
-    assert_eq!(folder::push(&config, 3), Push::Changed);
+    assert_eq!(folder::push(&config, 3, &|_| true), Push::Changed);
     let file: Value = serde_json::from_slice(&std::fs::read(dir.join("config.json")).unwrap()).unwrap();
     assert_eq!(file["enabled"], false);
     assert_eq!(folder::state(), folder::FolderState::Synced);
@@ -607,7 +607,7 @@ fn absorb_then_push_keeps_the_other_pcs_row() {
     std::fs::write(dir.join("config.json"), serde_json::to_string(&theirs).unwrap()).unwrap();
     folder::point_at(Some(dir.clone()), Some(raw.clone()));
     folder::set_base(raw, held);
-    assert_eq!(folder::push(&config, 5), Push::Quiet);
+    assert_eq!(folder::push(&config, 5, &|_| true), Push::Quiet);
     let file: Value = serde_json::from_slice(&std::fs::read(dir.join("config.json")).unwrap()).unwrap();
     assert_eq!(file["enabled"], false);
     let row = &file["desks"]["sig"]["workspaces"][0]["windows"][0];
@@ -692,7 +692,7 @@ fn deleting_or_moving_a_row_here_leaves_the_other_rows_as_the_folder_has_them() 
 }
 
 #[test]
-fn this_pcs_own_file_over_the_limits_still_writes_and_reads() {
+fn a_config_over_the_limits_is_never_written_to_the_folder() {
     let _lock = folder::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let dir = std::env::temp_dir().join(format!("seam-test-{}-big", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
@@ -702,17 +702,63 @@ fn this_pcs_own_file_over_the_limits_still_writes_and_reads() {
     let workspaces: Vec<Value> = (0..201).map(|n| json!({ "id": format!("w{n}"), "windows": [] })).collect();
     config.desks.insert("sig".into(), Desk { workspaces, ..Desk::default() });
     config.migrate_sign_in();
-    assert_eq!(folder::push(&config, 1), Push::Quiet);
-    let bytes = std::fs::read(dir.join("config.json")).unwrap();
-    // Another PC's copy of it is refused, this PC's is read, and a second save doesn't stop.
-    assert!(matches!(attempt(&bytes, 0), Attempt::GiveUp));
-    assert!(matches!(attempt_as(&bytes, 0, Some(&folder::computer_name())), Attempt::Take(_)));
+    // Over the limits: nothing is written, and the state says why. The file Seam would refuse to read isn't made.
+    assert_eq!(folder::push(&config, 1, &|_| true), Push::Changed);
+    assert!(!dir.join("config.json").exists());
+    assert_eq!(folder::info().problem, Some(folder::Problem::TooBig));
+    assert_eq!(folder::push(&config, 2, &|_| true), Push::Quiet);
+    // A read of the same bytes by anyone, this PC included, is refused too.
+    let shared = folder::shared_of(&config);
+    assert!(matches!(attempt(shared.to_string().as_bytes(), 0), Attempt::GiveUp));
+    // Back within them: it is written, and the problem goes.
+    config.desks.get_mut("sig").unwrap().workspaces.truncate(5);
+    assert_eq!(folder::push(&config, 3, &|_| true), Push::Quiet);
+    assert!(dir.join("config.json").exists());
+    assert_eq!(folder::info().problem, None);
+    // A folder the check no longer allows is not written to.
     config.enabled = false;
-    assert_eq!(folder::push(&config, 2), Push::Quiet);
-    let file: Value = serde_json::from_slice(&std::fs::read(dir.join("config.json")).unwrap()).unwrap();
-    assert_eq!(file["enabled"], false);
+    assert_eq!(folder::push(&config, 4, &|_| false), Push::Changed);
+    assert_eq!(folder::state(), folder::FolderState::Unavailable);
     folder::point_at(None, None);
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+fn identical_rows(open_with: [&str; 3]) -> (Vec<Value>, Vec<Value>) {
+    // Held rows are identical (the guard stripped the Open with); the folder's own rows differ in it.
+    let held = vec![json!({ "exe": "a.exe", "launch": false }); 3];
+    let raw = open_with.map(|w| json!({ "exe": "a.exe", "launch": true, "open_with": w })).to_vec();
+    (held, raw)
+}
+
+#[test]
+fn identical_rows_pair_in_order_and_an_edited_one_does_not_take_a_neighbours_values() {
+    let (held, raw) = identical_rows(["one", "two", "three"]);
+    let (h, o, r) = (workspace_with(json!(held)), workspace_with(json!(held)), workspace_with(json!(raw)));
+    assert_eq!(rows_of(&outgoing(&h, &o, &r)), raw);
+    // The first is edited: the others still get their own, not each other's.
+    let mut edited = held.clone();
+    edited[0]["launch"] = json!(true);
+    let out = rows_of(&outgoing(&h, &workspace_with(json!(edited)), &r));
+    assert_eq!(out[1], raw[1]);
+    assert_eq!(out[2], raw[2]);
+    // It can't be told which of three the edited one was, so it goes out as this PC has it.
+    assert_eq!(out[0], edited[0]);
+    // The second is deleted: the first and the last keep their own.
+    let out = rows_of(&outgoing(&h, &workspace_with(json!([held[0], held[2]])), &r));
+    assert_eq!(out[0], raw[0]);
+}
+
+#[test]
+fn a_great_many_identical_rows_are_paired_quickly() {
+    let held = vec![json!({ "exe": "a.exe", "launch": false }); 50_000];
+    let raw = vec![json!({ "exe": "a.exe", "launch": true }); 50_000];
+    let mut rows = held.clone();
+    rows[10]["launch"] = json!(true);
+    rows.remove(20);
+    let started = std::time::Instant::now();
+    let out = outgoing(&workspace_with(json!(held)), &workspace_with(json!(rows)), &workspace_with(json!(raw)));
+    assert_eq!(rows_of(&out).len(), 49_999);
+    assert!(started.elapsed() < std::time::Duration::from_secs(5), "{:?}", started.elapsed());
 }
 
 struct Mount(&'static [char], &'static [char]);

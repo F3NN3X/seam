@@ -244,13 +244,7 @@ fn run(folder: &Path, hwnd: isize, (stop, wake): (isize, isize), id: u64) {
                 }
             }
         }
-        let wait = match due {
-            Some(at) => at.saturating_duration_since(now()),
-            None if dir.is_some() && folder::state() != FolderState::Unavailable => {
-                Duration::from_millis(u64::from(INFINITE))
-            }
-            None => POLL,
-        };
+        let wait = wait_for(due, dir.is_some(), folder::state());
         let handles = [stop, wake, io];
         let count = if armed { 3 } else { 2 };
         let woken =
@@ -344,17 +338,29 @@ fn run(folder: &Path, hwnd: isize, (stop, wake): (isize, isize), id: u64) {
 }
 
 /// Read the file once and hand what came of it to the tray. The time to read again, if it should.
+/// How long the watcher waits: until a read is due, else for ever while the folder is watched and fine, and
+/// 30 s otherwise (not watched, or down, which looks again for a write that failed or a file that was locked).
+fn wait_for(due: Option<Instant>, watched: bool, state: FolderState) -> Duration {
+    match due {
+        Some(at) => at.saturating_duration_since(now()),
+        None if watched && state != FolderState::Unavailable => Duration::from_millis(u64::from(INFINITE)),
+        None => POLL,
+    }
+}
+
+/// What a read of this PC's own bytes asks of the tray: a resync if the folder had been down, since what
+/// changed meanwhile was never written.
+fn own_write_seen(was_down: bool) -> Option<Seen> {
+    was_down.then_some(Seen::Resync)
+}
+
 fn read_once(folder: &Path, hwnd: isize, tries: &mut u8, id: u64) -> Option<Instant> {
     let was_down = folder::state() == FolderState::Unavailable;
     // The rules for a folder hold each time it is read: it may have become a link to somewhere else.
-    let refused = shared::folder_ok(&folder.to_string_lossy(), &package::settings_dir(), &FixedDrives)
-        .err()
-        .filter(|why| *why != shared::NOT_THERE);
-    let read = if refused.is_some() {
-        Err(std::io::Error::other("not a folder Seam may use"))
-    } else {
-        folder::read_theirs(folder)
-    };
+    // Nothing is read until the check passes, and a folder that can't be resolved yet is tried again in 30 s.
+    let refused = shared::folder_ok(&folder.to_string_lossy(), &package::settings_dir(), &FixedDrives).is_err();
+    let read =
+        if refused { Err(std::io::Error::other("not a folder Seam may use")) } else { folder::read_theirs(folder) };
     // A watcher that was replaced or stopped while it read says nothing.
     if !current(id) {
         return None;
@@ -379,13 +385,13 @@ fn read_once(folder: &Path, hwnd: isize, tries: &mut u8, id: u64) -> Option<Inst
     // What Seam wrote itself, which the tray already holds.
     if folder::is_own_write(&bytes) {
         folder::synced_at(unix_now());
-        if was_down {
-            inbox().seen = Some(Seen::Resync);
+        if let Some(seen) = own_write_seen(was_down) {
+            inbox().seen = Some(seen);
         }
         post(hwnd);
         return None;
     }
-    match shared::attempt_as(&bytes, *tries, Some(&folder::computer_name())) {
+    match shared::attempt(&bytes, *tries) {
         Attempt::Take(config) => {
             folder::synced_at(unix_now());
             inbox().seen = Some(Seen::File(config));
@@ -395,6 +401,8 @@ fn read_once(folder: &Path, hwnd: isize, tries: &mut u8, id: u64) -> Option<Inst
         }
         Attempt::Newer => {
             log::info!("sync: config.json in the folder is from a newer Seam");
+            // The folder is reachable: it is the file that can't be used, and the note says so.
+            folder::set_state(FolderState::Synced);
             folder::set_problem(Some(Problem::Newer));
             *tries = 0;
             post(hwnd);
@@ -406,6 +414,7 @@ fn read_once(folder: &Path, hwnd: isize, tries: &mut u8, id: u64) -> Option<Inst
         }
         Attempt::GiveUp => {
             log::info!("sync: config.json in the folder can't be read");
+            folder::set_state(FolderState::Synced);
             folder::set_problem(Some(Problem::Unreadable));
             *tries = 0;
             post(hwnd);
@@ -438,7 +447,9 @@ pub(super) fn start(app: &mut App) {
 /// After a save on the save thread: write the folder when it needs it, and tell the tray what came of it.
 pub(super) fn saved(hwnd: isize, config: &Config, generation: u64) {
     if generation == folder::generation() {
-        match folder::push(config, unix_now()) {
+        let allowed =
+            |dir: &Path| shared::folder_ok(&dir.to_string_lossy(), &package::settings_dir(), &FixedDrives).is_ok();
+        match folder::push(config, unix_now(), &allowed) {
             folder::Push::Quiet => {}
             folder::Push::Changed => {
                 post(hwnd);
@@ -760,5 +771,18 @@ mod tests {
         // Stopping makes the running one stale too, so what it read late is dropped.
         unwatch();
         assert!(!current(second));
+    }
+
+    #[test]
+    fn the_wait_is_30_s_while_down_even_when_watched_and_a_resync_follows_a_return() {
+        // Watched and fine: no timeout. Down, or not watched: 30 s. A read that is due: until then.
+        assert!(wait_for(None, true, FolderState::Synced) > POLL * 1000);
+        assert_eq!(wait_for(None, true, FolderState::Unavailable), POLL);
+        assert_eq!(wait_for(None, false, FolderState::Synced), POLL);
+        assert!(wait_for(Some(now() + DEBOUNCE), true, FolderState::Synced) <= DEBOUNCE);
+        assert_eq!(wait_for(Some(now()), false, FolderState::Synced), Duration::ZERO);
+        // Its own bytes read after the folder was down: write what changed meanwhile.
+        assert!(matches!(own_write_seen(true), Some(Seen::Resync)));
+        assert!(own_write_seen(false).is_none());
     }
 }

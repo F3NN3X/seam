@@ -231,10 +231,6 @@ fn set_send_to(
     };
     change(panel, at, note, window, cx, |rule| {
         rule.send_to = to.map(|(id, _)| id);
-        // A rule that moves nothing, pins nothing and sends nothing would do nothing.
-        if rule.send_to.is_none() && rule.target == (Target::State { state: WinState::Keep }) && rule.pin.is_none() {
-            rule.pin = Some(Pin::Top);
-        }
     });
 }
 

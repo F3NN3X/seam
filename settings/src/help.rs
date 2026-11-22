@@ -518,6 +518,7 @@ pub const TOPICS: &[Topic] = &[
         settings: &[
             Setting { title: "Where apps open", page: Page::Windows, section: "Where apps open" },
             Setting { title: "Left alone", page: Page::Windows, section: "Where apps open" },
+            Setting { title: "Send new windows to", page: Page::Windows, section: "Where apps open" },
             Setting { title: "Put apps in place when they open", page: Page::Workspaces, section: "All workspaces" },
         ],
         related: &["Workspaces", "Zones", "Pins and borders"],

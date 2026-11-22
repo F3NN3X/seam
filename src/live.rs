@@ -307,6 +307,10 @@ fn work(jobs: Receiver<Job>) {
 /// It carries the rule's stamp or its new row's, which `place_opened` would stop at, so the
 /// stamp is lifted for that and put back if no free row takes the window (D776).
 fn join_place(live: &LiveWorkspace, hwnd: isize) -> Option<String> {
+    if switcher::switching() {
+        log::info!("app rule: a window joined while a switch ran, so it stays");
+        return None;
+    }
     let h = HWND(hwnd as *mut _);
     let before = winutil::ws_stamp(h);
     winutil::clear_ws_stamp(h);

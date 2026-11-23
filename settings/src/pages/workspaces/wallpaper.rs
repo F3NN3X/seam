@@ -14,7 +14,7 @@ use gpui_kit::component::slider::{SliderEvent, SliderState};
 use gpui_kit::component::{Icon, WindowExt};
 use gpui_kit::*;
 use seam::api::Event;
-use seam::config::{Fit, MAX_SCREEN_GAP_MM, Wallpaper};
+use seam::config::{Fit, MAX_SCREEN_GAP_MM, Wallpaper, WallpaperSet};
 use seam::wallpaper::span::{self, Layout};
 use seam::wallpaper::{Origin, choices};
 use seam::workspace::Workspace;
@@ -52,6 +52,7 @@ const PART_OF_IT: &str = "Part of the picture across all screens";
 const LEFT_OUT: &str = "Not next to the other screens, so it shows the whole picture";
 const NOTE_LINE_UP: &str =
     "Your picture across the screens follows Windows' arrangement. Line up your screens so it matches where they stand";
+const NEEDS_LINE_UP: &str = "Needs your screens lined up";
 const GAP_TITLE: &str = "Space between screens";
 const GAP_ABOUT: &str = "The picture skips this much where two screens meet, for the bezels. 0 is none";
 /// The preview of the picture over the screens.
@@ -158,10 +159,12 @@ fn state_words(
 }
 
 /// The second line of the row for the picture across all screens.
-fn across_words(picture: Option<&Wallpaper>, missing: bool, on_the_desk: bool) -> String {
+fn across_words(picture: Option<&Wallpaper>, missing: bool, on_the_desk: bool, several: bool) -> String {
     match picture {
         None => ACROSS_NONE.to_string(),
         Some(w) if missing => format!("{} isn't there any more", file_name(&w.path)),
+        // One screen has no edges to line up.
+        Some(w) if !several => file_name(&w.path),
         Some(w) if on_the_desk => format!("{}. {ON_THE_DESK}", file_name(&w.path)),
         Some(w) => format!("{}. {FOLLOWS_WINDOWS}", file_name(&w.path)),
     }
@@ -240,21 +243,26 @@ pub fn event(panel: &mut Panel, event: &Event, window: &mut Window, cx: &mut Con
                     std::iter::once((String::new(), &d.wallpaper))
                         .chain(d.workspace_wallpapers.iter().map(|(id, set)| (id.clone(), set)))
                 });
-                let rows: Vec<String> = sets
-                    .filter(|(_, set)| {
-                        let own = set.screens.get(screen).is_some_and(|w| w.path == path);
-                        own || set.span.as_ref().is_some_and(|w| w.path == path)
-                    })
-                    .map(|(id, _)| id)
+                let rows: Vec<(String, String)> = sets
+                    .filter_map(|(id, set)| failed_on(set, screen, path).map(|row| (id, row.to_string())))
                     .collect();
-                for id in rows {
-                    panel.wallpaper.errors.insert((id, screen.to_string()), message.to_string());
+                for key in rows {
+                    panel.wallpaper.errors.insert(key, message.to_string());
                 }
             }
         }
         _ => {}
     }
     refresh(panel, cx);
+}
+
+/// The row a picture that failed on `screen` is reported under in `set`: the screen's own, else the
+/// Across all screens row when the picture is the set's span.
+fn failed_on<'a>(set: &WallpaperSet, screen: &'a str, path: &str) -> Option<&'a str> {
+    if set.screens.get(screen).is_some_and(|w| w.path == path) {
+        return Some(screen);
+    }
+    set.span.as_ref().is_some_and(|w| w.path == path).then_some(ACROSS)
 }
 
 fn spotlight_notice() -> Notification {
@@ -290,8 +298,11 @@ fn gap_row(panel: &Panel, p: Palette, window: &mut Window, cx: &mut Context<Pane
     }
     let value = if gap == 0 { "None".to_string() } else { format!("{gap} mm") };
     let on = panel.config.wallpapers_enabled;
-    let slider = ui::slider_with_value(&panel.screen_gap, value, on, GAP_TITLE, p);
-    ui::dimmed(row(GAP_TITLE, Some(GAP_ABOUT.into()), slider, p), "screen-gap-off", (!on).then_some(OFF_TOOLTIP))
+    // The gap is for the physical layout only, so it needs the screens lined up.
+    let lined_up = layout(panel) == Layout::Desk;
+    let slider = ui::slider_with_value(&panel.screen_gap, value, on && lined_up, GAP_TITLE, p);
+    let why = if !on { Some(OFF_TOOLTIP) } else { (!lined_up).then_some(NEEDS_LINE_UP) };
+    ui::dimmed(row(GAP_TITLE, Some(GAP_ABOUT.into()), slider, p), "screen-gap-off", why)
 }
 
 /// The Space between screens slider shows the value as it moves and sends it when let go.
@@ -436,7 +447,7 @@ fn picture_row(
     let in_span = (set_span && !across && ws.is_none_or(|w| w.scope.is_none()))
         .then(|| on.number.is_some_and(|n| !left_out(panel, n)));
     let words = match across {
-        true => across_words(chosen.as_ref(), missing, layout(panel) == Layout::Desk),
+        true => across_words(chosen.as_ref(), missing, layout(panel) == Layout::Desk, panel.mons.len() > 1),
         false => state_words(chosen.as_ref(), ws.is_none(), missing, on.connected, in_span),
     };
     let error = panel.wallpaper.errors.get(&(id.clone().unwrap_or_default(), on.id.clone())).cloned();
@@ -575,6 +586,16 @@ fn send(
 ) {
     let key = (ws.clone().unwrap_or_default(), screen.clone());
     panel.wallpaper.errors.remove(&key);
+    if screen == ACROSS {
+        // A new picture across all screens ends what was said under the screens about the old one.
+        let desk = panel.config.desks.get(&desk_sig(panel));
+        let set = desk.and_then(|d| match &ws {
+            Some(id) => d.workspace_wallpapers.get(id),
+            None => Some(&d.wallpaper),
+        });
+        let own: Vec<String> = set.map(|s| s.screens.keys().cloned().collect()).unwrap_or_default();
+        panel.wallpaper.errors.retain(|(w, screen), _| *w != key.0 || own.contains(screen));
+    }
     let params = match screen.as_str() {
         ACROSS => json!({ "workspace": ws, "across": true, "path": path, "fit": fit }),
         _ => json!({ "workspace": ws, "screen": screen, "path": path, "fit": fit }),
@@ -609,8 +630,21 @@ pub fn copy_pictures(panel: &mut Panel, from: &str, to: String, window: &mut Win
 /// The pictures a workspace sets, by screen, to give back later with `put_pictures`.
 pub fn pictures_of(panel: &Panel, id: &str) -> Vec<(String, Wallpaper)> {
     let desk = panel.config.desks.get(&desk_sig(panel));
-    let set = desk.and_then(|d| d.workspace_wallpapers.get(id));
-    set.map(|s| s.screens.clone().into_iter().collect()).unwrap_or_default()
+    desk.and_then(|d| d.workspace_wallpapers.get(id)).map(pictures_in).unwrap_or_default()
+}
+
+/// A set's pictures by screen, and the one across all screens under `ACROSS`.
+fn pictures_in(set: &WallpaperSet) -> Vec<(String, Wallpaper)> {
+    let span = set.span.iter().map(|w| (ACROSS.to_string(), w.clone()));
+    set.screens.iter().map(|(s, w)| (s.clone(), w.clone())).chain(span).collect()
+}
+
+/// The `wallpaper.set` params that give workspace `to` a picture back.
+fn put_params(to: &str, screen: &str, w: &Wallpaper) -> serde_json::Value {
+    match screen {
+        ACROSS => json!({ "workspace": to, "across": true, "path": w.path, "fit": w.fit }),
+        _ => json!({ "workspace": to, "screen": screen, "path": w.path, "fit": w.fit }),
+    }
 }
 
 /// `wallpaper.set` for each picture, one after another, for workspace `to`.
@@ -635,13 +669,16 @@ fn copy_next(
         panel.reload_config(window, cx);
         return;
     };
-    let params = json!({ "workspace": to, "screen": screen, "path": w.path, "fit": w.fit });
+    let params = put_params(&to, &screen, &w);
     panel.call("wallpaper.set", params, window, cx, move |panel, _, window, cx| copy_next(panel, to, left, window, cx));
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{FITS, Fit, Wallpaper, across_words, fit_key, second_line, state_words};
+    use super::{
+        ACROSS, FITS, Fit, Wallpaper, WallpaperSet, across_words, failed_on, fit_key, json, pictures_in, put_params,
+        second_line, state_words,
+    };
 
     fn picture(path: &str) -> Wallpaper {
         Wallpaper { path: path.into(), fit: Fit::Fill }
@@ -661,13 +698,14 @@ mod tests {
     #[test]
     fn rows_for_the_picture_across_all_screens_say_how_it_is_cut() {
         let w = picture(r"D:\Pictures\Wide.jpg");
-        assert_eq!(across_words(None, false, true), "One picture, cut to where each screen stands");
-        assert_eq!(across_words(Some(&w), false, true), "Wide.jpg. Cut to where each screen stands on the desk");
+        assert_eq!(across_words(None, false, true, true), "One picture, cut to where each screen stands");
+        assert_eq!(across_words(Some(&w), false, true, true), "Wide.jpg. Cut to where each screen stands on the desk");
         assert_eq!(
-            across_words(Some(&w), false, false),
+            across_words(Some(&w), false, false, true),
             "Wide.jpg. Follows Windows' arrangement, so it may not line up at the edges"
         );
-        assert_eq!(across_words(Some(&w), true, true), "Wide.jpg isn't there any more");
+        assert_eq!(across_words(Some(&w), true, true, true), "Wide.jpg isn't there any more");
+        assert_eq!(across_words(Some(&w), false, false, false), "Wide.jpg", "one screen has no edges");
         // A screen without a picture of its own shows its part, or the whole picture when it is left out.
         let part = state_words(None, true, false, true, Some(true));
         assert_eq!(second_line("PG32UCDM", part), "PG32UCDM. Part of the picture across all screens");
@@ -677,6 +715,21 @@ mod tests {
             "PG32UCDM. Not next to the other screens, so it shows the whole picture"
         );
         assert_eq!(state_words(Some(&w), true, false, true, Some(true)), "Wide.jpg");
+    }
+
+    #[test]
+    fn a_set_gives_back_its_span_with_its_screens_and_a_failure_shows_on_the_right_row() {
+        let mut set = WallpaperSet::default();
+        set.screens.insert("s1".into(), picture("a.jpg"));
+        set.span = Some(picture("wide.jpg"));
+        let back = pictures_in(&set);
+        assert_eq!(back, [("s1".to_string(), picture("a.jpg")), (ACROSS.to_string(), picture("wide.jpg"))]);
+        let sent = put_params("w2", ACROSS, &picture("wide.jpg"));
+        assert_eq!(sent, json!({ "workspace": "w2", "across": true, "path": "wide.jpg", "fit": "fill" }));
+        assert_eq!(put_params("w2", "s1", &picture("a.jpg"))["screen"], "s1");
+        assert_eq!(failed_on(&set, "s1", "a.jpg"), Some("s1"));
+        assert_eq!(failed_on(&set, "s2", "wide.jpg"), Some(ACROSS));
+        assert_eq!(failed_on(&set, "s2", "other.jpg"), None);
     }
 
     #[test]

@@ -2,6 +2,7 @@
 
 use super::*;
 use crate::config::ScreenInUse;
+use crate::wallpaper::span::RectF;
 
 fn picture(path: &str) -> Wallpaper {
     Wallpaper { path: path.into(), fit: Fit::Fill }
@@ -310,7 +311,7 @@ fn compose_puts_bars_round_a_fitted_picture() {
 
 #[test]
 fn cache_key_changes_with_file_fit_and_size() {
-    let key = |path: &str, len, written, fit, size| cache_key(path, len, written, fit, 0, size, None);
+    let key = |path: &str, len, written, fit, size| cache_key(path, len, written, fit, 0, size, None, None);
     let base = key(r"C:\a.jpg", 10, 1, Fit::Fill, (1920, 1080));
     assert_eq!(base, key(r"c:\A.JPG", 10, 1, Fit::Fill, (1920, 1080)));
     for other in [
@@ -319,7 +320,7 @@ fn cache_key_changes_with_file_fit_and_size() {
         key(r"C:\a.jpg", 10, 2, Fit::Fill, (1920, 1080)),
         key(r"C:\a.jpg", 10, 1, Fit::Tile, (1920, 1080)),
         key(r"C:\a.jpg", 10, 1, Fit::Fill, (1080, 1920)),
-        cache_key(r"C:\a.jpg", 10, 1, Fit::Fill, 0x00ff_ffff, (1920, 1080), None),
+        cache_key(r"C:\a.jpg", 10, 1, Fit::Fill, 0x00ff_ffff, (1920, 1080), None, None),
     ] {
         assert_ne!(base, other);
     }
@@ -330,16 +331,24 @@ fn cache_key_changes_with_file_fit_and_size() {
 
 #[test]
 fn cache_key_includes_the_cut() {
-    let key = |cut| cache_key(r"C:\a.jpg", 10, 1, Fit::Fill, 0, (1920, 1080), cut);
+    let place = Place {
+        bounds: RectF { x: 0.0, y: 0.0, w: 2000.0, h: 500.0 },
+        rect: RectF { x: 0.0, y: 0.0, w: 1000.0, h: 500.0 },
+    };
+    let key = |cut| cache_key(r"C:\a.jpg", 10, 1, Fit::Fill, 0, (1920, 1080), Some(&place), cut);
     let (left, right) = (Cut { x: 0, y: 0, w: 3000, h: 2000 }, Cut { x: 3000, y: 0, w: 3000, h: 2000 });
     assert_ne!(key(Some(left)), key(Some(right)));
     assert_ne!(key(Some(left)), key(None));
     assert_ne!(key(Some(left)), key(Some(Cut { h: 1999, ..left })));
     assert_eq!(key(Some(left)), key(Some(left)));
-    // The prefix has it too, so a picture that is gone finds the render of its own part.
-    let prefix = |cut| cache_prefix(r"C:\a.jpg", Fit::Fill, 0, (1920, 1080), cut);
-    assert!(key(Some(right)).starts_with(&prefix(Some(right))));
-    assert_ne!(prefix(Some(left)), prefix(Some(right)));
+    // The prefix has where the screen stands, not the cut, so a picture that is gone, whose size
+    // isn't known after a restart, still finds the render of its own part (D800).
+    let prefix = |place| cache_prefix(r"C:\a.jpg", Fit::Fill, 0, (1920, 1080), place);
+    assert!(key(Some(right)).starts_with(&prefix(Some(&place))));
+    assert!(key(Some(left)).starts_with(&prefix(Some(&place))));
+    let next = Place { rect: RectF { x: 1000.0, ..place.rect }, ..place };
+    assert_ne!(prefix(Some(&place)), prefix(Some(&next)));
+    assert_ne!(prefix(Some(&place)), prefix(None));
 }
 
 #[test]

@@ -474,16 +474,11 @@ impl State {
         let size = (screen.rect.width().max(1) as u32, screen.rect.height().max(1) as u32);
         let cache = self.cache();
         let Ok(meta) = std::fs::metadata(&picture.path) else {
-            // A part is found by its cut, which needs the size the picture had when it was last read.
-            let known = self.sizes.get(&picture.path).map(|(_, src)| *src);
-            let cut = place.zip(known).map(|(p, src)| span::cut(src, p, picture.fit));
-            return Ok(match (place, cut) {
-                (Some(_), None) => None,
-                _ => self.last_render(&cache_prefix(&picture.path, picture.fit, bars, size, cut)),
-            });
+            // A part is found by where the screen stands, which doesn't need the file (D800).
+            return Ok(self.last_render(&cache_prefix(&picture.path, picture.fit, bars, size, place)));
         };
         let written = meta.modified().map(unix).unwrap_or(0);
-        let base = cache_key(&picture.path, meta.len(), written, picture.fit, bars, size, None);
+        let base = cache_key(&picture.path, meta.len(), written, picture.fit, bars, size, None, None);
         if let Some((_, message)) = self.failures.get(&base) {
             return Err((message, false));
         }
@@ -500,7 +495,7 @@ impl State {
             },
         };
         let key = match cut {
-            Some(_) => cache_key(&picture.path, meta.len(), written, picture.fit, bars, size, cut),
+            Some(_) => cache_key(&picture.path, meta.len(), written, picture.fit, bars, size, place, cut),
             None => base.clone(),
         };
         let file = cache.join(format!("{key}.png"));

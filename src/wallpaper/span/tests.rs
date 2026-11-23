@@ -165,3 +165,16 @@ fn a_cut_inside_the_picture_fills_the_screen() {
     // All outside the picture: only bars.
     assert!(part((1000, 1000), Cut { x: -500, y: 0, w: 400, h: 400 }, (800, 400)).is_none());
 }
+
+#[test]
+fn the_gap_goes_on_the_left_and_top_too() {
+    // The primary is the second screen, with the other to its left, then above it.
+    let at = |x, y, primary| mon("m", Rect::new(x, y, 1920, 1080), 96.0, primary);
+    let left = [at(1920, 0, true), at(0, 0, false)];
+    let (rects, _) = span_rects(&left, &[link(0, 1, Side::Left, 0.0, 96.0)], 25.4);
+    // The other screen is 508 mm wide and ends 25.4 mm before the primary.
+    assert!((rects[1].unwrap().x + 508.0 + 25.4).abs() < 1e-9, "{:?}", rects[1]);
+    let above = [at(0, 1080, true), at(0, 0, false)];
+    let (rects, _) = span_rects(&above, &[link(0, 1, Side::Top, 0.0, 96.0)], 25.4);
+    assert!((rects[1].unwrap().y + 285.75 + 25.4).abs() < 1e-9, "{:?}", rects[1]);
+}

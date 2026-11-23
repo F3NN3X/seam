@@ -3,7 +3,7 @@
 //! Seam opens it. Windows has one position for every screen, so Seam renders each screen's picture
 //! at the screen's own size and Windows shows it with Fill (D791). Pure, except `read_header`.
 
-use self::span::Cut;
+use self::span::{Cut, Place};
 use crate::config::Desk;
 pub use crate::config::{Fit, Wallpaper, WallpaperSet};
 use crate::workspace::{self, Workspace};
@@ -287,18 +287,24 @@ fn hash(parts: &[&[u8]]) -> u64 {
 }
 
 /// The first half of a render's name: the picture, how it fits, the screen's size and, for a part
-/// of a picture across all screens, the cut of the source (D806). A picture that is gone is found by it (D800).
-pub fn cache_prefix(path: &str, fit: Fit, colour: u32, size: (u32, u32), cut: Option<Cut>) -> String {
+/// of a picture across all screens, where the screen stands in it (D806). That is known without the
+/// file, so a picture that is gone is found by it, also after a restart (D800).
+pub fn cache_prefix(path: &str, fit: Fit, colour: u32, size: (u32, u32), place: Option<&Place>) -> String {
     let (path, fit) = (path.to_lowercase(), format!("{fit:?}"));
-    let cut: Vec<[u8; 4]> =
-        cut.iter().flat_map(|c| [c.x.to_le_bytes(), c.y.to_le_bytes(), c.w.to_le_bytes(), c.h.to_le_bytes()]).collect();
+    let place: Vec<[u8; 8]> = place
+        .iter()
+        .flat_map(|p| [p.bounds, p.rect])
+        .flat_map(|r| [r.x, r.y, r.w, r.h].map(f64::to_le_bytes))
+        .collect();
     let (colour, w, h) = (colour.to_le_bytes(), size.0.to_le_bytes(), size.1.to_le_bytes());
     let mut parts: Vec<&[u8]> = vec![path.as_bytes(), fit.as_bytes(), &colour, &w, &h];
-    parts.extend(cut.iter().map(|b| b.as_slice()));
+    parts.extend(place.iter().map(|b| b.as_slice()));
     format!("{:016x}", hash(&parts))
 }
 
-/// A render's file name, without `.png`: the prefix, then the file's size and write time.
+/// A render's file name, without `.png`: the prefix, then the file's size and write time and, for
+/// a part, the cut of the source it was made from (D806).
+#[allow(clippy::too_many_arguments)]
 pub fn cache_key(
     path: &str,
     len: u64,
@@ -306,10 +312,15 @@ pub fn cache_key(
     fit: Fit,
     colour: u32,
     size: (u32, u32),
+    place: Option<&Place>,
     cut: Option<Cut>,
 ) -> String {
-    let version = hash(&[&len.to_le_bytes(), &written.to_le_bytes()]);
-    format!("{}-{version:016x}", cache_prefix(path, fit, colour, size, cut))
+    let cut: Vec<[u8; 4]> =
+        cut.iter().flat_map(|c| [c.x.to_le_bytes(), c.y.to_le_bytes(), c.w.to_le_bytes(), c.h.to_le_bytes()]).collect();
+    let (len, written) = (len.to_le_bytes(), written.to_le_bytes());
+    let mut parts: Vec<&[u8]> = vec![&len, &written];
+    parts.extend(cut.iter().map(|b| b.as_slice()));
+    format!("{}-{:016x}", cache_prefix(path, fit, colour, size, place), hash(&parts))
 }
 
 /// A file in the cache: its size and when it was last used, in Unix seconds.

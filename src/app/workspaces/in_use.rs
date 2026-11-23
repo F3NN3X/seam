@@ -58,6 +58,11 @@ pub(in crate::app) fn meant(app: &App, screen: Option<&str>) -> Option<String> {
         Some(screen) => desk.and_then(|d| workspace::in_use_on(d, screen)).map(str::to_string),
         None => {
             // A desk-wide workspace every screen has replaced with its own is in use nowhere.
+            // With no screen's own in use, this is today's answer, even while screens change.
+            let own = desk.is_some_and(|d| d.screen_in_use.values().any(|s| s.workspace.is_some()));
+            if !own {
+                return app.workspace.clone();
+            }
             let in_use = in_use_ids(app);
             let still = |id: &String| in_use.contains(id);
             app.last_in_use.clone().filter(still).or_else(|| app.workspace.clone().filter(still))

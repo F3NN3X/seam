@@ -4,6 +4,8 @@ All notable changes to Seam. The format follows [Keep a Changelog](https://keepa
 
 ## [Unreleased]
 
+## [0.10.0] - 2026-11-23
+
 ### Added
 
 - **Wallpapers per workspace and per screen.** **Change wallpaper with workspaces**, on Workspaces under **Wallpaper**, is off until you turn it on. Each workspace can set a picture for each screen (a workspace for one screen only for its own), and **When no workspace sets one** has a desk default per screen. A screen shows the picture of the workspace in use on it, else the desk default, else your own wallpaper, and the pictures change as a switch starts. Fits: **Fill**, **Fit**, **Stretch**, **Center** and **Tile**; Seam renders each screen's picture at its own size and Windows shows it with Fill. Your own wallpaper (pictures, solid colour or slideshow) is recorded first and comes back when you turn it off, on quit and at the next start after a crash. New optional `wallpapers_enabled`, and `wallpaper` and `workspace_wallpapers` on a desk, all kept on this PC; older files load unchanged. New API methods `wallpaper.set` (Seam window only) and `wallpaper.state`, events `wallpaper.changed` and `wallpaper.failed`; `config.patch` drops a desk's `wallpaper` and `workspace_wallpapers`.

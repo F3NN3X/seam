@@ -120,6 +120,8 @@ unsafe fn create_window() -> Option<HWND> {
 }
 
 unsafe fn new_app(hwnd: HWND, cfg: Config) -> App {
+    // Before anything changes a screen: a journal from a crash with the feature off puts mine back (D798).
+    let wallpaper = Wallpapers::start(hwnd.0 as isize, cfg.wallpapers_enabled);
     unsafe {
         App {
             hwnd,
@@ -183,6 +185,7 @@ unsafe fn new_app(hwnd: HWND, cfg: Config) -> App {
             session_ending: false,
             restart_apps: false,
             spotlight_resume: false,
+            wallpaper,
         }
     }
 }

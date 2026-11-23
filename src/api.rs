@@ -275,6 +275,16 @@ pub enum Command {
     WorkspaceMinimizeUndo,
     /// The workspace taken as in use at start when none is remembered, or none.
     WorkspaceSetDefault(Option<String>),
+    /// `wallpaper.set`: the picture a workspace (or with `None`, the desk default) sets for one
+    /// screen, or with no `path`, none (brief K). Only the panel: a picture is a file Seam opens.
+    WallpaperSet {
+        workspace: Option<String>,
+        screen: String,
+        path: Option<String>,
+        fit: Option<crate::config::Fit>,
+    },
+    /// `wallpaper.state`: what each screen shows and where it comes from, and what mine is.
+    WallpaperState,
     /// "Put apps in place when they open".
     AutoApplySet(bool),
     /// Windows' "Ease cursor movement between displays". Only on is carried out.

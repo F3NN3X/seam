@@ -21,6 +21,7 @@ pub mod strip;
 pub mod tiling;
 pub mod turn;
 pub mod updates;
+pub mod wallpaper;
 pub mod workspace;
 pub mod zones;
 

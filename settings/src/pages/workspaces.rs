@@ -26,6 +26,9 @@ mod close;
 mod list;
 mod review;
 mod sections;
+mod wallpaper;
+
+pub use wallpaper::{WallpaperView, event as wallpaper_event, refresh as refresh_wallpaper};
 
 pub use close::ask as ask_to_close;
 
@@ -185,7 +188,13 @@ fn duplicate(panel: &mut Panel, ws: &Workspace, window: &mut Window, cx: &mut Co
     list.push(workspace::to_value(&copy));
     shortcuts::stop_recording(panel);
     panel.workspace = Some(copy.id.clone());
-    save(panel, list, window, cx);
+    // The pictures are this PC's, apart from the workspace, so they follow once the copy is saved.
+    let (from, to) = (ws.id.clone(), copy.id.clone());
+    let sig = desk_sig(panel);
+    let copy_pictures = move |panel: &mut Panel, window: &mut Window, cx: &mut Context<Panel>| {
+        wallpaper::copy_pictures(panel, &from, to, window, cx)
+    };
+    panel.patch_then(json!({ "desks": { sig: { "workspaces": list } } }), window, cx, copy_pictures);
     let undo = move |panel: &mut Panel, window: &mut Window, cx: &mut Context<Panel>| {
         shortcuts::stop_recording(panel);
         panel.workspace = None;
@@ -469,7 +478,16 @@ fn detail(panel: &mut Panel, ws: Workspace, window: &mut Window, cx: &mut Contex
             .into_any_element(),
     );
     let switching = sections::switch_section(panel, &ws, p, window, cx);
-    div().flex().flex_col().gap(px(ui::SECTION_GAP)).flex_1().min_w_0().child(card(rows, p)).child(switching)
+    let pictures = wallpaper::detail_section(panel, &ws, p, cx);
+    div()
+        .flex()
+        .flex_col()
+        .gap(px(ui::SECTION_GAP))
+        .flex_1()
+        .min_w_0()
+        .child(card(rows, p))
+        .child(switching)
+        .child(pictures)
 }
 
 /// The note at the top of the card when the workspace's last switch had problems (D713): it
@@ -827,6 +845,7 @@ pub fn render(panel: &mut Panel, window: &mut Window, cx: &mut Context<Panel>) -
         .child(header.child(capture))
         .child(body)
         .child(sections::all_section(panel, p, window, cx))
+        .children(wallpaper::page_sections(panel, p, window, cx))
 }
 
 #[cfg(test)]

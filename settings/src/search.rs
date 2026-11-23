@@ -351,6 +351,18 @@ const ENTRIES: &[Entry] = &[
     ),
     entry(
         Page::Workspaces,
+        "Wallpaper",
+        "A picture for each screen, for each workspace and when no workspace sets one",
+        "wallpaper background picture desktop image photo screen",
+    ),
+    entry(
+        Page::Workspaces,
+        "Change wallpaper with workspaces",
+        "Each screen shows the picture its workspace sets. Turning this off puts your own wallpaper back",
+        "wallpaper background picture desktop image spotlight slideshow",
+    ),
+    entry(
+        Page::Workspaces,
         "Put windows back",
         "Moved or minimized windows go back where the workspace puts them",
         "snap back drift status moved",

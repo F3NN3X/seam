@@ -604,6 +604,39 @@ fn files_without_scope_or_screen_in_use_load_unchanged() {
 }
 
 #[test]
+fn wallpapers_default_off_and_absent_load_unchanged() {
+    let file = json!({ "desks": { "sig": { "workspaces": [{ "id": "w", "name": "Dev" }], "active_workspace": "w" } } });
+    let p = scratch("without_wallpapers", file.to_string().as_bytes());
+    let c = Config::load_from(&p);
+    let _ = std::fs::remove_dir_all(p.parent().unwrap());
+    assert!(!c.wallpapers_enabled);
+    let desk = &c.desks["sig"];
+    assert!(desk.wallpaper.is_empty() && desk.workspace_wallpapers.is_empty());
+    // Saving adds none of the three keys.
+    let saved = serde_json::to_value(&c).unwrap();
+    assert!(saved.get("wallpapers_enabled").is_none());
+    assert!(saved["desks"]["sig"].get("wallpaper").is_none());
+    assert!(saved["desks"]["sig"].get("workspace_wallpapers").is_none());
+}
+
+#[test]
+fn wallpaper_fields_round_trip() {
+    let picture = |path: &str, fit| Wallpaper { path: path.into(), fit };
+    let mut desk = Desk::default();
+    desk.wallpaper.screens.insert("m".into(), picture(r"C:\a.jpg", Fit::Fill));
+    let set = WallpaperSet { screens: BTreeMap::from([("m".to_string(), picture(r"C:\b.png", Fit::Center))]) };
+    desk.workspace_wallpapers.insert("w".into(), set);
+    let config =
+        Config { wallpapers_enabled: true, desks: BTreeMap::from([("sig".into(), desk)]), ..Config::default() };
+    let saved = serde_json::to_value(&config).unwrap();
+    assert_eq!(saved["wallpapers_enabled"], true);
+    assert_eq!(saved["desks"]["sig"]["workspace_wallpapers"]["w"]["screens"]["m"]["fit"], "center");
+    let back: Config = serde_json::from_value(saved).unwrap();
+    assert_eq!(back.desks, config.desks);
+    assert!(back.wallpapers_enabled);
+}
+
+#[test]
 fn scope_round_trips() {
     use crate::workspace::Workspace;
     let ws = Workspace { id: "w".into(), scope: Some(r"\\?\DISPLAY#B".into()), ..Workspace::default() };

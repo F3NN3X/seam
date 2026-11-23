@@ -1090,6 +1090,26 @@ On 2 or more screens, with workspace X for all screens in use and workspace Y wi
 - [ ] **Tray.** Y's item says "Screen 2" before its shortcut. With X in use on screen 1 and Y on screen 2, both items are checked, not one radio item; with one in use, it is the radio item. Y with its screen unplugged is greyed and says "Screen not connected". The restore offer after a screens change says "Screens changed" and "Restore 2 workspaces? Click to restore".
 - [ ] **Stream Deck.** A workspace key for Y is lit while Y is in use on screen 2, dotted while Y has moved, and a key for X is lit while X is in use on screen 1.
 
+### Wallpapers
+
+On two screens of different scaling (one at 100%, one at 150% or more), with workspaces X and Y for all screens and Z for screen 2. Note your own wallpaper first.
+
+- [ ] **Off by default.** Workspaces shows **Wallpaper** with **Change wallpaper with workspaces** off, and **When no workspace sets one** dimmed with the tooltip "Turn on Change wallpaper with workspaces first". `config.json` has none of `wallpapers_enabled`, `wallpaper`, `workspace_wallpapers`.
+- [ ] **Spotlight and slideshow.** With Windows Spotlight on and the switch off, the second line says "Turning this on replaces your Windows Spotlight pictures until you turn it off"; with a slideshow, "…replaces your slideshow until you turn it off".
+- [ ] **Choose a picture.** Turn it on. Screen 1's row reads "<name>. Your own wallpaper" with **Choose picture**; pick a JPG: the row shows a thumbnail, the file name, `…` and **Fill**, Undo is offered, and the desktop changes on screen 1 only.
+- [ ] **1:1, no blur.** On each screen, a picture with fine detail is sharp, with no scaling blur, on the 100% and the 150% screen alike. `%LOCALAPPDATA%\Seam\wallpapers\cache` has one PNG per screen at that screen's pixel size.
+- [ ] **Each fit.** Fill covers and crops evenly; Fit leaves bars in Windows' background colour; Stretch fills exactly; Center shows the picture at its own size in the middle (cropped when bigger); Tile repeats it from the top left. A portrait screen too.
+- [ ] **Switching.** Give X a picture on both screens and Y one on screen 1 only. Switch X to Y: screen 1 changes while the windows move, screen 2 shows the desk default (or your own). Switch back: only the screens whose picture differs change.
+- [ ] **One screen.** Z's card has one row, for screen 2. Switch to Z: only screen 2's picture changes. Z with no picture shows the desk default on screen 2, not X's. `wallpaper.set` for Z on screen 1 answers "This workspace is for one screen, so it can only set that screen's picture".
+- [ ] **Turn off.** Turn the switch off: your own wallpaper is back on every screen (a picture, a solid colour and a slideshow, each tried). With Spotlight in the record, "Your wallpaper is back" says "Turn Windows Spotlight on again in Settings" and **Open background settings** opens it.
+- [ ] **Quit.** With it on, quit from the tray: your own wallpaper is back, and `wallpapers\original.json` is gone.
+- [ ] **Crash.** With it on, end `seam.exe` in Task Manager, set `"wallpapers_enabled": false` in `config.json` and start Seam: your own wallpaper comes back. With it left on instead, Seam shows its pictures again with no flash of your own.
+- [ ] **Someone else.** With it on, change the wallpaper in Windows Settings: Seam leaves it. The next switch or screen change puts Seam's pictures up, and turning off then puts back the one you chose in Settings.
+- [ ] **Errors.** A `.svg` (rename one to `.jpg` too), a HEIC without the HEIF extension ("Windows can't open this picture. For HEIC or AVIF, get the extension from the Microsoft Store"), a 30,000 px picture ("That picture is too big. Use one up to 20,000 pixels on each side"): each shows the message under the row and nothing changes.
+- [ ] **Gone.** Move a chosen picture away: the row says "<file> isn't there any more", and the screen keeps its last render.
+- [ ] **Explorer.** Restart Explorer in Task Manager: the pictures come back.
+- [ ] **Note what Windows does.** Whether the picture fades when it changes, whether a slideshow or Spotlight stops when Seam sets a picture (`GetStatus`, `BackgroundType` after), whether `GetWallpaper` gives back the path Seam set, and whether the desktop survives an uninstall with it on.
+
 ### Close and minimize a workspace
 
 - [ ] **Unsaved work stays.** Type into Notepad without saving, put it in a workspace, then **Close this workspace** from the workspace's **...** menu. The list shows every window ticked, with the count on the button ("Close 4 windows"). Close: Notepad asks to save, and when you cancel, it stays open. Seam doesn't ask again.

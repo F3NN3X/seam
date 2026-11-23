@@ -212,6 +212,19 @@ pub(super) unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARA
                 with_app(align_finished);
                 LRESULT(0)
             }
+            seam::wallpaper::worker::WM_APP_WALLPAPER => {
+                // Busy elsewhere: the reports wait with the worker, and a timer tries again.
+                if with_app(wallpaper_reported).is_none() {
+                    SetTimer(Some(hwnd), TIMER_WALLPAPER, 100, None);
+                }
+                LRESULT(0)
+            }
+            WM_TIMER if wparam.0 == TIMER_WALLPAPER => {
+                if with_app(wallpaper_reported).is_some() {
+                    let _ = KillTimer(Some(hwnd), TIMER_WALLPAPER);
+                }
+                LRESULT(0)
+            }
             sync::WM_APP_SYNC => {
                 with_app(sync::incoming);
                 LRESULT(0)
@@ -277,6 +290,10 @@ pub(super) unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARA
                 if wparam.0 == SPI_SETWORKAREA.0 as usize {
                     snap::work_area_changed();
                     snap::display_changed();
+                }
+                // Seam's own pictures send this too; the worker tells them apart (D799).
+                if wparam.0 == SPI_SETDESKWALLPAPER.0 as usize {
+                    with_app(|a| wallpaper_changed_outside(a));
                 }
                 // The colours changed, which is what switching the taskbar light or dark sends.
                 if lparam.0 != 0 && PCWSTR(lparam.0 as *const u16).to_string().is_ok_and(|s| s == "ImmersiveColorSet") {
@@ -354,6 +371,8 @@ pub(super) unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARA
                 with_app(|a| {
                     add_icon(a);
                     refresh(a);
+                    // Windows keeps the paths, but the cache may have been cleaned meanwhile.
+                    wallpaper_screens(a, true);
                 });
                 LRESULT(0)
             }
@@ -602,7 +621,10 @@ unsafe fn on_destroy() {
         hook::enable(false);
         // One second for the whole quit: the pins, the tiled windows and the parked ones share it.
         let until = Instant::now() + Duration::from_secs(1);
+        let mut wallpaper_back = None;
         if with_app(|a| a.release_on_exit).unwrap_or(false) {
+            // Asked first, so the worker puts mine back while the rest of the quit runs (D798).
+            wallpaper_back = with_app(|a| wallpaper_quit(a)).flatten();
             wm::release_before_exit();
             // A quit the user asked for, the same signal as pins: not an update, a crash or a sign-out.
             if with_app(|a| a.cfg.zones.tiling_free_on_quit).unwrap_or(false) {
@@ -623,6 +645,12 @@ unsafe fn on_destroy() {
         mousewatch::stop();
         spotlight::stop();
         crate::overview_win::shutdown();
+        // What's left of the second. Without an answer in time the journal stays for the next start.
+        if let Some(back) = wallpaper_back
+            && back.recv_timeout(until.saturating_duration_since(Instant::now())) != Ok(true)
+        {
+            log::info!("wallpaper: your own didn't go back before quitting, so the record stays");
+        }
         with_app(|a| {
             let nid = tray_data(a);
             let _ = Shell_NotifyIconW(NIM_DELETE, &nid);

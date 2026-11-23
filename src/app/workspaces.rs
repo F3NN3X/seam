@@ -244,6 +244,8 @@ pub(super) fn start_switch_job(
     let held = switcher::held_windows(&holders(app, &workspace.id, &reach));
     // The last session has no layouts, so a restore leaves them alone.
     apply_zones(app, &workspace, &reach);
+    // The pictures change while the windows move (D794).
+    wallpaper_sync(app, Some(&workspace));
     let name = workspace.name.clone();
     let screens: Vec<SwitchScreen> = job_screens(app).into_iter().filter(|s| reach(&s.id)).collect();
     let number = scope.as_deref().and_then(|s| screens.iter().find(|m| m.id == s)).map(|m| m.number);
@@ -275,6 +277,7 @@ pub(super) fn start_switch_job(
         })
     } else {
         log::info!("workspace {}: the switch didn't start, its screen layouts stay set", name);
+        wallpaper_switched(app);
         refused("Couldn't start the switch")
     }
 }
@@ -372,6 +375,8 @@ pub(super) fn switched(app: &mut App) {
         app.recheck = true;
         unsafe { SetTimer(Some(app.hwnd), TIMER_DRIFT, DRIFT_AFTER_MS, None) };
     }
+    // Done or cancelled, what is in use now decides each screen's picture.
+    wallpaper_switched(app);
     // Apps opened by hand during the switch go to their places now.
     live::switch_ended();
     snap::tiling_switch_ended();

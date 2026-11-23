@@ -47,12 +47,15 @@ fn every_field_set() -> Value {
         "sign_in": { "mode": "nothing", "ask": true }, "active_workspace": "w", "previous_workspace": "w",
         "default_workspace": "w", "tiling": { "m": {} }, "margins": { "m": {} }, "screens": [{ "id": "m" }],
         "screen_in_use": { "m": { "workspace": "w", "previous": "w" } },
+        "wallpaper": { "screens": { "m": { "path": "C:\\a.jpg" } } },
+        "workspace_wallpapers": { "w": { "screens": { "m": { "path": "C:\\b.jpg", "fit": "tile" } } } },
     }))
     .unwrap();
     let config = Config {
         setup_done: true,
         workspaces_update_closed: Some(ClosedApps::Keep),
         workspaces_offer_restore: true,
+        wallpapers_enabled: true,
         custom_layouts: vec![json!(1)],
         restore_apps_saved: Some(1),
         seen: vec!["x".into()],
@@ -124,6 +127,22 @@ fn screen_in_use_is_local() {
     let mine = json!({ "desks": { "sig": { "screen_in_use": { "m": { "workspace": "mine" } } } } });
     let theirs = json!({ "desks": { "sig": { "screen_in_use": { "m": { "workspace": "evil" } } } } });
     assert_eq!(join(&theirs, &mine)["desks"]["sig"]["screen_in_use"]["m"]["workspace"], "mine");
+}
+
+#[test]
+fn wallpaper_fields_stay_on_this_pc() {
+    let (shared, local) = split(&every_field_set());
+    // The pictures are files on this PC, and the switch says whether this PC changes them.
+    assert!(shared.get("wallpapers_enabled").is_none());
+    assert_eq!(local["wallpapers_enabled"], true);
+    for key in ["wallpaper", "workspace_wallpapers"] {
+        assert!(shared["desks"]["sig"].get(key).is_none(), "{key}");
+    }
+    assert_eq!(local["desks"]["sig"]["workspace_wallpapers"]["w"]["screens"]["m"]["fit"], "tile");
+    // A file from the folder can't point this PC at a picture either.
+    let theirs = json!({ "desks": { "sig": { "wallpaper": { "screens": { "m": { "path": "C:\\evil.png" } } } } } });
+    let mine = json!({ "desks": { "sig": { "wallpaper": { "screens": { "m": { "path": "C:\\mine.png" } } } } } });
+    assert_eq!(join(&theirs, &mine)["desks"]["sig"]["wallpaper"]["screens"]["m"]["path"], "C:\\mine.png");
 }
 
 fn config_with(

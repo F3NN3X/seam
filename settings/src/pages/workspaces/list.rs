@@ -187,7 +187,7 @@ fn meta_line(scope: Option<Scope>, active: Option<(Moved, &[u32])>) -> Option<St
 }
 
 /// The status on the item of the workspace in use: a dot and a word, as the editor's rows have.
-fn active_status(moved: Moved, only: &[u32], p: Palette) -> AnyElement {
+fn active_status(moved: Moved, (scope, only): (Option<Scope>, &[u32]), p: Palette) -> AnyElement {
     let dot = if moved == Moved::No { ui::dot(p.positive, true) } else { ui::dot(p.text_muted, false) };
     div()
         .flex()
@@ -195,7 +195,11 @@ fn active_status(moved: Moved, only: &[u32], p: Palette) -> AnyElement {
         .items_center()
         .gap(px(tokens::SPACE_8))
         .child(dot)
-        .child(text_style(div(), tokens::CAPTION).text_color(p.text_secondary).child(active_words(moved, only)))
+        .child(
+            text_style(div(), tokens::CAPTION)
+                .text_color(p.text_secondary)
+                .child(meta_line(scope, Some((moved, only))).unwrap_or_default()),
+        )
         .into_any_element()
 }
 
@@ -228,8 +232,10 @@ pub(super) fn item(
     let default =
         marks.default.then(|| text_style(div(), tokens::CAPTION).text_color(p.text_secondary).child("Default"));
     // The marks get a line of their own, so the name keeps the item's full width.
+    // The screen leads the line, which is one with the status while the workspace is in use.
     let scope = marks
         .scope
+        .filter(|_| marks.active.is_none())
         .map(|scope| text_style(div(), tokens::CAPTION).text_color(p.text_secondary).child(scope_words(scope)));
     let meta = (marks.default || marks.active.is_some() || marks.scope.is_some()).then(|| {
         div()
@@ -238,7 +244,7 @@ pub(super) fn item(
             .gap(px(tokens::SPACE_8))
             .children(scope)
             .children(default)
-            .children(marks.active.map(|moved| active_status(moved, &marks.only, p)))
+            .children(marks.active.map(|moved| active_status(moved, (marks.scope, &marks.only), p)))
     });
     let mut label = vec![ws.name.clone()];
     if marks.default {

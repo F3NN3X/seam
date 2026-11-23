@@ -350,9 +350,15 @@ pub(super) fn numbers(of: &[u32]) -> String {
 
 /// The line under the name: which screens have zones, and how many windows have moved.
 fn summary(panel: &Panel, ws: &Workspace) -> String {
-    let screens = panel.state.as_ref().map(|s| s.screens.clone()).unwrap_or_default();
-    let mut used: Vec<u32> = ws
-        .windows
+    let screens = panel.state.as_ref().map(|s| s.screens.as_slice()).unwrap_or_default();
+    header_words(ws, screens, moved_windows(panel, ws))
+}
+
+/// `summary` for `moved` windows that aren't where the workspace puts them. A one-screen
+/// workspace counts the zones and windows on its screen only, since its other rows are left alone (D788).
+fn header_words(ws: &Workspace, screens: &[Screen], moved: usize) -> String {
+    let rows: Vec<&Rule> = ws.windows.iter().filter(|r| workspace::in_scope(r, ws.scope.as_deref())).collect();
+    let mut used: Vec<u32> = rows
         .iter()
         .filter(|r| matches!(r.target, Target::Zone { .. }))
         .filter_map(|r| screens.iter().find(|s| s.id == r.monitor).map(|s| s.number))
@@ -360,8 +366,8 @@ fn summary(panel: &Panel, ws: &Workspace) -> String {
     used.sort_unstable();
     used.dedup();
     let zones = match used.as_slice() {
-        [] if ws.windows.is_empty() => "No windows yet".to_string(),
-        [] => format!("{} window{}", ws.windows.len(), if ws.windows.len() == 1 { "" } else { "s" }),
+        [] if rows.is_empty() => "No windows yet".to_string(),
+        [] => format!("{} window{}", rows.len(), if rows.len() == 1 { "" } else { "s" }),
         [only] => format!("Zones on screen {only}"),
         many => format!("Zones on screens {}", numbers(many)),
     };
@@ -371,7 +377,7 @@ fn summary(panel: &Panel, ws: &Workspace) -> String {
         Some(None) => return "Its screen isn't connected".into(),
         None => zones,
     };
-    match moved_windows(panel, ws) {
+    match moved {
         0 => zones,
         1 => format!("{zones}. 1 window isn't where this workspace puts it"),
         n => format!("{zones}. {n} windows aren't where this workspace puts them"),
@@ -821,4 +827,54 @@ pub fn render(panel: &mut Panel, window: &mut Window, cx: &mut Context<Panel>) -
         .child(header.child(capture))
         .child(body)
         .child(sections::all_section(panel, p, window, cx))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::header_words;
+    use seam::state::{Screen, ScreenRect};
+    use seam::workspace::{Rule, Target, Workspace};
+
+    fn screen(number: u32, id: &str) -> Screen {
+        Screen {
+            number,
+            id: id.into(),
+            name: String::new(),
+            primary: false,
+            rect: ScreenRect::default(),
+            layout: None,
+            workspace: None,
+        }
+    }
+
+    fn zone_row(monitor: &str) -> Rule {
+        Rule { monitor: monitor.into(), target: Target::Zone { zone: 1, span_to: None }, ..Rule::default() }
+    }
+
+    #[test]
+    fn the_header_counts_the_zones_of_its_screen_only() {
+        let screens = [screen(1, "s1"), screen(2, "s2")];
+        // Y is for screen 2 and keeps a zone row on screen 1.
+        let ws = Workspace {
+            windows: vec![zone_row("s1"), zone_row("s2")],
+            scope: Some("s2".into()),
+            ..Workspace::default()
+        };
+        assert_eq!(header_words(&ws, &screens, 0), "Screen 2 only. Zones on screen 2");
+        // With no zone row on its screen, it counts the windows there.
+        let rects = Workspace {
+            windows: vec![zone_row("s1"), Rule { monitor: "s2".into(), ..Rule::default() }],
+            scope: Some("s2".into()),
+            ..Workspace::default()
+        };
+        assert_eq!(
+            header_words(&rects, &screens, 1),
+            "Screen 2 only. 1 window. 1 window isn't where this workspace puts it"
+        );
+        // All screens names every screen with a zone.
+        let wide = Workspace { scope: None, ..ws };
+        assert_eq!(header_words(&wide, &screens, 0), "Zones on screens 1 and 2");
+        let gone = Workspace { scope: Some("s9".into()), ..wide };
+        assert_eq!(header_words(&gone, &screens, 0), "Its screen isn't connected");
+    }
 }

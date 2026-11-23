@@ -54,8 +54,9 @@ pub use matching::{Bound, Candidate, assign, assign_bound, assign_bound_all};
 pub use order::{MoveError, moved_to};
 pub use plan::{OTHER_SCREEN, RowAction, SCREEN_GONE, keeps_its_app, row_action, screen_gone, takes_part};
 pub use scope::{
-    SCOPE_GONE, after_switch, close_reach, cycle, forget, held, holders_of, holds, in_scope, in_use_on, keep_valid,
-    own_screens, rescope, retarget, scope_connected, sit_out, switch_back_target,
+    InUseSlots, SCOPE_GONE, after_switch, close_reach, cycle, forget, held, holders_of, holds, in_scope, in_use_on,
+    in_use_slots, keep_valid, own_screens, quick_save_target, rescope, restore_in_use, retarget, scope_connected,
+    sit_out, switch_back_target,
 };
 pub use secrets::{
     Seal, clean_imported_items, for_panel, kind_only, seal_commands, seal_patch, sealed_in, without_clear,

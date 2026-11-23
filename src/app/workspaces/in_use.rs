@@ -48,20 +48,21 @@ pub(in crate::app) fn in_use_ids(app: &App) -> Vec<String> {
 /// still in use, else the desk-wide one while it holds a screen (D785).
 pub(in crate::app) fn meant(app: &App, screen: Option<&str>) -> Option<String> {
     let desk = app.cfg.desks.get(&app.sig);
-    match screen {
-        Some(screen) => desk.and_then(|d| workspace::in_use_on(d, screen)).map(str::to_string),
-        None => {
-            // A desk-wide workspace every screen has replaced with its own is in use nowhere.
-            // With no screen's own in use, this is today's answer, even while screens change.
-            let own = desk.is_some_and(|d| d.screen_in_use.values().any(|s| s.workspace.is_some()));
-            if !own {
-                return app.workspace.clone();
-            }
-            let in_use = in_use_ids(app);
-            let still = |id: &String| in_use.contains(id);
-            app.last_in_use.clone().filter(still).or_else(|| app.workspace.clone().filter(still))
-        }
+    workspace::quick_save_target(desk, screen, screen.is_none().then(|| unnamed(app)).flatten())
+}
+
+/// The workspace the tray and the API mean with no screen named.
+fn unnamed(app: &App) -> Option<String> {
+    let desk = app.cfg.desks.get(&app.sig);
+    // A desk-wide workspace every screen has replaced with its own is in use nowhere.
+    // With no screen's own in use, this is today's answer, even while screens change.
+    let own = desk.is_some_and(|d| d.screen_in_use.values().any(|s| s.workspace.is_some()));
+    if !own {
+        return app.workspace.clone();
     }
+    let in_use = in_use_ids(app);
+    let still = |id: &String| in_use.contains(id);
+    app.last_in_use.clone().filter(still).or_else(|| app.workspace.clone().filter(still))
 }
 
 /// The screens a switch to `ws` leaves alone, with the stamp key of the workspace in use on
@@ -187,11 +188,8 @@ pub(in crate::app) type InUse = (Option<String>, Option<String>, BTreeMap<String
 /// What is in use on the desk now, to be put back by `put_in_use_back`.
 pub(super) fn in_use_now(app: &App) -> InUse {
     let desk = app.cfg.desks.get(&app.sig);
-    (
-        app.workspace.clone(),
-        desk.and_then(|d| d.previous_workspace.clone()),
-        desk.map(|d| d.screen_in_use.clone()).unwrap_or_default(),
-    )
+    let (_, previous, screens) = desk.map(workspace::in_use_slots).unwrap_or_default();
+    (app.workspace.clone(), previous, screens)
 }
 
 /// Workspaces whose scope a save changes (`(id, old, new)`): what is in use follows them (brief J,
@@ -210,7 +208,7 @@ pub(super) fn rescoped(app: &mut App, changes: &[(&str, Option<&str>, Option<&st
 /// A save that moved what is in use failed: it is as it was.
 pub(super) fn put_in_use_back(app: &mut App, before: InUse) {
     let Some(desk) = app.cfg.desks.get_mut(&app.sig) else { return };
-    (desk.active_workspace, desk.previous_workspace, desk.screen_in_use) = before;
+    workspace::restore_in_use(desk, before);
     app.workspace = desk.active_workspace.clone();
 }
 

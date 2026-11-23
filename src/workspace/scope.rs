@@ -3,7 +3,7 @@
 //! row added to such a workspace goes. Pure, so the tray, the API and the tests agree.
 
 use super::{Rule, Target, WinState, Workspace};
-use crate::config::Desk;
+use crate::config::{Desk, ScreenInUse};
 use crate::zones::Rect;
 use std::collections::{BTreeMap, HashSet};
 
@@ -14,6 +14,29 @@ pub const SCOPE_GONE: &str = "This workspace's screen isn't connected";
 pub fn in_use_on<'a>(desk: &'a Desk, screen: &str) -> Option<&'a str> {
     let own = desk.screen_in_use.get(screen).and_then(|s| s.workspace.as_deref());
     own.or(desk.active_workspace.as_deref())
+}
+
+/// What is in use on a desk, as `restore_in_use` puts it back: the desk-wide workspace, the one
+/// before it and each screen's own.
+pub type InUseSlots = (Option<String>, Option<String>, BTreeMap<String, ScreenInUse>);
+
+/// Read what is in use on `desk`, for Undo.
+pub fn in_use_slots(desk: &Desk) -> InUseSlots {
+    (desk.active_workspace.clone(), desk.previous_workspace.clone(), desk.screen_in_use.clone())
+}
+
+/// Put back what `in_use_slots` read.
+pub fn restore_in_use(desk: &mut Desk, slots: InUseSlots) {
+    (desk.active_workspace, desk.previous_workspace, desk.screen_in_use) = slots;
+}
+
+/// The workspace Quick save and the tray's items mean: the one in use on `screen`, or with none
+/// named `unnamed`, the one last switched to (D785, D789).
+pub fn quick_save_target(desk: Option<&Desk>, screen: Option<&str>, unnamed: Option<String>) -> Option<String> {
+    match screen {
+        Some(screen) => desk.and_then(|d| in_use_on(d, screen)).map(str::to_string),
+        None => unnamed,
+    }
 }
 
 /// Each of `screens` with the workspace in use on it, for those that have one.
@@ -414,16 +437,33 @@ mod tests {
 
     #[test]
     fn undoing_a_quick_save_puts_every_slot_back() {
-        // Y is in use on screen 2; a Quick save that makes a new workspace takes every screen.
-        let mut d = desk(Some("a"), Some("z"));
+        // X is desk-wide with Z before it, and Y is in use on screen 2.
+        let mut d = desk(Some("x"), Some("z"));
         after_switch(&mut d, "y", Some("s2"), &["s1", "s2"]);
         let before = d.clone();
-        let kept = (d.active_workspace.clone(), d.previous_workspace.clone(), d.screen_in_use.clone());
+        let kept = in_use_slots(&d);
+        // A quick save that makes a new workspace takes every screen, as `quick_saved` does.
         after_switch(&mut d, "n", None, &["s1", "s2"]);
         assert_eq!((in_use_on(&d, "s1"), in_use_on(&d, "s2")), (Some("n"), Some("n")));
-        // Undo writes the three slots back as they were, the screens' own included.
-        (d.active_workspace, d.previous_workspace, d.screen_in_use) = kept;
+        assert_ne!(d, before);
+        restore_in_use(&mut d, kept);
         assert_eq!(d, before);
         assert_eq!(in_use_on(&d, "s2"), Some("y"));
+    }
+
+    #[test]
+    fn quick_save_aims_at_the_workspace_in_use_on_the_screen() {
+        let mut d = desk(Some("x"), None);
+        after_switch(&mut d, "y", Some("s2"), &["s1", "s2"]);
+        let target =
+            |screen: Option<&str>, unnamed: Option<&str>| quick_save_target(Some(&d), screen, unnamed.map(Into::into));
+        // A screen with its own workspace, one on the desk-wide workspace, and none named.
+        assert_eq!(target(Some("s2"), Some("x")).as_deref(), Some("y"));
+        assert_eq!(target(Some("s1"), Some("y")).as_deref(), Some("x"));
+        assert_eq!(target(None, Some("y")).as_deref(), Some("y"));
+        // Nothing in use: a new workspace.
+        let empty = desk(None, None);
+        assert_eq!(quick_save_target(Some(&empty), Some("s1"), None), None);
+        assert_eq!(quick_save_target(None, Some("s1"), None), None);
     }
 }

@@ -8,7 +8,10 @@ fn picture(path: &str) -> Wallpaper {
 }
 
 fn set(pairs: &[(&str, &str)]) -> WallpaperSet {
-    WallpaperSet { screens: pairs.iter().map(|(s, p)| (s.to_string(), picture(p))).collect() }
+    WallpaperSet {
+        screens: pairs.iter().map(|(s, p)| (s.to_string(), picture(p))).collect(),
+        ..WallpaperSet::default()
+    }
 }
 
 fn ws(id: &str, scope: Option<&str>) -> Workspace {
@@ -101,6 +104,87 @@ fn scope_change_drops_the_old_screens_picture() {
     assert_eq!(d.workspace_wallpapers, BTreeMap::from([("solo".to_string(), set(&[("s2", "b.jpg")]))]));
     // Nothing left to drop.
     assert!(!keep_valid(&mut d, &list));
+}
+
+/// `desk()` with a picture across all screens for "dev" and for the desk default.
+fn spanning() -> Desk {
+    let mut d = desk();
+    d.workspace_wallpapers.get_mut("dev").unwrap().span = Some(picture("devwide.jpg"));
+    d.wallpaper.span = Some(picture("deskwide.jpg"));
+    d
+}
+
+#[test]
+fn screen_picture_beats_span_in_the_same_set() {
+    let d = spanning();
+    // dev has its own picture for s1 and only the span for s2.
+    let got = wanted(&d, &["s1", "s2"]);
+    assert_eq!(paths(&got), [("s1", Some("dev1.jpg"), Origin::Workspace), ("s2", Some("devwide.jpg"), Origin::Span)]);
+    // The next choice for s1 is the desk default's own picture, or with none, its span.
+    assert_eq!(choices(&d, "s1")[1].0.path, "desk1.jpg");
+    let mut bare = d.clone();
+    bare.wallpaper.screens.clear();
+    assert_eq!(choices(&bare, "s1")[1], (picture("deskwide.jpg"), Origin::Span));
+}
+
+#[test]
+fn one_screen_workspace_replaces_only_its_part() {
+    let mut d = spanning();
+    d.workspace_wallpapers.get_mut("dev").unwrap().screens.clear();
+    let before = wanted(&d, &["s1", "s2"]);
+    assert_eq!(paths(&before), [("s1", Some("devwide.jpg"), Origin::Span), ("s2", Some("devwide.jpg"), Origin::Span)]);
+    // notes is for s2 and sets its own picture: s1 keeps its part, s2 shows notes'.
+    let next = after_switch(&d, "notes", Some("s2"), &["s1", "s2"], &[]);
+    let after = wanted(&next, &["s1", "s2"]);
+    assert_eq!(after[0], before[0]);
+    assert_eq!(paths(&after)[1], ("s2", Some("notes2.jpg"), Origin::Workspace));
+    // Without a picture of its own, s2 shows the desk default's, not dev's span.
+    d.workspace_wallpapers.remove("notes");
+    let next = after_switch(&d, "notes", Some("s2"), &["s1", "s2"], &[]);
+    assert_eq!(paths(&wanted(&next, &["s1", "s2"]))[1], ("s2", Some("desk2.jpg"), Origin::Desk));
+    // And when that is a span, it is its part of it.
+    d.wallpaper.screens.clear();
+    let next = after_switch(&d, "notes", Some("s2"), &["s1", "s2"], &[]);
+    assert_eq!(paths(&wanted(&next, &["s1", "s2"]))[1], ("s2", Some("deskwide.jpg"), Origin::Span));
+}
+
+#[test]
+fn shape_includes_screens_showing_something_else() {
+    use crate::desk::Mon;
+    use crate::geom::Rect;
+    let mon = |id: &str, left, primary| Mon {
+        id: id.into(),
+        gdi: String::new(),
+        name: id.into(),
+        named: true,
+        rect: Rect::new(left, 0, 1000, 1000),
+        raw_dpi: 0.0,
+        primary,
+    };
+    let mons = [mon("s1", 0, true), mon("s2", 1000, false)];
+    // The shape comes from the screens, not from what they show, so it is the same while s2 shows
+    // notes' own picture, and s2's part comes back from the cache when the switch ends (D803).
+    let shape = || span::places(&span::span_rects(&mons, &[], 0.0).0);
+    let mut d = spanning();
+    d.workspace_wallpapers.get_mut("dev").unwrap().screens.clear();
+    let first = |d: &Desk, s: &str| choices(d, s).first().map(|c| c.1);
+    assert_eq!(first(&d, "s2"), Some(Origin::Span));
+    let all = shape();
+    let apart = after_switch(&d, "notes", Some("s2"), &["s1", "s2"], &[]);
+    assert_eq!(first(&apart, "s2"), Some(Origin::Workspace));
+    assert_eq!(all, shape());
+    assert_eq!(all.iter().flatten().count(), 2);
+}
+
+#[test]
+fn a_one_screen_workspace_has_no_span() {
+    assert_eq!(may_span(Some(&ws("solo", Some("s2")))), Err(NO_SPAN));
+    assert_eq!(may_span(Some(&ws("dev", None))), Ok(()));
+    assert_eq!(may_span(None), Ok(()));
+    // A scope that arrives later drops the span with the other screens' pictures.
+    let mut d = spanning();
+    assert!(keep_valid(&mut d, &[ws("dev", Some("s1"))]));
+    assert_eq!(d.workspace_wallpapers["dev"].span, None);
 }
 
 #[test]
@@ -226,7 +310,7 @@ fn compose_puts_bars_round_a_fitted_picture() {
 
 #[test]
 fn cache_key_changes_with_file_fit_and_size() {
-    let key = |path: &str, len, written, fit, size| cache_key(path, len, written, fit, 0, size);
+    let key = |path: &str, len, written, fit, size| cache_key(path, len, written, fit, 0, size, None);
     let base = key(r"C:\a.jpg", 10, 1, Fit::Fill, (1920, 1080));
     assert_eq!(base, key(r"c:\A.JPG", 10, 1, Fit::Fill, (1920, 1080)));
     for other in [
@@ -235,13 +319,27 @@ fn cache_key_changes_with_file_fit_and_size() {
         key(r"C:\a.jpg", 10, 2, Fit::Fill, (1920, 1080)),
         key(r"C:\a.jpg", 10, 1, Fit::Tile, (1920, 1080)),
         key(r"C:\a.jpg", 10, 1, Fit::Fill, (1080, 1920)),
-        cache_key(r"C:\a.jpg", 10, 1, Fit::Fill, 0x00ff_ffff, (1920, 1080)),
+        cache_key(r"C:\a.jpg", 10, 1, Fit::Fill, 0x00ff_ffff, (1920, 1080), None),
     ] {
         assert_ne!(base, other);
     }
     // A changed file keeps the prefix, so its last render is found once the file is gone.
-    assert!(base.starts_with(&cache_prefix(r"C:\a.jpg", Fit::Fill, 0, (1920, 1080))));
+    assert!(base.starts_with(&cache_prefix(r"C:\a.jpg", Fit::Fill, 0, (1920, 1080), None)));
     assert!(key(r"C:\a.jpg", 99, 9, Fit::Fill, (1920, 1080)).starts_with(&base[..16]));
+}
+
+#[test]
+fn cache_key_includes_the_cut() {
+    let key = |cut| cache_key(r"C:\a.jpg", 10, 1, Fit::Fill, 0, (1920, 1080), cut);
+    let (left, right) = (Cut { x: 0, y: 0, w: 3000, h: 2000 }, Cut { x: 3000, y: 0, w: 3000, h: 2000 });
+    assert_ne!(key(Some(left)), key(Some(right)));
+    assert_ne!(key(Some(left)), key(None));
+    assert_ne!(key(Some(left)), key(Some(Cut { h: 1999, ..left })));
+    assert_eq!(key(Some(left)), key(Some(left)));
+    // The prefix has it too, so a picture that is gone finds the render of its own part.
+    let prefix = |cut| cache_prefix(r"C:\a.jpg", Fit::Fill, 0, (1920, 1080), cut);
+    assert!(key(Some(right)).starts_with(&prefix(Some(right))));
+    assert_ne!(prefix(Some(left)), prefix(Some(right)));
 }
 
 #[test]

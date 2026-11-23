@@ -150,6 +150,13 @@ fn along_offset(mons: &[Mon], links: &[Link], placed: usize, next: usize, side: 
 /// from the primary across touching screens and glued borders, but not across
 /// a border that isn't on the desk.
 pub fn physical_layout(mons: &[Mon], links: &[Link]) -> Vec<Placed> {
+    walk(mons, links, 0.0).0
+}
+
+/// `physical_layout` with `gap` mm between screens that meet, and for each screen whether the
+/// walk reached it. A screen that touches nothing isn't reached; it sits in the row to the right
+/// as the Displays map has it (brief L, D804).
+pub fn walk(mons: &[Mon], links: &[Link], gap: f64) -> (Vec<Placed>, Vec<bool>) {
     let size = |i: usize| {
         let m = &mons[i];
         (to_mm(m.rect.width() as f64, dpi(m)), to_mm(m.rect.height() as f64, dpi(m)))
@@ -159,7 +166,7 @@ pub fn physical_layout(mons: &[Mon], links: &[Link]) -> Vec<Placed> {
         Placed { index: i, x, y, w, h, sized: mons[i].raw_dpi > 0.0 }
     };
     let Some(first) = mons.iter().position(|m| m.primary).or((!mons.is_empty()).then_some(0)) else {
-        return Vec::new();
+        return (Vec::new(), Vec::new());
     };
     let mut placed = vec![at(first, 0.0, 0.0)];
     let mut queue = VecDeque::from([first]);
@@ -187,14 +194,15 @@ pub fn physical_layout(mons: &[Mon], links: &[Link]) -> Vec<Placed> {
             let along = along_offset(mons, links, i, j, side);
             let (w, h) = size(j);
             placed.push(match side {
-                Side::Right => at(j, from.x + from.w, from.y + along),
-                Side::Left => at(j, from.x - w, from.y + along),
-                Side::Bottom => at(j, from.x + along, from.y + from.h),
-                Side::Top => at(j, from.x + along, from.y - h),
+                Side::Right => at(j, from.x + from.w + gap, from.y + along),
+                Side::Left => at(j, from.x - w - gap, from.y + along),
+                Side::Bottom => at(j, from.x + along, from.y + from.h + gap),
+                Side::Top => at(j, from.x + along, from.y - h - gap),
             });
             queue.push_back(j);
         }
     }
+    let reached: Vec<bool> = (0..mons.len()).map(|j| placed.iter().any(|p| p.index == j)).collect();
     // Screens that touch nothing sit in a row to the right.
     for j in 0..mons.len() {
         if !placed.iter().any(|p| p.index == j) {
@@ -202,7 +210,7 @@ pub fn physical_layout(mons: &[Mon], links: &[Link]) -> Vec<Placed> {
             placed.push(at(j, right + 50.0, 0.0));
         }
     }
-    placed
+    (placed, reached)
 }
 
 /// A size in millimetres is a size on a screen of this many "pixels" per inch.

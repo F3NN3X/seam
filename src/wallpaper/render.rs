@@ -3,7 +3,8 @@
 //! canvas of the screen's size by `fit_rect` and `compose`, and saved as a PNG. Runs on the
 //! `seam-wallpaper` worker only.
 
-use super::{Fit, NO_CODEC, TOO_BIG, UNREADABLE, compose, fit_rect, too_big};
+use super::span::{Cut, part};
+use super::{Area, Fit, NO_CODEC, Piece, Placement, TOO_BIG, UNREADABLE, compose, fit_rect, too_big};
 use std::path::Path;
 use windows::Win32::Foundation::{GENERIC_READ, GENERIC_WRITE, WINCODEC_ERR_COMPONENTNOTFOUND};
 use windows::Win32::Graphics::Imaging::*;
@@ -13,6 +14,14 @@ use windows::core::{HSTRING, w};
 
 /// The EXIF colour space that is sRGB.
 const EXIF_SRGB: u32 = 1;
+/// A picture of up to this many pixels is kept decoded for the parts of a span (D806).
+const KEEP_PIXELS: u64 = 64_000_000;
+
+fn size(picture: &IWICBitmapSource) -> std::result::Result<(u32, u32), Failure> {
+    let (mut w, mut h) = (0, 0);
+    unsafe { picture.GetSize(&mut w, &mut h) }.map_err(Failure::of)?;
+    Ok((w, h))
+}
 
 /// Why a picture couldn't be rendered: one of the strings the window shows, and for the log, the HRESULT.
 #[derive(Debug)]
@@ -96,6 +105,76 @@ impl Wic {
         let tmp = out.with_extension("png.tmp");
         self.save_png(&canvas, size, &tmp).map_err(Failure::of)?;
         std::fs::rename(&tmp, out).map_err(|_| Failure { message: UNREADABLE, hresult: None })
+    }
+
+    /// A picture's size once upright, without decoding its pixels.
+    pub fn size_of(&self, source: &str) -> std::result::Result<(u32, u32), Failure> {
+        size(&self.upright_bgra(source)?)
+    }
+
+    /// `source` ready to be cut into parts (D806), and whether it is kept in memory: up to
+    /// `KEEP_PIXELS` it is decoded once, and above that it is read again for each part, so memory
+    /// stays bounded.
+    pub fn decode(&self, source: &str) -> std::result::Result<(IWICBitmapSource, bool), Failure> {
+        let picture = self.upright_bgra(source)?;
+        let (w, h) = size(&picture)?;
+        if too_big((w, h)) {
+            return Err(Failure { message: TOO_BIG, hresult: None });
+        }
+        if w as u64 * h as u64 > KEEP_PIXELS {
+            return Ok((picture, false));
+        }
+        let bitmap = unsafe { self.0.CreateBitmapFromSource(&picture, WICBitmapCacheOnLoad) }.map_err(Failure::of)?;
+        Ok((bitmap.into(), true))
+    }
+
+    /// Render the part `cut` of `picture` for a screen of `screen` pixels (D805, D806), saved as a
+    /// PNG through a `.tmp` file.
+    pub fn render_part(
+        &self,
+        picture: &IWICBitmapSource,
+        screen: (u32, u32),
+        cut: Cut,
+        bars: u32,
+        out: &Path,
+    ) -> std::result::Result<(), Failure> {
+        let canvas = self.part_canvas(picture, screen, cut, bars)?;
+        let tmp = out.with_extension("png.tmp");
+        self.save_png(&canvas, screen, &tmp).map_err(Failure::of)?;
+        std::fs::rename(&tmp, out).map_err(|_| Failure { message: UNREADABLE, hresult: None })
+    }
+
+    /// The screen's pixels for the part `cut` of `picture`: clipped, scaled to the screen with high
+    /// quality cubic, and on bars where the cut leaves the picture.
+    fn part_canvas(
+        &self,
+        picture: &IWICBitmapSource,
+        screen: (u32, u32),
+        cut: Cut,
+        bars: u32,
+    ) -> std::result::Result<Vec<u8>, Failure> {
+        let (placement, pixels) = match part(size(picture)?, cut, screen) {
+            Some((clip, placed)) => {
+                let rect = WICRect { X: clip.x as i32, Y: clip.y as i32, Width: clip.w as i32, Height: clip.h as i32 };
+                let clipper = unsafe { self.0.CreateBitmapClipper() }.map_err(Failure::of)?;
+                unsafe { clipper.Initialize(picture, &rect) }.map_err(Failure::of)?;
+                let clipped: IWICBitmapSource = clipper.into();
+                let scaler = unsafe { self.0.CreateBitmapScaler() }.map_err(Failure::of)?;
+                let (w, h) = placed.scaled;
+                unsafe { scaler.Initialize(&clipped, w, h, WICBitmapInterpolationModeHighQualityCubic) }
+                    .map_err(Failure::of)?;
+                let mut pixels = vec![0u8; w as usize * h as usize * 4];
+                unsafe { scaler.CopyPixels(std::ptr::null(), w * 4, &mut pixels) }.map_err(Failure::of)?;
+                (placed, pixels)
+            }
+            // The cut is all bars.
+            None => {
+                let nothing = Piece { from: Area::default(), to: (0, 0) };
+                (Placement { scaled: (0, 0), piece: nothing, tiled: false, screen }, Vec::new())
+            }
+        };
+        let [r, g, b, _] = bars.to_le_bytes();
+        Ok(compose(&placement, &pixels, [b, g, r]))
     }
 
     /// The first frame, upright, in sRGB, as premultiplied BGRA. GIF's first frame is its picture.
@@ -213,6 +292,22 @@ mod tests {
             turner.CopyPixels(std::ptr::null(), w * 4, &mut out).unwrap();
             (w, h, out.chunks(4).map(|p| p[0]).collect())
         }
+    }
+
+    #[test]
+    fn a_part_is_clipped_scaled_and_put_on_bars() {
+        let _ = unsafe { CoInitializeEx(None, COINIT_APARTMENTTHREADED) };
+        let wic = Wic::open().expect("WIC");
+        // A 2 by 2 blue picture; the cut starts two pixels left of it, so the left half is bars.
+        let blue = [255u8, 0, 0, 255].repeat(4);
+        let bitmap = unsafe { wic.0.CreateBitmapFromMemory(2, 2, &GUID_WICPixelFormat32bppPBGRA, 8, &blue) }.unwrap();
+        let picture: IWICBitmapSource = bitmap.into();
+        let cut = Cut { x: -2, y: 0, w: 4, h: 2 };
+        let canvas = wic.part_canvas(&picture, (4, 2), cut, 0x0000_00ff).expect("a canvas");
+        let at = |x: usize, y: usize| <[u8; 4]>::try_from(&canvas[(y * 4 + x) * 4..][..4]).unwrap();
+        // Red bars (0x00BBGGRR), then blue, as BGRA.
+        assert_eq!([at(0, 0), at(1, 1)], [[0, 0, 255, 255]; 2]);
+        assert_eq!([at(2, 0), at(3, 1)], [[255, 0, 0, 255]; 2]);
     }
 
     #[test]

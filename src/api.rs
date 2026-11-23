@@ -283,6 +283,13 @@ pub enum Command {
         path: Option<String>,
         fit: Option<crate::config::Fit>,
     },
+    /// `wallpaper.set` with `across`: the one picture a workspace (or with `None`, the desk
+    /// default) sets across all screens, or with no `path`, none (brief L). Fit is Fill, Fit or Stretch.
+    WallpaperAcross {
+        workspace: Option<String>,
+        path: Option<String>,
+        fit: Option<crate::config::Fit>,
+    },
     /// `wallpaper.state`: what each screen shows and where it comes from, and what mine is.
     WallpaperState,
     /// "Put apps in place when they open".

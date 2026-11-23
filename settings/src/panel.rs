@@ -170,6 +170,8 @@ pub struct Panel {
     /// The Edge resistance and Glued edge push sliders, sent the same way.
     pub edge_resistance: Entity<SliderState>,
     pub glue_push: Entity<SliderState>,
+    /// The Space between screens slider of the picture across all screens, sent the same way.
+    pub screen_gap: Entity<SliderState>,
     pub search: Entity<InputState>,
     /// The command bar's results list, driven from the search field.
     command_list: Entity<CommandState>,
@@ -276,7 +278,10 @@ impl Panel {
         let glue_push = cx.new(|_| {
             SliderState::new().min(0.).max(MAX_GLUE_PUSH_PX as f32).step(10.).default_value(pointer.glue_push_px as f32)
         });
+        let screen_gap = cx
+            .new(|_| SliderState::new().min(0.).max(seam::config::MAX_SCREEN_GAP_MM as f32).step(1.).default_value(0.));
         let mut subscriptions = slider_subscriptions(&edge_resistance, &glue_push, &gap, window, cx);
+        subscriptions.push(pages::workspaces::gap_subscription(&screen_gap, window, cx));
         subscriptions.extend(pages::zones::margins::subscriptions(&margins, window, cx));
         subscriptions.extend(field_subscriptions(
             &name_input,
@@ -336,6 +341,7 @@ impl Panel {
             margins,
             edge_resistance,
             glue_push,
+            screen_gap,
             search,
             command_list,
             selected: None,

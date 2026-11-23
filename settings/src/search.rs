@@ -363,6 +363,18 @@ const ENTRIES: &[Entry] = &[
     ),
     entry(
         Page::Workspaces,
+        "Across all screens",
+        "One picture, cut to where each screen stands",
+        "wallpaper background picture span wide spanning panorama screens",
+    ),
+    entry(
+        Page::Workspaces,
+        "Space between screens",
+        "The picture skips this much where two screens meet, for the bezels. 0 is none",
+        "wallpaper background picture span gap bezel mm",
+    ),
+    entry(
+        Page::Workspaces,
         "Put windows back",
         "Moved or minimized windows go back where the workspace puts them",
         "snap back drift status moved",

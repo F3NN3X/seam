@@ -3,6 +3,7 @@
 //! Seam opens it. Windows has one position for every screen, so Seam renders each screen's picture
 //! at the screen's own size and Windows shows it with Fill (D791). Pure, except `read_header`.
 
+use self::span::Cut;
 use crate::config::Desk;
 pub use crate::config::{Fit, Wallpaper, WallpaperSet};
 use crate::workspace::{self, Workspace};
@@ -11,6 +12,7 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 pub mod journal;
+pub mod span;
 
 #[cfg(windows)]
 pub mod desktop;
@@ -41,6 +43,8 @@ pub const TOO_BIG: &str = "That picture is too big. Use one up to 20,000 pixels 
 pub const UNREADABLE: &str = "Seam couldn't read that picture";
 /// D793a: a one-screen workspace sets a picture for its own screen only.
 pub const ONE_SCREEN: &str = "This workspace is for one screen, so it can only set that screen's picture";
+/// D801: a one-screen workspace has no picture across all screens.
+pub const NO_SPAN: &str = "A workspace for one screen can't have a picture across all screens";
 
 /// Where a screen's picture comes from (D793).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
@@ -50,18 +54,27 @@ pub enum Origin {
     Workspace,
     /// The desk default.
     Desk,
+    /// A part of the picture across all screens, of the workspace or the desk default (D802).
+    Span,
     /// My own wallpaper, as it was before Seam changed it.
     Own,
 }
 
 /// What screen `screen` can show, best first: the picture the workspace in use there sets for it,
-/// then the desk default. After these comes my own wallpaper. Only `in_use_on` says which
-/// workspace is in use, so a one-screen workspace with no picture gives way to the desk default.
+/// then the desk default. Within a set, the screen's own picture wins over the picture across all
+/// screens (D802). After these comes my own wallpaper. Only `in_use_on` says which workspace is in
+/// use, so a one-screen workspace with no picture gives way to the desk default.
 pub fn choices(desk: &Desk, screen: &str) -> Vec<(Wallpaper, Origin)> {
-    let set_by = |set: Option<&WallpaperSet>| set.and_then(|set| set.screens.get(screen)).cloned();
+    let set_by = |set: Option<&WallpaperSet>, origin| {
+        let set = set?;
+        match set.screens.get(screen) {
+            Some(own) => Some((own.clone(), origin)),
+            None => set.span.clone().map(|span| (span, Origin::Span)),
+        }
+    };
     let in_use = workspace::in_use_on(desk, screen).and_then(|id| desk.workspace_wallpapers.get(id));
-    let from_workspace = set_by(in_use).map(|w| (w, Origin::Workspace));
-    let from_desk = set_by(Some(&desk.wallpaper)).map(|w| (w, Origin::Desk));
+    let from_workspace = set_by(in_use, Origin::Workspace);
+    let from_desk = set_by(Some(&desk.wallpaper), Origin::Desk);
     from_workspace.into_iter().chain(from_desk).collect()
 }
 
@@ -115,6 +128,14 @@ pub fn may_set(ws: Option<&Workspace>, screen: &str) -> Result<(), &'static str>
     }
 }
 
+/// Whether `ws` (or the desk default, `None`) may have a picture across all screens (D801).
+pub fn may_span(ws: Option<&Workspace>) -> Result<(), &'static str> {
+    match ws.and_then(|w| w.scope.as_deref()) {
+        Some(_) => Err(NO_SPAN),
+        None => Ok(()),
+    }
+}
+
 /// Whether a choice for `workspace` (the desk default with `None`) on `screen` can change what that
 /// screen shows now: the desk default, or a workspace in use on it. Only such a choice ends the
 /// hold after someone else changed the wallpaper (D799).
@@ -133,13 +154,14 @@ pub fn retry(failures: &mut Failures, screen: Option<&str>) {
 
 /// Keep only the pictures a workspace on the desk can show: none for a deleted workspace, and for a
 /// one-screen workspace only its own screen's, so a changed scope drops the old screen's picture
-/// (D793a). Returns whether anything went.
+/// (D793a), and no picture across all screens (D801). Returns whether anything went.
 pub fn keep_valid(desk: &mut Desk, list: &[Workspace]) -> bool {
     let before = desk.workspace_wallpapers.clone();
     desk.workspace_wallpapers.retain(|id, set| {
         let Some(ws) = list.iter().find(|w| w.id == *id) else { return false };
         if let Some(scope) = ws.scope.as_deref() {
             set.screens.retain(|screen, _| screen == scope);
+            set.span = None;
         }
         !set.is_empty()
     });
@@ -264,19 +286,30 @@ fn hash(parts: &[&[u8]]) -> u64 {
     h
 }
 
-/// The first half of a render's name: the picture, how it fits and the screen's size. A picture
-/// that is gone is found by it (D800).
-pub fn cache_prefix(path: &str, fit: Fit, colour: u32, size: (u32, u32)) -> String {
+/// The first half of a render's name: the picture, how it fits, the screen's size and, for a part
+/// of a picture across all screens, the cut of the source (D806). A picture that is gone is found by it (D800).
+pub fn cache_prefix(path: &str, fit: Fit, colour: u32, size: (u32, u32), cut: Option<Cut>) -> String {
     let (path, fit) = (path.to_lowercase(), format!("{fit:?}"));
-    let parts: [&[u8]; 5] =
-        [path.as_bytes(), fit.as_bytes(), &colour.to_le_bytes(), &size.0.to_le_bytes(), &size.1.to_le_bytes()];
+    let cut: Vec<[u8; 4]> =
+        cut.iter().flat_map(|c| [c.x.to_le_bytes(), c.y.to_le_bytes(), c.w.to_le_bytes(), c.h.to_le_bytes()]).collect();
+    let (colour, w, h) = (colour.to_le_bytes(), size.0.to_le_bytes(), size.1.to_le_bytes());
+    let mut parts: Vec<&[u8]> = vec![path.as_bytes(), fit.as_bytes(), &colour, &w, &h];
+    parts.extend(cut.iter().map(|b| b.as_slice()));
     format!("{:016x}", hash(&parts))
 }
 
 /// A render's file name, without `.png`: the prefix, then the file's size and write time.
-pub fn cache_key(path: &str, len: u64, written: u64, fit: Fit, colour: u32, size: (u32, u32)) -> String {
+pub fn cache_key(
+    path: &str,
+    len: u64,
+    written: u64,
+    fit: Fit,
+    colour: u32,
+    size: (u32, u32),
+    cut: Option<Cut>,
+) -> String {
     let version = hash(&[&len.to_le_bytes(), &written.to_le_bytes()]);
-    format!("{}-{version:016x}", cache_prefix(path, fit, colour, size))
+    format!("{}-{version:016x}", cache_prefix(path, fit, colour, size, cut))
 }
 
 /// A file in the cache: its size and when it was last used, in Unix seconds.
@@ -380,6 +413,15 @@ pub fn check_picture(path: &str, len: u64, header: &[u8]) -> Result<(), &'static
         Some(size) if too_big(size) => Err(TOO_BIG),
         _ => Ok(()),
     }
+}
+
+/// A picture's size from the start of its file, for the preview of a picture across all screens.
+/// `None` for a kind `header_size` doesn't know, or a file that doesn't read.
+pub fn file_size(path: &str) -> Option<(u32, u32)> {
+    use std::io::Read;
+    let mut header = Vec::new();
+    std::fs::File::open(path).ok()?.take(HEADER_READ as u64).read_to_end(&mut header).ok()?;
+    header_size(&header)
 }
 
 /// `check_picture` for a file on disk.

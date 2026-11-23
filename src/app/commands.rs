@@ -389,6 +389,7 @@ fn command_result(app: &mut App, command: Command, panel: bool) -> Reply {
         }
         Command::WorkspaceSetDefault(id) => set_default(app, id),
         Command::WallpaperSet { workspace, screen, path, fit } => wallpaper_set(app, workspace, screen, path, fit),
+        Command::WallpaperAcross { workspace, path, fit } => wallpaper_across(app, workspace, path, fit),
         Command::WallpaperState => Ok(wallpaper_state(app)),
         Command::CursorEasingSet(on) => set_cursor_easing(app, on),
         Command::AutoApplySet(on) => {

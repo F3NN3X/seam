@@ -28,7 +28,7 @@ mod review;
 mod sections;
 mod wallpaper;
 
-pub use wallpaper::{WallpaperView, event as wallpaper_event, refresh as refresh_wallpaper};
+pub use wallpaper::{WallpaperView, event as wallpaper_event, gap_subscription, refresh as refresh_wallpaper};
 
 pub use close::ask as ask_to_close;
 

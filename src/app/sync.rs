@@ -604,6 +604,8 @@ fn apply(app: &mut App, next: Config) {
     persist(app);
     apply_hotkeys(app);
     relink(app);
+    // A border marked on or off the desk changes where the screens stand (D808).
+    wallpaper_sync(app, None);
     publish(app);
     api_server::broadcast_to_panels("config.reloaded", &json!({ "source": "folder" }));
 }

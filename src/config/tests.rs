@@ -624,7 +624,10 @@ fn wallpaper_fields_round_trip() {
     let picture = |path: &str, fit| Wallpaper { path: path.into(), fit };
     let mut desk = Desk::default();
     desk.wallpaper.screens.insert("m".into(), picture(r"C:\a.jpg", Fit::Fill));
-    let set = WallpaperSet { screens: BTreeMap::from([("m".to_string(), picture(r"C:\b.png", Fit::Center))]) };
+    let set = WallpaperSet {
+        screens: BTreeMap::from([("m".to_string(), picture(r"C:\b.png", Fit::Center))]),
+        ..WallpaperSet::default()
+    };
     desk.workspace_wallpapers.insert("w".into(), set);
     let config =
         Config { wallpapers_enabled: true, desks: BTreeMap::from([("sig".into(), desk)]), ..Config::default() };
@@ -655,6 +658,45 @@ fn an_unknown_fit_reads_as_fill_and_keeps_the_file() {
     assert_eq!(desk.workspaces.len(), 1);
     assert_eq!(desk.wallpaper.screens["m"], Wallpaper { path: r"C:\a.jpg".into(), fit: Fit::Fill });
     assert_eq!(desk.workspace_wallpapers["w"].screens["m"].fit, Fit::Fill);
+}
+
+#[test]
+fn span_round_trips() {
+    let mut desk = Desk { screen_gap_mm: 6, ..Desk::default() };
+    desk.wallpaper.span = Some(Wallpaper { path: r"C:\wide.jpg".into(), fit: Fit::Stretch });
+    let config = Config { desks: BTreeMap::from([("sig".into(), desk)]), ..Config::default() };
+    let saved = serde_json::to_value(&config).unwrap();
+    assert_eq!(saved["desks"]["sig"]["wallpaper"]["span"]["fit"], "stretch");
+    assert_eq!(saved["desks"]["sig"]["screen_gap_mm"], 6);
+    let back: Config = serde_json::from_value(saved).unwrap();
+    assert_eq!(back.desks, config.desks);
+    // Neither is written while unused, so an older file stays as it was.
+    let plain = serde_json::to_value(Desk::default()).unwrap();
+    assert!(plain.get("wallpaper").is_none() && plain.get("screen_gap_mm").is_none());
+}
+
+#[test]
+fn span_with_center_loads_as_fill() {
+    let file = json!({ "desks": { "sig": {
+        "name": "Home",
+        "wallpaper": { "span": { "path": "C:\\a.jpg", "fit": "center" } },
+        "workspace_wallpapers": {
+            "w": { "span": { "path": "C:\\b.jpg", "fit": "tile" } },
+            "x": { "span": 7 },
+        },
+        "screen_gap_mm": 400,
+    } } });
+    let p = scratch("span_center", file.to_string().as_bytes());
+    let c = Config::load_from(&p);
+    let set_aside = p.with_extension("json.corrupt").exists();
+    let _ = std::fs::remove_dir_all(p.parent().unwrap());
+    assert!(!set_aside);
+    let desk = &c.desks["sig"];
+    assert_eq!(desk.name, "Home");
+    assert_eq!(desk.wallpaper.span, Some(Wallpaper { path: r"C:\a.jpg".into(), fit: Fit::Fill }));
+    assert_eq!(desk.workspace_wallpapers["w"].span.as_ref().map(|w| w.fit), Some(Fit::Fill));
+    assert_eq!(desk.workspace_wallpapers["x"].span, None);
+    assert_eq!(desk.screen_gap_mm, 0, "a gap past 30 mm reads as none");
 }
 
 #[test]

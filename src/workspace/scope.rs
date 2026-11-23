@@ -411,4 +411,19 @@ mod tests {
         assert_eq!(held(&windows, &holders), HashSet::from([1]));
         assert!(held(&windows, &[]).is_empty());
     }
+
+    #[test]
+    fn undoing_a_quick_save_puts_every_slot_back() {
+        // Y is in use on screen 2; a Quick save that makes a new workspace takes every screen.
+        let mut d = desk(Some("a"), Some("z"));
+        after_switch(&mut d, "y", Some("s2"), &["s1", "s2"]);
+        let before = d.clone();
+        let kept = (d.active_workspace.clone(), d.previous_workspace.clone(), d.screen_in_use.clone());
+        after_switch(&mut d, "n", None, &["s1", "s2"]);
+        assert_eq!((in_use_on(&d, "s1"), in_use_on(&d, "s2")), (Some("n"), Some("n")));
+        // Undo writes the three slots back as they were, the screens' own included.
+        (d.active_workspace, d.previous_workspace, d.screen_in_use) = kept;
+        assert_eq!(d, before);
+        assert_eq!(in_use_on(&d, "s2"), Some("y"));
+    }
 }

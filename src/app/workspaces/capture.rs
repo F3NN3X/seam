@@ -34,12 +34,17 @@ pub(super) fn begin_capture(
     if matches!(target, Some(None)) {
         return Some(Err(RpcError::new(api::NOT_FOUND, "no such workspace on this desk")));
     }
-    if row.is_some_and(|row| target.flatten().is_none_or(|w| row >= w.windows.len())) {
+    if row.is_some_and(|row| target.as_ref().and_then(Option::as_ref).is_none_or(|w| row >= w.windows.len())) {
         return Some(Err(RpcError::new(api::NOT_FOUND, "no such row in that workspace")));
     }
     let hwnd = pick.as_ref().map(|p| p.hwnd);
+    // A one-screen workspace captures its screen only (D789).
+    let scope = target.as_ref().and_then(Option::as_ref).and_then(|w| w.scope.clone());
+    if scope.as_deref().is_some_and(|s| !screen_ids(app).contains(&s)) {
+        return Some(refused(workspace::SCOPE_GONE));
+    }
     // Telling the apps that aren't open from the capture needs the windows of the rest of the desk.
-    let mut job = capture_job(app);
+    let mut job = capture_job(app, scope.as_deref());
     job.removes |= preview && into.is_some();
     app.capturing = Some(Capturing {
         reply,
@@ -67,11 +72,14 @@ pub(super) fn begin_capture(
     Some(refused("Couldn't start the capture"))
 }
 
-/// Quick save (§7): the same capture as "Update from screen", into the workspace in
-/// use, or with none in use into a new "Workspace N" that becomes the one in use.
-/// Returns an answer only if it can't start.
-pub(in crate::app) fn quick_save(app: &mut App, reply: Option<Sender<Reply>>) -> Option<Reply> {
-    let into = active_workspace(app).map(|w| w.id);
+/// Quick save (§7): the same capture as "Update from screen", into the workspace in use on
+/// the screen `on` means (D785, D789), or with none in use into a new "Workspace N" for all
+/// screens that becomes the one in use. Returns an answer only if it can't start.
+pub(in crate::app) fn quick_save(app: &mut App, on: OnScreen, reply: Option<Sender<Reply>>) -> Option<Reply> {
+    let into = match screen_meant(app, on) {
+        Ok(screen) => meant(app, screen.as_deref()),
+        Err(e) => return Some(Err(e)),
+    };
     let refusal = start_capture(app, None, into, None, None, reply);
     if let Some(job) = app.capturing.as_mut().filter(|_| refusal.is_none()) {
         job.quick = true;
@@ -83,7 +91,7 @@ pub(in crate::app) fn quick_save(app: &mut App, reply: Option<Sender<Reply>>) ->
 /// click on the notification, because a tray balloon can't carry a button.
 pub(super) fn quick_saved(app: &mut App, saved: &Workspace, before: Option<Value>) {
     let created = before.is_none();
-    let in_use = app.workspace.clone();
+    let in_use = in_use_now(app);
     // A new workspace holds every screen it captured, as an All-screens switch would.
     if created {
         took_over(app, &saved.id, None);
@@ -122,7 +130,7 @@ pub(super) fn update_removed(
     (removed, turned_off): (usize, usize),
 ) {
     let until = Instant::now() + QUICK_UNDO_FOR;
-    let in_use = app.workspace.clone();
+    let in_use = in_use_now(app);
     let after = workspace::to_value(saved);
     app.quick_undo = Some(QuickUndo {
         sig: app.sig.clone(),
@@ -156,8 +164,9 @@ pub(in crate::app) fn undo_quick_save(app: &mut App) {
         return;
     };
     desk.workspaces = list;
+    // What the new workspace took over comes back as it was, the screens' own included.
     if undo.before.is_none() && app.workspace.as_deref() == Some(undo.id.as_str()) {
-        set_in_use(app, undo.in_use);
+        put_in_use_back(app, undo.in_use);
     }
     let source = undo.source;
     log::info!("quick save: undone");
@@ -235,7 +244,10 @@ fn update_existing(
             if quick_undo.as_ref().is_some_and(|u| u.id == *into) {
                 *quick_undo = None;
             }
-            let zones = workspace::capture_zones(&old.zones, layouts);
+            // A one-screen workspace keeps the layouts it has for the other screens.
+            let own: Vec<_> =
+                layouts.iter().filter(|(s, _)| old.scope.as_deref().is_none_or(|o| o == s)).cloned().collect();
+            let zones = workspace::capture_zones(&old.zones, &own);
             let merged = workspace::merge_capture(old, rules, &bound, &elsewhere, others, closed);
             kept.rows = Some(merged.rows);
             if merged.removed + merged.turned_off > 0 {

@@ -1,7 +1,7 @@
 //! What the capture review and Update from screen ask before they save: which windows
 //! start ticked, and which rows have no app open.
 
-use super::capture::{app_open, as_candidates, pair};
+use super::capture::{app_open, as_candidates, pair_reached};
 use super::*;
 use crate::classify::brief_window;
 
@@ -31,7 +31,8 @@ pub fn ticks(rules: &[Rule], elevated: &[bool]) -> Vec<(bool, Option<&'static st
 
 /// The rows of `old` whose app has no window open, as a capture of `fresh` finds it, in
 /// row order. Empty when none of the workspace's apps is open, so Update from screen
-/// never empties a workspace. `bound`, `elsewhere` and `others` as `merge_capture`.
+/// never empties a workspace. A row on another screen than the workspace's is never one of
+/// them (D789). `bound`, `elsewhere` and `others` as `merge_capture`.
 pub fn not_open(
     old: &Workspace,
     fresh: &[Rule],
@@ -39,7 +40,7 @@ pub fn not_open(
     elsewhere: &HashSet<isize>,
     others: &[Candidate],
 ) -> Vec<usize> {
-    let found = pair(&old.windows, fresh, bound, elsewhere);
+    let found = pair_reached(old, fresh, bound, elsewhere);
     let mut taken = vec![false; fresh.len()];
     for i in found.iter().flatten() {
         taken[*i as usize] = true;
@@ -56,6 +57,9 @@ pub fn not_open(
         .zip(&found)
         .enumerate()
         .filter(|(o, (row, hit))| {
+            if !in_scope(row, old.scope.as_deref()) {
+                return false;
+            }
             let wins = match bound.get(*o).copied().flatten() {
                 Some(Bound::Gone) => &held,
                 // Its own window is open, though the capture took none of it.
@@ -67,7 +71,8 @@ pub fn not_open(
         .map(|(o, _)| o)
         .collect();
     // A capture that finds nothing of the workspace would only empty it.
-    if closed.len() == old.windows.len() { Vec::new() } else { closed }
+    let reached = old.windows.iter().filter(|r| in_scope(r, old.scope.as_deref())).count();
+    if closed.len() == reached { Vec::new() } else { closed }
 }
 
 /// For each of `rows` (as `not_open` gives them), whether the app is running anyway: the
@@ -80,7 +85,7 @@ pub fn running(
     elsewhere: &HashSet<isize>,
     rows: &[usize],
 ) -> Vec<bool> {
-    let found = pair(&old.windows, fresh, bound, elsewhere);
+    let found = pair_reached(old, fresh, bound, elsewhere);
     let cands = as_candidates(fresh);
     rows.iter()
         .map(|row| {

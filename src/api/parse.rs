@@ -128,7 +128,7 @@ fn command(method: &str, p: &Value) -> Result<Command, RpcError> {
                 direction.ok_or_else(|| RpcError::new(INVALID_PARAMS, "direction must be next or previous"))?;
             Command::WorkspaceStep { direction, alongside: false }
         }
-        "workspace.quick_save" => Command::WorkspaceQuickSave,
+        "workspace.quick_save" => Command::WorkspaceQuickSave { screen: on_screen_param(p)? },
         "workspace.windows" => Command::WorkspaceWindows { id: id_param(p)? },
         "workspace.close" => workspace_close(p)?,
         "workspace.minimize" => Command::WorkspaceMinimize { id: str_param(p, "id")?, screen: on_screen_param(p)? },
@@ -552,12 +552,12 @@ fn assistant_allowed(command: &Command, peer: Peer) -> Result<(), RpcError> {
             Err(RpcError::new(INVALID_PARAMS, "A row can only be turned off here, never back on"))
         }
         // Quick save adds a row for every window on screen, so it is an edit.
-        Command::WorkspaceCreate { .. } | Command::WorkspaceEdit { .. } | Command::WorkspaceQuickSave
+        Command::WorkspaceCreate { .. } | Command::WorkspaceEdit { .. } | Command::WorkspaceQuickSave { .. }
             if peer.assistants_edit =>
         {
             Ok(())
         }
-        Command::WorkspaceCreate { .. } | Command::WorkspaceEdit { .. } | Command::WorkspaceQuickSave => {
+        Command::WorkspaceCreate { .. } | Command::WorkspaceEdit { .. } | Command::WorkspaceQuickSave { .. } => {
             Err(RpcError::new(FORBIDDEN, "Changing workspaces is off for assistants in Seam, General"))
         }
         _ => Err(RpcError::new(FORBIDDEN, "Assistants can't do that")),
@@ -777,7 +777,12 @@ mod tests {
                 anyone,
                 Command::WorkspaceStep { direction: workspace::Step::Previous, alongside: false },
             ),
-            (request("workspace.quick_save", "{}"), anyone, Command::WorkspaceQuickSave),
+            (request("workspace.quick_save", "{}"), anyone, Command::WorkspaceQuickSave { screen: None }),
+            (
+                request("workspace.quick_save", r#"{"screen":2}"#),
+                anyone,
+                Command::WorkspaceQuickSave { screen: Some(2) },
+            ),
             (request("workspace.cancel", "{}"), anyone, Command::WorkspaceCancel),
             (
                 request("workspace.last_switch", r#"{"id":"ws_1"}"#),
@@ -985,7 +990,7 @@ mod tests {
             Ok(Command::WorkspaceSwitchBack { alongside: true, screen: Some(2) })
         );
         // A screen is a Line Up number, from 1.
-        for method in ["workspace.snap_back", "workspace.switch_back", "workspace.minimize"] {
+        for method in ["workspace.snap_back", "workspace.switch_back", "workspace.minimize", "workspace.quick_save"] {
             for params in [r#"{"screen":0}"#, r#"{"screen":-1}"#, r#"{"screen":"2"}"#, r#"{"screen":1.5}"#] {
                 let bad = code(&request(method, params), panel).map_err(|e| e.0);
                 assert_eq!(bad, Err(INVALID_PARAMS), "{method} {params}");
@@ -1006,7 +1011,7 @@ mod tests {
         // Quick save is an edit, and needs the second switch.
         let quick = request("workspace.quick_save", "{}");
         assert_eq!(code(&quick, assistant(false)).map_err(|e| e.0), Err(FORBIDDEN));
-        assert_eq!(code(&quick, assistant(true)), Ok(Command::WorkspaceQuickSave));
+        assert_eq!(code(&quick, assistant(true)), Ok(Command::WorkspaceQuickSave { screen: None }));
         // The API switch has to be on too, after hello as well as at it.
         let api_off = Peer { api_enabled: false, ..assistant(true) };
         assert_eq!(code(&request("state.get", "{}"), api_off).map_err(|e| e.0), Err(DISABLED));

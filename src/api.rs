@@ -249,7 +249,11 @@ pub enum Command {
         alongside: bool,
     },
     /// Save the windows on screen into the workspace in use, or a new one (§7).
-    WorkspaceQuickSave,
+    WorkspaceQuickSave {
+        /// The Line Up number of the screen whose workspace it is; without it, the one last
+        /// switched to that is still in use (D785).
+        screen: Option<u32>,
+    },
     /// `workspace.windows`: the windows a close or minimize would take, and the ones it
     /// would keep. Never for an assistant.
     WorkspaceWindows {

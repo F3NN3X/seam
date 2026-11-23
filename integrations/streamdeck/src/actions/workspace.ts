@@ -7,7 +7,7 @@ import streamDeck, {
 import type { JsonValue } from "@elgato/utils";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { NOT_FOUND, seam, SeamError, type SeamState } from "../seam.js";
+import { NOT_FOUND, seam, SeamError, type SeamState, type WorkspaceRef } from "../seam.js";
 import { SeamAction } from "./seam-action.js";
 
 /** `alongside`: switch once and leave the other windows alone. */
@@ -32,9 +32,15 @@ function driftImage(): string | undefined {
 	}
 }
 
+/** The workspaces in use on any screen, and the one the tray means. A one-screen workspace is in use on its screen only. */
+function inUse(state: SeamState): WorkspaceRef[] {
+	const own = (state.screens ?? []).flatMap((s) => (s.workspace ? [s.workspace] : []));
+	return state.workspace ? [...own, state.workspace] : own;
+}
+
 /**
- * Switch to the workspace chosen in the property inspector. Lit while it's the one in use,
- * with a dot while it has drifted. Pressing it then puts the windows back.
+ * Switch to the workspace chosen in the property inspector. Lit while it's in use on any
+ * screen, with a dot while it has drifted. Pressing it then puts the windows back.
  */
 @action({ UUID: "co.f3nn3x.seam.workspace" })
 export class SwitchWorkspace extends SeamAction<Settings> {
@@ -42,10 +48,11 @@ export class SwitchWorkspace extends SeamAction<Settings> {
 	readonly #dotted = new Set<string>();
 
 	protected async render(key: KeyAction<Settings>, settings: Settings, state: SeamState): Promise<void> {
-		const active = Boolean(settings.id) && state.workspace?.id === settings.id;
+		const here = settings.id ? inUse(state).filter((w) => w.id === settings.id) : [];
+		const active = here.length > 0;
 		await key.setState(active ? 1 : 0);
-		await this.#dot(key, active && state.workspace?.drifted === true);
-		const name = await this.#currentName(settings, state);
+		await this.#dot(key, here.some((w) => w.drifted === true));
+		const name = await this.#currentName(settings, here[0]);
 		await key.setTitle(name);
 	}
 
@@ -94,9 +101,9 @@ export class SwitchWorkspace extends SeamAction<Settings> {
 	}
 
 	/** The name the key shows: Seam's current one when this desk has the workspace, else the saved one. */
-	async #currentName(settings: Settings, state: SeamState): Promise<string | undefined> {
-		if (state.workspace?.id === settings.id) {
-			return state.workspace?.name;
+	async #currentName(settings: Settings, here: WorkspaceRef | undefined): Promise<string | undefined> {
+		if (here) {
+			return here.name;
 		}
 		const listed = (await seam.workspaces()).find((w) => w.id === settings.id);
 		return listed?.name ?? settings.name;

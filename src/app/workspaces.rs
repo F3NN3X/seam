@@ -21,12 +21,13 @@ pub(super) use assist::{create_workspace, edit_workspace};
 pub(super) use capture::{captured, quick_save, start_capture, undo_quick_save, update_from_panel, update_workspace};
 pub(super) use close::{Ask, Closing, Minimized, closed, start_close, start_close_here, undo_minimize};
 pub(super) use copy::copy_from_desk;
+pub(in crate::app) use in_use::InUse;
 pub(super) use in_use::{
     OnScreen, choose_in_use, detected_in_use, drift_checked, drift_due, forget_deleted, in_use_ids, live_of, meant,
     next_put_back, put_back_all, screen_meant, set_default, snap_back, switch_back, switch_back_id, sync_live,
     ws_moved,
 };
-use in_use::{active_workspace, holders, put_in_use_back, rescoped, screen_ids, set_in_use, took_over};
+use in_use::{holders, in_use_now, put_in_use_back, rescoped, screen_ids, took_over};
 pub(super) use join::sent as sent_to_join;
 pub(super) use notice::{
     LastSwitch, ended, last_switch, open_switched, show_label, skipped_json, started, starting, starting_due,
@@ -178,10 +179,12 @@ pub(super) fn job_screens(app: &App) -> Vec<SwitchScreen> {
     app.mons.iter().enumerate().map(screen).collect()
 }
 
-/// A capture of this desk. The apps the zones leave alone are never captured either.
-pub(super) fn capture_job(app: &App) -> CaptureJob {
+/// A capture of this desk, or of the one screen `scope` names (D789). The apps the zones leave
+/// alone are never captured either.
+pub(super) fn capture_job(app: &App, scope: Option<&str>) -> CaptureJob {
     let exclude = app.cfg.zones.exclude.iter().map(|x| x.to_lowercase()).collect();
     let (mut screens, gap, places) = (job_screens(app), app.cfg.zones.gap, app.cfg.workspaces_remember_places);
+    screens.retain(|s| scope.is_none_or(|own| own == s.id));
     // A tiled screen's tree changes with every open and close, so a zone number from it
     // would point elsewhere later: its windows are saved by their place (D568).
     for s in screens.iter_mut().filter(|s| snap::is_tiled(&s.id)) {

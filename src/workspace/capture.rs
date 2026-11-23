@@ -30,6 +30,25 @@ pub(super) fn pair(
     assign_bound_all(old, &as_candidates(fresh), bound, elsewhere)
 }
 
+/// `pair` for a capture of the workspace's screen: a row on another screen takes no window, so it
+/// takes none from a row that is reached, and stays `None` (D789).
+pub(super) fn pair_reached(
+    old: &Workspace,
+    fresh: &[Rule],
+    bound: &[Option<Bound>],
+    elsewhere: &HashSet<isize>,
+) -> Vec<Option<isize>> {
+    let rows: Vec<usize> =
+        (0..old.windows.len()).filter(|o| in_scope(&old.windows[*o], old.scope.as_deref())).collect();
+    let rules: Vec<Rule> = rows.iter().map(|o| old.windows[*o].clone()).collect();
+    let bound: Vec<Option<Bound>> = rows.iter().map(|o| bound.get(*o).copied().flatten()).collect();
+    let mut found = vec![None; old.windows.len()];
+    for (o, hit) in rows.into_iter().zip(pair(&rules, fresh, &bound, elsewhere)) {
+        found[o] = hit;
+    }
+    found
+}
+
 /// What "Update from screen" makes of a workspace's rows.
 pub struct Merged {
     pub windows: Vec<Rule>,
@@ -54,7 +73,8 @@ pub(super) fn app_open(row: &Rule, wins: &[&Candidate]) -> bool {
 
 /// "Update from screen": each row the capture has a window for takes where and how
 /// that window is now, and keeps its launch details and its place in the start
-/// order. A row with no window right now stays. What `closed` says for it (by its row
+/// order. A row on another screen than the workspace's is kept as it is (D789).
+/// A row with no window right now stays. What `closed` says for it (by its row
 /// of `old`) decides: Keep leaves it, Turn off sets it off, Remove takes it out. That
 /// is only for a row whose app has no window the capture didn't give a row: bound
 /// elsewhere, or in `others` (windows of the desk it made no rule of, such as on
@@ -69,7 +89,7 @@ pub fn merge_capture(
     others: &[Candidate],
     closed: &dyn Fn(usize) -> ClosedApps,
 ) -> Merged {
-    let found = pair(&old.windows, &fresh, bound, elsewhere);
+    let found = pair_reached(old, &fresh, bound, elsewhere);
     let mut taken = vec![false; fresh.len()];
     for i in found.iter().flatten() {
         taken[*i as usize] = true;
@@ -80,6 +100,11 @@ pub fn merge_capture(
     let mut from = Vec::with_capacity(old.windows.len());
     let mut rows = vec![0; fresh.len()];
     for (o, (row, hit)) in old.windows.iter().zip(&found).enumerate() {
+        if !in_scope(row, old.scope.as_deref()) {
+            windows.push(row.clone());
+            from.push(Some(o));
+            continue;
+        }
         let choice = if not_open.contains(&o) { closed(o) } else { ClosedApps::Keep };
         if choice == ClosedApps::Remove {
             removed += 1;

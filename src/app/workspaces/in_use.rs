@@ -30,12 +30,6 @@ pub(in crate::app) fn screen_ids(app: &App) -> Vec<&str> {
     app.mons.iter().map(|m| m.id.as_str()).collect()
 }
 
-/// The desk-wide workspace in use on this desk, if there is one.
-pub(super) fn active_workspace(app: &App) -> Option<Workspace> {
-    let id = app.workspace.as_deref()?;
-    desk_workspaces(app).into_iter().find(|w| w.id == id)
-}
-
 /// Every workspace in use on a connected screen, each once: the desk-wide one first, then the
 /// screens' own in Line Up order.
 pub(in crate::app) fn in_use_ids(app: &App) -> Vec<String> {
@@ -188,7 +182,17 @@ pub(in crate::app) fn forget_deleted(app: &mut App) -> bool {
 }
 
 /// What is in use on the desk, kept to be put back.
-pub(super) type InUse = (Option<String>, Option<String>, BTreeMap<String, seam::config::ScreenInUse>);
+pub(in crate::app) type InUse = (Option<String>, Option<String>, BTreeMap<String, seam::config::ScreenInUse>);
+
+/// What is in use on the desk now, to be put back by `put_in_use_back`.
+pub(super) fn in_use_now(app: &App) -> InUse {
+    let desk = app.cfg.desks.get(&app.sig);
+    (
+        app.workspace.clone(),
+        desk.and_then(|d| d.previous_workspace.clone()),
+        desk.map(|d| d.screen_in_use.clone()).unwrap_or_default(),
+    )
+}
 
 /// Workspaces whose scope a save changes (`(id, old, new)`): what is in use follows them (brief J,
 /// edge cases). Done before the save is written, so the cleanup after it finds the screens

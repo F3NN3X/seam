@@ -32,21 +32,23 @@ pub(in crate::app) struct Minimized {
 }
 
 /// Start listing, closing or minimizing the windows of a workspace of this desk, the one in
-/// use when `id` is `None`. Returns an answer only if it can't start; the worker's end is
-/// `closed`.
+/// use on `on`'s screen when `id` is `None` (D785). Returns an answer only if it can't start;
+/// the worker's end is `closed`.
 pub(in crate::app) fn start_close(
     app: &mut App,
-    id: Option<&str>,
+    (id, on): (Option<&str>, OnScreen),
     (ask, handles): (Ask, Vec<isize>),
     (reply, client): (Option<Sender<Reply>>, &str),
 ) -> Option<Reply> {
     if app.closing.is_some() || app.capturing.is_some() || crate::switcher::switching() {
         return Some(busy("A workspace switch or capture is still running"));
     }
-    let found = match id {
-        Some(id) => desk_workspaces(app).into_iter().find(|w| w.id == id),
-        None => active_workspace(app),
+    let screen = match screen_meant(app, on) {
+        Ok(screen) => screen,
+        Err(e) => return Some(Err(e)),
     };
+    let wanted = id.map(str::to_string).or_else(|| meant(app, screen.as_deref()));
+    let found = wanted.and_then(|wanted| desk_workspaces(app).into_iter().find(|w| w.id == wanted));
     let Some(ws) = found else {
         return Some(match id {
             Some(_) => Err(RpcError::new(api::NOT_FOUND, "no such workspace on this desk")),
@@ -59,12 +61,15 @@ pub(in crate::app) fn start_close(
         Ask::Minimize => Verb::Minimize,
     };
     let exclude = app.cfg.zones.exclude.iter().map(|x| x.to_lowercase()).collect();
+    let (screens, held) = reach_of(app, &ws);
     let job = CloseJob {
         owner: app.hwnd.0 as isize,
         ws: ws.clone(),
         exclude,
         places: app.cfg.workspaces_remember_places,
         verb,
+        screens,
+        held,
     };
     app.closing = Some(Closing { reply, client: client.to_string(), ask, ws });
     if crate::switcher::start_close(job) {
@@ -74,9 +79,25 @@ pub(in crate::app) fn start_close(
     Some(refused("Couldn't start"))
 }
 
+/// Where a close or minimize of `ws` reaches (D786): the screens where it is in use, or while it
+/// isn't, its screen or every screen (empty, as before one-screen workspaces). Never a window
+/// the workspace in use on a screen it doesn't reach holds there.
+fn reach_of(app: &App, ws: &Workspace) -> (Vec<zones::Rect>, std::collections::HashSet<isize>) {
+    let ids = screen_ids(app);
+    let reached = app.cfg.desks.get(&app.sig).map(|d| workspace::close_reach(d, &ids, ws)).unwrap_or_default();
+    let reach = |s: &str| reached.iter().any(|r| r == s);
+    let rect = |m: &Mon| zones::Rect { x: m.rect.left, y: m.rect.top, w: m.rect.width(), h: m.rect.height() };
+    let screens = if ids.iter().all(|s| reach(s)) {
+        Vec::new()
+    } else {
+        app.mons.iter().filter(|m| reach(&m.id)).map(rect).collect()
+    };
+    (screens, switcher::held_windows(&holders(app, &ws.id, &reach)))
+}
+
 /// A tray item or a shortcut: say why it did nothing, in a notice.
-pub(in crate::app) fn start_close_here(app: &mut App, title: &str, ask: Ask) {
-    if let Some(Err(e)) = start_close(app, None, (ask, Vec::new()), (None, "the tray")) {
+pub(in crate::app) fn start_close_here(app: &mut App, title: &str, ask: Ask, on: OnScreen) {
+    if let Some(Err(e)) = start_close(app, (None, on), (ask, Vec::new()), (None, "the tray")) {
         log::info!("{}: {}", title.to_lowercase(), e.message);
         notify(app, title, &e.message, BalloonAction::None);
     }

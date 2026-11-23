@@ -41,6 +41,11 @@ pub struct CloseJob {
     pub exclude: Vec<String>,
     pub places: bool,
     pub verb: Verb,
+    /// The screens where the workspace is in use, whose windows it takes; empty for every
+    /// screen (D786).
+    pub screens: Vec<Rect>,
+    /// Windows another workspace holds, never taken.
+    pub held: HashSet<isize>,
 }
 
 pub enum Done {
@@ -59,7 +64,7 @@ static DONE: Mutex<Option<Done>> = Mutex::new(None);
 pub fn start(job: CloseJob) -> bool {
     let spawned = std::thread::Builder::new().name("seam-close".into()).spawn(move || {
         let _com = Com::enter();
-        let owned = windows_of(&job.ws, &job.exclude, job.places);
+        let owned = windows_of(&job, job.places);
         let done = match job.verb {
             Verb::List => Done::Listed(owned),
             Verb::Close(asked) => {
@@ -93,10 +98,19 @@ pub fn take_done() -> Option<Done> {
 
 /// The windows matched to the workspace's rows, one per row, sorted into the ones taken and
 /// the ones kept (D701, D702). A second window of the same app that no row describes isn't here.
-pub fn windows_of(ws: &Workspace, exclude: &[String], remember: bool) -> Owned {
-    let seen = snapshot_with(exclude, &mut Procs::new(), &mut |_, _| {});
+/// Only windows on the job's screens count, and none another workspace holds.
+fn windows_of(job: &CloseJob, remember: bool) -> Owned {
+    let ws = &job.ws;
+    let on_screens = |h: isize| {
+        job.screens.is_empty()
+            || screen_point(hwnd_of(h)).is_some_and(|(x, y)| job.screens.iter().any(|r| r.contains(x, y)))
+    };
+    let seen: Vec<Seen> = snapshot_with(&job.exclude, &mut Procs::new(), &mut |_, _| {})
+        .into_iter()
+        .filter(|s| !job.held.contains(&s.cand.hwnd) && on_screens(s.cand.hwnd))
+        .collect();
     let known: Vec<Candidate> = seen.iter().map(|s| s.cand.clone()).collect();
-    let matched = match_rows(ws, &known, remember);
+    let matched = match_reached(ws, &known, remember, &[]);
     let facts: Vec<Fact> = seen.iter().map(|s| (s.cand.hwnd, s.pin, s.elevated)).collect();
     let (take, kept) = workspace::sort_out(&ws.windows, &matched, &facts);
     let entry = |row: usize, hwnd: isize| {

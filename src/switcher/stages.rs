@@ -114,7 +114,8 @@ impl Starts {
 /// each one that got its window at once.
 fn catch(run: &Run, cands: Vec<Candidate>, waits: &mut Waits, starts: &mut Starts, tally: &mut Tally) {
     let claimed: HashSet<isize> = waits.found.iter().flatten().copied().collect();
-    let fresh: Vec<Candidate> = cands.iter().filter(|c| !claimed.contains(&c.hwnd)).cloned().collect();
+    let fresh: Vec<Candidate> =
+        cands.iter().filter(|c| !claimed.contains(&c.hwnd) && !run.held.contains(&c.hwnd)).cloned().collect();
     waits.known.extend(cands);
     if fresh.is_empty() || starts.waiting.is_empty() {
         return;

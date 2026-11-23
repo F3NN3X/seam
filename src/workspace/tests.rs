@@ -770,16 +770,16 @@ fn off_rows_and_open_windows_round_trip_and_old_files_are_unchanged() {
 fn an_off_row_is_neither_started_nor_placed() {
     let on = rule("a.exe", None, "", "");
     let off = Rule { off: true, ..on.clone() };
-    assert_eq!(row_action(&on, None, OpenWindows::Move, false), RowAction::Start);
-    assert_eq!(row_action(&off, None, OpenWindows::Move, false), RowAction::Leave);
-    assert_eq!(row_action(&on, Some(1), OpenWindows::Move, false), RowAction::Place);
-    assert_eq!(row_action(&off, Some(1), OpenWindows::Move, false), RowAction::Leave);
+    assert_eq!(row_action(&on, None, OpenWindows::Move, false, None), RowAction::Start);
+    assert_eq!(row_action(&off, None, OpenWindows::Move, false, None), RowAction::Leave);
+    assert_eq!(row_action(&on, Some(1), OpenWindows::Move, false, None), RowAction::Place);
+    assert_eq!(row_action(&off, Some(1), OpenWindows::Move, false, None), RowAction::Leave);
     // Not even when Snap back asks.
-    assert_eq!(row_action(&off, Some(1), OpenWindows::Move, true), RowAction::Leave);
+    assert_eq!(row_action(&off, Some(1), OpenWindows::Move, true, None), RowAction::Leave);
     // A row with launch off is placed but never started, which is not the same as off.
     let placed_only = Rule { launch: false, ..on };
-    assert_eq!(row_action(&placed_only, None, OpenWindows::Move, false), RowAction::Leave);
-    assert_eq!(row_action(&placed_only, Some(1), OpenWindows::Move, false), RowAction::Place);
+    assert_eq!(row_action(&placed_only, None, OpenWindows::Move, false, None), RowAction::Leave);
+    assert_eq!(row_action(&placed_only, Some(1), OpenWindows::Move, false, None), RowAction::Place);
     // An off row matches no window and takes none from another row.
     let wins = [win(1, "a.exe", None, "", "", 0)];
     let rules = [off.clone(), rule("a.exe", None, "", "")];
@@ -790,14 +790,14 @@ fn an_off_row_is_neither_started_nor_placed() {
 #[test]
 fn leave_where_they_are_places_only_started_windows() {
     let r = rule("a.exe", None, "", "");
-    assert_eq!(row_action(&r, Some(1), OpenWindows::Leave, false), RowAction::Leave);
-    assert_eq!(row_action(&r, None, OpenWindows::Leave, false), RowAction::Start);
+    assert_eq!(row_action(&r, Some(1), OpenWindows::Leave, false, None), RowAction::Leave);
+    assert_eq!(row_action(&r, None, OpenWindows::Leave, false, None), RowAction::Start);
 }
 
 #[test]
 fn put_back_moves_open_windows_even_when_the_workspace_leaves_them() {
     let r = rule("a.exe", None, "", "");
-    assert_eq!(row_action(&r, Some(1), OpenWindows::Leave, true), RowAction::Place);
+    assert_eq!(row_action(&r, Some(1), OpenWindows::Leave, true, None), RowAction::Place);
 }
 
 #[test]
@@ -1328,6 +1328,24 @@ fn rule_with_a_workspace_round_trips_and_is_skipped_when_unset() {
     let value = serde_json::to_value(&sent).unwrap();
     assert_eq!(value["send_to"], "w1");
     assert_eq!(serde_json::from_value::<Rule>(value).unwrap(), sent);
+}
+
+#[test]
+fn import_maps_scope_and_keeps_an_unmatched_one() {
+    let info = |number| ScreenInfo { number, name: String::new(), width: 0, height: 0 };
+    let here = BTreeMap::from([("p".to_string(), info(1)), ("q".to_string(), info(2))]);
+    // The file's screen 2 is this desk's screen 2.
+    let screens = BTreeMap::from([("old2".to_string(), info(2)), ("old9".to_string(), info(9))]);
+    let file = |scope: &str| Export {
+        seam_workspace: Export::VERSION,
+        workspace: Workspace { id: "w".into(), scope: Some(scope.into()), ..Workspace::default() },
+        screens: screens.clone(),
+    };
+    assert_eq!(import(file("old2"), &here, &[], &[]).scope.as_deref(), Some("q"));
+    // No screen here matches: kept, so it can't be switched until a screen is picked.
+    assert_eq!(import(file("old9"), &here, &[], &[]).scope.as_deref(), Some("old9"));
+    let all = Export { seam_workspace: Export::VERSION, workspace: Workspace::default(), screens: BTreeMap::new() };
+    assert_eq!(import(all, &here, &[], &[]).scope, None);
 }
 
 #[test]

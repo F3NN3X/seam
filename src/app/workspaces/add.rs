@@ -18,13 +18,15 @@ const MOVE_TITLE: &str = "Move window to workspace";
 /// Start adding `hwnd`, or the window in front, to a workspace. An API client hears how
 /// it went through `reply`; a key shows a notice when it can't.
 pub(in crate::app) fn start_add_window(app: &mut App, which: Which, hwnd: Option<isize>, reply: Option<Sender<Reply>>) {
-    start(app, which, hwnd, reply, false);
+    start(app, which, hwnd, reply);
 }
 
 /// "Move window to next workspace" or "previous": the window in front joins a workspace as
-/// above, and its row goes from the workspace in use.
-pub(in crate::app) fn start_move_window(app: &mut App, which: Which) {
-    start(app, which, None, None, true);
+/// above, and its row goes from workspace `from`, the one in use on its screen.
+pub(in crate::app) fn start_move_window(app: &mut App, which: Which, from: Option<String>) {
+    if let Err(e) = begin(app, which, None, None, from) {
+        answer(app, None, Err(e), true);
+    }
 }
 
 /// A move's notice when there is no workspace to go to.
@@ -32,18 +34,19 @@ pub(in crate::app) fn refuse_move(app: &mut App, why: &str) {
     answer(app, None, Err(RpcError::new(api::NOT_FOUND, why)), true);
 }
 
-fn start(app: &mut App, which: Which, hwnd: Option<isize>, reply: Option<Sender<Reply>>, moving: bool) {
-    if let Err(e) = begin(app, which, hwnd, reply.clone(), moving) {
-        answer(app, reply, Err(e), moving);
+fn start(app: &mut App, which: Which, hwnd: Option<isize>, reply: Option<Sender<Reply>>) {
+    if let Err(e) = begin(app, which, hwnd, reply.clone(), None) {
+        answer(app, reply, Err(e), false);
     }
 }
 
+/// `move_from` is the workspace a move takes the row out of, `None` for an add.
 fn begin(
     app: &mut App,
     which: Which,
     hwnd: Option<isize>,
     reply: Option<Sender<Reply>>,
-    moving: bool,
+    move_from: Option<String>,
 ) -> Result<(), RpcError> {
     if app.closing.is_some() {
         return Err(RpcError::new(api::BUSY, "Windows of a workspace are still being closed or minimized"));
@@ -64,7 +67,6 @@ fn begin(
     if hwnd == 0 {
         return Err(RpcError::new(api::REFUSED, "No window is in front"));
     }
-    let move_from = if moving { super::moved::origin(app.workspace.as_deref(), app.step_to.as_deref()) } else { None };
     let id = found.id.clone();
     start_capture(app, &id, hwnd, reply, move_from, false)
 }
@@ -133,6 +135,26 @@ pub(super) fn label(rule: &Rule) -> String {
     stem.filter(|s| !s.is_empty()).unwrap_or_else(|| rule.title_hint.clone())
 }
 
+/// A row joining a one-screen workspace goes on its screen (D788), with the zones a switch gives
+/// that screen: the workspace's own layout for it, else the desk's. A row for all screens stays
+/// where the window is.
+pub(super) fn onto_scope(app: &App, ws: &Workspace, rule: Rule) -> Rule {
+    let Some(screen) = ws.scope.as_deref() else { return rule };
+    let desk = || app.cfg.desks.get(&app.sig).and_then(|d| d.zones.get(screen)).and_then(zones::layout_of);
+    // An entry this build can't read keeps the screen as it is, so the desk's layout counts then.
+    let layout = match ws.zones.get(screen).map(workspace::screen_layout) {
+        Some(Some(own)) => own,
+        _ => desk(),
+    };
+    workspace::retarget(&rule, screen, layout.map_or(0, |l| zones::leaf_count(&l.tree)))
+}
+
+/// A one-screen workspace in use on its screen places a window that joins it at once (D788).
+pub(super) fn placed_at_once(app: &App, ws: &Workspace) -> bool {
+    let desk = app.cfg.desks.get(&app.sig);
+    ws.scope.as_deref().is_some_and(|s| desk.and_then(|d| workspace::in_use_on(d, s)) == Some(ws.id.as_str()))
+}
+
 /// The workspace as the file has it.
 fn stored(app: &App, id: &str) -> Option<Value> {
     let desk = app.cfg.desks.get(&app.sig)?;
@@ -184,6 +206,7 @@ fn save(app: &mut App, job: &Capturing, read: Result<(Rule, isize), String>) -> 
     };
     let remember = app.cfg.workspaces_remember_places;
     let name = label(&rule);
+    let rule = onto_scope(app, &old, rule);
     let (bound, _) = switcher::capture_bindings(&old, &[hwnd], remember);
     let going = job.move_from.as_deref().filter(|from| *from != id);
     let source = going.and_then(|from| leaving(app, from, hwnd, remember));
@@ -215,6 +238,10 @@ fn save(app: &mut App, job: &Capturing, read: Result<(Rule, isize), String>) -> 
     live::stamp(workspace::stamp_key(id), vec![(hwnd, added.row)], false);
     if app.workspace.as_deref() == Some(id) {
         sync_live(app);
+        live::check_drift();
+    } else if placed_at_once(app, &saved) {
+        sync_live(app);
+        live::join(hwnd, id);
         live::check_drift();
     }
     // Which old row each row is now, for Undo: the row it added is none of them.

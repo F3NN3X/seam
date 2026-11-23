@@ -17,11 +17,13 @@ pub struct Choice {
     dot: Option<Hsla>,
     /// Shown in muted text, for a value that no longer stands for anything on offer.
     muted: bool,
+    /// Shown as the value only, never offered in the menu.
+    unlisted: bool,
 }
 
 impl Choice {
     pub fn new(key: impl Into<String>, label: impl Into<SharedString>) -> Choice {
-        Choice { key: key.into(), label: label.into(), dot: None, muted: false }
+        Choice { key: key.into(), label: label.into(), dot: None, muted: false, unlisted: false }
     }
 
     pub fn dot(self, colour: Option<Hsla>) -> Choice {
@@ -30,6 +32,11 @@ impl Choice {
 
     pub fn muted(self) -> Choice {
         Choice { muted: true, ..self }
+    }
+
+    /// The value while it is the one chosen, and not in the menu to pick again.
+    pub fn unlisted(self) -> Choice {
+        Choice { unlisted: true, ..self }
     }
 }
 
@@ -68,7 +75,7 @@ pub fn select(
         .w(px(width))
         .child(face)
         .dropdown_menu(move |mut menu, _, _| {
-            for choice in &options {
+            for choice in options.iter().filter(|c| !c.unlisted) {
                 let (pick, key) = (pick.clone(), choice.key.clone());
                 let item = match choice.dot {
                     Some(colour) => {

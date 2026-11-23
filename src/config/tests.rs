@@ -582,3 +582,37 @@ fn app_rules_without_send_to_load_unchanged() {
     assert!(serde_json::to_value(&parsed).unwrap().get("send_to").is_none());
     assert_eq!(crate::workspace::app_rules(&c.app_rules).len(), 1);
 }
+
+#[test]
+fn files_without_scope_or_screen_in_use_load_unchanged() {
+    let file = json!({ "desks": { "sig": {
+        "workspaces": [{ "id": "w", "name": "Dev" }], "active_workspace": "w", "previous_workspace": "v",
+    } } });
+    let p = scratch("without_scope", file.to_string().as_bytes());
+    let c = Config::load_from(&p);
+    let _ = std::fs::remove_dir_all(p.parent().unwrap());
+    let desk = &c.desks["sig"];
+    assert!(desk.screen_in_use.is_empty());
+    let ws = crate::workspace::parse(&desk.workspaces[0]).unwrap();
+    assert_eq!(ws.scope, None);
+    // Every screen has the desk-wide workspace, and saving adds neither key.
+    assert_eq!(crate::workspace::in_use_on(desk, "any"), Some("w"));
+    assert_eq!(crate::workspace::switch_back_target(desk, "any"), Some("v"));
+    let saved = serde_json::to_value(desk).unwrap();
+    assert!(saved.get("screen_in_use").is_none());
+    assert!(serde_json::to_value(&ws).unwrap().get("scope").is_none());
+}
+
+#[test]
+fn scope_round_trips() {
+    use crate::workspace::Workspace;
+    let ws = Workspace { id: "w".into(), scope: Some(r"\\?\DISPLAY#B".into()), ..Workspace::default() };
+    let saved = crate::workspace::to_value(&ws);
+    assert_eq!(saved["scope"], r"\\?\DISPLAY#B");
+    assert_eq!(crate::workspace::parse(&saved), Some(ws));
+    let in_use = ScreenInUse { workspace: Some("w".into()), previous: None };
+    let desk = Desk { screen_in_use: BTreeMap::from([("b".to_string(), in_use)]), ..Desk::default() };
+    let saved = serde_json::to_value(&desk).unwrap();
+    assert_eq!(saved["screen_in_use"], json!({ "b": { "workspace": "w" } }));
+    assert_eq!(serde_json::from_value::<Desk>(saved).unwrap(), desk);
+}

@@ -251,7 +251,9 @@ fn export(panel: &Panel, mut ws: Workspace, window: &mut Window, cx: &mut Contex
     ws.windows.iter_mut().for_each(|r| (r.place, r.open_with) = (None, None));
     // A folder, web links or an editor go with it, a startup command never does (D737).
     ws.windows.iter_mut().for_each(|r| r.item = r.item.take().map(workspace::Item::without_commands));
-    let refers = |id: &String| ws.windows.iter().any(|r| r.monitor == *id) || ws.zones.contains_key(id);
+    let refers = |id: &String| {
+        ws.windows.iter().any(|r| r.monitor == *id) || ws.zones.contains_key(id) || ws.scope.as_ref() == Some(id)
+    };
     let used: BTreeMap<String, ScreenInfo> = screen_infos(panel).into_iter().filter(|(id, _)| refers(id)).collect();
     let name: String = ws.name.chars().map(|c| if c.is_alphanumeric() || c == ' ' { c } else { '-' }).collect();
     let file = Export { seam_workspace: Export::VERSION, workspace: ws, screens: used };

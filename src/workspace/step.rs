@@ -39,9 +39,12 @@ pub fn stepped(list: &[Workspace], current: Option<&str>, dir: Step, wrap: bool)
 }
 
 /// The screens a switch to `ws` changes, as indexes into `screens` (their ids): those with
-/// an on row of the workspace, or a layout of its own. A screen it only keeps isn't one.
+/// an on row of the workspace, or a layout of its own. A screen it only keeps isn't one, and
+/// a one-screen workspace changes its screen alone (D783).
 pub fn screens_changed(ws: &Workspace, screens: &[&str]) -> Vec<usize> {
-    let changes = |id: &str| ws.windows.iter().any(|r| !r.off && r.monitor == id) || ws.zones.contains_key(id);
+    let mine = |id: &str| ws.scope.as_deref().is_none_or(|s| s == id);
+    let changes =
+        |id: &str| mine(id) && (ws.windows.iter().any(|r| !r.off && r.monitor == id) || ws.zones.contains_key(id));
     screens.iter().enumerate().filter(|(_, id)| changes(id)).map(|(i, _)| i).collect()
 }
 
@@ -113,6 +116,9 @@ mod tests {
         let mut ws = Workspace { windows: vec![row("m1", false), row("m2", true)], ..Workspace::default() };
         ws.zones.insert("m3".into(), json!({ "template": "none", "tree": "leaf" }));
         assert_eq!(screens_changed(&ws, &["m1", "m2", "m3", "m4"]), vec![0, 2]);
+        // For screen 3 alone, the row on screen 1 changes nothing.
+        let one = Workspace { scope: Some("m3".into()), ..ws };
+        assert_eq!(screens_changed(&one, &["m1", "m2", "m3", "m4"]), vec![2]);
     }
 
     #[test]

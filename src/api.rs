@@ -234,9 +234,13 @@ pub enum Command {
     WorkspaceSnapBack {
         /// Leave the other windows alone, which an assistant always does.
         alongside: bool,
+        /// The Line Up number of the screen whose workspace it is; without it, the one last
+        /// switched to that is still in use (D785).
+        screen: Option<u32>,
     },
     WorkspaceSwitchBack {
         alongside: bool,
+        screen: Option<u32>,
     },
     /// Switch to the next or previous workspace of the desk, from the one in use.
     WorkspaceStep {
@@ -257,9 +261,11 @@ pub enum Command {
         id: String,
         hwnds: Vec<isize>,
     },
-    /// `workspace.minimize`: the workspace in use when `id` is left out. Never for an assistant.
+    /// `workspace.minimize`: the workspace in use when `id` is left out, on `screen` when it is
+    /// named. Never for an assistant.
     WorkspaceMinimize {
         id: Option<String>,
+        screen: Option<u32>,
     },
     /// Put back the windows the last minimize took (D705).
     WorkspaceMinimizeUndo,
@@ -472,14 +478,32 @@ pub fn workspaces_list(snapshot: &Snapshot, desk: Option<&str>) -> Reply {
     };
     let active = snapshot.state.workspace.as_ref().map(|w| w.id.as_str());
     let default = desk["default_workspace"].as_str();
+    // Screens and what is in use on them are the connected desk's.
+    let here = sig == snapshot.state.desk.sig;
+    let screens: &[crate::state::Screen] = if here { &snapshot.state.screens } else { &[] };
+    let recorded = desk["screens"].as_array().map(Vec::as_slice).unwrap_or_default();
+    let scope = |path: &str| {
+        let on = screens.iter().find(|s| s.id == path);
+        let name = on
+            .map(|s| s.name.clone())
+            .or_else(|| recorded.iter().find(|s| s["id"] == path).and_then(|s| s["name"].as_str()).map(String::from));
+        json!({ "number": on.map(|s| s.number), "id": path, "name": name.unwrap_or_default() })
+    };
     let workspaces = desk["workspaces"].as_array().into_iter().flatten().map(|w| {
+        let in_use_on: Vec<u32> = screens
+            .iter()
+            .filter(|s| s.workspace.as_ref().is_some_and(|r| w["id"].as_str() == Some(r.id.as_str())))
+            .map(|s| s.number)
+            .collect();
         json!({
             "id": w["id"],
             "name": w["name"],
             "hotkey": w["hotkey"],
             "windows": w["windows"].as_array().map_or(0, Vec::len),
             "zones": w.get("zones").cloned().unwrap_or_else(|| json!({})),
-            "active": w["id"].as_str() == active,
+            "scope": w["scope"].as_str().map(scope),
+            "in_use_on": in_use_on,
+            "active": !in_use_on.is_empty() || (here && w["id"].as_str() == active),
             "default": default.is_some() && w["id"].as_str() == default,
         })
     });

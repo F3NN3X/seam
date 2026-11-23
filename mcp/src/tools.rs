@@ -22,6 +22,11 @@ pub struct Tool {
 
 const ID: (&str, &str, &str) = ("id", "string", "The workspace id, as seam_workspaces lists it");
 const ROW: (&str, &str, &str) = ("row", "integer", "The row number, from 0, as seam_workspace lists it");
+const SCREEN: (&str, &str, &str) = (
+    "screen",
+    "integer",
+    "The screen's number, from 1, as seam_state lists it. Without it, the workspace last switched to that is still in use",
+);
 
 pub const TOOLS: &[Tool] = &[
     Tool {
@@ -35,7 +40,7 @@ pub const TOOLS: &[Tool] = &[
     Tool {
         name: "seam_workspaces",
         method: "workspaces.list",
-        about: "The saved workspaces of the current desk: id, name, shortcut, how many apps each holds, and which is in use.",
+        about: "The saved workspaces of the current desk: id, name, shortcut, how many apps each holds, which is in use and on which screens, and the one screen a workspace is for, if it is for one. A workspace for one screen changes only that screen when switched to.",
         kind: Kind::Read,
         args: &[],
         required: &[],
@@ -51,7 +56,7 @@ pub const TOOLS: &[Tool] = &[
     Tool {
         name: "seam_workspace_status",
         method: "workspace.status",
-        about: "How each app of a workspace is doing right now: in_place, moved, minimized, not_running, background or cant_move.",
+        about: "How each app of a workspace is doing right now: in_place, moved, minimized, not_running, background, cant_move, off, other_screen (a row of a one-screen workspace on another screen, left alone) or other_workspace (on a screen that has a workspace of its own in use).",
         kind: Kind::Read,
         args: &[ID],
         required: &["id"],
@@ -59,7 +64,7 @@ pub const TOOLS: &[Tool] = &[
     Tool {
         name: "seam_switch_workspace",
         method: "workspace.switch",
-        about: "Switch to a workspace by name or id. Windows it doesn't mention are left alone and nothing is closed, but apps it lists that aren't running may be started. seam_cancel_switch stops one that is starting apps.",
+        about: "Switch to a workspace by name or id. Windows it doesn't mention are left alone and nothing is closed, but apps it lists that aren't running may be started. A workspace for one screen changes only that screen, and can't be switched to while its screen isn't connected. seam_cancel_switch stops one that is starting apps.",
         kind: Kind::Act,
         args: &[("name", "string", "The workspace's name, matched without regard to case"), ID],
         required: &[],
@@ -75,17 +80,17 @@ pub const TOOLS: &[Tool] = &[
     Tool {
         name: "seam_snap_back",
         method: "workspace.snap_back",
-        about: "Put the windows of the workspace in use back where it says they go.",
+        about: "Put the windows of the workspace in use back where it says they go: the one in use on a screen, when you name it.",
         kind: Kind::Act,
-        args: &[],
+        args: &[SCREEN],
         required: &[],
     },
     Tool {
         name: "seam_switch_back",
         method: "workspace.switch_back",
-        about: "Switch back to the workspace that was in use before this one.",
+        about: "Switch back to the workspace that was in use before this one, on a screen when you name it.",
         kind: Kind::Act,
-        args: &[],
+        args: &[SCREEN],
         required: &[],
     },
     Tool {

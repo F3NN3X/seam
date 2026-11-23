@@ -10,6 +10,11 @@ pub(super) fn busy(message: &str) -> Reply {
     Err(RpcError::new(api::BUSY, message))
 }
 
+/// The screen a request names, or the tray's rule when it names none (D785).
+fn on(screen: Option<u32>) -> OnScreen {
+    screen.map_or(OnScreen::Unnamed, OnScreen::Number)
+}
+
 /// The panel's patch with its items checked and each startup command in it sealed, so none
 /// reaches config.json in clear and none is one the panel didn't have (D736).
 fn seal_items(patch: &mut Value) {
@@ -222,21 +227,21 @@ pub(super) fn run_command(app: &mut App, queued: Queued) {
         }
         Command::WorkspaceWindows { id } => {
             let from = (Some(reply.clone()), client.as_str());
-            if let Some(refusal) = start_close(app, Some(&id), (Ask::List, Vec::new()), from) {
+            if let Some(refusal) = start_close(app, (Some(&id), OnScreen::Unnamed), (Ask::List, Vec::new()), from) {
                 let _ = reply.send(refusal);
             }
             return;
         }
         Command::WorkspaceClose { id, hwnds } => {
             let from = (Some(reply.clone()), client.as_str());
-            if let Some(refusal) = start_close(app, Some(&id), (Ask::Close, hwnds), from) {
+            if let Some(refusal) = start_close(app, (Some(&id), OnScreen::Unnamed), (Ask::Close, hwnds), from) {
                 let _ = reply.send(refusal);
             }
             return;
         }
-        Command::WorkspaceMinimize { id } => {
+        Command::WorkspaceMinimize { id, screen } => {
             let from = (Some(reply.clone()), client.as_str());
-            if let Some(refusal) = start_close(app, id.as_deref(), (Ask::Minimize, Vec::new()), from) {
+            if let Some(refusal) = start_close(app, (id.as_deref(), on(screen)), (Ask::Minimize, Vec::new()), from) {
                 let _ = reply.send(refusal);
             }
             return;
@@ -375,9 +380,11 @@ fn command_result(app: &mut App, command: Command, panel: bool) -> Reply {
         Command::WorkspaceMove { id, to } => move_workspace(app, &id, to),
         Command::WorkspaceCopyFromDesk { from } => copy_from_desk(app, &from),
         Command::WorkspaceUpdate { id, workspace } => update_from_panel(app, &id, workspace),
-        Command::WorkspaceSnapBack { alongside } => snap_back(app, alongside, Via::api(panel)),
-        Command::WorkspaceSwitchBack { alongside } => switch_back(app, alongside, Via::api(panel)),
-        Command::WorkspaceStep { direction, alongside } => step(app, direction, None, alongside, Via::api(panel)),
+        Command::WorkspaceSnapBack { alongside, screen } => snap_back(app, on(screen), alongside, Via::api(panel)),
+        Command::WorkspaceSwitchBack { alongside, screen } => switch_back(app, on(screen), alongside, Via::api(panel)),
+        Command::WorkspaceStep { direction, alongside } => {
+            step(app, direction, OnScreen::Unnamed, alongside, Via::api(panel))
+        }
         Command::WorkspaceSetDefault(id) => set_default(app, id),
         Command::CursorEasingSet(on) => set_cursor_easing(app, on),
         Command::AutoApplySet(on) => {

@@ -16,8 +16,8 @@ use seam::stack;
 use seam::winutil;
 use seam::workspace::report::{CANCELLED, RUNS_IN_BACKGROUND, TOOK_TOO_LONG};
 use seam::workspace::{
-    self, Bound, Candidate, Item, OpenWith, OtherWindows, Pin, Place, RowAction, RowState, RowStatus, Rule,
-    SCREEN_GONE, SESSION_ID, Shown, Target, WinState, Workspace,
+    self, Bound, Candidate, Item, OTHER_SCREEN, OpenWith, OtherWindows, Pin, Place, RowAction, RowState, RowStatus,
+    Rule, SCREEN_GONE, SESSION_ID, Shown, Target, WinState, Workspace,
 };
 use seam::zones::{self, Rect, ZoneLayout};
 use std::collections::{BTreeMap, HashMap, HashSet};
@@ -44,7 +44,7 @@ mod rules;
 mod run;
 mod stages;
 
-use bind::{bind, bindings, bound_windows, match_rows, unbind};
+use bind::{bind, bindings, bound_windows, match_reached, match_rows, unbind};
 use launch::{earlier_launch, launch, launch_key, note_launch, place_kind};
 use place::{destination, in_place, now_of, place_all, restack, to_focus};
 use rows::move_opened;
@@ -135,6 +135,26 @@ fn hwnd_of(key: isize) -> HWND {
 
 fn centre(r: Rect) -> (i32, i32) {
     (r.x + r.w / 2, r.y + r.h / 2)
+}
+
+/// The middle of a window, or of where a minimized one restores to.
+fn screen_point(h: HWND) -> Option<(i32, i32)> {
+    let rect = if winutil::is_minimized(h) { winutil::normal_rect(h) } else { winutil::visible_rect(h) };
+    rect.map(centre)
+}
+
+/// The windows other screens' workspaces hold: each stamped by the workspace in use on the
+/// screen it is on. `holders` are those screens' bounds with that workspace's stamp key.
+/// Reads only window properties and rects, so it never waits on an app.
+pub fn held_windows(holders: &[(Rect, u32)]) -> HashSet<isize> {
+    if holders.is_empty() {
+        return HashSet::new();
+    }
+    let stamped = winutil::top_level_windows().into_iter().filter_map(|h| {
+        let (key, _) = winutil::ws_stamp(h)?;
+        Some((h.0 as isize, Some(key), screen_point(h)?))
+    });
+    workspace::held(&stamped.collect::<Vec<_>>(), holders)
 }
 
 /// Windows for COM calls (the property store, `ShellExecuteW`) on a worker.
@@ -370,6 +390,26 @@ struct Run<'a> {
     /// Each row's remembered window as the switch began, `None` for a row without a
     /// place (D336).
     bound: Vec<Option<Bound>>,
+    /// Screens another workspace holds: the rows there take no part.
+    away: &'a [String],
+    /// Windows another screen's workspace holds, never claimed (D783).
+    held: &'a HashSet<isize>,
+}
+
+impl Run<'_> {
+    /// The row is on a screen this switch reaches: its workspace's, and not one another holds.
+    fn reaches(&self, rule: &Rule) -> bool {
+        workspace::in_scope(rule, self.ws.scope.as_deref()) && !self.away.contains(&rule.monitor)
+    }
+
+    /// What the switch does with row `i`, given the window it found.
+    fn action(&self, i: usize, found: Option<isize>) -> RowAction {
+        let (ws, rule) = (self.ws, &self.ws.windows[i]);
+        if self.away.contains(&rule.monitor) {
+            return RowAction::Leave;
+        }
+        workspace::row_action(rule, found, ws.open_windows, self.put_back, ws.scope.as_deref())
+    }
 }
 
 /// The apps a switch has started.

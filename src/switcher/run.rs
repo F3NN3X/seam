@@ -26,6 +26,11 @@ pub struct SwitchJob {
     pub from_panel: bool,
     /// Another app asked through the API, so a Terminal item opens without its startup command.
     pub other_app: bool,
+    /// Screens another workspace holds, which a Snap back of the desk-wide one leaves alone:
+    /// its rows there take no part. Empty for every other switch.
+    pub away: Vec<String>,
+    /// Windows another screen's workspace holds, which this switch never claims (D783).
+    pub held: HashSet<isize>,
 }
 
 /// How a switch went: what the event says.
@@ -44,6 +49,11 @@ pub struct Switched {
     pub cancelled: bool,
     /// Snap back: the same workspace again.
     pub put_back: bool,
+    /// The screen of a one-screen workspace, `None` for All screens.
+    pub scope: Option<String>,
+    /// A desk-wide switch that left the screens another workspace holds alone, so what is in use
+    /// stays as it was.
+    pub left_screens: bool,
 }
 
 /// An app a switch couldn't start or move, or left alone on purpose.
@@ -210,14 +220,18 @@ fn run_switch(job: &SwitchJob, mine: u64) -> Option<Switched> {
         put_back,
         bound,
         other_app: job.other_app,
+        away: &job.away,
+        held: &job.held,
     };
     let mut tally = Tally::default();
     let mut procs = Procs::new();
 
-    // Snapshot and match.
+    // Snapshot and match. A window another screen's workspace holds is never one of ours.
     let seen = snapshot(&mut procs);
-    let mut known: Vec<Candidate> = seen.iter().map(|s| s.cand.clone()).collect();
-    let mut found = workspace::assign_bound(&ws.windows, &known, &run.bound, &elsewhere);
+    let mut known: Vec<Candidate> =
+        seen.iter().filter(|s| !job.held.contains(&s.cand.hwnd)).map(|s| s.cand.clone()).collect();
+    let rows = workspace::sit_out(&ws.windows, ws.scope.as_deref(), &job.away);
+    let mut found = workspace::assign_bound(&rows, &known, &run.bound, &elsewhere);
     bind_unbound(&run, &found);
     if let Some(key) = stamp {
         clear_stale_stamps(key, &found, &seen);
@@ -274,6 +288,8 @@ fn run_switch(job: &SwitchJob, mine: u64) -> Option<Switched> {
         from_panel: job.from_panel,
         cancelled,
         put_back: job.put_back,
+        scope: ws.scope.clone(),
+        left_screens: !job.away.is_empty(),
     })
 }
 
@@ -297,14 +313,15 @@ fn stacks_of(ws: &Workspace, found: &[Option<isize>]) -> Vec<(Zones, Vec<isize>)
         .collect()
 }
 
-/// An unbound place row keeps the window it matched by app from now on.
+/// An unbound place row keeps the window it matched by app from now on. One on a screen the
+/// switch doesn't reach takes no part, so it binds nothing.
 fn bind_unbound(run: &Run, found: &[Option<isize>]) {
     let ws = run.ws;
     for (i, b) in run.bound.iter().enumerate() {
         let app = app_name(&ws.windows[i]);
         match (b, found[i]) {
             (Some(Bound::Alive(_)), _) => log::info!("{app}: its window is open"),
-            (Some(Bound::Unbound), hit) => {
+            (Some(Bound::Unbound), hit) if run.reaches(&ws.windows[i]) => {
                 log::info!("{app}: not bound yet, matching by app");
                 if let Some(hwnd) = hit {
                     bind(&ws.id, i, hwnd);
@@ -378,11 +395,18 @@ fn arrange_as_they_open(
 /// What is running already goes in one pass, then the missing apps start in stages.
 fn place_then_start(run: &Run, mine: u64, waits: &mut Waits, starts: &mut Starts, tally: &mut Tally) -> Option<()> {
     let ws = run.ws;
-    let action = |i: usize| workspace::row_action(&ws.windows[i], waits.found[i], ws.open_windows, run.put_back);
+    let action = |i: usize| run.action(i, waits.found[i]);
     let running: Vec<usize> = (0..waits.found.len()).filter(|i| action(*i) == RowAction::Place).collect();
-    // A window left where it is still has its row, so auto-apply doesn't give the row to a second window.
+    // A row of a one-screen workspace on another screen is kept and left alone, and says so (D788).
+    for (i, rule) in ws.windows.iter().enumerate() {
+        if workspace::takes_part(rule) && !workspace::in_scope(rule, ws.scope.as_deref()) {
+            tally.skipped.push(Skip::row(i, rule, OTHER_SCREEN));
+        }
+    }
+    // A window left where it is still has its row, so auto-apply doesn't give the row to a second
+    // window. One on a screen this switch doesn't reach isn't stamped as this workspace's.
     if let Some(key) = run.stamp {
-        let left = (0..waits.found.len()).filter(|i| action(*i) == RowAction::Leave);
+        let left = (0..waits.found.len()).filter(|i| action(*i) == RowAction::Leave && run.reaches(&ws.windows[*i]));
         for i in left {
             if let Some(hwnd) = waits.found[i] {
                 winutil::set_ws_stamp(hwnd_of(hwnd), key, i);
@@ -411,11 +435,9 @@ fn place_then_start(run: &Run, mine: u64, waits: &mut Waits, starts: &mut Starts
     // An app this switch doesn't start and that has no window is reported when its
     // program still runs, closed to the tray.
     let mut background = Background::default();
-    let idle = ws
-        .windows
-        .iter()
-        .enumerate()
-        .filter(|(i, r)| workspace::takes_part(r) && waits.found[*i].is_none() && !starting.contains(i));
+    let idle = ws.windows.iter().enumerate().filter(|(i, r)| {
+        workspace::takes_part(r) && run.reaches(r) && waits.found[*i].is_none() && !starting.contains(i)
+    });
     for (i, rule) in idle {
         if rule.item.is_none() && background.runs(rule, waits.procs) {
             tally.skipped.push(Skip::row(i, rule, RUNS_IN_BACKGROUND));
@@ -451,11 +473,13 @@ fn deal_with_others(
     let (mut exes, mut aumids): (HashSet<String>, HashSet<String>) = (HashSet::new(), HashSet::new());
     // A place row whose window is open but out of reach (on another desktop) still has its app here.
     let open = |i: usize| matches!(run.bound[i], Some(Bound::Alive(_)));
+    // So does an off row's app, and one on a screen the switch doesn't reach (D694, D788).
+    let kept = |r: &Rule| workspace::keeps_its_app(r, ws.scope.as_deref()) || run.away.contains(&r.monitor);
     let mine_rules = ws
         .windows
         .iter()
         .enumerate()
-        .filter(|(i, r)| r.off || found[*i].is_some() || starts.started.contains(i) || open(*i));
+        .filter(|(i, r)| kept(r) || found[*i].is_some() || starts.started.contains(i) || open(*i));
     for (_, rule) in mine_rules {
         exes.insert(rule.exe.to_lowercase());
         aumids.extend(rule.aumid.clone());
@@ -464,7 +488,12 @@ fn deal_with_others(
         exes.insert(c.exe.to_lowercase());
         aumids.extend(c.aumid.clone());
     }
-    let others = seen.iter().filter(|s| !s.elevated && !stays(s.pin, job.pins_stay) && !claimed.contains(&s.cand.hwnd));
+    let others = seen.iter().filter(|s| {
+        !s.elevated
+            && !stays(s.pin, job.pins_stay)
+            && !claimed.contains(&s.cand.hwnd)
+            && !run.held.contains(&s.cand.hwnd)
+    });
     for s in others.filter(|s| !exes.contains(&s.cand.exe.to_lowercase())) {
         if s.cand.aumid.as_ref().is_some_and(|a| aumids.contains(a)) {
             continue;

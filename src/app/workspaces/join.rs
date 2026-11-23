@@ -77,8 +77,10 @@ fn join(app: &mut App, job: &Capturing, read: Result<(Rule, isize), String>) -> 
     let old = desk_workspaces(app).into_iter().find(|w| w.id == id).ok_or("the workspace is gone")?;
     let name = super::add::label(&rule);
     let ids: Vec<String> = desk_workspaces(app).into_iter().map(|w| w.id).collect();
-    let placing = workspace::join_target(id, &ids, app.workspace.as_deref()) == workspace::Join::SaveAndPlace;
-    let joined = workspace::join_window(&old, rule);
+    // In use on any screen counts: a one-screen workspace places on its own (D786, D788).
+    let in_use = if in_use_ids(app).iter().any(|i| i == id) { Some(id) } else { app.workspace.as_deref() };
+    let placing = workspace::join_target(id, &ids, in_use) == workspace::Join::SaveAndPlace;
+    let joined = workspace::join_window(&old, super::add::onto_scope(app, &old, rule));
     if joined.new {
         // The editor's checks, then one write, as any add.
         let edit = check_rows(app, id, workspace::to_value(&joined.workspace), Some(joined.row), false)
@@ -98,7 +100,7 @@ fn join(app: &mut App, job: &Capturing, read: Result<(Rule, isize), String>) -> 
         if joined.new {
             sync_live(app);
         }
-        live::join(hwnd);
+        live::join(hwnd, id);
         live::check_drift();
     }
     let verb = if joined.new { "joined" } else { "is already in" };

@@ -400,6 +400,10 @@ pub fn import(file: Export, here: &BTreeMap<String, ScreenInfo>, names: &[String
         zones.entry(id).or_insert(layout);
     }
     workspace.zones = zones;
+    // A scope with no screen here is kept, and the workspace can't be switched until one is picked (D790).
+    if let Some(id) = workspace.scope.as_deref().and_then(find) {
+        workspace.scope = Some(id);
+    }
     workspace.id = new_id(ids);
     workspace.name = unique_name(&workspace.name, names);
     for rule in &mut workspace.windows {

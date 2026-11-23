@@ -61,6 +61,9 @@ pub struct Screen {
     /// library. It is here so a change of layout is a change of the state.
     #[serde(default)]
     pub layout: Option<String>,
+    /// The workspace in use on this screen: its own, else the desk-wide one (D782).
+    #[serde(default)]
+    pub workspace: Option<WorkspaceRef>,
 }
 
 /// A screen that is connected but turned off in Windows. Seam can't use it.

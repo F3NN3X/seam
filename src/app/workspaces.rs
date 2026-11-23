@@ -21,11 +21,12 @@ pub(super) use assist::{create_workspace, edit_workspace};
 pub(super) use capture::{captured, quick_save, start_capture, undo_quick_save, update_from_panel, update_workspace};
 pub(super) use close::{Ask, Closing, Minimized, closed, start_close, start_close_here, undo_minimize};
 pub(super) use copy::copy_from_desk;
-use in_use::{active_workspace, set_in_use};
 pub(super) use in_use::{
-    choose_in_use, detected_in_use, drift_checked, drift_due, forget_deleted, live_of, set_default, snap_back,
-    switch_back, sync_live, ws_moved,
+    OnScreen, choose_in_use, detected_in_use, drift_checked, drift_due, forget_deleted, in_use_ids, live_of, meant,
+    next_put_back, put_back_all, screen_meant, set_default, snap_back, switch_back, switch_back_id, sync_live,
+    ws_moved,
 };
+use in_use::{active_workspace, holders, put_in_use_back, rescoped, screen_ids, set_in_use, took_over};
 pub(super) use join::sent as sent_to_join;
 pub(super) use notice::{
     LastSwitch, ended, last_switch, open_switched, show_label, skipped_json, started, starting, starting_due,
@@ -215,16 +216,35 @@ pub(super) fn start_switch_job(
     if app.closing.is_some() {
         return busy("Windows of a workspace are still being closed or minimized");
     }
-    // What a minimize took belongs to the layout this switch changes. A step sets its own target after.
+    // A one-screen workspace never falls back to all screens (D787).
+    if !workspace::scope_connected(&workspace, &screen_ids(app)) {
+        log::info!("workspace {}: its screen isn't connected, so it isn't switched", workspace.name);
+        return refused(workspace::SCOPE_GONE);
+    }
+    // What a minimize took belongs to the layout this switch changes. A step and a queue of
+    // Snap backs set their own after.
     app.minimized = None;
     app.step_to = None;
+    app.put_back_queue.clear();
     log::info!("switching to workspace {}", workspace.name);
     // A hotkey gives the tray the right to take focus. For anyone else this is all it can do.
     let _ = unsafe { AllowSetForegroundWindow(std::process::id()) };
+    // A one-screen switch takes its screen only (D783). Snap back of the desk-wide workspace
+    // leaves the screens that have their own; any other All-screens switch takes them all (D784).
+    let desk_wide_back = via.put_back && workspace.scope.is_none() && app.workspace.as_deref() == Some(&workspace.id);
+    let away = match app.cfg.desks.get(&app.sig) {
+        Some(desk) if desk_wide_back => workspace::own_screens(desk, &screen_ids(app)),
+        _ => Vec::new(),
+    };
+    let scope = workspace.scope.clone();
+    let reach = |s: &str| scope.as_deref().is_none_or(|own| own == s) && !away.iter().any(|a| a == s);
+    let held = switcher::held_windows(&holders(app, &workspace.id, &reach));
     // The last session has no layouts, so a restore leaves them alone.
-    apply_zones(app, &workspace);
+    apply_zones(app, &workspace, &reach);
     let name = workspace.name.clone();
-    let (owner, screens, gap) = (app.hwnd.0 as isize, job_screens(app), app.cfg.zones.gap);
+    let screens: Vec<SwitchScreen> = job_screens(app).into_iter().filter(|s| reach(&s.id)).collect();
+    let number = scope.as_deref().and_then(|s| screens.iter().find(|m| m.id == s)).map(|m| m.number);
+    let (owner, gap) = (app.hwnd.0 as isize, app.cfg.zones.gap);
     let (pins_stay, size_mode) = (app.cfg.windows.pins_stay_on_switch, app.cfg.window_size_on_move);
     // The last session never saves a folder or page, so it never opens one either.
     let places = app.cfg.workspaces_remember_places && workspace.id != SESSION_ID;
@@ -242,9 +262,14 @@ pub(super) fn start_switch_job(
         put_back,
         from_panel,
         other_app,
+        away,
+        held,
     };
     if switcher::switch(job) {
-        Ok(json!({ "ok": true }))
+        Ok(match number {
+            Some(screen) => json!({ "ok": true, "screen": screen }),
+            None => json!({ "ok": true }),
+        })
     } else {
         log::info!("workspace {}: the switch didn't start, its screen layouts stay set", name);
         refused("Couldn't start the switch")
@@ -290,12 +315,12 @@ fn store_screen_layout(app: &mut App, screen: &str, layout: Option<zones::ZoneLa
 /// Give each connected screen the layout the workspace has for it, before its switch
 /// is built, so the switch places apps into the new zones. Saved as a pick on the
 /// Zones page is, but the screen's snapped windows aren't moved: the switch places
-/// the workspace's apps. A screen kept as is, not connected, or whose zones already
-/// match (`zones_match`, as the editor's status) stays. Saved with zones off or
-/// another window manager in charge too.
-fn apply_zones(app: &mut App, workspace: &Workspace) {
+/// the workspace's apps. A screen kept as is, not connected, outside the switch's `reach`, or
+/// whose zones already match (`zones_match`, as the editor's status) stays. Saved with zones
+/// off or another window manager in charge too.
+fn apply_zones(app: &mut App, workspace: &Workspace, reach: &dyn Fn(&str) -> bool) {
     let mut changed = Vec::new();
-    for m in &app.mons {
+    for m in app.mons.iter().filter(|m| reach(&m.id)) {
         let Some(saved) = workspace.zones.get(&m.id) else { continue };
         let before = app.cfg.desks.get(&app.sig).and_then(|d| d.zones.get(&m.id)).and_then(zones::layout_of);
         if workspace::zones_match(saved, before.as_ref()) {
@@ -331,7 +356,11 @@ pub(super) fn switched(app: &mut App) {
     );
     // The last session isn't a workspace anyone can pick, so it never shows as the one in use.
     if done.id != SESSION_ID {
-        set_in_use(app, Some(done.id.clone()));
+        // Snap back of the desk-wide workspace left the screens that have their own: nothing changes hands.
+        if !done.left_screens {
+            took_over(app, &done.id, done.scope.as_deref());
+        }
+        app.last_in_use = Some(done.id.clone());
         // Only the end of the switch a step asked for ends its chain: the end of one it replaced may arrive late.
         if app.step_to.as_deref() == Some(done.id.as_str()) {
             app.step_to = None;
@@ -350,19 +379,41 @@ pub(super) fn switched(app: &mut App) {
     publish(app);
     let skipped = skipped_json(&done.skipped);
     let problems = skipped.iter().filter(|s| !s["why"].is_null()).count();
-    let data = json!({
+    let mut data = json!({
         "id": done.id, "name": done.name, "launched": done.launched, "placed": done.placed, "skipped": skipped,
         "problems": problems, "cancelled": done.cancelled, "from_panel": done.from_panel
     });
+    if let Some(n) = done.scope.as_deref().and_then(|s| app.mons.iter().position(|m| m.id == s)) {
+        data["screen"] = json!(n + 1);
+    }
     api_server::broadcast("workspace.switched", &data);
     ended(app, &done);
     show_label(app, &done);
+    // "Put windows back" goes on with the next workspace that moved, now that this one is done,
+    // unless the user stopped this one: that stops the rest too (D714).
+    app.put_back_queue = left_to_put_back(std::mem::take(&mut app.put_back_queue), done.cancelled);
+    if let Some(Err(e)) = next_put_back(app) {
+        log::info!("put windows back: {}", e.message);
+    }
+}
+
+/// What the put-back queue still holds once a switch ended: nothing, when that one was cancelled.
+fn left_to_put_back(queue: Vec<(String, bool)>, cancelled: bool) -> Vec<(String, bool)> {
+    if cancelled { Vec::new() } else { queue }
 }
 
 #[cfg(test)]
 mod tests {
     use super::Via;
+    use super::left_to_put_back;
     use super::step::step_target;
+
+    #[test]
+    fn a_cancel_stops_the_snap_backs_still_queued() {
+        let queue = vec![("b".to_string(), false), ("c".to_string(), false)];
+        assert_eq!(left_to_put_back(queue.clone(), false), queue);
+        assert!(left_to_put_back(queue, true).is_empty());
+    }
     use seam::workspace::{Step, Workspace};
 
     fn list(ids: &[&str]) -> Vec<Workspace> {

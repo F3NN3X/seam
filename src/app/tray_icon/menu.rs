@@ -26,12 +26,15 @@ fn with_hint(label: &str, hint: Option<String>) -> String {
 /// The workspaces of the desk as radio items, the one in use marked and hinted when its windows
 /// have moved. Ids run on from `ID_WORKSPACE`.
 unsafe fn add_workspaces(app: &App, menu: HMENU, workspaces: &[Workspace]) {
-    let active = app.workspace.as_deref();
+    // The one the tray's items act on (D785): with nothing one-screen in use, the desk's.
+    let meant = meant(app, None);
+    let active = meant.as_deref();
     unsafe {
         add_text(menu, MF_STRING | MF_GRAYED, 0, "Workspace");
         for (id, ws) in (ID_WORKSPACE..).zip(workspaces) {
             let name = ws.name.replace('&', "&&");
-            let moved = (active == Some(ws.id.as_str()) && app.drifted).then(|| "moved".to_string());
+            let drifted = app.drifted.get(&ws.id) == Some(&true);
+            let moved = (active == Some(ws.id.as_str()) && drifted).then(|| "moved".to_string());
             // The workspace's own shortcut stays, ahead of the moved hint.
             let hints: Vec<String> = hint(&ws.hotkey).into_iter().chain(moved).collect();
             let label = with_hint(&name, (!hints.is_empty()).then(|| hints.join(", ")));
@@ -42,8 +45,8 @@ unsafe fn add_workspaces(app: &App, menu: HMENU, workspaces: &[Workspace]) {
             let _ =
                 CheckMenuRadioItem(menu, ID_WORKSPACE as u32, last as u32, (ID_WORKSPACE + at) as u32, MF_BYCOMMAND.0);
         }
-        let previous = app.cfg.desks.get(&app.sig).and_then(|d| d.previous_workspace.as_deref());
-        if let Some(ws) = workspaces.iter().find(|w| Some(w.id.as_str()) == previous) {
+        let previous = switch_back_id(app, None);
+        if let Some(ws) = workspaces.iter().find(|w| Some(&w.id) == previous.as_ref()) {
             add_text(menu, MF_STRING, ID_SWITCH_BACK, &format!("Switch back to {}", ws.name.replace('&', "&&")));
         }
         let back = if active.is_some() { MF_STRING } else { MF_STRING | MF_GRAYED };
@@ -162,15 +165,15 @@ pub(in crate::app) fn show_menu(app: &mut App) {
             }
             ID_RELEASE => wm::release(None),
             ID_PUT_BACK => {
-                if let Err(e) = snap_back(app, false, Via::local()) {
+                if let Err(e) = put_back_all(app) {
                     log::info!("workspace menu: {}", e.message);
                     notify(app, "Put windows back", &e.message, BalloonAction::None);
                 }
             }
-            ID_MINIMIZE_WS => start_close_here(app, "Minimize this workspace", Ask::Minimize),
-            ID_CLOSE_WS => start_close_here(app, "Close this workspace", Ask::List),
+            ID_MINIMIZE_WS => start_close_here(app, "Minimize this workspace", Ask::Minimize, OnScreen::Unnamed),
+            ID_CLOSE_WS => start_close_here(app, "Close this workspace", Ask::List, OnScreen::Unnamed),
             ID_SWITCH_BACK => {
-                if let Err(e) = switch_back(app, false, Via::local()) {
+                if let Err(e) = switch_back(app, OnScreen::Unnamed, false, Via::local()) {
                     log::info!("workspace menu: {}", e.message);
                     notify(app, "Switch back", &e.message, BalloonAction::None);
                 }

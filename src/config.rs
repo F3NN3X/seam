@@ -564,6 +564,23 @@ pub struct Desk {
     /// Seam drops it, which only means the desk isn't offered as a source until it's connected again.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub screens: Vec<DeskScreen>,
+    /// Monitor device path -> the workspace in use on that screen when it has its own, and
+    /// what was in use there before (D782). Left out while empty, and an older Seam drops
+    /// it, which gives every screen the desk-wide workspace again. Kept on this PC.
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub screen_in_use: BTreeMap<String, ScreenInUse>,
+}
+
+/// One screen's workspaces in use (D782).
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ScreenInUse {
+    /// The one-screen workspace in use on this screen. `None`: the desk-wide one is.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub workspace: Option<String>,
+    /// What was in use on this screen before, of either kind, for Switch back.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub previous: Option<String>,
 }
 
 /// One screen of a desk, as it was the last time the desk was connected.

@@ -81,6 +81,7 @@ impl Panel {
                         this.open_setup(window, cx);
                     }
                     this.refresh_folder(cx);
+                    pages::workspaces::refresh_wallpaper(this, cx);
                     if let Some(id) = this.close_ask.take() {
                         this.show(Page::Workspaces, None, window, cx);
                         pages::workspaces::ask_to_close(this, &id, window, cx);
@@ -119,6 +120,9 @@ impl Panel {
                         match event.kind.as_str() {
                             "workspace.switching" => this.switching(&event.data, window, cx),
                             "workspace.switched" => this.switched(&event.data, window, cx),
+                            "wallpaper.changed" | "wallpaper.failed" | "desk.changed" => {
+                                pages::workspaces::wallpaper_event(this, &event, window, cx)
+                            }
                             _ => {}
                         }
                         // A moved window of another workspace changes nothing on show.
@@ -270,6 +274,17 @@ impl Panel {
 
     /// Change settings. They show at once, and the tray has the last word.
     pub fn patch(&mut self, patch: Value, window: &mut Window, cx: &mut Context<Self>) {
+        self.patch_then(patch, window, cx, |_, _, _| {});
+    }
+
+    /// `patch`, then `then` once the tray has it.
+    pub fn patch_then(
+        &mut self,
+        patch: Value,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+        then: impl FnOnce(&mut Panel, &mut Window, &mut Context<Panel>) + 'static,
+    ) {
         if let Ok(config) = self.config.patched(&patch) {
             self.set_config(config);
         }
@@ -280,6 +295,7 @@ impl Panel {
                 window.push_notification(refusal("Setting left as it was", &error_text(&e)), cx);
             }
             this.reload_config(window, cx);
+            then(this, window, cx);
         });
     }
 
@@ -410,7 +426,7 @@ fn connect(token: &str) -> Result<Session, CallError> {
     let events = Client::subscribe(
         "panel",
         Some(token),
-        &["state", "desk", "workspace", "update", "lineup", "panel", "config"],
+        &["state", "desk", "workspace", "update", "lineup", "panel", "config", "wallpaper"],
     )?;
     let state = client.call("state.get", json!({}))?;
     let state = serde_json::from_value(state).map_err(std::io::Error::other)?;

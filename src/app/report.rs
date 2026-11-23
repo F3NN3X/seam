@@ -7,7 +7,10 @@ pub(super) fn refresh(app: &mut App) {
     if overlay::is_active() {
         return;
     }
+    let before: Vec<(String, seam::geom::Rect)> = app.mons.iter().map(|m| (m.id.clone(), m.rect)).collect();
     app.mons = monitors::enumerate();
+    let moved =
+        app.mons.len() != before.len() || app.mons.iter().zip(&before).any(|(m, b)| (&m.id, m.rect) != (&b.0, b.1));
     app.inactive = monitors::inactive().into_iter().map(|(id, name)| state::InactiveScreen { id, name }).collect();
     spotlight::screens_changed(&app.mons);
     // A display change can make a window cover its screen, or stop it.
@@ -32,6 +35,12 @@ pub(super) fn refresh(app: &mut App) {
     // Where each screen is, for another desk to copy workspaces by.
     if desk::note_screens(&mut app.cfg, &app.sig, &app.mons, &app.links) {
         persist(app);
+    }
+    // A screen that came, went, moved or changed size gets its picture again, at its new size (D794).
+    if moved {
+        wallpaper_screens(app, false);
+    } else {
+        wallpaper_sync(app, None);
     }
     if arrived {
         choose_in_use(app);

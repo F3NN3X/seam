@@ -131,6 +131,7 @@ pub(super) fn set_in_use(app: &mut App, id: Option<String>) {
         desk.active_workspace = id;
         persist(app);
     }
+    wallpaper_sync(app, None);
 }
 
 /// A switch to `id`, for `scope`'s screen or all screens, ended: it is in use where it
@@ -175,11 +176,16 @@ pub(in crate::app) fn forget_deleted(app: &mut App) -> bool {
     // A screen whose workspace went, or is now for another screen (a synced file, a patch),
     // falls back to the desk-wide one.
     let changed = workspace::keep_valid(desk, &list);
+    // And a picture goes with its workspace, or with a screen it is no longer for (D793a).
+    let pictures = seam::wallpaper::keep_valid(desk, &list);
     if changed {
         app.workspace = desk.active_workspace.clone();
         sync_live(app);
     }
-    changed
+    if changed || pictures {
+        wallpaper_sync(app, None);
+    }
+    changed || pictures
 }
 
 /// What is in use on the desk, kept to be put back.
@@ -210,6 +216,7 @@ pub(super) fn put_in_use_back(app: &mut App, before: InUse) {
     let Some(desk) = app.cfg.desks.get_mut(&app.sig) else { return };
     workspace::restore_in_use(desk, before);
     app.workspace = desk.active_workspace.clone();
+    wallpaper_sync(app, None);
 }
 
 /// At start and on another desk, which workspaces are in use, without moving a window:
@@ -251,6 +258,8 @@ pub(in crate::app) fn choose_in_use(app: &mut App) {
             live::check_drift();
         }
     }
+    // Each screen's own workspace is back from the file, whatever the desk-wide one is.
+    wallpaper_sync(app, None);
 }
 
 /// The live worker found which workspace looks like the one in use.

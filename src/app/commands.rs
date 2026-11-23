@@ -63,6 +63,7 @@ pub(super) fn patch_config(app: &mut App, patch: &Value) -> Reply {
     // What Windows' Restart apps was before Seam changed it is the tray's to keep.
     next.restore_apps_saved = app.cfg.restore_apps_saved;
     let remap_turned_on = next.enabled && !app.cfg.enabled;
+    let wallpapers_were = app.cfg.wallpapers_enabled;
     app.cfg = next;
     forget_deleted(app);
     sync_restart_apps(app);
@@ -75,6 +76,7 @@ pub(super) fn patch_config(app: &mut App, patch: &Value) -> Reply {
     if remap_turned_on {
         warn_about_ease(app);
     }
+    wallpaper_turned(app, wallpapers_were);
     publish(app);
     arm_auto_install(app);
     Ok(json!({ "ok": true }))
@@ -386,6 +388,8 @@ fn command_result(app: &mut App, command: Command, panel: bool) -> Reply {
             step(app, direction, OnScreen::Unnamed, alongside, Via::api(panel))
         }
         Command::WorkspaceSetDefault(id) => set_default(app, id),
+        Command::WallpaperSet { workspace, screen, path, fit } => wallpaper_set(app, workspace, screen, path, fit),
+        Command::WallpaperState => Ok(wallpaper_state(app)),
         Command::CursorEasingSet(on) => set_cursor_easing(app, on),
         Command::AutoApplySet(on) => {
             app.cfg.auto_apply = on;

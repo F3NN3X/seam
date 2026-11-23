@@ -45,6 +45,16 @@ pub fn settings_dir() -> PathBuf {
     }
 }
 
+/// `%LOCALAPPDATA%\Seam` as it really is, for files another process reads, such as the wallpapers
+/// Explorer shows (D800). A packaged app's LocalAppData is redirected the same way as its AppData.
+pub fn local_dir() -> PathBuf {
+    let local = std::env::var_os("LOCALAPPDATA").map(PathBuf::from).unwrap_or_else(|| PathBuf::from("."));
+    match is_packaged().then(family_name).flatten() {
+        Some(family) => local.join("Packages").join(family).join("LocalCache").join("Local").join("Seam"),
+        None => local.join("Seam"),
+    }
+}
+
 /// Run on a thread of its own: WinRT needs an apartment, and a blocking
 /// blocking wait must never sit on the tray's main thread.
 fn on_fresh_thread<T: Send + 'static>(work: impl FnOnce() -> Option<T> + Send + 'static) -> Option<T> {

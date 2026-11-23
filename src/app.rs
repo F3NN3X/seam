@@ -18,6 +18,7 @@ mod tiling;
 mod tray_icon;
 mod turn;
 mod update;
+mod wallpapers;
 mod workspaces;
 
 use crate::api_server::{self, Queued};
@@ -78,6 +79,10 @@ use tray_icon::{TrayIcons, add_icon, clear_balloon, notify, show_menu, theme_cha
 use update::{
     arm_auto_install, auto_install, check_for_updates, clean_up_after_update, read_update_state, update_read,
 };
+use wallpapers::{
+    Wallpapers, wallpaper_changed_outside, wallpaper_quit, wallpaper_reported, wallpaper_screens, wallpaper_set,
+    wallpaper_state, wallpaper_switched, wallpaper_sync, wallpaper_turned,
+};
 use wincontrol::tile::{At, Verb};
 use windows::Win32::Foundation::*;
 use windows::Win32::Graphics::Gdi::*;
@@ -119,6 +124,8 @@ const TIMER_TILING: usize = 42;
 const TIMER_DIVIDER: usize = 41;
 /// Retries the overview's moves the snapping was too busy for (menu open).
 const TIMER_OVERVIEW: usize = 43;
+/// Retries taking the wallpaper worker's reports the app was too busy for (menu open).
+const TIMER_WALLPAPER: usize = 44;
 /// Windows silently removes low-level hooks that ever time out, so re-arm periodically.
 const TIMER_REARM: usize = 2;
 /// Retries API commands the app was too busy for (menu open).
@@ -532,6 +539,8 @@ struct App {
     restart_apps: bool,
     /// Spotlight was on when Seam began to stand by, so it comes back after.
     spotlight_resume: bool,
+    /// The pictures each screen shows, and the worker that shows them (brief K).
+    wallpaper: Wallpapers,
 }
 
 thread_local! {

@@ -569,6 +569,55 @@ pub struct Desk {
     /// it, which gives every screen the desk-wide workspace again. Kept on this PC.
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     pub screen_in_use: BTreeMap<String, ScreenInUse>,
+    /// The desk default: the picture each screen shows when no workspace in use sets one (D793).
+    /// Left out while empty, and an older Seam drops it. Kept on this PC.
+    #[serde(default, skip_serializing_if = "WallpaperSet::is_empty")]
+    pub wallpaper: WallpaperSet,
+    /// Workspace id -> the pictures it sets. Apart from the workspaces, which are shared, so the
+    /// pictures stay on this PC.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub workspace_wallpapers: BTreeMap<String, WallpaperSet>,
+}
+
+/// A picture for each screen, by monitor device path (D791).
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct WallpaperSet {
+    pub screens: BTreeMap<String, Wallpaper>,
+}
+
+impl WallpaperSet {
+    pub fn is_empty(&self) -> bool {
+        self.screens.is_empty()
+    }
+}
+
+/// One screen's picture and how it fits the screen.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Wallpaper {
+    pub path: String,
+    #[serde(deserialize_with = "lenient_fit")]
+    pub fit: Fit,
+}
+
+/// A fit this build doesn't know (a later Seam's, a hand edit) reads as Fill, so one picture
+/// setting can never make the whole file unreadable.
+fn lenient_fit<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Fit, D::Error> {
+    let value = serde_json::Value::deserialize(d)?;
+    Ok(serde_json::from_value(value).unwrap_or_default())
+}
+
+/// How a picture fits its screen (D796).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Fit {
+    #[default]
+    Fill,
+    Fit,
+    Stretch,
+    Center,
+    Tile,
 }
 
 /// One screen's workspaces in use (D782).
@@ -721,6 +770,10 @@ pub struct Config {
     /// screen the switch changed. On by default, and left out of the file while on.
     #[serde(skip_serializing_if = "is_true")]
     pub workspaces_switch_label: bool,
+    /// "Change wallpaper with workspaces" (D791): each screen shows the picture its workspace sets.
+    /// Off by default, left out of the file while off, and kept on this PC.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub wallpapers_enabled: bool,
     /// "Where apps open": an app's window goes to its place whenever it opens, with
     /// or without a workspace. Raw JSON like workspaces, so an entry this build
     /// can't read is kept as it is and ignored.
@@ -798,6 +851,7 @@ impl Default for Config {
             workspaces_update_closed: None,
             workspaces_offer_restore: false,
             workspaces_switch_label: true,
+            wallpapers_enabled: false,
             app_rules: Vec::new(),
             custom_layouts: Vec::new(),
             cursor_easing_asked: false,

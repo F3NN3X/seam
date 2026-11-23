@@ -62,6 +62,34 @@ fn without_folder(mut patch: Value) -> Value {
     patch
 }
 
+/// A patch can't choose pictures either: only `wallpaper.set` does, which checks each one, so no
+/// client points Seam at a file it hasn't looked at (brief K).
+fn without_wallpapers(mut patch: Value) -> Value {
+    let desks = patch.get_mut("desks").and_then(Value::as_object_mut);
+    for desk in desks.into_iter().flat_map(|d| d.values_mut()).filter_map(Value::as_object_mut) {
+        desk.remove("wallpaper");
+        desk.remove("workspace_wallpapers");
+    }
+    patch
+}
+
+fn wallpaper_set(p: &Value) -> Result<Command, RpcError> {
+    let screen = str_param(p, "screen")?.ok_or_else(|| RpcError::new(INVALID_PARAMS, "screen is required"))?;
+    let path = match p.get("path") {
+        Some(Value::Null) => None,
+        Some(Value::String(path)) if !path.is_empty() => Some(path.clone()),
+        _ => return Err(RpcError::new(INVALID_PARAMS, "path must be a picture file or null")),
+    };
+    let fit = match p.get("fit") {
+        None | Some(Value::Null) => None,
+        Some(fit) => Some(
+            serde_json::from_value(fit.clone())
+                .map_err(|_| RpcError::new(INVALID_PARAMS, "fit must be fill, fit, stretch, center or tile"))?,
+        ),
+    };
+    Ok(Command::WallpaperSet { workspace: str_param(p, "workspace")?, screen, path, fit })
+}
+
 fn config_set_folder(p: &Value) -> Result<Command, RpcError> {
     let path = match p.get("path") {
         Some(Value::Null) => None,
@@ -88,6 +116,7 @@ fn command(method: &str, p: &Value) -> Result<Command, RpcError> {
                 .filter(|v| v.is_object())
                 .cloned()
                 .map(without_folder)
+                .map(without_wallpapers)
                 .ok_or_else(|| RpcError::new(INVALID_PARAMS, "patch must be an object"))?,
         ),
         "config.set_folder" => config_set_folder(p)?,
@@ -134,6 +163,8 @@ fn command(method: &str, p: &Value) -> Result<Command, RpcError> {
         "workspace.minimize" => Command::WorkspaceMinimize { id: str_param(p, "id")?, screen: on_screen_param(p)? },
         "workspace.minimize_undo" => Command::WorkspaceMinimizeUndo,
         "workspace.set_default" => Command::WorkspaceSetDefault(str_param(p, "id")?),
+        "wallpaper.set" => wallpaper_set(p)?,
+        "wallpaper.state" => Command::WallpaperState,
         "autoapply.set" => Command::AutoApplySet(on_param(p)?),
         "cursor_easing.set" => Command::CursorEasingSet(on_param(p)?),
         "remap.set" => Command::RemapSet(on_param(p)?),
@@ -585,6 +616,7 @@ fn allowed(command: &Command, peer: Peer) -> Result<(), RpcError> {
         | Command::WorkspaceMove { .. }
         | Command::WorkspaceCopyFromDesk { .. }
         | Command::CursorEasingSet(_)
+        | Command::WallpaperSet { .. }
         | Command::LayoutShow(_) => peer.panel,
         Command::AppQuit
         | Command::WorkspaceCapture { .. }
@@ -593,7 +625,7 @@ fn allowed(command: &Command, peer: Peer) -> Result<(), RpcError> {
         | Command::WorkspaceSetDefault(_)
         | Command::WorkspaceMinimizeUndo => peer.panel || peer.own_image,
         Command::UpdateReady => peer.own_image,
-        Command::ConfigFolder => peer.panel || peer.own_image,
+        Command::ConfigFolder | Command::WallpaperState => peer.panel || peer.own_image,
         _ => true,
     };
     permitted.then_some(()).ok_or_else(|| RpcError::new(FORBIDDEN, "Only Seam can do that"))
@@ -639,6 +671,54 @@ mod tests {
         let line = r#"{"jsonrpc":"2.0","id":1,"method":"config.patch","params":{"patch":{"config_folder":"D:\\Sync","sync":{"pc":"X","at":1},"enabled":false}}}"#;
         let (_, command) = parse_request(line, panel).unwrap();
         assert_eq!(command, Command::ConfigPatch(json!({ "enabled": false })));
+    }
+
+    #[test]
+    fn config_patch_drops_desk_wallpaper_keys() {
+        let panel = Peer { panel: true, api_enabled: true, ..Peer::default() };
+        let patch = r#"{"wallpapers_enabled":true,"desks":{"a|b":{"name":"Home","wallpaper":{"screens":{"m":{"path":"C:\\x.png"}}},"workspace_wallpapers":{"w":{}}}}}"#;
+        let line = format!(r#"{{"jsonrpc":"2.0","id":1,"method":"config.patch","params":{{"patch":{patch}}}}}"#);
+        let (_, command) = parse_request(&line, panel).unwrap();
+        let kept = json!({ "wallpapers_enabled": true, "desks": { "a|b": { "name": "Home" } } });
+        assert_eq!(command, Command::ConfigPatch(kept));
+    }
+
+    #[test]
+    fn wallpaper_set_is_panel_only_and_wallpaper_state_is_panel_or_seam() {
+        let panel = Peer { panel: true, api_enabled: true, ..Peer::default() };
+        let anyone = Peer { api_enabled: true, ..Peer::default() };
+        let own = Peer { own_image: true, ..Peer::default() };
+        let assistant = Peer { mcp: true, mcp_on: true, api_enabled: true, assistants_edit: true, ..Peer::default() };
+        let line =
+            |method: &str, params: &str| format!(r#"{{"jsonrpc":"2.0","id":1,"method":"{method}","params":{params}}}"#);
+        let set = line("wallpaper.set", r#"{"workspace":"w","screen":"m","path":"C:\\a.jpg","fit":"tile"}"#);
+        let want = Command::WallpaperSet {
+            workspace: Some("w".into()),
+            screen: "m".into(),
+            path: Some(r"C:\a.jpg".into()),
+            fit: Some(crate::config::Fit::Tile),
+        };
+        assert_eq!(parse_request(&set, panel).map(|(_, c)| c), Ok(want));
+        for peer in [anyone, own, assistant] {
+            assert!(parse_request(&set, peer).is_err());
+        }
+        // The desk default, and taking a picture away.
+        let remove = line("wallpaper.set", r#"{"workspace":null,"screen":"m","path":null}"#);
+        let want = Command::WallpaperSet { workspace: None, screen: "m".into(), path: None, fit: None };
+        assert_eq!(parse_request(&remove, panel).map(|(_, c)| c), Ok(want));
+        for bad in [
+            r#"{"screen":"m"}"#,
+            r#"{"path":null}"#,
+            r#"{"screen":"m","path":3}"#,
+            r#"{"screen":"m","path":"a","fit":"span"}"#,
+        ] {
+            let refused = parse_request(&line("wallpaper.set", bad), panel).map_err(|(_, e)| e.code);
+            assert_eq!(refused, Err(INVALID_PARAMS), "{bad}");
+        }
+        let state = line("wallpaper.state", "{}");
+        assert_eq!(parse_request(&state, own).map(|(_, c)| c), Ok(Command::WallpaperState));
+        assert_eq!(parse_request(&state, panel).map(|(_, c)| c), Ok(Command::WallpaperState));
+        assert_eq!(parse_request(&state, anyone).map_err(|(_, e)| e.code), Err(FORBIDDEN));
     }
 
     #[test]

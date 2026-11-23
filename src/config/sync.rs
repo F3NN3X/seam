@@ -21,11 +21,20 @@ pub const LOCAL_TOP: &[&str] = &[
     "seen",
     "layouts",
     "config_folder",
+    "wallpapers_enabled",
 ];
 
-/// Fields of a desk the tray rewrites on every switch, sign-in or desk change, so they stay on this PC.
-pub const LOCAL_DESK: &[&str] =
-    &["last_seen", "last_session", "active_workspace", "previous_workspace", "screen_in_use"];
+/// Fields of a desk the tray rewrites on every switch, sign-in or desk change, and the wallpapers,
+/// whose pictures are files on this PC (D791), so they stay on this PC.
+pub const LOCAL_DESK: &[&str] = &[
+    "last_seen",
+    "last_session",
+    "active_workspace",
+    "previous_workspace",
+    "screen_in_use",
+    "wallpaper",
+    "workspace_wallpapers",
+];
 
 /// The stamp only the shared file has.
 const STAMP: &str = "sync";

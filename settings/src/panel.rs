@@ -154,6 +154,8 @@ pub struct Panel {
     pub status: Option<(String, Vec<RowStatus>)>,
     pub asking_status: Option<String>,
     status_again: bool,
+    /// What the tray and the disk say about the screens' pictures (brief K).
+    pub wallpaper: pages::workspaces::WallpaperView,
     /// The topic the Help page shows, as an index into `help::TOPICS`. `None` shows the topic grid.
     pub help_topic: Option<usize>,
     /// The pickers behind the Custom swatch of the focus and pin colour rows, and a
@@ -325,6 +327,7 @@ impl Panel {
             status: None,
             asking_status: None,
             status_again: false,
+            wallpaper: Default::default(),
             help_topic: None,
             focus_picker,
             pin_picker,

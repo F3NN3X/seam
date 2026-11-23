@@ -60,7 +60,12 @@ impl Engine {
     }
 
     pub(super) fn geometry(&self) -> Vec<Placed> {
-        let gap = |dpi: u32| (self.settings.gap.min(MAX_GAP) as f32 * dpi as f32 / 96.0).round() as i32;
+        self.geometry_at(self.settings.gap)
+    }
+
+    /// The screens' zones with `gap_px` between them, as they were or will be at that gap.
+    pub(super) fn geometry_at(&self, gap_px: u32) -> Vec<Placed> {
+        let gap = |dpi: u32| (gap_px.min(MAX_GAP) as f32 * dpi as f32 / 96.0).round() as i32;
         let placed = self.screens.iter().filter_map(|s| {
             let layout = s.layout.as_ref()?;
             let (work, dpi) = work_area(s.bounds)?;

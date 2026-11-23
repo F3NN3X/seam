@@ -372,8 +372,10 @@ pub fn update(owner: HWND, cfg: &Config, sig: &str, mons: &[Mon], aside: Option<
         }
         e.cancel_drag();
         let margins_changed = e.screens.iter().map(|s| s.margins).ne(screens.iter().map(|s| s.margins));
+        // `owner` is 0 until the first update, whose gap isn't a change.
         let first = e.owner == 0;
-        let gap_changed = !first && refit::gap_changed(e.settings.gap, cfg.zones.gap);
+        let old_gap = e.settings.gap;
+        let gap_changed = !first && refit::gap_changed(old_gap, cfg.zones.gap);
         let moved = e.screens.iter().map(|s| (&s.id, s.bounds)).ne(screens.iter().map(|s| (&s.id, s.bounds)));
         e.owner = owner.0 as isize;
         e.enabled = cfg.zones.enabled;
@@ -402,7 +404,9 @@ pub fn update(owner: HWND, cfg: &Config, sig: &str, mons: &[Mon], aside: Option<
         e.tiled_resume();
         // The windows in zones move to the new gap, as the zones' overlay did.
         if gap_changed {
-            e.regap();
+            e.regap(old_gap);
+            // A tiled screen keeps its tree, laid out again at the new gap.
+            e.tiled_refit();
         }
         // New margins move the windows tiling holds now, not at the next change.
         if margins_changed {

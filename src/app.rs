@@ -25,7 +25,7 @@ use crate::config::{Config, MAX_EDGE_RESISTANCE_PX, MAX_GLUE_PUSH_PX, signature}
 use crate::desk::{self, has_neighbours, resolve};
 use crate::hook;
 use crate::layout::{Link, Live};
-use crate::live::{WM_APP_DETECTED, WM_APP_DRIFT};
+use crate::live::{WM_APP_DETECTED, WM_APP_DRIFT, WM_APP_SENT};
 use crate::log;
 use crate::monitors::{self, Mon};
 use crate::snap::{self, WM_APP_REFIT, WM_APP_REFIT_DONE, WM_APP_SNAP_BLOCKED};
@@ -67,7 +67,7 @@ use session::{
 use signin::{SignInRun, arm, begin, cancel_sign_in, open_offered, sign_in_tick};
 pub use start::run;
 use std::cell::RefCell;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, VecDeque};
 use std::os::windows::process::CommandExt;
 use std::sync::Mutex;
 use std::sync::mpsc::{Sender, channel};
@@ -101,7 +101,7 @@ use workspaces::{
     show_spotlight, snap_back, start_capture, start_focus_only, start_switch, start_switch_job, start_window,
     switch_back, switched, sync_live, undo_quick_save, update_from_panel, ws_moved,
 };
-use workspaces::{last_switch, open_switched, started, starting, starting_due};
+use workspaces::{last_switch, open_switched, sent_to_join, started, starting, starting_due};
 use workspaces::{save_preview, start_preview};
 
 const WM_APP_TRAY: u32 = WM_APP + 1;
@@ -334,6 +334,8 @@ struct Capturing {
     add: Option<isize>,
     /// "Move window to next workspace": the workspace whose row for that window goes once it is added.
     move_from: Option<String>,
+    /// An app rule sent the window to `into`: it joins as a row, quietly, with no Undo.
+    join: bool,
     /// The capture review: keep the result under a token instead of saving it.
     preview: bool,
     /// What the save does with each row of `into` whose app isn't open, by row. A row
@@ -451,6 +453,8 @@ struct App {
     /// The workspace the last Next or Previous asked for, until its switch ends, so quick
     /// presses go on from there and not from the one still in use.
     step_to: Option<String>,
+    /// Windows an app rule sent to a workspace, waiting for their turn to join it, with its id.
+    joining: VecDeque<(isize, String)>,
     /// A window of that workspace is moved or minimized, so Snap back has work to do.
     drifted: bool,
     /// Keys of workspaces whose stamped windows moved, waiting for the drift timer.

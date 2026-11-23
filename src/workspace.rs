@@ -17,6 +17,7 @@ mod copy;
 mod export;
 mod geometry;
 mod items;
+mod join;
 mod matching;
 mod order;
 mod plan;
@@ -30,8 +31,8 @@ mod tests;
 
 pub use assist::{Edit, MAX_ASSISTANT_WORKSPACES, MAX_NAME, RowChange, checked_name, edited, survivors};
 pub use capture::{
-    Added, add_window, checked_rows, checked_update, merge_capture, moved_rows, numbered, recapture_row, stages,
-    take_window_place, tame_delay, why_not,
+    Added, Joined, add_window, checked_rows, checked_update, join_window, merge_capture, moved_rows, numbered,
+    recapture_row, stages, take_window_place, tame_delay, why_not,
 };
 pub use close::{Fact, Why, sort_out, still_ours};
 pub use copy::{
@@ -47,6 +48,7 @@ pub use items::{
     cmd_escape, command_ok, edited_items, editor_args, encoded_command, folder_ok, item_shape, terminal_args,
     terminal_too_long, unbase64, unused_commands, web_args,
 };
+pub use join::{Join, join_target, owned_away};
 pub use matching::{Bound, Candidate, assign, assign_bound, assign_bound_all};
 pub use order::{MoveError, moved_to};
 pub use plan::{RowAction, SCREEN_GONE, row_action, screen_gone, takes_part};
@@ -311,6 +313,10 @@ pub struct Rule {
     /// it, and the row is on again.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub off: bool,
+    /// An app rule's workspace: a new window of the app joins it as a row (brief I, D771).
+    /// Never set on a workspace row; an older Seam drops it and the rule only places.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub send_to: Option<String>,
 }
 
 impl Default for Rule {
@@ -339,6 +345,7 @@ impl Default for Rule {
             stack: None,
             float: false,
             off: false,
+            send_to: None,
         }
     }
 }
@@ -511,8 +518,9 @@ pub fn list(saved: &[Value]) -> Vec<Workspace> {
 /// The app rules this build can use: an app, a screen and a place to go to. Others
 /// stay in the config and are ignored.
 pub fn app_rules(saved: &[Value]) -> Vec<Rule> {
-    // A rule needs a place to send the window to, or a pin to keep it with.
-    let usable = |r: &Rule| (!r.exe.is_empty() || r.aumid.is_some()) && (r.moves() || r.pin.is_some());
+    // A rule needs a place to send the window to, a pin to keep it with, or a workspace to join.
+    let usable =
+        |r: &Rule| (!r.exe.is_empty() || r.aumid.is_some()) && (r.moves() || r.pin.is_some() || r.send_to.is_some());
     saved.iter().filter_map(|v| serde_json::from_value(v.clone()).ok()).filter(usable).collect()
 }
 

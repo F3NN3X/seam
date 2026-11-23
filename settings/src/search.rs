@@ -205,6 +205,14 @@ const ENTRIES: &[Entry] = &[
         within: Some("Where apps open"),
         topic: None,
     },
+    Entry {
+        page: Page::Windows,
+        title: "Send new windows to",
+        about: "A new window of an app joins a workspace as a row",
+        keywords: "app rule workspace join add row send new window",
+        within: Some("Where apps open"),
+        topic: None,
+    },
     entry(
         Page::Zones,
         "Snap beside a window",

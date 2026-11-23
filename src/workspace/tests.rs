@@ -1252,3 +1252,111 @@ fn a_patch_seals_nothing_and_drops_what_fails_its_check() {
     assert!(rows[0].get("item").is_none());
     assert!(rows[1].get("open_with").is_none() && rows[1]["item"]["kind"] == "folder");
 }
+
+#[test]
+fn join_adds_a_row_with_launch_off_for_an_app_the_workspace_lacks() {
+    let old = Workspace { windows: vec![rule("a.exe", None, "A", "a")], ..named("w") };
+    let mut fresh = rule("b.exe", None, "B", "b");
+    fresh.open_with = Some(r"C:\x".into());
+    fresh.target = Target::Zone { zone: 2, span_to: None };
+    let joined = join_window(&old, fresh);
+    assert!(joined.new);
+    assert_eq!((joined.row, joined.workspace.windows.len()), (1, 2));
+    let row = &joined.workspace.windows[1];
+    assert!(!row.launch && row.open_with.is_none() && !row.focused);
+    assert_eq!((row.z, &row.target), (1, &Target::Zone { zone: 2, span_to: None }));
+    assert_eq!(joined.workspace.windows[0], old.windows[0]);
+}
+
+#[test]
+fn join_never_changes_an_existing_row() {
+    let mut have = rule("a.exe", None, "A", "a");
+    have.target = Target::Zone { zone: 1, span_to: None };
+    let old = Workspace { windows: vec![have], ..named("w") };
+    let mut fresh = rule("a.exe", None, "A", "a");
+    fresh.target = Target::Zone { zone: 4, span_to: None };
+    let joined = join_window(&old, fresh);
+    assert!(!joined.new);
+    assert_eq!(joined.row, 0);
+    assert_eq!(joined.workspace, old);
+}
+
+#[test]
+fn join_treats_an_off_row_as_the_apps_row() {
+    let off = Rule { off: true, launch: false, ..rule("a.exe", None, "A", "a") };
+    let old = Workspace { windows: vec![off], ..named("w") };
+    let joined = join_window(&old, rule("a.exe", None, "A", "a"));
+    assert!(!joined.new);
+    assert_eq!(joined.workspace, old);
+    assert!(joined.workspace.windows[0].off);
+}
+
+#[test]
+fn a_second_window_of_the_same_app_adds_nothing() {
+    let old = named("w");
+    let first = join_window(&old, rule("a.exe", None, "A", "a"));
+    assert!(first.new);
+    let second = join_window(&first.workspace, rule("a.exe", None, "A", "another window"));
+    assert!(!second.new);
+    assert_eq!(second.workspace.windows.len(), 1);
+}
+
+#[test]
+fn join_ignores_an_item_row_of_the_same_app() {
+    let folder = Rule { item: Some(Item::Folder { folder: r"C:\p".into() }), ..rule("a.exe", None, "A", "a") };
+    let old = Workspace { windows: vec![folder], ..named("w") };
+    assert!(join_window(&old, rule("a.exe", None, "A", "a")).new);
+}
+
+#[test]
+fn rule_with_a_workspace_and_no_place_is_usable() {
+    let saved = |exe: &str, send_to: Option<&str>| {
+        let rule = Rule { exe: exe.into(), send_to: send_to.map(Into::into), ..Rule::default() };
+        serde_json::to_value(rule).unwrap()
+    };
+    let list = [saved("a.exe", Some("w1")), saved("b.exe", None), saved("", Some("w1"))];
+    let usable = app_rules(&list);
+    assert_eq!(usable.len(), 1);
+    assert_eq!((usable[0].exe.as_str(), usable[0].send_to.as_deref()), ("a.exe", Some("w1")));
+}
+
+#[test]
+fn rule_with_a_workspace_round_trips_and_is_skipped_when_unset() {
+    let none = serde_json::to_value(rule("a.exe", None, "A", "a")).unwrap();
+    assert!(none.get("send_to").is_none());
+    let sent = Rule { send_to: Some("w1".into()), ..rule("a.exe", None, "A", "a") };
+    let value = serde_json::to_value(&sent).unwrap();
+    assert_eq!(value["send_to"], "w1");
+    assert_eq!(serde_json::from_value::<Rule>(value).unwrap(), sent);
+}
+
+#[test]
+fn import_clears_send_to() {
+    let row = Rule { send_to: Some("w1".into()), ..rule("a.exe", None, "A", "a") };
+    let workspace = Workspace { id: "w".into(), name: "A".into(), windows: vec![row], ..Workspace::default() };
+    let file = Export { seam_workspace: Export::VERSION, workspace, screens: BTreeMap::new() };
+    let got = import(file, &BTreeMap::new(), &[], &[]);
+    assert_eq!(got.windows[0].send_to, None);
+}
+
+#[test]
+fn a_window_sent_to_a_workspace_joins_by_whether_it_is_on_the_desk_and_in_use() {
+    let desk = ["a".to_string(), "b".to_string()];
+    assert_eq!(join_target("gone", &desk, Some("a")), Join::Skip);
+    assert_eq!(join_target("gone", &desk, None), Join::Skip);
+    assert_eq!(join_target("b", &desk, Some("a")), Join::Save);
+    assert_eq!(join_target("b", &desk, None), Join::Save);
+    assert_eq!(join_target("a", &desk, Some("a")), Join::SaveAndPlace);
+}
+
+#[test]
+fn a_rule_for_the_workspace_in_use_isnt_owned_away() {
+    let sends = |id: Option<&str>| Rule { send_to: id.map(Into::into), ..rule("a.exe", None, "A", "a") };
+    // The workspace in use has a row for the app: it owns it, except for its own rule.
+    assert!(owned_away(&sends(None), Some("w1"), true));
+    assert!(owned_away(&sends(Some("w2")), Some("w1"), true));
+    assert!(!owned_away(&sends(Some("w1")), Some("w1"), true));
+    // No row for the app: nothing owns it.
+    assert!(!owned_away(&sends(None), Some("w1"), false));
+    assert!(!owned_away(&sends(Some("w2")), None, false));
+}

@@ -64,18 +64,32 @@ fn begin(
     if hwnd == 0 {
         return Err(RpcError::new(api::REFUSED, "No window is in front"));
     }
-    let into = Some(found.id.clone());
     let move_from = if moving { super::moved::origin(app.workspace.as_deref(), app.step_to.as_deref()) } else { None };
+    let id = found.id.clone();
+    start_capture(app, &id, hwnd, reply, move_from, false)
+}
+
+/// Read `hwnd` on a worker, to join workspace `id`: as "Add window to workspace" does, or with
+/// `join`, as an app rule's new window does, quietly. The caller has checked the slot is free.
+pub(super) fn start_capture(
+    app: &mut App,
+    id: &str,
+    hwnd: isize,
+    reply: Option<Sender<Reply>>,
+    move_from: Option<String>,
+    join: bool,
+) -> Result<(), RpcError> {
     app.capturing = Some(Capturing {
         reply,
         name: None,
-        into,
+        into: Some(id.to_string()),
         row: None,
         pick: None,
         sig: app.sig.clone(),
         quick: false,
         add: Some(hwnd),
         move_from,
+        join,
         preview: false,
         closed: BTreeMap::new(),
         from_panel: false,
@@ -105,12 +119,16 @@ fn answer(app: &mut App, reply: Option<Sender<Reply>>, result: Reply, moving: bo
 /// The worker has read the window.
 pub(super) fn added(app: &mut App) {
     let (Some(read), Some(job)) = (switcher::take_added(), app.capturing.take()) else { return };
+    if job.join {
+        super::join::joined(app, &job, read);
+        return super::join::next_join(app);
+    }
     let result = save(app, &job, read);
     answer(app, job.reply, result, job.move_from.is_some());
 }
 
 /// What to call the app in a notice: its program's name, or failing that its window's title.
-fn label(rule: &Rule) -> String {
+pub(super) fn label(rule: &Rule) -> String {
     let stem = Path::new(&rule.exe).file_stem().map(|s| s.to_string_lossy().into_owned());
     stem.filter(|s| !s.is_empty()).unwrap_or_else(|| rule.title_hint.clone())
 }
@@ -123,7 +141,7 @@ fn stored(app: &App, id: &str) -> Option<Value> {
 
 /// Put the folder or page the window showed into its row. Only a capture reads one, so
 /// the editor's checks leave it out and this adds it after them.
-fn store_place(app: &mut App, id: &str, row: usize, place: workspace::Place) {
+pub(super) fn store_place(app: &mut App, id: &str, row: usize, place: workspace::Place) {
     let Some(desk) = app.cfg.desks.get_mut(&app.sig) else { return };
     let Some(slot) = desk.workspaces.iter_mut().find(|v| workspace::parse(v).is_some_and(|w| w.id == id)) else {
         return;

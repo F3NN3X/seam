@@ -19,6 +19,8 @@ use windows::Win32::UI::WindowsAndMessaging::{PostMessageW, WM_APP};
 pub const WM_APP_DRIFT: u32 = WM_APP + 27;
 /// The worker looked which workspace's windows are all in place. Read it with `take_detected`.
 pub const WM_APP_DETECTED: u32 = WM_APP + 28;
+/// An app rule sent windows to workspaces. Read them with `take_sent`.
+pub const WM_APP_SENT: u32 = WM_APP + 47;
 
 /// What the worker found about the active workspace.
 pub struct Drift {
@@ -43,6 +45,9 @@ enum Job {
         workspaces: Vec<LiveWorkspace>,
     },
     Opened(isize),
+    /// This window joined the workspace in use as a row: put it where the row says, whether
+    /// or not auto-apply is on.
+    Join(isize),
     /// Pin the open windows of the rules that keep an app on top. The windows of these
     /// rules are pinned again even if they were released.
     PinOpen(Vec<workspace::Rule>),
@@ -75,6 +80,8 @@ static RESUME: AtomicBool = AtomicBool::new(false);
 static AUTO: AtomicBool = AtomicBool::new(false);
 static OWNER: AtomicIsize = AtomicIsize::new(0);
 static DRIFT: Mutex<Option<Drift>> = Mutex::new(None);
+/// Windows an app rule sent to a workspace, by id, for the tray thread to join.
+static SENT: Mutex<Vec<(isize, String)>> = Mutex::new(Vec::new());
 static DETECTED: Mutex<Option<Detected>> = Mutex::new(None);
 static WORKER: OnceLock<Option<Sender<Job>>> = OnceLock::new();
 
@@ -154,6 +161,25 @@ pub fn opened(hwnd: isize) {
     send(Job::Opened(hwnd));
 }
 
+/// An app rule sends a window to a workspace. Called from the worker, which asks the tray
+/// thread to join it.
+pub fn send_to(hwnd: isize, id: String) {
+    SENT.lock().unwrap_or_else(|e| e.into_inner()).push((hwnd, id));
+    let owner = HWND(OWNER.load(Ordering::SeqCst) as *mut _);
+    unsafe {
+        let _ = PostMessageW(Some(owner), WM_APP_SENT, WPARAM(0), LPARAM(0));
+    }
+}
+
+pub fn take_sent() -> Vec<(isize, String)> {
+    std::mem::take(&mut *SENT.lock().unwrap_or_else(|e| e.into_inner()))
+}
+
+/// A window joined the workspace in use: place it where its row says.
+pub fn join(hwnd: isize) {
+    send(Job::Join(hwnd));
+}
+
 /// With nothing remembered or chosen at start, find the workspace in use by its windows.
 pub fn detect(sig: String, workspaces: Vec<LiveWorkspace>) {
     send(Job::Detect { sig, workspaces });
@@ -210,9 +236,11 @@ fn work(jobs: Receiver<Job>) {
                 _ => {}
             }
         }
+        let mut joins: Vec<isize> = Vec::new();
         for job in &batch {
             match job {
                 Job::Opened(hwnd) if !later.contains(hwnd) => later.push(*hwnd),
+                Job::Join(hwnd) if !joins.contains(hwnd) => joins.push(*hwnd),
                 Job::PinOpen(fresh) => {
                     pin_open = true;
                     pin_fresh.extend(fresh.iter().cloned());
@@ -246,6 +274,12 @@ fn work(jobs: Receiver<Job>) {
                 crate::tiler::opened(hwnd);
             }
         }
+        for hwnd in joins {
+            if let Some(what) = live.as_ref().and_then(|live| join_place(live, hwnd)) {
+                log::info!("app rule joined {what}");
+                placed = true;
+            }
+        }
         if pin_open && !switcher::switching() {
             pin_open = false;
             let owner = live.as_ref().map(|l| &l.workspace);
@@ -267,6 +301,27 @@ fn work(jobs: Receiver<Job>) {
             }
         }
     }
+}
+
+/// Place a window that joined the workspace in use where its row says, ignoring auto-apply.
+/// It carries the rule's stamp or its new row's, which `place_opened` would stop at, so the
+/// stamp is lifted for that and put back if no free row takes the window (D776).
+fn join_place(live: &LiveWorkspace, hwnd: isize) -> Option<String> {
+    if switcher::switching() {
+        log::info!("app rule: a window joined while a switch ran, so it stays");
+        return None;
+    }
+    let h = HWND(hwnd as *mut _);
+    let before = winutil::ws_stamp(h);
+    winutil::clear_ws_stamp(h);
+    let placed = switcher::place_opened(live, hwnd);
+    if placed.is_none() {
+        if let Some((key, row)) = before {
+            winutil::set_ws_stamp(h, key, row);
+        }
+        log::info!("app rule: no free row of {} for a window of the app, so it stays", live.workspace.name);
+    }
+    placed
 }
 
 fn detect_in_use(sig: &str, workspaces: &[LiveWorkspace]) {

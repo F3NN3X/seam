@@ -8,6 +8,7 @@ mod capture;
 mod close;
 mod copy;
 mod in_use;
+mod join;
 mod moved;
 mod notice;
 mod order;
@@ -25,6 +26,7 @@ pub(super) use in_use::{
     choose_in_use, detected_in_use, drift_checked, drift_due, forget_deleted, live_of, set_default, snap_back,
     switch_back, sync_live, ws_moved,
 };
+pub(super) use join::sent as sent_to_join;
 pub(super) use notice::{
     LastSwitch, ended, last_switch, open_switched, show_label, skipped_json, started, starting, starting_due,
 };

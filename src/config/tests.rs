@@ -560,3 +560,25 @@ fn switch_label_off_round_trips() {
     let back: Config = serde_json::from_value(saved).unwrap();
     assert!(!back.workspaces_switch_label);
 }
+
+#[test]
+fn app_rules_without_send_to_load_unchanged() {
+    use crate::workspace::{Rule, Target};
+    let before = Rule {
+        exe: r"C:\Apps\notes.exe".into(),
+        monitor: "mon-a".into(),
+        target: Target::Zone { zone: 1, span_to: None },
+        ..Rule::default()
+    };
+    let saved = serde_json::to_value(&before).unwrap();
+    assert!(saved.get("send_to").is_none());
+    let p = scratch("app_rule_without_send_to", json!({ "app_rules": [saved] }).to_string().as_bytes());
+    let c = Config::load_from(&p);
+    let _ = std::fs::remove_dir_all(p.parent().unwrap());
+    assert_eq!(c.app_rules.len(), 1);
+    let parsed: Rule = serde_json::from_value(c.app_rules[0].clone()).unwrap();
+    assert_eq!(parsed, before);
+    // Written back, the rule gains no key, and it is still in use.
+    assert!(serde_json::to_value(&parsed).unwrap().get("send_to").is_none());
+    assert_eq!(crate::workspace::app_rules(&c.app_rules).len(), 1);
+}

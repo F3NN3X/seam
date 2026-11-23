@@ -5,7 +5,7 @@
 use crate::icons;
 use crate::pages::app_picker;
 use crate::pages::workspace_editor::{Place, app_icon, places};
-use crate::pages::workspaces::app_title;
+use crate::pages::workspaces::{app_title, on_desk};
 use crate::panel::Panel;
 use crate::theme::tokens::{self, text_style};
 use crate::theme::{Palette, palette};
@@ -15,7 +15,7 @@ use gpui_kit::component::button::ButtonVariants;
 use gpui_kit::component::menu::{DropdownMenu, PopupMenuItem};
 use gpui_kit::*;
 use seam::state::Screen;
-use seam::workspace::{Pin, Rule, Target, WinState};
+use seam::workspace::{Pin, Rule, Target, WinState, Workspace};
 use serde_json::{Value, json};
 use std::rc::Rc;
 
@@ -43,10 +43,16 @@ fn goes(rule: &Rule, screens: &[Screen]) -> String {
     }
 }
 
-/// What the rule does, as the line under its app: "Opens on screen 4, zone 1", "Kept on top".
-fn rule_line(rule: &Rule, screens: &[Screen]) -> String {
+/// What the rule does, as the line under its app: "Opens on screen 4, zone 1", "Kept on top",
+/// "Sent to Work". A rule with a workspace doesn't use its place, so the line leaves it out.
+fn rule_line(rule: &Rule, screens: &[Screen], workspaces: &[Workspace]) -> String {
     let mut parts: Vec<String> = Vec::new();
-    if goes(rule, screens) != STAYS {
+    if let Some(id) = &rule.send_to {
+        match workspaces.iter().find(|w| w.id == *id) {
+            Some(ws) => parts.push(format!("sent to {}", ws.name)),
+            None => parts.push("workspace on another desk".into()),
+        }
+    } else if goes(rule, screens) != STAYS {
         parts.push(
             format!("opens on {}", goes(rule, screens).to_lowercase())
                 .replace("screen not connected", "a screen that isn't connected"),
@@ -130,9 +136,9 @@ fn add(panel: &mut Panel, rule: Rule, window: &mut Window, cx: &mut Context<Pane
     save(panel, after, format!("{title} opens in {}", place.label), window, cx);
 }
 
-/// The Select of where a rule's windows open.
+/// The Select of where a rule's windows open. It keeps its value while a workspace decides.
 fn goes_select(panel: &Panel, at: usize, rule: &Rule, screens: &[Screen], cx: &mut Context<Panel>) -> AnyElement {
-    let (title, current) = (app_title(rule), goes(rule, screens));
+    let (title, current, locked) = (app_title(rule), goes(rule, screens), rule.send_to.is_some());
     let view = cx.entity();
     // "Doesn't move" is for a rule that only pins, so it comes first.
     let stays = Place { label: STAYS.into(), monitor: None, target: Target::State { state: WinState::Keep } };
@@ -146,7 +152,7 @@ fn goes_select(panel: &Panel, at: usize, rule: &Rule, screens: &[Screen], cx: &m
         .chain(offered.iter().map(|place| Choice::new(place.label.clone(), place.label.clone())))
         .collect();
     let pick = move |key: &str, window: &mut Window, cx: &mut App| {
-        let Some(place) = offered.iter().find(|place| place.label == key).cloned() else { return };
+        let Some(place) = offered.iter().find(|place| place.label == key).cloned().filter(|_| !locked) else { return };
         view.update(cx, |panel, cx| {
             let stays = place.monitor.is_none();
             let note = |title: &str| match stays {
@@ -188,6 +194,44 @@ fn set_float(panel: &mut Panel, at: usize, on: bool, window: &mut Window, cx: &m
         false => format!("{title} is tiled like any other app"),
     };
     change(panel, at, note, window, cx, |rule| rule.float = on);
+}
+
+/// The Select of the workspace a rule's new windows join. A workspace that isn't on this desk
+/// stays what the rule says, in muted text, until another is picked.
+fn send_select(at: usize, rule: &Rule, workspaces: &[Workspace], cx: &mut Context<Panel>) -> AnyElement {
+    let view = cx.entity();
+    let current = rule.send_to.clone().unwrap_or_default();
+    let gone = (!current.is_empty() && workspaces.iter().all(|w| w.id != current))
+        .then(|| Choice::new(current.clone(), "Not on this desk").muted());
+    let choices: Vec<Choice> = std::iter::once(Choice::new("", "None"))
+        .chain(workspaces.iter().map(|w| Choice::new(w.id.clone(), w.name.clone())))
+        .chain(gone)
+        .collect();
+    let names: Vec<(String, String)> = workspaces.iter().map(|w| (w.id.clone(), w.name.clone())).collect();
+    let pick = move |key: &str, window: &mut Window, cx: &mut App| {
+        let to = names.iter().find(|(id, _)| id == key).cloned();
+        view.update(cx, |panel, cx| set_send_to(panel, at, to, window, cx));
+    };
+    let label = format!("Send {}'s new windows to", app_title(rule));
+    ui::select(("rule-send-to", at), label, choices, &current, GOES_TO_WIDTH, cx, pick)
+}
+
+/// Send the rule's new windows to the workspace `to` (its id and name), or to none.
+fn set_send_to(
+    panel: &mut Panel,
+    at: usize,
+    to: Option<(String, String)>,
+    window: &mut Window,
+    cx: &mut Context<Panel>,
+) {
+    let name = to.as_ref().map(|(_, name)| name.clone());
+    let note = |title: &str| match &name {
+        Some(name) => format!("{title} goes to {name}"),
+        None => format!("{title} no longer goes to a workspace"),
+    };
+    change(panel, at, note, window, cx, |rule| {
+        rule.send_to = to.map(|(id, _)| id);
+    });
 }
 
 /// The `…` of a row: Edit opens or closes the rule's details, and Remove takes the rule away.
@@ -258,7 +302,8 @@ fn rule_rows(
     let title = app_title(rule);
     let remove: Removing = Rc::new(move |panel, window, cx| self::remove(panel, at, window, cx));
     let more = more_menu(("rule-more", at), &title, Some(icons::identity(rule)), remove, cx);
-    let main = app_row(app_icon(rule, &panel.icons, p), title, rule_line(rule, screens), more, p);
+    let line = rule_line(rule, screens, &on_desk(panel));
+    let main = app_row(app_icon(rule, &panel.icons, p), title, line, more, p);
     let mut rows = vec![main.into_any_element()];
     if panel.rule_open.as_ref() == Some(&icons::identity(rule)) {
         rows.extend(details(panel, at, rule, screens, window, cx));
@@ -277,7 +322,9 @@ fn details(
 ) -> Vec<AnyElement> {
     let p = palette(cx);
     let view = cx.entity();
-    let (bits, stays) = (rule.pin.map_or(0, Pin::bits), goes(rule, screens) == STAYS);
+    // A rule that sends to a workspace does something without a place or a pin.
+    let (bits, stays) = (rule.pin.map_or(0, Pin::bits), goes(rule, screens) == STAYS && rule.send_to.is_none());
+    let workspaces = on_desk(panel);
     let pin = |bit: usize,
                id: &'static str,
                title: &'static str,
@@ -312,7 +359,14 @@ fn details(
         let about = "Its windows float on a screen with smart tiling";
         ui::dimmed(ui::row(title, Some(about.into()), control, p), ("rule-float-row", at), why)
     };
-    let opens = ui::row("Opens on", None, goes_select(panel, at, rule, screens, cx), p);
+    let why = rule.send_to.is_some().then_some("The workspace decides where it goes");
+    let opens = ui::dimmed(
+        ui::row("Opens on", None, goes_select(panel, at, rule, screens, cx), p),
+        ("rule-opens-row", at),
+        why,
+    );
+    let about = "It joins the workspace as a row. When that workspace is in use it goes where the row says";
+    let send = ui::row("Send new windows to", Some(about.into()), send_select(at, rule, &workspaces, cx), p);
     let keep_top = pin(TOP, "rule-top", "Keep on top", "Its windows stay above the others", window, cx);
     let keep_out = pin(
         STICKY,
@@ -322,7 +376,7 @@ fn details(
         window,
         cx,
     );
-    [opens, keep_top, keep_out, float]
+    [opens, send, keep_top, keep_out, float]
         .into_iter()
         .map(|row| div().pl(px(tokens::SPACE_32)).child(row).into_any_element())
         .collect()
@@ -388,4 +442,44 @@ pub fn section_view(panel: &mut Panel, window: &mut Window, cx: &mut Context<Pan
         div().flex().flex_col().gap(px(tokens::SPACE_8)).child(group).children(lonely.then_some(hint))
     });
     section("Where apps open", body, p)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Pin, Rule, Screen, Target, Workspace, rule_line};
+
+    fn screen() -> Screen {
+        Screen { number: 4, id: "m".into(), name: String::new(), primary: true, rect: Default::default(), layout: None }
+    }
+
+    fn work() -> Workspace {
+        Workspace { id: "w1".into(), name: "Work".into(), ..Workspace::default() }
+    }
+
+    fn placed() -> Rule {
+        Rule { monitor: "m".into(), target: Target::Zone { zone: 1, span_to: None }, ..Rule::default() }
+    }
+
+    #[test]
+    fn the_line_of_a_rule_without_a_workspace_is_as_before() {
+        let pinned = Rule { pin: Some(Pin::Top), ..placed() };
+        assert_eq!(rule_line(&placed(), &[screen()], &[work()]), "Opens on screen 4, zone 1");
+        assert_eq!(rule_line(&pinned, &[screen()], &[work()]), "Opens on screen 4, zone 1, kept on top");
+    }
+
+    #[test]
+    fn the_line_of_a_rule_with_a_workspace_names_it_and_leaves_the_place_out() {
+        let sent = Rule { send_to: Some("w1".into()), ..placed() };
+        assert_eq!(rule_line(&sent, &[screen()], &[work()]), "Sent to Work");
+        let pinned = Rule { pin: Some(Pin::Top), ..sent };
+        assert_eq!(rule_line(&pinned, &[screen()], &[work()]), "Sent to Work, kept on top");
+        let only = Rule { send_to: Some("w1".into()), ..Rule::default() };
+        assert_eq!(rule_line(&only, &[], &[work()]), "Sent to Work");
+    }
+
+    #[test]
+    fn the_line_of_a_rule_for_a_workspace_on_another_desk_says_so() {
+        let sent = Rule { send_to: Some("other".into()), pin: Some(Pin::Top), ..placed() };
+        assert_eq!(rule_line(&sent, &[screen()], &[work()]), "Workspace on another desk, kept on top");
+    }
 }

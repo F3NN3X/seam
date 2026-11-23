@@ -71,6 +71,10 @@ pub(super) unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARA
                 with_app(drift_checked);
                 LRESULT(0)
             }
+            WM_APP_SENT => {
+                with_app(sent_to_join);
+                LRESULT(0)
+            }
             WM_APP_DETECTED => {
                 with_app(detected_in_use);
                 LRESULT(0)

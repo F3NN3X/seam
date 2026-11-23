@@ -83,7 +83,13 @@ pub(in crate::app) fn start_close_here(app: &mut App, title: &str, ask: Ask) {
 }
 
 /// The worker finished: answer the client, or tell the user.
+/// Then a window an app rule sent to a workspace may have its turn.
 pub(in crate::app) fn closed(app: &mut App) {
+    ended(app);
+    super::join::next_join(app);
+}
+
+fn ended(app: &mut App) {
     let (Some(done), Some(job)) = (crate::switcher::take_done(), app.closing.take()) else { return };
     let Closing { reply, client, ask, ws } = job;
     let name = &ws.name;

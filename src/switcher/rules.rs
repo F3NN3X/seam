@@ -22,12 +22,13 @@ fn rule_hit(set: &AppRules, owner: Option<&Workspace>, h: HWND, procs: &mut Proc
     if seen.elevated || stays(seen.pin, set.pins_stay) {
         return None;
     }
-    // The workspace in use owns every window of an app it has a row for.
     let cand = std::slice::from_ref(&seen.cand);
-    if owner.is_some_and(|ws| match_rows(ws, cand, set.places).iter().any(Option::is_some)) {
-        return None;
-    }
-    workspace::assign(&set.rules, cand).iter().position(Option::is_some)
+    let hit = workspace::assign(&set.rules, cand).iter().position(Option::is_some)?;
+    // The workspace in use owns every window of an app it has a row for, except for the
+    // rule that sends them to it (D777).
+    let owns = owner.is_some_and(|ws| match_rows(ws, cand, set.places).iter().any(Option::is_some));
+    let in_use = owner.map(|ws| ws.id.as_str());
+    (!workspace::owned_away(&set.rules[hit], in_use, owns)).then_some(hit)
 }
 
 /// A window the seam-wm thread refused to pin, by handle and its process's start time,
@@ -146,7 +147,13 @@ pub fn place_by_rule(set: &AppRules, owner: Option<&Workspace>, hwnd: isize) -> 
     let rule = &set.rules[hit];
     let geos = geometry(&set.screens, set.gap);
     let mut done = Vec::new();
-    if rule.moves() && geos.iter().any(|g| g.id == rule.monitor) {
+    if let Some(id) = &rule.send_to {
+        // The workspace decides where it goes, so the rule's own place isn't used (D772).
+        // Stamped, so it's never sent twice. No workspace has this key.
+        winutil::set_ws_stamp(h, workspace::stamp_key("app_rule"), hit);
+        crate::live::send_to(hwnd, id.clone());
+        done.push("sent to a workspace");
+    } else if rule.moves() && geos.iter().any(|g| g.id == rule.monitor) {
         let moved = move_opened(h, rule, &geos, set.size_mode, false);
         // Stamped either way, so it's never placed again. No workspace has this key.
         winutil::set_ws_stamp(h, workspace::stamp_key("app_rule"), hit);

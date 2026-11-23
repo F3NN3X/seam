@@ -459,13 +459,13 @@ unsafe fn on_hotkey(id: i32) {
             }
             HOTKEY_RELEASE => wm::release(None),
             HOTKEY_SNAP_BACK => {
-                if let Some(Err(e)) = with_app(|a| snap_back(a, false, Via::local())) {
+                if let Some(Err(e)) = with_app(|a| snap_back(a, OnScreen::Pointer, false, Via::local())) {
                     log::info!("snap back hotkey: {}", e.message);
                 }
             }
             HOTKEY_SWITCH_BACK => {
                 with_app(|a| {
-                    if let Err(e) = switch_back(a, false, Via::local()) {
+                    if let Err(e) = switch_back(a, OnScreen::Pointer, false, Via::local()) {
                         log::info!("switch back hotkey: {}", e.message);
                         notify(a, "Switch back", &e.message, BalloonAction::None);
                     }
@@ -478,7 +478,7 @@ unsafe fn on_hotkey(id: i32) {
                     (Step::Previous, "Previous workspace")
                 };
                 with_app(|a| {
-                    if let Err(e) = step(a, dir, None, false, Via::local()) {
+                    if let Err(e) = step(a, dir, OnScreen::Pointer, false, Via::local()) {
                         log::info!("workspace step hotkey: {}", e.message);
                         notify(a, title, &e.message, BalloonAction::None);
                     }
@@ -489,10 +489,10 @@ unsafe fn on_hotkey(id: i32) {
                 with_app(|a| step_add(a, dir));
             }
             HOTKEY_CLOSE_WORKSPACE => {
-                with_app(|a| start_close_here(a, "Close this workspace", Ask::List));
+                with_app(|a| start_close_here(a, "Close this workspace", Ask::List, OnScreen::Pointer));
             }
             HOTKEY_MINIMIZE_WORKSPACE => {
-                with_app(|a| start_close_here(a, "Minimize this workspace", Ask::Minimize));
+                with_app(|a| start_close_here(a, "Minimize this workspace", Ask::Minimize, OnScreen::Pointer));
             }
             HOTKEY_FOCUS_ONLY => {
                 with_app(|a| start_focus_only(a, FocusScope::Screen, None));

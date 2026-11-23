@@ -45,9 +45,9 @@ enum Job {
         workspaces: Vec<LiveWorkspace>,
     },
     Opened(isize),
-    /// This window joined the workspace in use as a row: put it where the row says, whether
-    /// or not auto-apply is on.
-    Join(isize),
+    /// This window joined a workspace in use, by id, as a row: put it where the row says,
+    /// whether or not auto-apply is on.
+    Join(isize, String),
     /// Pin the open windows of the rules that keep an app on top. The windows of these
     /// rules are pinned again even if they were released.
     PinOpen(Vec<workspace::Rule>),
@@ -67,8 +67,9 @@ enum Job {
     },
 }
 
-/// The workspace in use, with what placing its windows needs, and who to tell.
-static ACTIVE: Mutex<Option<Arc<LiveWorkspace>>> = Mutex::new(None);
+/// The workspaces in use, with what placing their windows needs: each screen's own, limited
+/// to its screen, and the desk-wide one, limited to the screens it still holds (D786).
+static ACTIVE: Mutex<Vec<Arc<LiveWorkspace>>> = Mutex::new(Vec::new());
 static RULES: Mutex<Option<Arc<AppRules>>> = Mutex::new(None);
 /// "Put apps in place when they open" is on, so the active workspace places what opens.
 /// Windows that showed while a switch ran, which no app rule places.
@@ -79,7 +80,8 @@ static PINNING: Mutex<Vec<workspace::Rule>> = Mutex::new(Vec::new());
 static RESUME: AtomicBool = AtomicBool::new(false);
 static AUTO: AtomicBool = AtomicBool::new(false);
 static OWNER: AtomicIsize = AtomicIsize::new(0);
-static DRIFT: Mutex<Option<Drift>> = Mutex::new(None);
+/// One per workspace in use, from the last look.
+static DRIFT: Mutex<Vec<Drift>> = Mutex::new(Vec::new());
 /// Windows an app rule sent to a workspace, by id, for the tray thread to join.
 static SENT: Mutex<Vec<(isize, String)>> = Mutex::new(Vec::new());
 static DETECTED: Mutex<Option<Detected>> = Mutex::new(None);
@@ -89,17 +91,26 @@ fn rules() -> Option<Arc<AppRules>> {
     RULES.lock().unwrap_or_else(|e| e.into_inner()).clone()
 }
 
-fn active() -> Option<Arc<LiveWorkspace>> {
+fn active() -> Vec<Arc<LiveWorkspace>> {
     ACTIVE.lock().unwrap_or_else(|e| e.into_inner()).clone()
 }
 
-/// The workspace in use now, or none. The seam-wm thread hears whether to watch.
-pub fn set_active(owner: isize, live: Option<LiveWorkspace>, auto_apply: bool) {
+/// The workspaces in use now, maybe none. The seam-wm thread hears whether to watch.
+pub fn set_active(owner: isize, lives: Vec<LiveWorkspace>, auto_apply: bool) {
     OWNER.store(owner, Ordering::SeqCst);
     AUTO.store(auto_apply, Ordering::SeqCst);
-    let active = live.is_some();
-    *ACTIVE.lock().unwrap_or_else(|e| e.into_inner()) = live.map(Arc::new);
+    let active = !lives.is_empty();
+    *ACTIVE.lock().unwrap_or_else(|e| e.into_inner()) = lives.into_iter().map(Arc::new).collect();
     crate::wm::workspace(active, auto_apply);
+}
+
+/// The workspaces in use, the one in use on the screen the window is on first (D786).
+fn first_for(lives: &[Arc<LiveWorkspace>], hwnd: isize) -> Vec<Arc<LiveWorkspace>> {
+    let at = winutil::window_rect(HWND(hwnd as *mut _)).map(|r| (r.x + r.w / 2, r.y + r.h / 2));
+    let on = |live: &Arc<LiveWorkspace>| at.is_some_and(|(x, y)| live.screens.iter().any(|s| s.bounds.contains(x, y)));
+    let (mut here, others): (Vec<_>, Vec<_>) = lives.iter().cloned().partition(on);
+    here.extend(others);
+    here
 }
 
 /// The app rules now, or none. The seam-wm thread hears whether to watch. Open windows
@@ -134,11 +145,11 @@ fn gained(before: &[workspace::Rule], rule: &workspace::Rule) -> bool {
     before.iter().find(same).is_none_or(|p| bits(rule) & !bits(p) != 0)
 }
 
-pub fn take_drift() -> Option<Drift> {
-    DRIFT.lock().unwrap_or_else(|e| e.into_inner()).take()
+pub fn take_drift() -> Vec<Drift> {
+    std::mem::take(&mut *DRIFT.lock().unwrap_or_else(|e| e.into_inner()))
 }
 
-/// Look again whether the active workspace drifted.
+/// Look again whether the workspaces in use drifted.
 pub fn check_drift() {
     send(Job::Drift);
 }
@@ -175,9 +186,9 @@ pub fn take_sent() -> Vec<(isize, String)> {
     std::mem::take(&mut *SENT.lock().unwrap_or_else(|e| e.into_inner()))
 }
 
-/// A window joined the workspace in use: place it where its row says.
-pub fn join(hwnd: isize) {
-    send(Job::Join(hwnd));
+/// A window joined workspace `id`, which is in use: place it where its row says.
+pub fn join(hwnd: isize, id: &str) {
+    send(Job::Join(hwnd, id.to_string()));
 }
 
 /// With nothing remembered or chosen at start, find the workspace in use by its windows.
@@ -236,11 +247,11 @@ fn work(jobs: Receiver<Job>) {
                 _ => {}
             }
         }
-        let mut joins: Vec<isize> = Vec::new();
+        let mut joins: Vec<(isize, String)> = Vec::new();
         for job in &batch {
             match job {
                 Job::Opened(hwnd) if !later.contains(hwnd) => later.push(*hwnd),
-                Job::Join(hwnd) if !joins.contains(hwnd) => joins.push(*hwnd),
+                Job::Join(hwnd, id) if !joins.iter().any(|(h, _)| h == hwnd) => joins.push((*hwnd, id.clone())),
                 Job::PinOpen(fresh) => {
                     pin_open = true;
                     pin_fresh.extend(fresh.iter().cloned());
@@ -250,9 +261,10 @@ fn work(jobs: Receiver<Job>) {
         }
         // The switch stamps what it waited for, so only the others are placed after it.
         let opened = if switcher::switching() { Vec::new() } else { std::mem::take(&mut later) };
-        let (live, rules) = (active(), rules());
+        let (lives, rules) = (active(), rules());
         let auto = AUTO.load(Ordering::SeqCst);
-        let mut placed = false;
+        // The workspaces a window of whose was placed, by id.
+        let mut placed: Vec<String> = Vec::new();
         for hwnd in opened {
             let owned = {
                 let mut list = SWITCH_OWNED.lock().unwrap_or_else(|e| e.into_inner());
@@ -260,13 +272,19 @@ fn work(jobs: Receiver<Job>) {
                 list.retain(|h| *h != hwnd);
                 held
             };
-            // The workspace's row wins; the app rule is for what it has no row for.
-            let row = live.as_ref().filter(|_| auto).and_then(|live| switcher::place_opened(live, hwnd));
-            if let (Some(what), Some(live)) = (&row, &live) {
+            // The workspace's row wins, the one in use where the window opened first; the app
+            // rule is for what none has a row for.
+            let order = first_for(&lives, hwnd);
+            let row = order
+                .iter()
+                .filter(|_| auto)
+                .find_map(|live| switcher::place_opened(live, hwnd).map(|what| (what, live)));
+            let here = order.first().map(|l| &l.workspace);
+            if let Some((what, live)) = &row {
                 log::info!("auto-apply {}: {what}", live.workspace.name);
-                placed = true;
+                placed.push(live.workspace.id.clone());
             } else if let Some(set) = rules.as_ref().filter(|_| !owned)
-                && let Some(what) = switcher::place_by_rule(set, live.as_ref().map(|l| &l.workspace), hwnd)
+                && let Some(what) = switcher::place_by_rule(set, here, hwnd)
             {
                 log::info!("app rule {what}");
             } else if !owned {
@@ -274,15 +292,16 @@ fn work(jobs: Receiver<Job>) {
                 crate::tiler::opened(hwnd);
             }
         }
-        for hwnd in joins {
-            if let Some(what) = live.as_ref().and_then(|live| join_place(live, hwnd)) {
+        for (hwnd, id) in joins {
+            let live = lives.iter().find(|l| l.workspace.id == id);
+            if let Some(what) = live.and_then(|live| join_place(live, hwnd)) {
                 log::info!("app rule joined {what}");
-                placed = true;
+                placed.push(id);
             }
         }
         if pin_open && !switcher::switching() {
             pin_open = false;
-            let owner = live.as_ref().map(|l| &l.workspace);
+            let owner = lives.first().map(|l| &l.workspace);
             // Taken even with no rules, so a stale list never pins a released window later.
             let fresh = std::mem::take(&mut pin_fresh);
             let pinned = rules.as_ref().map_or(0, |set| switcher::pin_by_rules(set, owner, &fresh));
@@ -290,11 +309,16 @@ fn work(jobs: Receiver<Job>) {
                 log::info!("app rules pinned {pinned} open windows");
             }
         }
-        let Some(live) = live else { continue };
-        if placed || batch.iter().any(|j| matches!(j, Job::Drift)) {
-            let drifted = workspace::drifted(&switcher::status(&live));
-            *DRIFT.lock().unwrap_or_else(|e| e.into_inner()) =
-                Some(Drift { id: live.workspace.id.clone(), drifted, placed });
+        if lives.is_empty() {
+            continue;
+        }
+        if !placed.is_empty() || batch.iter().any(|j| matches!(j, Job::Drift)) {
+            let drift = |live: &Arc<LiveWorkspace>| {
+                let id = live.workspace.id.clone();
+                let drifted = workspace::drifted(&switcher::status(live));
+                Drift { placed: placed.contains(&id), id, drifted }
+            };
+            *DRIFT.lock().unwrap_or_else(|e| e.into_inner()) = lives.iter().map(drift).collect();
             let owner = HWND(OWNER.load(Ordering::SeqCst) as *mut _);
             unsafe {
                 let _ = PostMessageW(Some(owner), WM_APP_DRIFT, WPARAM(0), LPARAM(0));

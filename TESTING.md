@@ -1064,6 +1064,24 @@ Turn the debug log on, and **Remember folders and pages** on at the bottom of Wo
 - [ ] **Forget.** With the setting off, the row **Saved folders and pages** shows with **Forget saved folders and pages**. Press it: every `place` is gone from `config.json`, on every desk, and the row goes. With the setting on, or with none saved, the row isn't there.
 - [ ] **Last session.** With **Offer my last session** set, sign out and back in: the last session in `config.json` has no `place`.
 
+### A workspace for one screen
+
+On 2 or more screens, with workspace X for all screens in use and workspace Y with apps on screen 2.
+
+- [ ] **The Screens row.** Y's editor has **Screens** first under "When you switch to Y", reading **All screens**, then "Screen 1, <name>" and "Screen 2, <name>" in its menu. On a desk with one screen the row isn't there. Pick screen 2: nothing moves, and `config.json` has `"scope"` on Y and nothing new on the desk.
+- [ ] **Only its screen.** Set Y's **Other windows** to Minimize and switch to Y: only screen 2's other windows are minimized, screen 1 and X's windows on it don't move, and `workspaces.list` gives Y `in_use_on: [2]` and X `in_use_on: [1]`. `state.get` has `screens[1].workspace` Y and `screens[0].workspace` X.
+- [ ] **Held windows.** X has Chrome on screen 1 and Y has Chrome on screen 2: switching to Y never takes X's Chrome window; it starts or uses another one.
+- [ ] **Rows on another screen.** Give Y a row on screen 1 and switch to Y: that app isn't moved or started, `workspace.switched` lists it as `on another screen` with no `why`, and `workspace.status` says `other_screen`.
+- [ ] **Shortcuts per screen.** With the pointer on screen 2, **Snap back** puts back Y and **Switch back** goes back to X on screen 2 only; with the pointer on screen 1 they act on X. **Switch to next workspace** on each screen steps through that screen's own workspaces and the ones for all screens, and skips one for another screen.
+- [ ] **All screens again.** Switch to X: both screens change, and Switch back on screen 2 then goes to Y.
+- [ ] **Put windows back.** Move a window of X and one of Y, then **Put windows back** in the tray: X, then Y, are put back, one after the other.
+- [ ] **Restore offer.** With **Offer to restore after screens change** on and both moved, unplug and replug a screen: the notice says "Restore 2 workspaces? Click to restore", and clicking it puts both back.
+- [ ] **Not connected.** Set Y's scope in `config.json` to a path that isn't connected: the Select shows "Screen not connected" (not in its menu), and switching to Y says "This workspace's screen isn't connected".
+- [ ] **Add window.** Add a window from screen 1 to Y with **Add window to workspace**: its row is on screen 2, and with Y in use the window goes there at once.
+- [ ] **Default.** `workspace.set_default` with Y's id answers "Only a workspace for all screens can be the default".
+- [ ] **Copy to a new desk.** Copy the workspaces to a desk with as many screens: Y's scope is the screen in the same place.
+- [ ] **Restart.** Quit and start Seam: screen 2 still has Y in use and screen 1 X, and no window moves.
+
 ### Close and minimize a workspace
 
 - [ ] **Unsaved work stays.** Type into Notepad without saving, put it in a workspace, then **Close this workspace** from the workspace's **...** menu. The list shows every window ticked, with the count on the button ("Close 4 windows"). Close: Notepad asks to save, and when you cancel, it stays open. Seam doesn't ask again.

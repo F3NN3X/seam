@@ -6,10 +6,11 @@ use crate::pages::workspace_editor;
 use crate::panel::{Panel, error_text, refusal};
 use crate::theme::Palette;
 use crate::theme::tokens;
-use crate::ui::{self, Row, card, row, section, segmented, switch};
+use crate::ui::{self, Choice, Row, card, row, section, segmented, switch};
 use gpui_kit::component::WindowExt;
 use gpui_kit::*;
 use seam::config::ClosedApps;
+use seam::state::Screen;
 use seam::workspace::{self, OpenWindows, OtherWindows, Workspace};
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
@@ -79,7 +80,11 @@ pub(super) fn switch_section(
             view.update(cx, |panel, cx| edit(panel, &id, window, cx, |ws| ws.other_windows = mode));
         }
     });
-    let mut rows: Vec<ui::Row> = vec![
+    let screens = panel.state.as_ref().map(|s| s.screens.clone()).unwrap_or_default();
+    // A one-screen desk has nothing to choose, unless a scope was set elsewhere (brief J).
+    let scope_row = (screens.len() > 1 || ws.scope.is_some()).then(|| scope_row(ws, &screens, p, cx));
+    let mut rows: Vec<ui::Row> = scope_row.into_iter().collect();
+    rows.extend([
         shortcut,
         row("Start missing apps", Some("Apps that aren't open start, in the order above".into()), start_missing, p),
         row(
@@ -95,10 +100,46 @@ pub(super) fn switch_section(
             p,
         ),
         row("Other windows", Some("Close asks each app first, so it can save".into()), others, p),
-    ];
+    ]);
     rows.extend(workspace_editor::zones_section(panel, ws, window, cx).into_iter().map(Row::from));
     section(format!("When you switch to {}", ws.name), card(rows, p), p)
 }
+
+/// The Select's key for All screens.
+const ALL_SCREENS: &str = "";
+
+/// The Screens Select's items: All screens, then each screen by its Line Up number and name.
+/// The second is whether the workspace's screen isn't connected, which shows as the value only.
+fn scope_options(screens: &[Screen], scope: Option<&str>) -> (Vec<(String, String)>, bool) {
+    let name = |s: &Screen| match s.name.is_empty() {
+        true => format!("Screen {}", s.number),
+        false => format!("Screen {}, {}", s.number, s.name),
+    };
+    let items = std::iter::once((ALL_SCREENS.to_string(), "All screens".to_string()))
+        .chain(screens.iter().map(|s| (s.id.clone(), name(s))))
+        .collect();
+    (items, scope.is_some_and(|id| screens.iter().all(|s| s.id != id)))
+}
+
+/// "Screens": All screens, or the one screen a switch to the workspace changes (D781).
+fn scope_row(ws: &Workspace, screens: &[Screen], p: Palette, cx: &mut Context<Panel>) -> Row {
+    let view = cx.entity();
+    let current = ws.scope.clone().unwrap_or_default();
+    let (items, gone) = scope_options(screens, ws.scope.as_deref());
+    let not_connected = gone.then(|| Choice::new(current.clone(), "Screen not connected").muted().unlisted());
+    let choices: Vec<Choice> = items.into_iter().map(|(k, l)| Choice::new(k, l)).chain(not_connected).collect();
+    let id = ws.id.clone();
+    let pick = move |key: &str, window: &mut Window, cx: &mut App| {
+        let scope = (key != ALL_SCREENS).then(|| key.to_string());
+        let id = id.clone();
+        view.update(cx, |panel, cx| edit(panel, &id, window, cx, |ws| ws.scope = scope));
+    };
+    let select = ui::select("workspace-scope", "Screens", choices, &current, SCOPE_WIDTH, cx, pick);
+    row("Screens", Some(format!("Which screens a switch to {} changes", ws.name).into()), select, p)
+}
+
+/// Wide enough for "Screen 1" and a screen's name.
+const SCOPE_WIDTH: f32 = 240.;
 
 /// The one switch for every workspace: put apps in place when they open (§11.1).
 fn auto_apply_row(panel: &Panel, window: &mut Window, cx: &mut Context<Panel>) -> Row {
@@ -202,4 +243,26 @@ pub(super) fn all_section(panel: &Panel, p: Palette, window: &mut Window, cx: &m
         closed_row(panel, window, cx),
     ];
     section("All workspaces", card(rows, p), p)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Screen, scope_options};
+    use serde_json::json;
+
+    fn screen(number: u32, id: &str, name: &str) -> Screen {
+        serde_json::from_value(json!({ "number": number, "id": id, "name": name, "primary": false })).expect("a screen")
+    }
+
+    #[test]
+    fn the_screens_select_names_each_screen_and_keeps_an_unconnected_one_as_the_value() {
+        let screens = [screen(1, "a", "PG32UCDM"), screen(2, "b", "")];
+        let (items, gone) = scope_options(&screens, None);
+        let labels: Vec<&str> = items.iter().map(|(_, l)| l.as_str()).collect();
+        assert_eq!(labels, ["All screens", "Screen 1, PG32UCDM", "Screen 2"]);
+        assert_eq!(items[2].0, "b");
+        assert!(!gone);
+        assert!(!scope_options(&screens, Some("b")).1);
+        assert!(scope_options(&screens, Some("unplugged")).1);
+    }
 }

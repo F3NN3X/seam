@@ -24,7 +24,8 @@ pub const LOCAL_TOP: &[&str] = &[
 ];
 
 /// Fields of a desk the tray rewrites on every switch, sign-in or desk change, so they stay on this PC.
-pub const LOCAL_DESK: &[&str] = &["last_seen", "last_session", "active_workspace", "previous_workspace"];
+pub const LOCAL_DESK: &[&str] =
+    &["last_seen", "last_session", "active_workspace", "previous_workspace", "screen_in_use"];
 
 /// The stamp only the shared file has.
 const STAMP: &str = "sync";

@@ -93,7 +93,7 @@ use windows::Win32::UI::Shell::*;
 use windows::Win32::UI::WindowsAndMessaging::*;
 use windows::core::{PCWSTR, w};
 use workspaces::{Ask, Closing, Minimized, closed, start_close, start_close_here, undo_minimize};
-use workspaces::{Via, copy_from_desk, move_workspace, step, step_add};
+use workspaces::{OnScreen, Via, copy_from_desk, move_workspace, step, step_add};
 use workspaces::{Which, create_workspace, edit_workspace, start_add_window, start_group, window_planned};
 use workspaces::{
     apply_hotkeys, aside, capture_job, captured, choose_in_use, desk_workspaces, detected_in_use, drift_checked,
@@ -101,6 +101,7 @@ use workspaces::{
     show_spotlight, snap_back, start_capture, start_focus_only, start_switch, start_switch_job, start_window,
     switch_back, switched, sync_live, undo_quick_save, update_from_panel, ws_moved,
 };
+use workspaces::{in_use_ids, meant, next_put_back, put_back_all, switch_back_id};
 use workspaces::{last_switch, open_switched, sent_to_join, started, starting, starting_due};
 use workspaces::{save_preview, start_preview};
 
@@ -448,15 +449,21 @@ struct App {
     hotkey_errors: Vec<HotkeyError>,
     /// The shortcuts registered now (id, action, combo), to skip work when they haven't changed.
     bound: Vec<(i32, String, Option<String>)>,
-    /// The workspace last switched to, if it's still on this desk.
+    /// The desk-wide workspace in use, if it's still on this desk.
     workspace: Option<String>,
+    /// The workspace last switched to, of either kind, which the tray and the API mean when they
+    /// name no screen while it is still in use (D785). `None`: the desk-wide one.
+    last_in_use: Option<String>,
     /// The workspace the last Next or Previous asked for, until its switch ends, so quick
     /// presses go on from there and not from the one still in use.
     step_to: Option<String>,
     /// Windows an app rule sent to a workspace, waiting for their turn to join it, with its id.
     joining: VecDeque<(isize, String)>,
-    /// A window of that workspace is moved or minimized, so Snap back has work to do.
-    drifted: bool,
+    /// Workspaces in use with a window moved or minimized, so Snap back has work to do, by id.
+    drifted: BTreeMap<String, bool>,
+    /// Workspaces "Put windows back" or a restore still has to put back, one switch at a time,
+    /// each with whether it leaves other windows alone.
+    put_back_queue: Vec<(String, bool)>,
     /// Keys of workspaces whose stamped windows moved, waiting for the drift timer.
     moved: Vec<u32>,
     /// A switch finished, so the drift timer looks again whatever moved.
@@ -498,8 +505,8 @@ struct App {
     session_offer_tries: u8,
     /// The workspace offered at sign-in, for the notice's click.
     sign_in_offer: Option<(String, String)>,
-    /// The desk and workspace "Restore <name>?" was offered for, for the notice's click.
-    restore_offer: Option<(String, String)>,
+    /// The desk and workspaces "Restore <name>?" was offered for, for the notice's click.
+    restore_offer: Option<(String, Vec<String>)>,
     /// The screens changed and the restore offer waits for them to settle, or for the re-fit.
     restore_armed: bool,
     /// When the sign-in "Open <name>?" notice was shown, to tell how long it can hold the restore offer back.

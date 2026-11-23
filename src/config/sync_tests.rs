@@ -43,9 +43,10 @@ const SHARED_DESK: &[&str] = &[
 fn every_field_set() -> Value {
     let desk: Desk = serde_json::from_value(json!({
         "name": "d", "last_seen": 1, "borders": [], "lined_up_at": 2, "zones": { "m": {} },
-        "workspaces": [{ "id": "w" }], "last_session": { "id": "s" },
+        "workspaces": [{ "id": "w", "scope": "m" }], "last_session": { "id": "s" },
         "sign_in": { "mode": "nothing", "ask": true }, "active_workspace": "w", "previous_workspace": "w",
         "default_workspace": "w", "tiling": { "m": {} }, "margins": { "m": {} }, "screens": [{ "id": "m" }],
+        "screen_in_use": { "m": { "workspace": "w", "previous": "w" } },
     }))
     .unwrap();
     let config = Config {
@@ -111,6 +112,18 @@ fn local_fields_never_reach_the_shared_file() {
     let mut taken = hostile.clone();
     guard(&mut taken, &BTreeSet::new());
     assert!(taken.get("hotkeys").is_none() && taken["desks"]["sig"].get("last_seen").is_none());
+}
+
+#[test]
+fn screen_in_use_is_local() {
+    let (shared, local) = split(&every_field_set());
+    // Which workspace each screen has in use stays on this PC; the scope goes with its workspace.
+    assert!(shared["desks"]["sig"].get("screen_in_use").is_none());
+    assert_eq!(local["desks"]["sig"]["screen_in_use"]["m"]["workspace"], "w");
+    assert_eq!(shared["desks"]["sig"]["workspaces"][0]["scope"], "m");
+    let mine = json!({ "desks": { "sig": { "screen_in_use": { "m": { "workspace": "mine" } } } } });
+    let theirs = json!({ "desks": { "sig": { "screen_in_use": { "m": { "workspace": "evil" } } } } });
+    assert_eq!(join(&theirs, &mine)["desks"]["sig"]["screen_in_use"]["m"]["workspace"], "mine");
 }
 
 fn config_with(

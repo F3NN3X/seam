@@ -1,5 +1,7 @@
 //! What a switch tells about the apps it couldn't start or move: which, and why, in plain words (D711).
 
+#[cfg(test)]
+use super::plan::OTHER_SCREEN;
 use super::plan::SCREEN_GONE;
 
 /// What `skipped` says about an app whose window didn't show in time.
@@ -189,7 +191,7 @@ mod tests {
             "didn't move",
             SCREEN_GONE,
         ];
-        let on_purpose = ["sticky", "pinned", "steam game", "nothing matched", CANCELLED];
+        let on_purpose = ["sticky", "pinned", "steam game", "nothing matched", CANCELLED, OTHER_SCREEN];
         for reason in problems {
             assert!(words(reason).is_some(), "{reason}");
         }

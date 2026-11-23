@@ -84,8 +84,9 @@ pub(in crate::app) fn quick_save(app: &mut App, reply: Option<Sender<Reply>>) ->
 pub(super) fn quick_saved(app: &mut App, saved: &Workspace, before: Option<Value>) {
     let created = before.is_none();
     let in_use = app.workspace.clone();
+    // A new workspace holds every screen it captured, as an All-screens switch would.
     if created {
-        set_in_use(app, Some(saved.id.clone()));
+        took_over(app, &saved.id, None);
     }
     sync_live(app);
     let until = Instant::now() + QUICK_UNDO_FOR;
@@ -449,6 +450,11 @@ pub(super) fn check_rows(
     if keeps_zones {
         sent.zones = old.zones.clone();
     }
+    // A new scope is a screen of this desk; one kept from an import or a copy may not be (D787).
+    let elsewhere = sent.scope.as_deref().is_some_and(|s| !app.mons.iter().any(|m| m.id == s));
+    if elsewhere && sent.scope != old.scope {
+        return Err(RpcError::new(api::REFUSED, "That screen isn't on this desk"));
+    }
     // A clear command is only the panel's own, so no other save seals one (D736).
     if !sealing {
         workspace::without_clear_commands(&mut sent);
@@ -493,6 +499,10 @@ pub(super) fn write_checked(app: &mut App, edits: &[Checked]) -> Reply {
         }
         // An item that was edited isn't what its window opened, so the next switch starts the new one (D733).
         switcher::forget_edited(id, &workspace::edited_items(&old.windows, &checked.windows, &moves));
+        // A workspace in use whose scope changed stays in use where it is for now.
+        if old.scope != checked.scope {
+            rescoped(app, id, old.scope.as_deref(), checked.scope.as_deref());
+        }
     }
     Ok(reply)
 }

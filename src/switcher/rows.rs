@@ -16,6 +16,16 @@ pub struct LiveWorkspace {
     pub size_mode: WindowSize,
     /// "Remember folders and pages": place rows match their remembered windows (D336).
     pub places: bool,
+    /// For a desk-wide workspace, the screens that have a workspace of their own in use: its
+    /// rows there are another workspace's business (D786).
+    pub away: Vec<String>,
+}
+
+impl LiveWorkspace {
+    /// The row is on a screen the workspace has: its own, and not one another holds.
+    fn reaches(&self, rule: &Rule) -> bool {
+        workspace::in_scope(rule, self.workspace.scope.as_deref()) && !self.away.contains(&rule.monitor)
+    }
 }
 
 /// How each row's app is doing, the way a switch would see it. Runs on a worker.
@@ -32,6 +42,8 @@ pub fn status(live: &LiveWorkspace) -> Vec<RowStatus> {
     let row = |(i, (rule, hit)): (usize, (&Rule, Option<isize>))| {
         let state = match hit {
             _ if !workspace::takes_part(rule) => RowState::Off,
+            _ if !workspace::in_scope(rule, live.workspace.scope.as_deref()) => RowState::OtherScreen,
+            _ if live.away.contains(&rule.monitor) => RowState::OtherWorkspace,
             None if rule.item.is_none() && background.runs(rule, &mut procs) => RowState::Background,
             _ => row_state(rule, hit, &seen, &geos, live),
         };
@@ -88,7 +100,9 @@ pub fn place_opened(live: &LiveWorkspace, hwnd: isize) -> Option<String> {
     let others = winutil::top_level_windows().into_iter().filter(|w| *w != h);
     let taken: HashSet<usize> =
         others.filter_map(winutil::ws_stamp).filter(|(k, _)| *k == key).map(|(_, r)| r).collect();
-    let free: Vec<usize> = (0..ws.windows.len()).filter(|i| !taken.contains(i)).collect();
+    // A row on a screen the workspace doesn't have takes no window here.
+    let free: Vec<usize> =
+        (0..ws.windows.len()).filter(|i| !taken.contains(i) && live.reaches(&ws.windows[*i])).collect();
     let rules: Vec<Rule> = free.iter().map(|i| ws.windows[*i].clone()).collect();
     // A place row takes only its remembered window, as in a switch (D336).
     let (bound, elsewhere) = bindings(ws, live.places);

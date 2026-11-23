@@ -129,6 +129,11 @@ pub fn copy_workspaces(
                 .map(|(screen, layout)| (map.get(&screen).cloned().unwrap_or(screen), layout))
                 .collect();
         }
+        // A workspace for one screen is for the screen in the same place (D790).
+        let scope = fields.get("scope").and_then(Value::as_str).and_then(|s| map.get(s)).cloned();
+        if let Some(id) = scope {
+            fields.insert("scope".into(), Value::String(id));
+        }
         out.push(copy);
     }
     out
@@ -318,6 +323,20 @@ mod tests {
         assert_eq!(dev["zones"]["x"]["template"], "thirds");
         assert!(dev["zones"].get("a").is_none());
         assert_eq!(dev["future"], json!({ "keep": true }));
+    }
+
+    #[test]
+    fn copy_maps_scope() {
+        let list = vec![
+            json!({ "id": "ws_1", "name": "Mail", "scope": "b" }),
+            json!({ "id": "ws_2", "name": "Gone", "scope": "gone" }),
+            json!({ "id": "ws_3", "name": "All" }),
+        ];
+        let copies = copy_workspaces(&list, &map(&[("a", "y"), ("b", "x")]), &[], || "ws_n".into());
+        assert_eq!(copies[0]["scope"], "x");
+        // A screen the source doesn't list keeps its old id, as a row's does.
+        assert_eq!(copies[1]["scope"], "gone");
+        assert!(copies[2].get("scope").is_none());
     }
 
     #[test]

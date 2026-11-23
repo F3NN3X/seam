@@ -291,6 +291,12 @@ const ENTRIES: &[Entry] = &[
         "Switch without touching the other windows, just this once",
         "keep open leave alongside workspace",
     ),
+    entry(
+        Page::Workspaces,
+        "Screens",
+        "Which screens a switch to the workspace changes",
+        "scope one screen all screens monitor display",
+    ),
     entry(Page::Workspaces, "Start missing apps", "Apps that aren't open start, in the order above", "launch"),
     entry(
         Page::Workspaces,

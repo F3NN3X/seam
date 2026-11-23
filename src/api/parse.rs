@@ -23,6 +23,19 @@ fn screen_param(params: &Value) -> Result<Option<u32>, RpcError> {
     }
 }
 
+/// An optional `screen`, the Line Up number of the screen a workspace action means (D785).
+fn on_screen_param(params: &Value) -> Result<Option<u32>, RpcError> {
+    match params.get("screen") {
+        None | Some(Value::Null) => Ok(None),
+        Some(v) => v
+            .as_u64()
+            .and_then(|n| u32::try_from(n).ok())
+            .filter(|n| *n >= 1)
+            .map(Some)
+            .ok_or_else(|| RpcError::new(INVALID_PARAMS, "screen must be a screen number, from 1")),
+    }
+}
+
 /// An optional `hwnd`, a window handle.
 fn hwnd_param(params: &Value) -> Result<Option<isize>, RpcError> {
     match params.get("hwnd") {
@@ -107,8 +120,8 @@ fn command(method: &str, p: &Value) -> Result<Command, RpcError> {
         },
         "workspace.cancel" => Command::WorkspaceCancel,
         "workspace.last_switch" => Command::WorkspaceLastSwitch { id: id_param(p)? },
-        "workspace.snap_back" => Command::WorkspaceSnapBack { alongside: false },
-        "workspace.switch_back" => Command::WorkspaceSwitchBack { alongside: false },
+        "workspace.snap_back" => Command::WorkspaceSnapBack { alongside: false, screen: on_screen_param(p)? },
+        "workspace.switch_back" => Command::WorkspaceSwitchBack { alongside: false, screen: on_screen_param(p)? },
         "workspace.step" => {
             let direction = p.get("direction").and_then(Value::as_str).and_then(workspace::Step::parse);
             let direction =
@@ -118,7 +131,7 @@ fn command(method: &str, p: &Value) -> Result<Command, RpcError> {
         "workspace.quick_save" => Command::WorkspaceQuickSave,
         "workspace.windows" => Command::WorkspaceWindows { id: id_param(p)? },
         "workspace.close" => workspace_close(p)?,
-        "workspace.minimize" => Command::WorkspaceMinimize { id: str_param(p, "id")? },
+        "workspace.minimize" => Command::WorkspaceMinimize { id: str_param(p, "id")?, screen: on_screen_param(p)? },
         "workspace.minimize_undo" => Command::WorkspaceMinimizeUndo,
         "workspace.set_default" => Command::WorkspaceSetDefault(str_param(p, "id")?),
         "autoapply.set" => Command::AutoApplySet(on_param(p)?),
@@ -603,8 +616,10 @@ pub fn parse_request(line: &str, peer: Peer) -> Result<(Value, Command), Rejecte
     // An assistant's switch never closes windows, whatever it asked for.
     let parsed = parsed.map(|c| match c {
         Command::WorkspaceSwitch { id, name, .. } if peer.mcp => Command::WorkspaceSwitch { id, name, alongside: true },
-        Command::WorkspaceSnapBack { .. } if peer.mcp => Command::WorkspaceSnapBack { alongside: true },
-        Command::WorkspaceSwitchBack { .. } if peer.mcp => Command::WorkspaceSwitchBack { alongside: true },
+        Command::WorkspaceSnapBack { screen, .. } if peer.mcp => Command::WorkspaceSnapBack { alongside: true, screen },
+        Command::WorkspaceSwitchBack { screen, .. } if peer.mcp => {
+            Command::WorkspaceSwitchBack { alongside: true, screen }
+        }
         Command::WorkspaceStep { direction, .. } if peer.mcp => Command::WorkspaceStep { direction, alongside: true },
         c => c,
     });
@@ -732,8 +747,26 @@ mod tests {
             ),
             (request("zones.apply", r#"{"layout":null}"#), anyone, Command::ZonesApply { number: None, layout: None }),
             (request("zones.layouts", "{}"), anyone, Command::ZonesLayouts(None)),
-            (request("workspace.snap_back", "{}"), anyone, Command::WorkspaceSnapBack { alongside: false }),
-            (request("workspace.switch_back", "{}"), anyone, Command::WorkspaceSwitchBack { alongside: false }),
+            (
+                request("workspace.snap_back", "{}"),
+                anyone,
+                Command::WorkspaceSnapBack { alongside: false, screen: None },
+            ),
+            (
+                request("workspace.snap_back", r#"{"screen":2}"#),
+                anyone,
+                Command::WorkspaceSnapBack { alongside: false, screen: Some(2) },
+            ),
+            (
+                request("workspace.switch_back", "{}"),
+                anyone,
+                Command::WorkspaceSwitchBack { alongside: false, screen: None },
+            ),
+            (
+                request("workspace.switch_back", r#"{"screen":1}"#),
+                anyone,
+                Command::WorkspaceSwitchBack { alongside: false, screen: Some(1) },
+            ),
             (
                 request("workspace.step", r#"{"direction":"next"}"#),
                 anyone,
@@ -757,11 +790,16 @@ mod tests {
                 anyone,
                 Command::WorkspaceClose { id: "ws_1".into(), hwnds: vec![4660, 22] },
             ),
-            (request("workspace.minimize", "{}"), anyone, Command::WorkspaceMinimize { id: None }),
+            (request("workspace.minimize", "{}"), anyone, Command::WorkspaceMinimize { id: None, screen: None }),
             (
                 request("workspace.minimize", r#"{"id":"ws_1"}"#),
                 anyone,
-                Command::WorkspaceMinimize { id: Some("ws_1".into()) },
+                Command::WorkspaceMinimize { id: Some("ws_1".into()), screen: None },
+            ),
+            (
+                request("workspace.minimize", r#"{"screen":3}"#),
+                anyone,
+                Command::WorkspaceMinimize { id: None, screen: Some(3) },
             ),
             (request("workspace.minimize_undo", "{}"), panel, Command::WorkspaceMinimizeUndo),
             (request("autoapply.set", r#"{"on":true}"#), anyone, Command::AutoApplySet(true)),
@@ -940,12 +978,19 @@ mod tests {
         // Snap back and Switch back never close windows either.
         assert_eq!(
             code(&request("workspace.snap_back", "{}"), assistant(false)),
-            Ok(Command::WorkspaceSnapBack { alongside: true })
+            Ok(Command::WorkspaceSnapBack { alongside: true, screen: None })
         );
         assert_eq!(
-            code(&request("workspace.switch_back", "{}"), assistant(false)),
-            Ok(Command::WorkspaceSwitchBack { alongside: true })
+            code(&request("workspace.switch_back", r#"{"screen":2}"#), assistant(false)),
+            Ok(Command::WorkspaceSwitchBack { alongside: true, screen: Some(2) })
         );
+        // A screen is a Line Up number, from 1.
+        for method in ["workspace.snap_back", "workspace.switch_back", "workspace.minimize"] {
+            for params in [r#"{"screen":0}"#, r#"{"screen":-1}"#, r#"{"screen":"2"}"#, r#"{"screen":1.5}"#] {
+                let bad = code(&request(method, params), panel).map_err(|e| e.0);
+                assert_eq!(bad, Err(INVALID_PARAMS), "{method} {params}");
+            }
+        }
         assert_eq!(
             code(&request("workspace.step", r#"{"direction":"next"}"#), assistant(false)),
             Ok(Command::WorkspaceStep { direction: workspace::Step::Next, alongside: true })

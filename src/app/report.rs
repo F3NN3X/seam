@@ -21,8 +21,11 @@ pub(super) fn refresh(app: &mut App) {
         persist(app);
         // Workspaces and their shortcuts belong to the desk.
         app.workspace = None;
+        app.last_in_use = None;
         app.step_to = None;
         app.joining.clear();
+        app.put_back_queue.clear();
+        app.drifted.clear();
         apply_hotkeys(app);
     }
     relink(app);
@@ -57,7 +60,14 @@ pub(super) fn new_screen(app: &App) -> bool {
 }
 
 pub(super) fn snapshot(app: &App) -> Snapshot {
-    let desk_zones = app.cfg.desks.get(&app.sig).map(|d| &d.zones);
+    let desk = app.cfg.desks.get(&app.sig);
+    let desk_zones = desk.map(|d| &d.zones);
+    let list = desk.map(|d| workspace::list(&d.workspaces)).unwrap_or_default();
+    let named = |id: Option<&str>| {
+        let w = list.iter().find(|w| Some(w.id.as_str()) == id)?;
+        let drifted = app.drifted.get(&w.id).copied().unwrap_or(false);
+        Some(WorkspaceRef { id: w.id.clone(), name: w.name.clone(), drifted })
+    };
     let screens = app.mons.iter().enumerate().map(|(i, m)| Screen {
         number: i as u32 + 1,
         id: m.id.clone(),
@@ -65,12 +75,11 @@ pub(super) fn snapshot(app: &App) -> Snapshot {
         primary: m.primary,
         rect: ScreenRect { x: m.rect.left, y: m.rect.top, w: m.rect.width(), h: m.rect.height() },
         layout: seam::library::layout_id(desk_zones.and_then(|z| z.get(&m.id)).and_then(zones::layout_of).as_ref()),
+        workspace: named(desk.and_then(|d| workspace::in_use_on(d, &m.id))),
     });
-    let saved_name = app.cfg.desks.get(&app.sig).map(|d| d.name.clone()).filter(|n| !n.is_empty());
-    let workspace = app.workspace.as_ref().and_then(|id| {
-        let saved = app.cfg.desks.get(&app.sig)?;
-        workspace::list(&saved.workspaces).into_iter().find(|w| w.id == *id)
-    });
+    let saved_name = desk.map(|d| d.name.clone()).filter(|n| !n.is_empty());
+    // The one the tray and the API mean with no screen named (D785).
+    let workspace = named(meant(app, None).as_deref());
     let session = saved_session(app).map(|s| SessionRef { saved_at: s.saved_at, windows: s.windows.len() });
     let stack = |s: snap::StackInfo| {
         let screen = app.mons.iter().position(|m| m.id == s.screen)? as u32 + 1;
@@ -78,7 +87,7 @@ pub(super) fn snapshot(app: &App) -> Snapshot {
         Some(StackRef { screen, zone: s.from as u32 + 1, span_to, windows: s.windows, top: s.top })
     };
     let state = State {
-        workspace: workspace.map(|w| WorkspaceRef { id: w.id, name: w.name, drifted: app.drifted }),
+        workspace,
         session,
         seam_version: env!("CARGO_PKG_VERSION").into(),
         packaged: app.packaged,

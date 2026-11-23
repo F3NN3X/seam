@@ -72,13 +72,13 @@ pub(super) fn refit_ended(app: &mut App) {
     }
 }
 
-/// The screens have settled: have the worker say whether the workspace in use has windows out of place.
+/// The screens have settled: have the worker say whether the workspaces in use have windows out of place.
 pub(super) fn restore_look(app: &mut App) {
     unsafe {
         let _ = KillTimer(Some(app.hwnd), TIMER_RESTORE_OFFER);
     }
     // A change whose refresh hasn't run yet (a tray menu holds the app) isn't settled.
-    if !std::mem::take(&mut app.restore_armed) || CHANGE_PENDING.load(Ordering::SeqCst) || app.workspace.is_none() {
+    if !std::mem::take(&mut app.restore_armed) || CHANGE_PENDING.load(Ordering::SeqCst) || in_use_ids(app).is_empty() {
         return;
     }
     // The live worker judges against the screens as they are now.
@@ -87,17 +87,18 @@ pub(super) fn restore_look(app: &mut App) {
     live::check_drift();
 }
 
-/// The worker answered for `id`: ask if everything is in place for it.
-pub(super) fn restore_checked(app: &mut App, id: &str, moved: bool) {
+/// The worker answered for every workspace in use, and `moved` have windows out of place: ask
+/// whether to put them back (D786).
+pub(super) fn restore_checked(app: &mut App, moved: &[String]) {
     let asked = app.restore_check.take().is_some_and(|at| at.elapsed() < RESTORE_CHECK_FOR);
-    if !asked || app.workspace.as_deref() != Some(id) {
+    if !asked {
         return;
     }
     let sign_in_mode = app.cfg.desks.get(&app.sig).map(|d| d.choice().mode).unwrap_or(SignInMode::Nothing);
     let facts = OfferFacts {
         on: app.cfg.workspaces_offer_restore,
         in_use: true,
-        moved,
+        moved: !moved.is_empty(),
         busy: switcher::switching()
             || app.capturing.is_some()
             || app.closing.is_some()
@@ -113,24 +114,34 @@ pub(super) fn restore_checked(app: &mut App, id: &str, moved: bool) {
     if !workspace::should_offer(facts) {
         return;
     }
-    let Some(workspace) = desk_workspaces(app).into_iter().find(|w| w.id == id) else { return };
-    app.restore_offer = Some((app.sig.clone(), workspace.id.clone()));
-    let body = format!("Restore {}? Click to restore", workspace.name);
+    let list = desk_workspaces(app);
+    let named: Vec<&Workspace> = moved.iter().filter_map(|id| list.iter().find(|w| w.id == *id)).collect();
+    let body = match named.as_slice() {
+        [] => return,
+        [one] => format!("Restore {}? Click to restore", one.name),
+        several => format!("Restore {} workspaces? Click to restore", several.len()),
+    };
+    app.restore_offer = Some((app.sig.clone(), named.iter().map(|w| w.id.clone()).collect()));
     notify(app, "Screens changed", &body, BalloonAction::RestoreAfterScreens);
 }
 
-/// The click on "Restore <workspace>?". It snaps back on the desk it was offered for, while the
-/// workspace is still there and still in use, and leaves other windows alone.
+/// The click on "Restore <workspace>?". It snaps back on the desk it was offered for each
+/// workspace that is still there and still in use, one after another, and leaves other windows alone.
 pub(super) fn restore_offered(app: &mut App) {
-    let Some((sig, id)) = app.restore_offer.take() else { return };
+    let Some((sig, ids)) = app.restore_offer.take() else { return };
+    let in_use = in_use_ids(app);
+    let still: Vec<String> = ids.into_iter().filter(|id| in_use.contains(id)).collect();
     if standby::paused() {
         log::info!("restore after screens change: Seam is paused, so nothing moves");
     } else if app.sig != sig {
         log::info!("restore after screens change: the desk changed, so nothing moves");
-    } else if app.workspace.as_deref() != Some(id.as_str()) || !desk_workspaces(app).iter().any(|w| w.id == id) {
+    } else if still.is_empty() {
         log::info!("restore after screens change: the workspace isn't in use any more, so nothing moves");
-    } else if let Err(e) = start_switch(app, Some(&id), None, true, Via::local().snapping()) {
-        log::info!("restore after screens change: {}", e.message);
-        notify(app, "Screens changed", &e.message, BalloonAction::None);
+    } else {
+        app.put_back_queue = still.into_iter().map(|id| (id, true)).collect();
+        if let Some(Err(e)) = next_put_back(app) {
+            log::info!("restore after screens change: {}", e.message);
+            notify(app, "Screens changed", &e.message, BalloonAction::None);
+        }
     }
 }

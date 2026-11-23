@@ -23,6 +23,7 @@ mod order;
 mod plan;
 pub mod report;
 pub mod review;
+mod scope;
 mod secrets;
 mod step;
 mod terminal;
@@ -51,7 +52,11 @@ pub use items::{
 pub use join::{Join, join_target, owned_away};
 pub use matching::{Bound, Candidate, assign, assign_bound, assign_bound_all};
 pub use order::{MoveError, moved_to};
-pub use plan::{RowAction, SCREEN_GONE, row_action, screen_gone, takes_part};
+pub use plan::{OTHER_SCREEN, RowAction, SCREEN_GONE, keeps_its_app, row_action, screen_gone, takes_part};
+pub use scope::{
+    SCOPE_GONE, after_switch, cycle, forget, held, holds, in_scope, in_use_on, keep_valid, own_screens, rescope,
+    retarget, scope_connected, switch_back_target,
+};
 pub use secrets::{
     Seal, clean_imported_items, for_panel, kind_only, seal_commands, seal_patch, sealed_in, without_clear,
     without_clear_commands, without_commands, without_items,
@@ -445,6 +450,10 @@ pub struct Workspace {
     /// entry this build can't read is kept and keeps its screen as it is.
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     pub zones: BTreeMap<String, Value>,
+    /// The screen's device path for a workspace of one screen, `None` for All screens
+    /// (D781). An older Seam that edits it drops it, and it is for all screens again.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub scope: Option<String>,
 }
 
 impl Default for Workspace {
@@ -459,6 +468,7 @@ impl Default for Workspace {
             show_all: false,
             windows: Vec::new(),
             zones: BTreeMap::new(),
+            scope: None,
         }
     }
 }
@@ -564,6 +574,7 @@ impl Session {
             windows: self.windows,
             // A restore never changes a screen's layout.
             zones: BTreeMap::new(),
+            scope: None,
         }
     }
 }
@@ -591,6 +602,11 @@ pub enum RowState {
     CantMove,
     /// The row is off: a switch leaves it alone.
     Off,
+    /// The row is on a screen other than its one-screen workspace's, so a switch leaves it
+    /// alone (D788).
+    OtherScreen,
+    /// A desk-wide workspace's row on a screen that has a workspace of its own in use (D786).
+    OtherWorkspace,
 }
 
 /// One row of `workspace.status`.
@@ -610,7 +626,16 @@ pub fn drifted(rows: &[RowStatus]) -> bool {
 pub fn all_in_place(rows: &[RowStatus]) -> bool {
     let mut running = rows
         .iter()
-        .filter(|r| !matches!(r.state, RowState::NotRunning | RowState::Background | RowState::Off))
+        .filter(|r| {
+            !matches!(
+                r.state,
+                RowState::NotRunning
+                    | RowState::Background
+                    | RowState::Off
+                    | RowState::OtherScreen
+                    | RowState::OtherWorkspace
+            )
+        })
         .peekable();
     running.peek().is_some() && running.all(|r| r.state == RowState::InPlace)
 }

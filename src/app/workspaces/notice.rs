@@ -160,6 +160,8 @@ mod tests {
             from_panel: false,
             cancelled: false,
             put_back: false,
+            scope: None,
+            left_screens: false,
         }
     }
 

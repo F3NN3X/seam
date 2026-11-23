@@ -449,7 +449,15 @@ mod tests {
     use super::{Pin, Rule, Screen, Target, Workspace, rule_line};
 
     fn screen() -> Screen {
-        Screen { number: 4, id: "m".into(), name: String::new(), primary: true, rect: Default::default(), layout: None }
+        Screen {
+            number: 4,
+            id: "m".into(),
+            name: String::new(),
+            primary: true,
+            rect: Default::default(),
+            layout: None,
+            workspace: None,
+        }
     }
 
     fn work() -> Workspace {

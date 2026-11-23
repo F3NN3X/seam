@@ -13,6 +13,8 @@ pub const WM_APP_REFIT: u32 = WM_APP + 15;
 pub const WM_APP_REFIT_DONE: u32 = WM_APP + 45;
 /// Windows is still moving windows for a while after a display change.
 const DEBOUNCE_MS: u32 = 1500;
+/// The gap slider is let go once, but `config.patch` can come in bursts.
+const REGAP_DEBOUNCE_MS: u32 = 150;
 
 static FOUND: Mutex<Option<Vec<isize>>> = Mutex::new(None);
 
@@ -28,6 +30,8 @@ pub(super) struct Refit {
     timer: usize,
     /// A change came while a drag, Line Up or another run was going. Go once it ends.
     waiting: bool,
+    /// A gap change asked for this run, so it goes whether or not `zones.refit` is on.
+    regap: bool,
     /// A worker is listing windows.
     busy: bool,
     queue: VecDeque<isize>,
@@ -40,6 +44,17 @@ pub(super) fn covered(cells: &[Rect], from: usize, to: usize) -> Vec<usize> {
     let r = zones::span(*a, *b);
     let inside = |c: &Rect| c.x >= r.x && c.y >= r.y && c.x + c.w <= r.x + r.w && c.y + c.h <= r.y + r.h;
     cells.iter().enumerate().filter(|(_, c)| inside(c)).map(|(i, _)| i).collect()
+}
+
+/// Whether a change of the gap from `old` to `new` moves the windows in zones.
+/// Stored gaps past the slider's end are cut back when used, so they count as the end.
+pub(super) fn gap_changed(old: u32, new: u32) -> bool {
+    old.min(MAX_GAP) != new.min(MAX_GAP)
+}
+
+/// Whether a gap change moves the windows of a screen. A tiled screen keeps its tree.
+pub(super) fn regap_moves(tiled: bool) -> bool {
+    !tiled
 }
 
 /// Screens or resolution changed, or the PC woke up. Starts the debounce, and
@@ -138,12 +153,35 @@ impl Engine {
         if !self.settings.refit || !self.active() {
             return;
         }
+        self.refit_arm(DEBOUNCE_MS);
+    }
+
+    /// The gap changed: put the windows in zones at the new gap, once, with `zones.refit` on or off.
+    pub(super) fn regap(&mut self) {
+        if !self.active() {
+            return;
+        }
+        self.refit.regap = true;
+        self.refit_arm(REGAP_DEBOUNCE_MS);
+    }
+
+    /// A run is wanted: because of a screen change with the setting on, or a gap change.
+    fn refit_wanted(&self) -> bool {
+        (self.settings.refit || self.refit.regap) && self.active()
+    }
+
+    /// Whether `update` should drop what was lined up: stepping aside, or nothing asks for a run.
+    pub(super) fn refit_unwanted(&self) -> bool {
+        !(self.settings.refit || self.refit.regap) || self.aside.is_some() || self.standing_by
+    }
+
+    fn refit_arm(&mut self, ms: u32) {
         if self.refit.timer != 0 {
             unsafe {
                 let _ = KillTimer(None, self.refit.timer);
             }
         }
-        self.refit.timer = unsafe { SetTimer(None, 0, DEBOUNCE_MS, Some(on_debounce)) };
+        self.refit.timer = unsafe { SetTimer(None, 0, ms, Some(on_debounce)) };
     }
 
     /// The setting went off: drop everything that was lined up.
@@ -157,7 +195,7 @@ impl Engine {
     }
 
     fn refit_begin(&mut self) {
-        if !self.settings.refit || !self.active() {
+        if !self.refit_wanted() {
             return;
         }
         // A switch places windows itself, and stamps them where it puts them.
@@ -187,7 +225,7 @@ impl Engine {
 
     fn refit_found(&mut self, list: Vec<isize>) {
         self.refit.busy = false;
-        if !self.settings.refit || !self.active() {
+        if !self.refit_wanted() {
             return;
         }
         let geometry = self.geometry();
@@ -207,9 +245,9 @@ impl Engine {
             && !self.refit.busy
             && !overlay::is_active()
             && !crate::switcher::switching();
-        if self.refit.waiting && free {
+        if self.refit.waiting && free && self.refit_wanted() {
             self.refit.waiting = false;
-            self.refit_schedule();
+            self.refit_arm(if self.refit.regap { REGAP_DEBOUNCE_MS } else { DEBOUNCE_MS });
         }
     }
 
@@ -228,7 +266,13 @@ impl Engine {
         }
         if self.pending.is_none() && self.drag.is_none() && self.refit.queue.is_empty() {
             if let Some(run) = self.refit.run.take() {
-                log::info!("zone refit: {} found, {} moved, {} skipped", run.found, run.moved, run.skipped);
+                if self.refit.regap {
+                    self.refit.regap = false;
+                    log::info!("zones gap: moved {} of {} windows to the new gap", run.moved, run.found);
+                } else {
+                    log::info!("zone refit: {} found, {} moved, {} skipped", run.found, run.moved, run.skipped);
+                }
+                self.sync_dividers();
                 // Every window of a stack was fitted on its own, so its top goes back over the rest.
                 self.stack_raise_tops();
                 unsafe {
@@ -252,6 +296,9 @@ impl Engine {
         let Some(run) = self.refit.run.as_ref() else { return false };
         // The screen it is on now, and that screen's layout.
         let Some(g) = run.geometry.iter().find(|g| g.bounds.contains(x, y)) else { return false };
+        if self.refit.regap && !regap_moves(self.tiling_on(&g.id)) {
+            return false;
+        }
         // A zone that isn't in this layout means the window isn't ours to move.
         if set.iter().any(|i| *i >= g.zones.len()) {
             return false;
@@ -271,5 +318,25 @@ impl Engine {
         });
         (entry.screen, entry.from, entry.to, entry.at) = (screen, *from, *to, target);
         moved
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_gap_change_asks_for_a_run_and_the_same_gap_does_not() {
+        assert!(gap_changed(8, 0));
+        assert!(gap_changed(0, 16));
+        assert!(!gap_changed(8, 8));
+        assert!(!gap_changed(MAX_GAP + 5, MAX_GAP + 9), "both are cut to the end");
+        assert!(gap_changed(MAX_GAP + 5, 8));
+    }
+
+    #[test]
+    fn a_tiled_screen_is_left_out_of_a_gap_run() {
+        assert!(regap_moves(false));
+        assert!(!regap_moves(true));
     }
 }

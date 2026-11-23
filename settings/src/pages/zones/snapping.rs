@@ -33,6 +33,16 @@ const RESET: [&str; 12] = [
 /// The place of Pause in "Show zones while dragging", after the three keys.
 const PAUSE: usize = 3;
 
+/// No handle in a gap narrower than this. Matches `MIN_GAP_PX` in the tray's `dividers`, which
+/// this crate can't reach.
+const MIN_HANDLE_GAP: u32 = 4;
+const NEEDS_GAP: &str = "Needs a gap of 4 px or more";
+
+/// Why the handles row is dimmed, while the gap leaves no room for a handle.
+fn handles_need(gap: u32) -> Option<&'static str> {
+    (gap < MIN_HANDLE_GAP).then_some(NEEDS_GAP)
+}
+
 /// A switch row that patches one of the zone settings.
 fn toggle(
     (id, title, about): (&'static str, &'static str, &'static str),
@@ -160,13 +170,21 @@ fn more_rows(
             window,
             cx,
         ),
-        toggle(
-            ("zone-handles", "Handles between snapped windows", "Drag one to resize both sides. Right-click for sizes"),
-            ("divider_handles", zones_cfg.divider_handles),
-            view,
-            p,
-            window,
-            cx,
+        ui::dimmed(
+            toggle(
+                (
+                    "zone-handles",
+                    "Handles between snapped windows",
+                    "Drag one to resize both sides. Right-click for sizes",
+                ),
+                ("divider_handles", zones_cfg.divider_handles),
+                view,
+                p,
+                window,
+                cx,
+            ),
+            "zone-handles-off",
+            handles_need(zones_cfg.gap),
         ),
         toggle(
             (
@@ -231,7 +249,7 @@ pub(super) fn snapping_section(
     }
     let gap_row = row(
         "Gap between zones",
-        None,
+        Some("Windows in zones move to the new gap".into()),
         ui::slider_with_value(&panel.gap, format!("{gap} px"), true, "Gap between zones", p),
         p,
     );
@@ -283,4 +301,18 @@ pub(super) fn snapping_section(
         .on_click(cx.listener(|panel, _, window, cx| reset(panel, window, cx)))
         .into_any_element();
     section_with("Snapping", None, Some(reset), card(rows, p), p)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{MIN_HANDLE_GAP, handles_need};
+
+    #[test]
+    fn the_handles_row_is_dimmed_below_four_and_not_at_four() {
+        for gap in 0..MIN_HANDLE_GAP {
+            assert_eq!(handles_need(gap), Some("Needs a gap of 4 px or more"), "gap {gap}");
+        }
+        assert_eq!(handles_need(4), None);
+        assert_eq!(handles_need(32), None);
+    }
 }

@@ -4,6 +4,10 @@ All notable changes to Seam. The format follows [Keep a Changelog](https://keepa
 
 ## [Unreleased]
 
+### Changed
+
+- **Windows in zones move when you change the gap.** **Gap between zones** now puts the windows already in zones at the new gap when you let go of the slider, with **Keep windows in their zones** on or off; a screen with smart tiling keeps its tree. **Handles between snapped windows** is dimmed while the gap is under 4 px, as there is no room for a handle.
+
 ## [0.10.1] - 2026-11-23
 
 ### Changed

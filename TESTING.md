@@ -1108,7 +1108,11 @@ On two screens of different scaling (one at 100%, one at 150% or more), with wor
 - [ ] **Errors.** A `.svg` (rename one to `.jpg` too), a HEIC without the HEIF extension ("Windows can't open this picture. For HEIC or AVIF, get the extension from the Microsoft Store"), a 30,000 px picture ("That picture is too big. Use one up to 20,000 pixels on each side"): each shows the message under the row and nothing changes.
 - [ ] **Gone.** Move a chosen picture away: the row says "<file> isn't there any more", and the screen keeps its last render.
 - [ ] **Explorer.** Restart Explorer in Task Manager: the pictures come back.
-- [ ] **Note what Windows does.** Whether the picture fades when it changes, whether a slideshow or Spotlight stops when Seam sets a picture (`GetStatus`, `BackgroundType` after), whether `GetWallpaper` gives back the path Seam set, and whether the desktop survives an uninstall with it on.
+- [ ] **A screen plugged in later.** With it on and one screen, plug in a second, give it a picture and turn the feature off: both screens show your own again (the new one the first screen's picture), and nothing in `cache\` is a wallpaper any more.
+- [ ] **A stale monitor.** Add a monitor id that isn't connected to `original.json` by hand, then turn the feature off: the connected screens get your own back and `original.json` is gone. Change the wallpaper in Settings and restart Seam: your new choice stays.
+- [ ] **Orientation.** JPEGs with EXIF orientation 5, 6, 7 and 8 (a phone photo turned in each way) show upright with every fit.
+- [ ] **An unknown fit.** Put `"fit": "span"` on a picture in `config.json` and start Seam: everything else is as it was, the picture fits with Fill, and there is no `config.json.corrupt`.
+- [ ] **Before merge: note what Windows does.** Whether `GetWallpaper` gives back the path Seam set (with debug log on, a switch must not log "someone else changed it"), whether the picture fades when it changes, whether a slideshow or Spotlight stops when Seam sets a picture (`GetStatus`, `BackgroundType` after), and whether the desktop survives an uninstall with it on.
 
 ### Close and minimize a workspace
 

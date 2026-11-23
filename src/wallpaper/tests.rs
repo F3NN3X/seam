@@ -60,13 +60,26 @@ fn one_screen_workspace_without_a_picture_shows_the_desk_default() {
 fn one_screen_switch_changes_only_its_screen() {
     let d = desk();
     let before = wanted(&d, &["s1", "s2"]);
-    let next = after_switch(&d, "notes", Some("s2"), &["s1", "s2"]);
+    let next = after_switch(&d, "notes", Some("s2"), &["s1", "s2"], &[]);
     let after = wanted(&next, &["s1", "s2"]);
     assert_eq!(before[0], after[0]);
     assert_eq!(paths(&after)[1], ("s2", Some("notes2.jpg"), Origin::Workspace));
     // And an All-screens switch can change both.
-    let all = wanted(&after_switch(&next, "other", None, &["s1", "s2"]), &["s1", "s2"]);
+    let all = wanted(&after_switch(&next, "other", None, &["s1", "s2"], &[]), &["s1", "s2"]);
     assert_eq!(paths(&all), [("s1", Some("desk1.jpg"), Origin::Desk), ("s2", Some("desk2.jpg"), Origin::Desk)]);
+}
+
+#[test]
+fn snap_back_of_the_desk_wide_workspace_leaves_the_away_screens_pictures() {
+    // dev is desk-wide, notes is in use on s2; Snap back of dev leaves s2 to notes.
+    let d = after_switch(&desk(), "notes", Some("s2"), &["s1", "s2"], &[]);
+    let before = wanted(&d, &["s1", "s2"]);
+    let back = after_switch(&d, "dev", None, &["s1", "s2"], &["s2".to_string()]);
+    assert_eq!(wanted(&back, &["s1", "s2"]), before);
+    assert_eq!(paths(&before)[1], ("s2", Some("notes2.jpg"), Origin::Workspace));
+    // Without away, the same switch takes s2 too.
+    let all = after_switch(&d, "dev", None, &["s1", "s2"], &[]);
+    assert_eq!(paths(&wanted(&all, &["s2"]))[0].2, Origin::Desk);
 }
 
 #[test]

@@ -230,15 +230,21 @@ fn delete(panel: &mut Panel, id: &str, window: &mut Window, cx: &mut Context<Pan
     let before = saved(panel);
     let name = workspace::list(&before).into_iter().find(|w| w.id == id).map(|w| w.name).unwrap_or_default();
     let rest = before.iter().filter(|v| workspace::parse(v).is_none_or(|w| w.id != id)).cloned().collect();
+    // The tray drops a deleted workspace's pictures, so Undo gives them back once the workspace is.
+    let pictures = wallpaper::pictures_of(panel, id);
+    let id = id.to_string();
     shortcuts::stop_recording(panel);
     panel.workspace = None;
     save(panel, rest, window, cx);
-    panel.offer_undo(
-        format!("Deleted {name}"),
-        move |panel, window, cx| save(panel, before.clone(), window, cx),
-        window,
-        cx,
-    );
+    let undo = move |panel: &mut Panel, window: &mut Window, cx: &mut Context<Panel>| {
+        let (id, pictures) = (id.clone(), pictures.clone());
+        let sig = desk_sig(panel);
+        let patch = json!({ "desks": { sig: { "workspaces": before.clone() } } });
+        panel.patch_then(patch, window, cx, move |panel, window, cx| {
+            wallpaper::put_pictures(panel, id, pictures, window, cx)
+        });
+    };
+    panel.offer_undo(format!("Deleted {name}"), undo, window, cx);
 }
 
 /// The connected screens as an export file describes them.
@@ -778,7 +784,9 @@ pub fn render(panel: &mut Panel, window: &mut Window, cx: &mut Context<Panel>) -
             .gap(px(ui::SECTION_GAP))
             .child(header)
             .children(note)
-            .child(empty_state(panel, p, cx));
+            .child(empty_state(panel, p, cx))
+            // The desk default needs no workspace.
+            .children(wallpaper::page_sections(panel, p, window, cx));
     }
     let capture = ui::secondary("capture", "Capture current windows", cx)
         .on_click(cx.listener(|panel, _, window, cx| capture(panel, window, cx)));

@@ -23,7 +23,15 @@ pub struct Failure {
 
 impl Failure {
     fn of(e: windows::core::Error) -> Failure {
-        let message = if e.code() == WINCODEC_ERR_COMPONENTNOTFOUND { NO_CODEC } else { UNREADABLE };
+        Failure { message: UNREADABLE, hresult: Some(e.code().0) }
+    }
+
+    /// Opening `source` failed. No codec means the missing extension only for HEIC, HEIF and AVIF:
+    /// for anything else it is content WIC doesn't know under a name it does.
+    fn opening(e: windows::core::Error, source: &str) -> Failure {
+        let ext = Path::new(source).extension().and_then(|e| e.to_str()).map(str::to_ascii_lowercase);
+        let store = ext.is_some_and(|ext| matches!(ext.as_str(), "heic" | "heif" | "avif"));
+        let message = if e.code() == WINCODEC_ERR_COMPONENTNOTFOUND && store { NO_CODEC } else { UNREADABLE };
         Failure { message, hresult: Some(e.code().0) }
     }
 }
@@ -31,15 +39,16 @@ impl Failure {
 /// WIC's factory, made once by the worker.
 pub struct Wic(IWICImagingFactory);
 
-/// What EXIF orientation 1 to 8 asks for, as WIC's flips and turns.
+/// What EXIF orientation 1 to 8 asks for, as WIC's flips and turns. WIC flips before it turns, so
+/// a transpose (5) is a flip and a quarter turn left (`every_exif_orientation_comes_out_upright`).
 fn upright(orientation: u16) -> WICBitmapTransformOptions {
     let turn = match orientation {
         2 => WICBitmapTransformFlipHorizontal.0,
         3 => WICBitmapTransformRotate180.0,
         4 => WICBitmapTransformFlipVertical.0,
-        5 => WICBitmapTransformRotate90.0 | WICBitmapTransformFlipHorizontal.0,
+        5 => WICBitmapTransformRotate270.0 | WICBitmapTransformFlipHorizontal.0,
         6 => WICBitmapTransformRotate90.0,
-        7 => WICBitmapTransformRotate270.0 | WICBitmapTransformFlipHorizontal.0,
+        7 => WICBitmapTransformRotate90.0 | WICBitmapTransformFlipHorizontal.0,
         8 => WICBitmapTransformRotate270.0,
         _ => WICBitmapTransformRotate0.0,
     };
@@ -94,7 +103,7 @@ impl Wic {
         let decoder = unsafe {
             self.0.CreateDecoderFromFilename(&HSTRING::from(source), None, GENERIC_READ, WICDecodeMetadataCacheOnDemand)
         }
-        .map_err(Failure::of)?;
+        .map_err(|e| Failure::opening(e, source))?;
         let frame = unsafe { decoder.GetFrame(0) }.map_err(Failure::of)?;
         let orientation = self.orientation(&frame);
         let mut picture: IWICBitmapSource = frame.clone().into();
@@ -175,6 +184,54 @@ impl Wic {
             frame.Commit()?;
             encoder.Commit()?;
             stream.Commit(windows::Win32::System::Com::STGC_DEFAULT)
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use windows::Win32::System::Com::{COINIT_APARTMENTTHREADED, CoInitializeEx};
+
+    /// A 2 by 3 picture whose pixels are numbered 0 to 5, turned for EXIF `orientation`: its size
+    /// and its pixels' numbers, row by row.
+    fn turned(orientation: u16) -> (u32, u32, Vec<u8>) {
+        let _ = unsafe { CoInitializeEx(None, COINIT_APARTMENTTHREADED) };
+        let wic = Wic::open().expect("WIC");
+        let mut pixels = vec![0u8; 24];
+        for (i, pixel) in pixels.chunks_mut(4).enumerate() {
+            pixel[0] = i as u8;
+            pixel[3] = 255;
+        }
+        unsafe {
+            let bitmap = wic.0.CreateBitmapFromMemory(2, 3, &GUID_WICPixelFormat32bppBGRA, 8, &pixels).unwrap();
+            let turner = wic.0.CreateBitmapFlipRotator().unwrap();
+            turner.Initialize(&bitmap, upright(orientation)).unwrap();
+            let (mut w, mut h) = (0, 0);
+            turner.GetSize(&mut w, &mut h).unwrap();
+            let mut out = vec![0u8; (w * h * 4) as usize];
+            turner.CopyPixels(std::ptr::null(), w * 4, &mut out).unwrap();
+            (w, h, out.chunks(4).map(|p| p[0]).collect())
+        }
+    }
+
+    #[test]
+    fn every_exif_orientation_comes_out_upright() {
+        // The picture as stored is 0 1 / 2 3 / 4 5; each tag says how to show it.
+        let want: [(u16, (u32, u32), [u8; 6]); 8] = [
+            (1, (2, 3), [0, 1, 2, 3, 4, 5]),
+            (2, (2, 3), [1, 0, 3, 2, 5, 4]),
+            (3, (2, 3), [5, 4, 3, 2, 1, 0]),
+            (4, (2, 3), [4, 5, 2, 3, 0, 1]),
+            // Transpose, and transverse.
+            (5, (3, 2), [0, 2, 4, 1, 3, 5]),
+            (6, (3, 2), [4, 2, 0, 5, 3, 1]),
+            (7, (3, 2), [5, 3, 1, 4, 2, 0]),
+            (8, (3, 2), [1, 3, 5, 0, 2, 4]),
+        ];
+        for (orientation, size, pixels) in want {
+            let (w, h, got) = turned(orientation);
+            assert_eq!(((w, h), got.as_slice()), (size, pixels.as_slice()), "orientation {orientation}");
         }
     }
 }

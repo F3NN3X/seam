@@ -597,7 +597,15 @@ impl WallpaperSet {
 #[serde(default)]
 pub struct Wallpaper {
     pub path: String,
+    #[serde(deserialize_with = "lenient_fit")]
     pub fit: Fit,
+}
+
+/// A fit this build doesn't know (a later Seam's, a hand edit) reads as Fill, so one picture
+/// setting can never make the whole file unreadable.
+fn lenient_fit<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Fit, D::Error> {
+    let value = serde_json::Value::deserialize(d)?;
+    Ok(serde_json::from_value(value).unwrap_or_default())
 }
 
 /// How a picture fits its screen (D796).

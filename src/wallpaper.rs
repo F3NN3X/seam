@@ -76,10 +76,17 @@ pub fn wanted(desk: &Desk, screens: &[&str]) -> Vec<(String, Option<Wallpaper>, 
 }
 
 /// `desk` as it will be once a switch to `id` ends, for `scope`'s screen or all of them, so the
-/// pictures can change while the windows move (D794).
-pub fn after_switch(desk: &Desk, id: &str, scope: Option<&str>, screens: &[&str]) -> Desk {
+/// pictures can change while the windows move (D794). The `away` screens, which a Snap back of the
+/// desk-wide workspace leaves to their own, keep what is in use on them.
+pub fn after_switch(desk: &Desk, id: &str, scope: Option<&str>, screens: &[&str], away: &[String]) -> Desk {
     let mut next = desk.clone();
     workspace::after_switch(&mut next, id, scope, screens);
+    for screen in away {
+        match desk.screen_in_use.get(screen) {
+            Some(entry) => next.screen_in_use.insert(screen.clone(), entry.clone()),
+            None => next.screen_in_use.remove(screen),
+        };
+    }
     next
 }
 

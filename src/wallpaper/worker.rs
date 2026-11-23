@@ -5,7 +5,7 @@
 use super::desktop::{Desktop, match_ids};
 use super::journal::{self, AtStart, Record};
 use super::render::Wic;
-use super::{CACHE_CAP, Cached, Fit, Origin, Show, Wallpaper, cache_key, cache_prefix, evict, to_apply};
+use super::{CACHE_CAP, Cached, Fit, Origin, Show, UNREADABLE, Wallpaper, cache_key, cache_prefix, evict, to_apply};
 use crate::geom::Rect;
 use crate::log;
 use std::collections::BTreeMap;
@@ -132,10 +132,11 @@ impl Drop for Com {
 
 fn run(owner: isize, enabled: bool, jobs: Receiver<Job>) {
     let _com = unsafe { CoInitializeEx(None, COINIT_APARTMENTTHREADED) }.is_ok().then_some(Com);
-    let Ok(wic) = Wic::open() else {
+    // Without WIC no picture can be rendered, but mine can still go back.
+    let wic = Wic::open().ok();
+    if wic.is_none() {
         log::info!("wallpaper: WIC isn't there, so no picture is shown");
-        return;
-    };
+    }
     let dir = crate::package::local_dir().join("wallpapers");
     let mut state = State::new(wic, dir);
     post(owner, state.at_start(enabled));
@@ -166,20 +167,31 @@ fn unix(t: SystemTime) -> u64 {
 }
 
 struct State {
-    wic: Wic,
+    wic: Option<Wic>,
     /// `wallpapers\`: `original.json`, `original\` and `cache\`.
     dir: PathBuf,
     /// The file Seam last set on each monitor, by Windows' id. A monitor not here shows mine.
     applied: BTreeMap<String, String>,
+    /// What Windows said each of those monitors showed right after Seam set it (D799).
+    read_back: BTreeMap<String, String>,
+    /// Renders that failed, by cache key, so a broken picture isn't opened again until it changes.
+    failures: BTreeMap<String, &'static str>,
     /// The journal (D797), while there is one.
     record: Option<Record>,
 }
 
 impl State {
-    fn new(wic: Wic, dir: PathBuf) -> State {
-        let journal = std::fs::read(dir.join("original.json")).ok();
-        let record = journal.and_then(|bytes| serde_json::from_slice(&bytes).ok());
-        State { wic, dir, applied: BTreeMap::new(), record }
+    fn new(wic: Option<Wic>, dir: PathBuf) -> State {
+        let path = dir.join("original.json");
+        let journal = std::fs::read(&path).ok();
+        let record = journal.as_ref().and_then(|bytes| serde_json::from_slice(bytes).ok());
+        // A journal that doesn't read is kept aside, never written over: it may be all there is of mine.
+        if journal.is_some() && record.is_none() {
+            log::info!("wallpaper: original.json didn't read, so it is kept as original.json.corrupt");
+            let _ = std::fs::rename(&path, path.with_extension("json.corrupt"));
+        }
+        let (applied, read_back, failures) = (BTreeMap::new(), BTreeMap::new(), BTreeMap::new());
+        State { wic, dir, applied, read_back, failures, record }
     }
 
     fn cache(&self) -> PathBuf {
@@ -187,7 +199,19 @@ impl State {
     }
 
     fn in_cache(&self, path: &str) -> bool {
-        Path::new(path).parent().is_some_and(|p| p.as_os_str().eq_ignore_ascii_case(self.cache().as_os_str()))
+        journal::in_dir(path, &self.cache())
+    }
+
+    /// Seam set `id` to `sent`, and Windows says it shows `shown`.
+    fn note_set(&mut self, id: &str, sent: String, shown: String) {
+        let shown = if shown.is_empty() { sent.clone() } else { shown };
+        self.applied.insert(id.to_string(), sent);
+        self.read_back.insert(id.to_string(), shown);
+    }
+
+    fn forget_all(&mut self) {
+        self.applied.clear();
+        self.read_back.clear();
     }
 
     fn run(&mut self, job: Job) -> Option<Report> {
@@ -196,14 +220,14 @@ impl State {
             Job::Render(screen, picture) => self.render_only(&screen, &picture),
             Job::Check => self.check(),
             Job::Restore(reply) => {
-                let report = self.restore();
+                let report = self.restore(false);
                 if let Some(reply) = reply {
                     let _ = reply.send(report.restored || self.record.is_none());
                 }
                 Some(report)
             }
             Job::Forget => {
-                self.applied.clear();
+                self.forget_all();
                 None
             }
         }
@@ -211,23 +235,24 @@ impl State {
 
     /// What a start does with the journal it found (D798).
     fn at_start(&mut self, enabled: bool) -> Report {
-        let report = match journal::at_start(self.record.is_some(), enabled) {
+        let at_start = journal::at_start(self.record.is_some(), enabled);
+        // Whatever of Seam's an earlier run left up is Seam's to change, or to take down.
+        if at_start != AtStart::Nothing
+            && let Ok(desk) = Desktop::open()
+        {
+            for (id, _) in desk.monitors() {
+                let shown = desk.wallpaper(&id);
+                if self.in_cache(&shown) {
+                    self.note_set(&id, shown.clone(), shown);
+                }
+            }
+        }
+        let report = match at_start {
             AtStart::Restore => {
                 log::info!("wallpaper: putting your own back, left from an earlier run");
-                self.restore()
+                self.restore(true)
             }
-            AtStart::Keep => {
-                // Whatever of Seam's an earlier run left up is Seam's to change.
-                if let Ok(desk) = Desktop::open() {
-                    for (id, _) in desk.monitors() {
-                        let shown = desk.wallpaper(&id);
-                        if self.in_cache(&shown) {
-                            self.applied.insert(id, shown);
-                        }
-                    }
-                }
-                Report { original: self.original(None), ..Report::default() }
-            }
+            AtStart::Keep => Report { original: self.original(None), ..Report::default() },
             AtStart::Nothing => Report { original: self.original(Desktop::open().ok().as_ref()), ..Report::default() },
         };
         self.evict();
@@ -309,15 +334,15 @@ impl State {
         for (id, show) in changes {
             let path = match show {
                 Show::Picture(file) => file.clone(),
-                Show::Own => record.own(id, &exists).unwrap_or_default(),
+                Show::Own => record.own_or_fallback(id, &exists),
             };
             match desk.set(id, &path) {
+                // What Windows reads back is what a later check compares with (D799).
                 Ok(()) => match show {
-                    Show::Picture(file) => {
-                        self.applied.insert(id.clone(), file.clone());
-                    }
+                    Show::Picture(file) => self.note_set(id, file.clone(), desk.wallpaper(id)),
                     Show::Own => {
                         self.applied.remove(id);
+                        self.read_back.remove(id);
                     }
                 },
                 Err(e) => {
@@ -333,7 +358,7 @@ impl State {
 
     /// The first of a screen's choices that can be shown: its render, made now if it isn't in the
     /// cache, or for a picture that is gone, its last render (D800). None of them: mine.
-    fn pick(&self, want: &Want, bars: u32, failed: &mut Vec<Failed>) -> (Show, Shown) {
+    fn pick(&mut self, want: &Want, bars: u32, failed: &mut Vec<Failed>) -> (Show, Shown) {
         let mut missing = false;
         for (picture, from) in &want.choices {
             let file = match self.render(&want.screen, picture, bars) {
@@ -342,8 +367,11 @@ impl State {
                     missing = true;
                     continue;
                 }
-                Err(message) => {
-                    failed.push(self.failure(&want.screen, picture, message, true));
+                // Said once, not at every Apply, until the file changes.
+                Err((message, fresh)) => {
+                    if fresh {
+                        failed.push(self.failure(&want.screen, picture, message, true));
+                    }
                     continue;
                 }
             };
@@ -372,8 +400,14 @@ impl State {
     }
 
     /// The render of `picture` for `screen`, made if it isn't in the cache. `None`: the picture is
-    /// gone and was never rendered at this size.
-    fn render(&self, screen: &Screen, picture: &Wallpaper, bars: u32) -> Result<Option<String>, &'static str> {
+    /// gone and was never rendered at this size. A failure says whether it is new: one already
+    /// known for this very file isn't tried again.
+    fn render(
+        &mut self,
+        screen: &Screen,
+        picture: &Wallpaper,
+        bars: u32,
+    ) -> Result<Option<String>, (&'static str, bool)> {
         let size = (screen.rect.width().max(1) as u32, screen.rect.height().max(1) as u32);
         let cache = self.cache();
         let Ok(meta) = std::fs::metadata(&picture.path) else {
@@ -382,11 +416,19 @@ impl State {
         let written = meta.modified().map(unix).unwrap_or(0);
         let key = cache_key(&picture.path, meta.len(), written, picture.fit, bars, size);
         let file = cache.join(format!("{key}.png"));
+        if let Some(message) = self.failures.get(&key) {
+            return Err((message, false));
+        }
         if !file.exists() {
             let _ = std::fs::create_dir_all(&cache);
-            if let Err(e) = self.wic.render(&picture.path, size, picture.fit, bars, &file) {
+            let Some(wic) = &self.wic else {
+                self.failures.insert(key, UNREADABLE);
+                return Err((UNREADABLE, true));
+            };
+            if let Err(e) = wic.render(&picture.path, size, picture.fit, bars, &file) {
                 log::info!("wallpaper: couldn't render a picture for screen {} ({:?})", screen.number, e.hresult);
-                return Err(e.message);
+                self.failures.insert(key, e.message);
+                return Err((e.message, true));
             }
         }
         Ok(Some(file.to_string_lossy().into_owned()))
@@ -403,14 +445,14 @@ impl State {
     }
 
     /// `wallpaper.set` for a connected screen: render now, show nothing (D795).
-    fn render_only(&self, screen: &Screen, picture: &Wallpaper) -> Option<Report> {
+    fn render_only(&mut self, screen: &Screen, picture: &Wallpaper) -> Option<Report> {
         let desk = Desktop::open().ok();
         let bars = match (&self.record, &desk) {
             (Some(record), _) => record.background,
             (None, desk) => desk.as_ref().map_or(0, Desktop::background),
         };
         let failed = match self.render(screen, picture, bars) {
-            Err(message) => vec![self.failure(screen, picture, message, false)],
+            Err((message, _)) => vec![self.failure(screen, picture, message, false)],
             Ok(_) => Vec::new(),
         };
         self.evict();
@@ -420,20 +462,16 @@ impl State {
     /// D799: a monitor Seam set shows something else now, so that is mine, recorded once, and
     /// Seam leaves it until the next switch or screen change.
     fn check(&mut self) -> Option<Report> {
-        if self.applied.is_empty() {
+        if self.read_back.is_empty() {
             return None;
         }
         let desk = Desktop::open().ok()?;
+        let monitors = desk.monitors();
+        let attached = |id: &str| monitors.iter().any(|(m, rect)| m == id && rect.is_some());
+        let now: BTreeMap<String, String> =
+            self.read_back.keys().map(|id| (id.clone(), desk.wallpaper(id))).filter(|(_, s)| !s.is_empty()).collect();
         // A picture of Seam's own is never someone else's change.
-        let now: BTreeMap<String, String> = self
-            .applied
-            .iter()
-            .map(|(id, set)| {
-                let shown = desk.wallpaper(id);
-                (id.clone(), if self.in_cache(&shown) { set.clone() } else { shown })
-            })
-            .collect();
-        if !journal::outside_change(&self.applied, &now) {
+        if !journal::outside_change(&self.read_back, &now, &attached, &|p| self.in_cache(p)) {
             return None;
         }
         log::info!("wallpaper: someone else changed it, so that is your own now");
@@ -441,50 +479,51 @@ impl State {
         if self.write_journal(&record).is_ok() {
             self.record = Some(record);
         }
-        self.applied.clear();
+        self.forget_all();
         Some(Report { outside: true, original: self.original(Some(&desk)), ..Report::default() })
     }
 
-    /// Put mine back (D798). The journal goes only once it is back.
-    fn restore(&mut self) -> Report {
+    /// Put mine back (D798), monitor by monitor, on every monitor Seam set too. The journal goes
+    /// once anything is back, so a monitor Windows no longer takes can't keep it alive. With
+    /// `only_seams` (a start after a crash), a monitor that shows something else now keeps it.
+    fn restore(&mut self, only_seams: bool) -> Report {
         let Some(record) = self.record.clone() else {
             return Report { original: self.original(Desktop::open().ok().as_ref()), ..Report::default() };
         };
         let original = self.original(None);
         let exists = |p: &str| Path::new(p).exists();
-        let back = Desktop::open().and_then(|desk| desk.restore(&record, &|id| record.own(id, &exists)));
-        match back {
-            Ok(()) => {
-                let _ = std::fs::remove_file(self.dir.join("original.json"));
-                self.record = None;
-                self.applied.clear();
-                log::info!("wallpaper: your own is back");
-                Report { restored: true, original, ..Report::default() }
-            }
-            Err(e) => {
+        let set_by_seam: Vec<String> = self.applied.keys().cloned().collect();
+        let plan = journal::restore_plan(&record, &set_by_seam, only_seams, &exists);
+        let took = match (only_seams && plan.is_empty(), Desktop::open()) {
+            // Nothing of Seam's is up: what shows is mine, whoever chose it.
+            (true, _) => 0,
+            (false, Ok(desk)) => desk.restore(&record, &plan),
+            (false, Err(e)) => {
                 log::info!("wallpaper: your own didn't go back ({:#x}), the record stays", e.code().0);
-                Report { original, ..Report::default() }
+                return Report { original, ..Report::default() };
             }
+        };
+        if !journal::restored(plan.len(), took) {
+            log::info!("wallpaper: no monitor took your own back, the record stays");
+            return Report { original, ..Report::default() };
         }
+        let _ = std::fs::remove_file(self.dir.join("original.json"));
+        self.record = None;
+        self.forget_all();
+        log::info!("wallpaper: your own is back ({took} of {} monitors)", plan.len());
+        Report { restored: true, original, ..Report::default() }
     }
 
     /// What Windows shows now, with a copy of each picture in `original\`, so a moved or deleted
     /// one can still come back (D797). A monitor showing one of Seam's renders keeps what the
     /// last record had for it.
     fn record_now(&self, desk: &Desktop) -> Record {
-        let mut record = desk.record();
+        let mut record = journal::rerecord(desk.record(), self.record.as_ref(), &|p| self.in_cache(p));
         let copies = self.dir.join("original");
         let _ = std::fs::create_dir_all(&copies);
         for (i, picture) in record.monitors.iter_mut().enumerate() {
-            if self.in_cache(&picture.path) {
-                let before = self.record.as_ref().and_then(|r| r.monitors.iter().find(|p| p.id == picture.id));
-                *picture = before
-                    .cloned()
-                    .unwrap_or_else(|| journal::Picture { id: picture.id.clone(), ..Default::default() });
-                continue;
-            }
             let source = Path::new(&picture.path);
-            if picture.path.is_empty() || source.starts_with(&copies) {
+            if picture.path.is_empty() || picture.copy.is_some() || source.starts_with(&copies) {
                 continue;
             }
             let name = source.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
@@ -542,13 +581,8 @@ impl State {
             let Ok(meta) = entry.metadata() else { continue };
             files.push(Cached { path, len: meta.len(), used: meta.modified().map(unix).unwrap_or(0) });
         }
-        let record = self.record.as_ref();
-        let kept = |p: &Path| {
-            let named = |s: &str| Path::new(s) == p;
-            self.applied.values().any(|f| named(f))
-                || record
-                    .is_some_and(|r| r.monitors.iter().any(|m| named(&m.path) || m.copy.as_deref().is_some_and(named)))
-        };
+        let on_screen: Vec<&str> = self.applied.values().map(String::as_str).collect();
+        let kept = |p: &Path| journal::kept(p, &on_screen, self.record.as_ref());
         for path in evict(&files, CACHE_CAP, &kept) {
             let _ = std::fs::remove_file(path);
         }

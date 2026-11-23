@@ -4,6 +4,7 @@
 
 use super::journal::{Picture, Record, Slideshow};
 use crate::geom::Rect;
+use crate::log;
 use windows::Win32::Foundation::{COLORREF, ERROR_SUCCESS, RECT, S_OK};
 use windows::Win32::System::Com::{CLSCTX_ALL, CoCreateInstance, CoTaskMemFree};
 use windows::Win32::System::Registry::{HKEY_CURRENT_USER, RRF_RT_REG_DWORD, RegGetValueW};
@@ -125,24 +126,23 @@ impl Desktop {
         Some(Slideshow { items: (0..count).filter_map(path).collect(), options: options.0, tick })
     }
 
-    /// Put mine back (D798): position, background colour, then the slideshow or each monitor's
-    /// picture. `own` says what goes on a monitor, from the record.
-    pub fn restore(&self, record: &Record, own: &dyn Fn(&str) -> Option<String>) -> Result<()> {
-        unsafe {
-            self.0.SetPosition(DESKTOP_WALLPAPER_POSITION(record.position))?;
-            self.0.SetBackgroundColor(COLORREF(record.background))?;
-        }
-        if let Some(show) = record.slideshow.as_ref().filter(|s| !s.items.is_empty()) {
-            return self.start_slideshow(show);
-        }
-        let mut last = Ok(());
-        for picture in &record.monitors {
-            let path = own(&picture.id).unwrap_or_default();
-            if let Err(e) = self.set(&picture.id, &path) {
-                last = Err(e);
+    /// Put mine back (D798), as far as Windows takes it: position, background colour, then the
+    /// slideshow or each monitor of `plan` (`journal::restore_plan`). Each failure is logged and
+    /// the rest go on. Returns how many of `plan` took, all of them for a slideshow.
+    pub fn restore(&self, record: &Record, plan: &[(String, String)]) -> usize {
+        let logged = |what: &str, done: Result<()>| {
+            if let Err(e) = &done {
+                log::info!("wallpaper: {what} didn't go back ({:#x})", e.code().0);
             }
+            done.is_ok()
+        };
+        logged("the position", unsafe { self.0.SetPosition(DESKTOP_WALLPAPER_POSITION(record.position)) });
+        logged("the colour", unsafe { self.0.SetBackgroundColor(COLORREF(record.background)) });
+        let show = record.slideshow.as_ref().filter(|s| !s.items.is_empty());
+        if show.is_some_and(|show| logged("the slideshow", self.start_slideshow(show))) {
+            return plan.len();
         }
-        last
+        plan.iter().filter(|(id, path)| logged("a monitor's picture", self.set(id, path))).count()
     }
 
     fn start_slideshow(&self, show: &Slideshow) -> Result<()> {

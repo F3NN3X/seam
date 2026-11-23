@@ -12,13 +12,16 @@ pub(super) struct Wallpapers {
     worker: Option<Worker>,
     /// What was last handed to the worker, so the same again is skipped.
     sent: Option<Vec<Want>>,
-    /// The switch that is running, `(id, scope)`: its pictures are up while its windows move (D794).
-    switching: Option<(String, Option<String>)>,
+    /// The switch that is running, `(id, scope, away)`: its pictures are up while its windows move
+    /// (D794). `away` are the screens it leaves to their own workspace.
+    switching: Option<(String, Option<String>, Vec<String>)>,
     /// What each screen shows, from the worker's last Apply.
     shown: Vec<Shown>,
     original: Original,
     /// Someone else changed the wallpaper: Seam leaves it until the next switch or screen change (D799).
     held: bool,
+    /// A quit asked for mine back: nothing is put up after it.
+    quitting: bool,
 }
 
 impl Wallpapers {
@@ -35,6 +38,7 @@ impl Wallpapers {
             shown: Vec::new(),
             original: Original::default(),
             held: false,
+            quitting: false,
         }
     }
 
@@ -56,19 +60,20 @@ fn wants(app: &App, desk: &seam::config::Desk) -> Vec<Want> {
 
 /// Hand the worker what each screen is to show, unless it is what it already has. With `switch`,
 /// as if that switch had ended, so the pictures change while its windows move: a one-screen
-/// switch changes its screen only (D794). Off, nothing is touched.
-pub(super) fn wallpaper_sync(app: &mut App, switch: Option<&Workspace>) {
-    if let Some(ws) = switch.filter(|ws| ws.id != SESSION_ID) {
-        app.wallpaper.switching = Some((ws.id.clone(), ws.scope.clone()));
+/// switch changes its screen only, and one that leaves `away` screens leaves their pictures (D794).
+/// Off, nothing is touched.
+pub(super) fn wallpaper_sync(app: &mut App, switch: Option<(&Workspace, &[String])>) {
+    if let Some((ws, away)) = switch.filter(|(ws, _)| ws.id != SESSION_ID) {
+        app.wallpaper.switching = Some((ws.id.clone(), ws.scope.clone(), away.to_vec()));
         app.wallpaper.held = false;
     }
-    if !app.cfg.wallpapers_enabled || app.wallpaper.held {
+    if !app.cfg.wallpapers_enabled || app.wallpaper.held || app.wallpaper.quitting {
         return;
     }
     let Some(desk) = app.cfg.desks.get(&app.sig) else { return };
     let ids: Vec<&str> = app.mons.iter().map(|m| m.id.as_str()).collect();
     let wants = match &app.wallpaper.switching {
-        Some((id, scope)) => wants(app, &wallpaper::after_switch(desk, id, scope.as_deref(), &ids)),
+        Some((id, scope, away)) => wants(app, &wallpaper::after_switch(desk, id, scope.as_deref(), &ids, away)),
         None => wants(app, desk),
     };
     if app.wallpaper.sent.as_ref() == Some(&wants) {
@@ -78,9 +83,12 @@ pub(super) fn wallpaper_sync(app: &mut App, switch: Option<&Workspace>) {
     app.wallpaper.send(Job::Apply(wants));
 }
 
-/// A switch ended, done or cancelled: what is in use now decides.
-pub(super) fn wallpaper_switched(app: &mut App) {
-    app.wallpaper.switching = None;
+/// The switch to `id` ended, done or cancelled: what is in use now decides. The late end of a
+/// switch a newer one replaced leaves the newer one's pictures up.
+pub(super) fn wallpaper_switched(app: &mut App, id: &str) {
+    if app.wallpaper.switching.as_ref().is_some_and(|(running, ..)| running == id) {
+        app.wallpaper.switching = None;
+    }
     wallpaper_sync(app, None);
 }
 
@@ -121,11 +129,12 @@ pub(super) fn wallpaper_changed_outside(app: &App) {
 
 /// A quit I asked for puts mine back, within the quit's budget (D798). The answer is waited for
 /// later; without one in time the journal stays for the next start.
-pub(super) fn wallpaper_quit(app: &App) -> Option<Receiver<bool>> {
+pub(super) fn wallpaper_quit(app: &mut App) -> Option<Receiver<bool>> {
     if !app.cfg.wallpapers_enabled {
         return None;
     }
     let (tx, rx) = channel();
+    app.wallpaper.quitting = true;
     app.wallpaper.send(Job::Restore(Some(tx)));
     Some(rx)
 }
@@ -175,6 +184,8 @@ pub(super) fn wallpaper_set(
     };
     desk.workspace_wallpapers.retain(|_, set| !set.is_empty());
     persist(app);
+    // A choice made here is one to show, whoever changed the wallpaper since (D799).
+    app.wallpaper.held = false;
     // Rendered now, so the first switch to it finds it in the cache (D795).
     if let (Some(picture), Some(i)) = (picture, connected) {
         let m = &app.mons[i];

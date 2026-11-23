@@ -383,11 +383,25 @@ fn send(
 /// After a duplicate is saved: the copy gets the source's pictures, one `wallpaper.set` after
 /// another, with no Undo of their own (the duplicate's covers them).
 pub fn copy_pictures(panel: &mut Panel, from: &str, to: String, window: &mut Window, cx: &mut Context<Panel>) {
+    let pictures = pictures_of(panel, from);
+    put_pictures(panel, to, pictures, window, cx);
+}
+
+/// The pictures a workspace sets, by screen, to give back later with `put_pictures`.
+pub fn pictures_of(panel: &Panel, id: &str) -> Vec<(String, Wallpaper)> {
     let desk = panel.config.desks.get(&desk_sig(panel));
-    let pictures: Vec<(String, Wallpaper)> = desk
-        .and_then(|d| d.workspace_wallpapers.get(from))
-        .map(|s| s.screens.clone().into_iter().collect())
-        .unwrap_or_default();
+    let set = desk.and_then(|d| d.workspace_wallpapers.get(id));
+    set.map(|s| s.screens.clone().into_iter().collect()).unwrap_or_default()
+}
+
+/// `wallpaper.set` for each picture, one after another, for workspace `to`.
+pub fn put_pictures(
+    panel: &mut Panel,
+    to: String,
+    pictures: Vec<(String, Wallpaper)>,
+    window: &mut Window,
+    cx: &mut Context<Panel>,
+) {
     copy_next(panel, to, pictures, window, cx);
 }
 

@@ -637,6 +637,27 @@ fn wallpaper_fields_round_trip() {
 }
 
 #[test]
+fn an_unknown_fit_reads_as_fill_and_keeps_the_file() {
+    let file = json!({ "enabled": false, "desks": { "sig": {
+        "name": "Home",
+        "workspaces": [{ "id": "w", "name": "Dev" }],
+        "wallpaper": { "screens": { "m": { "path": "C:\\a.jpg", "fit": "span" } } },
+        "workspace_wallpapers": { "w": { "screens": { "m": { "path": "C:\\b.jpg", "fit": 7 } } } },
+    } } });
+    let p = scratch("unknown_fit", file.to_string().as_bytes());
+    let c = Config::load_from(&p);
+    let set_aside = p.with_extension("json.corrupt").exists();
+    let _ = std::fs::remove_dir_all(p.parent().unwrap());
+    assert!(!set_aside);
+    assert!(!c.enabled);
+    let desk = &c.desks["sig"];
+    assert_eq!(desk.name, "Home");
+    assert_eq!(desk.workspaces.len(), 1);
+    assert_eq!(desk.wallpaper.screens["m"], Wallpaper { path: r"C:\a.jpg".into(), fit: Fit::Fill });
+    assert_eq!(desk.workspace_wallpapers["w"].screens["m"].fit, Fit::Fill);
+}
+
+#[test]
 fn scope_round_trips() {
     use crate::workspace::Workspace;
     let ws = Workspace { id: "w".into(), scope: Some(r"\\?\DISPLAY#B".into()), ..Workspace::default() };

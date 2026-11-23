@@ -624,7 +624,7 @@ unsafe fn on_destroy() {
         let mut wallpaper_back = None;
         if with_app(|a| a.release_on_exit).unwrap_or(false) {
             // Asked first, so the worker puts mine back while the rest of the quit runs (D798).
-            wallpaper_back = with_app(|a| wallpaper_quit(a)).flatten();
+            wallpaper_back = with_app(wallpaper_quit).flatten();
             wm::release_before_exit();
             // A quit the user asked for, the same signal as pins: not an update, a crash or a sign-out.
             if with_app(|a| a.cfg.zones.tiling_free_on_quit).unwrap_or(false) {

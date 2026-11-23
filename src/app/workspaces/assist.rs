@@ -12,7 +12,7 @@ fn stored(app: &App, id: &str) -> Option<Value> {
 /// Keep what Undo puts back, and say so. Undo is a click on the notice, as after a quick save.
 fn offer_undo(app: &mut App, saved: &Workspace, before: Option<Value>, from: Option<Vec<Option<usize>>>, what: &str) {
     let Some(after) = stored(app, &saved.id) else { return };
-    let in_use = app.workspace.clone();
+    let in_use = in_use_now(app);
     let until = Instant::now() + QUICK_UNDO_FOR;
     app.quick_undo = Some(QuickUndo {
         sig: app.sig.clone(),

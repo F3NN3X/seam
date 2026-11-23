@@ -375,8 +375,9 @@ struct QuickUndo {
     /// For each row now, the row of `before` it was, when an Update from screen removed
     /// rows: the place rows' windows and the live stamps follow it back.
     from: Option<Vec<Option<usize>>>,
-    /// The workspace in use before a created one took over.
-    in_use: Option<String>,
+    /// What was in use before a created workspace took over: the desk-wide one, the one before
+    /// it and each screen's own.
+    in_use: workspaces::InUse,
     until: Instant,
     /// A move also took a row out of another workspace.
     source: Option<MovedFrom>,

@@ -1,6 +1,7 @@
 //! The list of workspaces at the left of the page.
 
 use super::app_title;
+use super::numbers;
 use crate::icons::{self, Icons};
 use crate::pages::shortcuts;
 use crate::panel::Panel;
@@ -11,6 +12,7 @@ use gpui_kit::component::Icon;
 use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
+use seam::state::Screen;
 use seam::workspace::{Rule, Workspace};
 
 /// How many icons an item shows before "+n", as many as fit in 200 px with the "+n" after them.
@@ -118,8 +120,13 @@ fn icon_strip(i: usize, ws: &Workspace, icons: &Icons, p: Palette) -> Div {
 /// What a workspace item says about itself besides its name.
 pub(super) struct Marks {
     pub picked: bool,
+    /// The screen a one-screen workspace is for; none for all screens.
+    pub scope: Option<Scope>,
     /// Some while it's the workspace in use: how many of its windows moved, if that's known.
     pub active: Option<Moved>,
+    /// The screens, by Line Up number, an all-screens workspace is in use on when that's some of
+    /// them; empty when it holds every screen or is for one.
+    pub only: Vec<u32>,
     pub default: bool,
     /// A move just ended: the keyboard focus goes to this item, which now has the workspace the user holds.
     pub focus: bool,
@@ -134,17 +141,53 @@ pub(super) enum Moved {
     Count(usize),
 }
 
-/// "Active", "Active, moved" or "Active, 6 moved".
-fn active_words(moved: Moved) -> String {
-    match moved {
-        Moved::No => "Active".into(),
-        Moved::Some => "Active, moved".into(),
-        Moved::Count(n) => format!("Active, {n} moved"),
+/// The screen of a one-screen workspace.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum Scope {
+    /// Its Line Up number.
+    Screen(u32),
+    /// It isn't connected.
+    Gone,
+}
+
+/// The screen a workspace is for, `None` when it is for all screens.
+pub(super) fn scope_of(ws: &Workspace, screens: &[Screen]) -> Option<Scope> {
+    let id = ws.scope.as_deref()?;
+    Some(screens.iter().find(|s| s.id == id).map_or(Scope::Gone, |s| Scope::Screen(s.number)))
+}
+
+/// "Screen 2", or "Screen not connected".
+fn scope_words(scope: Scope) -> String {
+    match scope {
+        Scope::Screen(n) => format!("Screen {n}"),
+        Scope::Gone => "Screen not connected".into(),
     }
 }
 
+/// "Active", "Active, moved" or "Active, 6 moved"; "Active on screens 1 and 3, 2 moved" for an
+/// all-screens workspace that holds only `only`.
+fn active_words(moved: Moved, only: &[u32]) -> String {
+    let active = match only {
+        [] => "Active".to_string(),
+        [one] => format!("Active on screen {one}"),
+        many => format!("Active on screens {}", numbers(many)),
+    };
+    match moved {
+        Moved::No => active,
+        Moved::Some => format!("{active}, moved"),
+        Moved::Count(n) => format!("{active}, {n} moved"),
+    }
+}
+
+/// What the item says besides its name: "Screen 2, Active, 3 moved". `None` when it says nothing.
+fn meta_line(scope: Option<Scope>, active: Option<(Moved, &[u32])>) -> Option<String> {
+    let parts: Vec<String> =
+        scope.map(scope_words).into_iter().chain(active.map(|(moved, only)| active_words(moved, only))).collect();
+    (!parts.is_empty()).then(|| parts.join(", "))
+}
+
 /// The status on the item of the workspace in use: a dot and a word, as the editor's rows have.
-fn active_status(moved: Moved, p: Palette) -> AnyElement {
+fn active_status(moved: Moved, (scope, only): (Option<Scope>, &[u32]), p: Palette) -> AnyElement {
     let dot = if moved == Moved::No { ui::dot(p.positive, true) } else { ui::dot(p.text_muted, false) };
     div()
         .flex()
@@ -152,7 +195,11 @@ fn active_status(moved: Moved, p: Palette) -> AnyElement {
         .items_center()
         .gap(px(tokens::SPACE_8))
         .child(dot)
-        .child(text_style(div(), tokens::CAPTION).text_color(p.text_secondary).child(active_words(moved)))
+        .child(
+            text_style(div(), tokens::CAPTION)
+                .text_color(p.text_secondary)
+                .child(meta_line(scope, Some((moved, only))).unwrap_or_default()),
+        )
         .into_any_element()
 }
 
@@ -185,20 +232,26 @@ pub(super) fn item(
     let default =
         marks.default.then(|| text_style(div(), tokens::CAPTION).text_color(p.text_secondary).child("Default"));
     // The marks get a line of their own, so the name keeps the item's full width.
-    let meta = (marks.default || marks.active.is_some()).then(|| {
+    // The screen leads the line, which is one with the status while the workspace is in use.
+    let scope = marks
+        .scope
+        .filter(|_| marks.active.is_none())
+        .map(|scope| text_style(div(), tokens::CAPTION).text_color(p.text_secondary).child(scope_words(scope)));
+    let meta = (marks.default || marks.active.is_some() || marks.scope.is_some()).then(|| {
         div()
             .flex()
             .items_center()
             .gap(px(tokens::SPACE_8))
+            .children(scope)
             .children(default)
-            .children(marks.active.map(|moved| active_status(moved, p)))
+            .children(marks.active.map(|moved| active_status(moved, (marks.scope, &marks.only), p)))
     });
     let mut label = vec![ws.name.clone()];
     if marks.default {
         label.push("default".into());
     }
-    if let Some(moved) = marks.active {
-        label.push(active_words(moved).to_lowercase());
+    if let Some(line) = meta_line(marks.scope, marks.active.map(|moved| (moved, marks.only.as_slice()))) {
+        label.push(line.to_lowercase());
     }
     let name =
         text_style(div().min_w_0(), tokens::BODY).font_weight(FontWeight::MEDIUM).truncate().child(ws.name.clone());
@@ -298,7 +351,29 @@ pub(super) fn new_empty(
 
 #[cfg(test)]
 mod tests {
-    use super::{alt_target, number_after};
+    use super::{Moved, Scope, alt_target, meta_line, number_after};
+
+    #[test]
+    fn meta_line_names_the_screen() {
+        // A one-screen workspace starts with its screen, then today's words.
+        assert_eq!(
+            meta_line(Some(Scope::Screen(2)), Some((Moved::Count(3), &[]))).as_deref(),
+            Some("Screen 2, Active, 3 moved")
+        );
+        assert_eq!(meta_line(Some(Scope::Screen(2)), Some((Moved::No, &[]))).as_deref(), Some("Screen 2, Active"));
+        assert_eq!(meta_line(Some(Scope::Screen(1)), None).as_deref(), Some("Screen 1"));
+        assert_eq!(meta_line(Some(Scope::Gone), None).as_deref(), Some("Screen not connected"));
+        // An all-screens workspace holding only some screens says which.
+        assert_eq!(meta_line(None, Some((Moved::No, &[1, 3]))).as_deref(), Some("Active on screens 1 and 3"));
+        assert_eq!(
+            meta_line(None, Some((Moved::Count(2), &[1, 3]))).as_deref(),
+            Some("Active on screens 1 and 3, 2 moved")
+        );
+        assert_eq!(meta_line(None, Some((Moved::Some, &[2]))).as_deref(), Some("Active on screen 2, moved"));
+        // Holding every screen, or none in use, is as before.
+        assert_eq!(meta_line(None, Some((Moved::Some, &[]))).as_deref(), Some("Active, moved"));
+        assert_eq!(meta_line(None, None), None);
+    }
 
     #[test]
     fn alt_arrows_move_a_workspace_only_inside_the_list() {

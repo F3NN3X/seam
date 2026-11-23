@@ -96,7 +96,7 @@ pub(super) fn start_capture(
         closed: BTreeMap::new(),
         from_panel: false,
     });
-    if switcher::capture_added(capture_job(app), hwnd) {
+    if switcher::capture_added(capture_job(app, None), hwnd) {
         return Ok(());
     }
     app.capturing = None;
@@ -246,7 +246,7 @@ fn save(app: &mut App, job: &Capturing, read: Result<(Rule, isize), String>) -> 
     }
     // Which old row each row is now, for Undo: the row it added is none of them.
     let from = (0..saved.windows.len()).map(|i| (i < old.windows.len()).then_some(i)).collect();
-    let (in_use, until) = (app.workspace.clone(), Instant::now() + QUICK_UNDO_FOR);
+    let (in_use, until) = (in_use_now(app), Instant::now() + QUICK_UNDO_FOR);
     app.quick_undo = Some(QuickUndo {
         sig: app.sig.clone(),
         id: id.to_string(),

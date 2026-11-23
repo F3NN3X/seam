@@ -39,6 +39,8 @@ fn status_of(states: &[Option<RowState>]) -> Option<(Kind, String)> {
         (RowState::NotRunning, "not running", "Not running"),
         (RowState::CantMove, "can't move", "Can't move: runs as administrator"),
         (RowState::Off, "off", "Off"),
+        (RowState::OtherScreen, "other screen", "Other screen"),
+        (RowState::OtherWorkspace, "other workspace", "Other workspace"),
     ];
     let word = match states.as_slice() {
         [one] => words.iter().find(|(s, ..)| s == one).map(|(.., word)| word.to_string())?,
@@ -51,7 +53,14 @@ fn status_of(states: &[Option<RowState>]) -> Option<(Kind, String)> {
     let kind = match () {
         _ if count(RowState::CantMove) > 0 => Kind::Problem,
         _ if count(RowState::InPlace) == states.len() => Kind::Good,
-        _ if count(RowState::NotRunning) + count(RowState::Off) == states.len() => Kind::Off,
+        _ if count(RowState::NotRunning)
+            + count(RowState::Off)
+            + count(RowState::OtherScreen)
+            + count(RowState::OtherWorkspace)
+            == states.len() =>
+        {
+            Kind::Off
+        }
         _ => Kind::Waiting,
     };
     Some((kind, word))

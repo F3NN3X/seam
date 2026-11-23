@@ -1081,6 +1081,14 @@ On 2 or more screens, with workspace X for all screens in use and workspace Y wi
 - [ ] **Default.** `workspace.set_default` with Y's id answers "Only a workspace for all screens can be the default".
 - [ ] **Copy to a new desk.** Copy the workspaces to a desk with as many screens: Y's scope is the screen in the same place.
 - [ ] **Restart.** Quit and start Seam: screen 2 still has Y in use and screen 1 X, and no window moves.
+- [ ] **Update from screen.** With Y scoped to screen 2, a row of Y on screen 1 and its app closed, press **Update from screen** on Y: only screen 2's windows are saved, the row on screen 1 is as it was, and with "Apps that aren't open" set to Remove it is not offered and not removed. The Zones section keeps screen 1's layout.
+- [ ] **Quick save per screen.** With the pointer on screen 2 and Y in use there, the **Save windows to the active workspace** shortcut saves screen 2's windows into Y; with the pointer on screen 1 it saves into X (all screens). `workspace.quick_save` with `{"screen":2}` does the same as the first, and `{"screen":0}` is refused. With nothing in use on that screen it makes a new workspace for all screens.
+- [ ] **Quick save Undo.** With Y in use on screen 2, let a quick save make a new workspace, then click the notice to undo: the new workspace is gone, and Y is in use on screen 2 again (the list says "Screen 2, Active").
+- [ ] **Header and Note.** Y's header says "Screen 2 only. Zones on screen 2". Move one of its rows to screen 1: its status is **Other screen**, and a note above the apps says "1 app is on another screen, so switching leaves it where it is" with **Move them to screen 2**. Press it: the row is on screen 2 and the notification offers Undo. An all-screens row on screen 2 while Y is in use there shows **Other workspace**. With Y's screen unplugged the header says "Its screen isn't connected".
+- [ ] **List meta.** The list says "Screen 2, Active" for Y while it is in use, "Screen 2, Active, 3 moved" after three of its windows moved, and "Screen 2" when it isn't. X, in use on screen 1 only, says "Active on screen 1", and once Y is no longer in use on screen 2 it says "Active".
+- [ ] **Set as default.** On Y's **...** menu, **Set as default** is dimmed, and its tooltip says "Only a workspace for all screens can be the default".
+- [ ] **Tray.** Y's item says "Screen 2" before its shortcut. With X in use on screen 1 and Y on screen 2, both items are checked, not one radio item; with one in use, it is the radio item. Y with its screen unplugged is greyed and says "Screen not connected". The restore offer after a screens change says "Screens changed" and "Restore 2 workspaces? Click to restore".
+- [ ] **Stream Deck.** A workspace key for Y is lit while Y is in use on screen 2, dotted while Y has moved, and a key for X is lit while X is in use on screen 1.
 
 ### Close and minimize a workspace
 

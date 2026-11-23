@@ -1378,3 +1378,66 @@ fn a_rule_for_the_workspace_in_use_isnt_owned_away() {
     assert!(!owned_away(&sends(None), Some("w1"), false));
     assert!(!owned_away(&sends(Some("w2")), None, false));
 }
+
+fn on_screen(mut rule: Rule, monitor: &str) -> Rule {
+    rule.monitor = monitor.into();
+    rule
+}
+
+#[test]
+fn update_from_screen_keeps_rows_on_other_screens_and_never_counts_them_as_missing() {
+    // Y is for screen s1. Slack is on s2 and closed there, Spotify is on s1 and closed.
+    let (np, slack, spotify) = ("notepad.exe", r"C:\Slack.exe", r"C:\Spotify.exe");
+    let rows = vec![
+        on_screen(rule(np, None, "", "Notes"), "s1"),
+        on_screen(rule(slack, None, "", ""), "s2"),
+        on_screen(rule(spotify, None, "", ""), "s1"),
+    ];
+    let old = Workspace { windows: rows.clone(), scope: Some("s1".into()), ..Workspace::default() };
+    // The capture saw only s1's windows.
+    let fresh = vec![on_screen(rule(np, None, "", "Notes"), "s1")];
+    let none = HashSet::new();
+    assert_eq!(review::not_open(&old, &fresh, &[], &none, &[]), [2]);
+    let merged = merge_capture(&old, fresh.clone(), &[], &none, &[], &remove);
+    assert_eq!((merged.removed, merged.turned_off), (1, 0));
+    let kept: Vec<&str> = merged.windows.iter().map(|r| r.exe.as_str()).collect();
+    assert_eq!(kept, [np, slack]);
+    // The row on s2 is as it was, down to its stack and focus.
+    assert_eq!(merged.windows[1], rows[1]);
+    assert_eq!(merged.from, [Some(0), Some(1)]);
+    // The same capture of an All-screens workspace counts Slack as missing too.
+    let wide = Workspace { scope: None, ..old };
+    assert_eq!(review::not_open(&wide, &fresh, &[], &none, &[]), [1, 2]);
+}
+
+#[test]
+fn a_row_on_another_screen_takes_no_window_from_the_capture_of_its_screen() {
+    // Two Chrome rows, the first on s2: the one window on s1 belongs to the second row.
+    let chrome = r"C:\Chrome.exe";
+    let old = Workspace {
+        windows: vec![on_screen(rule(chrome, None, "", "A"), "s2"), on_screen(rule(chrome, None, "", "B"), "s1")],
+        scope: Some("s1".into()),
+        ..Workspace::default()
+    };
+    let mut moved = on_screen(rule(chrome, None, "", "B"), "s1");
+    moved.target = Target::Zone { zone: 2, span_to: None };
+    let merged = merge_capture(&old, vec![moved], &[], &HashSet::new(), &[], &keep);
+    assert_eq!(merged.windows.len(), 2);
+    assert_eq!(merged.windows[0], old.windows[0]);
+    assert_eq!(merged.windows[1].target, Target::Zone { zone: 2, span_to: None });
+    assert_eq!(merged.rows, [1]);
+}
+
+#[test]
+fn a_capture_that_finds_nothing_of_the_screen_changes_nothing() {
+    let old = Workspace {
+        windows: vec![
+            on_screen(rule("notepad.exe", None, "", ""), "s1"),
+            on_screen(rule(r"C:\Slack.exe", None, "", ""), "s2"),
+        ],
+        scope: Some("s1".into()),
+        ..Workspace::default()
+    };
+    let fresh = vec![on_screen(rule("calc.exe", None, "", ""), "s1")];
+    assert!(review::not_open(&old, &fresh, &[], &HashSet::new(), &[]).is_empty());
+}

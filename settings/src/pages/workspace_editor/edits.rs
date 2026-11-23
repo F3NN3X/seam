@@ -216,6 +216,46 @@ pub(super) fn send_to_screen(
     });
 }
 
+/// The rows of a one-screen workspace that are on other screens, in row order (D788).
+pub fn rows_elsewhere(ws: &Workspace) -> Vec<usize> {
+    let elsewhere = |r: &Rule| !workspace::in_scope(r, ws.scope.as_deref());
+    ws.windows.iter().enumerate().filter(|(_, r)| elsewhere(r)).map(|(i, _)| i).collect()
+}
+
+/// The note above the apps: "2 apps are on other screens, so switching leaves them where they are".
+pub fn other_screens_note(count: usize) -> String {
+    match count {
+        1 => "1 app is on another screen, so switching leaves it where it is".into(),
+        n => format!("{n} apps are on other screens, so switching leaves them where they are"),
+    }
+}
+
+/// Bring the rows on other screens onto the workspace's screen, with Undo. Each goes as a window
+/// added there would (D788): a zone the screen doesn't have becomes full screen.
+pub fn bring_to_screen(panel: &mut Panel, id: &str, window: &mut Window, cx: &mut Context<Panel>) {
+    let Some(ws) = by_id(panel, id) else { return };
+    let Some(screen) = ws.scope.clone() else { return };
+    let Some(number) = panel.state.as_ref().and_then(|s| s.screens.iter().find(|s| s.id == screen)).map(|s| s.number)
+    else {
+        return;
+    };
+    let sig = desk_sig(panel);
+    let desk = || panel.config.desks.get(&sig).and_then(|d| d.zones.get(&screen)).and_then(zones::layout_of);
+    // The workspace's own layout for the screen, else the desk's, as a switch gives it.
+    let layout = match ws.zones.get(&screen).map(workspace::screen_layout) {
+        Some(Some(own)) => own,
+        _ => desk(),
+    };
+    let zone_count = layout.map_or(0, |l| zones::leaf_count(&l.tree));
+    let count = rows_elsewhere(&ws).len();
+    let note = format!("Moved {} to screen {number}", workspace::report::apps(count));
+    update(panel, id, Some(note), window, cx, |ws| {
+        for i in rows_elsewhere(&ws.clone()) {
+            ws.windows[i] = workspace::retarget(&ws.windows[i], &screen, zone_count);
+        }
+    });
+}
+
 /// The workspace without the windows at `taken`.
 fn without(ws: &Workspace, taken: &[usize]) -> Workspace {
     let windows = ws.windows.iter().enumerate().filter(|(i, _)| !taken.contains(i)).map(|(_, r)| r.clone());
@@ -327,4 +367,29 @@ pub(super) fn where_it_is(panel: &mut Panel, ws: &Workspace, i: usize, window: &
             window.push_notification(refusal(&format!("Where {title} goes stays as it was"), &error_text(&e)), cx)
         }
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{other_screens_note, rows_elsewhere};
+    use seam::workspace::{Rule, Workspace};
+
+    fn row(monitor: &str) -> Rule {
+        Rule { exe: "a.exe".into(), monitor: monitor.into(), ..Rule::default() }
+    }
+
+    #[test]
+    fn note_counts_rows_on_other_screens() {
+        let ws = Workspace {
+            windows: vec![row("s1"), row("s2"), row("s3"), row("s1")],
+            scope: Some("s1".into()),
+            ..Workspace::default()
+        };
+        assert_eq!(rows_elsewhere(&ws), [1, 2]);
+        assert_eq!(other_screens_note(2), "2 apps are on other screens, so switching leaves them where they are");
+        assert_eq!(other_screens_note(1), "1 app is on another screen, so switching leaves it where it is");
+        // A workspace for all screens has no row on another screen.
+        let wide = Workspace { scope: None, ..ws };
+        assert!(rows_elsewhere(&wide).is_empty());
+    }
 }

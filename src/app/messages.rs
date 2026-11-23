@@ -501,7 +501,7 @@ unsafe fn on_hotkey(id: i32) {
                 with_app(|a| set_spotlight(a, None));
             }
             HOTKEY_QUICK_SAVE => {
-                if let Some(Some(Err(e))) = with_app(|a| quick_save(a, None)) {
+                if let Some(Some(Err(e))) = with_app(|a| quick_save(a, OnScreen::Pointer, None)) {
                     log::info!("quick save hotkey: {}", e.message);
                 }
             }

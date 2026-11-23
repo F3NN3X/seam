@@ -22,7 +22,7 @@ pub(super) fn start_session_capture(app: &mut App) {
     if !app.cfg.keeps_session(&app.sig) || app.session_capture.is_some() {
         return;
     }
-    if switcher::capture_session(capture_job(app)) {
+    if switcher::capture_session(capture_job(app, None)) {
         app.session_capture = Some(app.sig.clone());
     }
 }

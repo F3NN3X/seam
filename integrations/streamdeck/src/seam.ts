@@ -21,10 +21,15 @@ export type SeamState = {
 		name?: string;
 		primary?: boolean;
 		rect?: { x: number; y: number; w: number; h: number };
+		/** The workspace in use on this screen: its own, else the desk-wide one. */
+		workspace?: WorkspaceRef | null;
 	}[];
-	/** `drifted`: a window of it was moved or minimized since, so Snap back has work to do. */
-	workspace: { id: string; name: string; drifted?: boolean } | null;
+	/** The workspace the tray and the API mean when no screen is named. */
+	workspace: WorkspaceRef | null;
 };
+
+/** `drifted`: a window of it was moved or minimized since, so Snap back has work to do. */
+export type WorkspaceRef = { id: string; name: string; drifted?: boolean };
 
 export type Workspace = { id: string; name: string; active: boolean };
 

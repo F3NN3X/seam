@@ -96,9 +96,9 @@ pub const TOOLS: &[Tool] = &[
     Tool {
         name: "seam_quick_save",
         method: "workspace.quick_save",
-        about: "Save the windows on screen into the workspace in use, or into a new workspace if none is in use. Needs \"Let assistants change workspaces\" in Seam. The user can undo it from Seam's notice for a few seconds.",
+        about: "Save the windows on screen into the workspace in use, or into a new workspace for all screens if none is in use. With screen, the workspace in use on that screen. A workspace for one screen saves only the windows on its screen. Needs \"Let assistants change workspaces\" in Seam. The user can undo it from Seam's notice for a few seconds.",
         kind: Kind::Act,
-        args: &[],
+        args: &[SCREEN],
         required: &[],
     },
     Tool {

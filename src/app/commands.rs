@@ -219,8 +219,8 @@ pub(super) fn run_command(app: &mut App, queued: Queued) {
         },
         Command::WorkspaceCancel => Ok(json!({ "cancelled": switcher::cancel() })),
         Command::WorkspaceLastSwitch { id } => Ok(last_switch(app, &id)),
-        Command::WorkspaceQuickSave => {
-            if let Some(refusal) = quick_save(app, Some(reply.clone())) {
+        Command::WorkspaceQuickSave { screen } => {
+            if let Some(refusal) = quick_save(app, on(screen), Some(reply.clone())) {
                 let _ = reply.send(refusal);
             }
             return;

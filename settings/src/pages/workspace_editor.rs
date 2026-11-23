@@ -27,7 +27,7 @@ mod groups;
 mod screen_zones;
 mod table;
 
-pub use edits::{add_app, update};
+pub use edits::{add_app, bring_to_screen, other_screens_note, rows_elsewhere, update};
 use edits::{
     change_item, exe_name, move_rows, never_include, remove_rows, seconds, send_to_screen, set_delay, set_open_with,
     update_row, update_rows, where_it_is,

@@ -10,10 +10,11 @@ use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::input::Input;
 use gpui_kit::component::menu::{DropdownMenu, PopupMenuItem};
 use gpui_kit::component::notification::Notification;
+use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::component::{Icon, WindowExt};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
-use list::{Marks, Moved};
+use list::{Marks, Moved, scope_of};
 use seam::state::Screen;
 use seam::workspace::{self, Export, RowState, Rule, ScreenInfo, Target, Workspace};
 use serde_json::{Value, json};
@@ -338,7 +339,7 @@ fn moved_windows(panel: &Panel, ws: &Workspace) -> usize {
 }
 
 /// "1, 2 and 4".
-fn numbers(of: &[u32]) -> String {
+pub(super) fn numbers(of: &[u32]) -> String {
     let words: Vec<String> = of.iter().map(u32::to_string).collect();
     match words.as_slice() {
         [] => String::new(),
@@ -349,9 +350,15 @@ fn numbers(of: &[u32]) -> String {
 
 /// The line under the name: which screens have zones, and how many windows have moved.
 fn summary(panel: &Panel, ws: &Workspace) -> String {
-    let screens = panel.state.as_ref().map(|s| s.screens.clone()).unwrap_or_default();
-    let mut used: Vec<u32> = ws
-        .windows
+    let screens = panel.state.as_ref().map(|s| s.screens.as_slice()).unwrap_or_default();
+    header_words(ws, screens, moved_windows(panel, ws))
+}
+
+/// `summary` for `moved` windows that aren't where the workspace puts them. A one-screen
+/// workspace counts the zones and windows on its screen only, since its other rows are left alone (D788).
+fn header_words(ws: &Workspace, screens: &[Screen], moved: usize) -> String {
+    let rows: Vec<&Rule> = ws.windows.iter().filter(|r| workspace::in_scope(r, ws.scope.as_deref())).collect();
+    let mut used: Vec<u32> = rows
         .iter()
         .filter(|r| matches!(r.target, Target::Zone { .. }))
         .filter_map(|r| screens.iter().find(|s| s.id == r.monitor).map(|s| s.number))
@@ -359,26 +366,39 @@ fn summary(panel: &Panel, ws: &Workspace) -> String {
     used.sort_unstable();
     used.dedup();
     let zones = match used.as_slice() {
-        [] if ws.windows.is_empty() => "No windows yet".to_string(),
-        [] => format!("{} window{}", ws.windows.len(), if ws.windows.len() == 1 { "" } else { "s" }),
+        [] if rows.is_empty() => "No windows yet".to_string(),
+        [] => format!("{} window{}", rows.len(), if rows.len() == 1 { "" } else { "s" }),
         [only] => format!("Zones on screen {only}"),
         many => format!("Zones on screens {}", numbers(many)),
     };
-    match moved_windows(panel, ws) {
+    // A one-screen workspace says so first (D781); its zones and moved windows follow.
+    let zones = match ws.scope.as_deref().map(|id| screens.iter().find(|s| s.id == id)) {
+        Some(Some(screen)) => format!("Screen {} only. {zones}", screen.number),
+        Some(None) => return "Its screen isn't connected".into(),
+        None => zones,
+    };
+    match moved {
         0 => zones,
         1 => format!("{zones}. 1 window isn't where this workspace puts it"),
         n => format!("{zones}. {n} windows aren't where this workspace puts them"),
     }
 }
 
-/// Whether this is the workspace in use.
-fn in_use(panel: &Panel, ws: &Workspace) -> bool {
-    panel.state.as_ref().and_then(|s| s.workspace.as_ref()).is_some_and(|w| w.id == ws.id)
+/// The screens, by Line Up number, this workspace is in use on.
+fn held_on(panel: &Panel, ws: &Workspace) -> Vec<u32> {
+    let screens = panel.state.as_ref().map(|s| s.screens.as_slice()).unwrap_or_default();
+    screens.iter().filter(|s| s.workspace.as_ref().is_some_and(|w| w.id == ws.id)).map(|s| s.number).collect()
 }
 
-/// Move the windows of the workspace in use back to where it puts them.
-fn put_back(panel: &mut Panel, count: usize, window: &mut Window, cx: &mut Context<Panel>) {
-    panel.call("workspace.snap_back", json!({}), window, cx, move |_, result, window, cx| match result {
+/// Whether this is a workspace in use, on any screen.
+fn in_use(panel: &Panel, ws: &Workspace) -> bool {
+    !held_on(panel, ws).is_empty()
+}
+
+/// Move the windows of the workspace in use on `screen` back to where it puts them.
+fn put_back(panel: &mut Panel, screen: Option<u32>, count: usize, window: &mut Window, cx: &mut Context<Panel>) {
+    let params = screen.map_or_else(|| json!({}), |screen| json!({ "screen": screen }));
+    panel.call("workspace.snap_back", params, window, cx, move |_, result, window, cx| match result {
         Ok(_) => {
             let said = match count {
                 0 => "Put windows back".to_string(),
@@ -411,8 +431,9 @@ fn primary_action(panel: &Panel, ws: &Workspace, cx: &mut Context<Panel>) -> But
     let drifted = moved > 0 || workspace_editor::zones_moved(panel, ws);
     let ws = ws.clone();
     if in_use(panel, &ws) && drifted {
+        let screen = held_on(panel, &ws).first().copied();
         return ui::primary("snap-back", "Put windows back")
-            .on_click(cx.listener(move |panel, _, window, cx| put_back(panel, moved, window, cx)));
+            .on_click(cx.listener(move |panel, _, window, cx| put_back(panel, screen, moved, window, cx)));
     }
     ui::primary("switch-workspace", "Switch now")
         .on_click(cx.listener(move |panel, _, window, cx| switch_to(panel, &ws, window, cx)))
@@ -425,6 +446,7 @@ fn detail(panel: &mut Panel, ws: Workspace, window: &mut Window, cx: &mut Contex
     let mut rows = Vec::new();
     rows.extend(problems_note(panel, &ws, p, cx));
     rows.push(header);
+    rows.extend(other_screens_note(&ws, panel, p, cx));
     rows.extend(workspace_editor::rows(panel, &ws, window, cx));
     let (id, item_for) = (ws.id.clone(), ws.id.clone());
     let add_app: app_picker::Add =
@@ -475,6 +497,28 @@ fn problems_note(panel: &Panel, ws: &Workspace, p: Palette, cx: &mut Context<Pan
             .px(px(tokens::SPACE_16))
             .py(px(tokens::SPACE_12))
             .child(ui::note(text, Some(again), p))
+            .into_any_element(),
+    )
+}
+
+/// The note above the apps of a one-screen workspace when some are on other screens (D788): a
+/// switch leaves them where they are, and one button brings them to the workspace's screen.
+fn other_screens_note(ws: &Workspace, panel: &Panel, p: Palette, cx: &mut Context<Panel>) -> Option<AnyElement> {
+    let count = workspace_editor::rows_elsewhere(ws).len();
+    let screens = panel.state.as_ref().map(|s| s.screens.as_slice()).unwrap_or_default();
+    let number = screens.iter().find(|s| ws.scope.as_deref() == Some(s.id.as_str()))?.number;
+    if count == 0 {
+        return None;
+    }
+    let id = ws.id.clone();
+    let move_them = ui::secondary("move-to-screen", format!("Move them to screen {number}"), cx)
+        .on_click(cx.listener(move |panel, _, window, cx| workspace_editor::bring_to_screen(panel, &id, window, cx)));
+    let text = workspace_editor::other_screens_note(count);
+    Some(
+        div()
+            .px(px(tokens::SPACE_16))
+            .py(px(tokens::SPACE_12))
+            .child(ui::note(text, Some(move_them), p))
             .into_any_element(),
     )
 }
@@ -549,14 +593,28 @@ fn more_button(panel: &Panel, ws: &Workspace, cx: &mut Context<Panel>) -> impl I
             let (alongside, alongside_id) = (view.clone(), more_ws.id.clone());
             let (defaulting, default_to) = (view.clone(), (!is_default).then(|| more_ws.id.clone()));
             let default_label = if is_default { "Stop being the default" } else { "Set as default" };
+            // Only a workspace for all screens can be the default, so a one-screen one says why it can't.
+            let for_one_screen = more_ws.scope.is_some();
             let menu = menu
                 .item(PopupMenuItem::new("Rename").on_click(move |_, _, cx| {
                     let _ = rename.update(cx, start_naming);
                 }))
-                .item(PopupMenuItem::new(default_label).on_click(move |_, window, cx| {
-                    let id = default_to.clone();
-                    let _ = defaulting.update(cx, |panel, cx| set_default(panel, id, window, cx));
-                }))
+                .item(if for_one_screen {
+                    let why = "Only a workspace for all screens can be the default";
+                    PopupMenuItem::element(move |_, _| {
+                        div()
+                            .id("set-default")
+                            .child(default_label)
+                            .opacity(tokens::OPACITY_DISABLED)
+                            .tooltip(move |window, cx| Tooltip::new(why).build(window, cx))
+                    })
+                    .disabled(true)
+                } else {
+                    PopupMenuItem::new(default_label).on_click(move |_, window, cx| {
+                        let id = default_to.clone();
+                        let _ = defaulting.update(cx, |panel, cx| set_default(panel, id, window, cx));
+                    })
+                })
                 .item(PopupMenuItem::new("Duplicate").on_click(move |_, window, cx| {
                     let ws = to_copy.clone();
                     let _ = copying.update(cx, |panel, cx| duplicate(panel, &ws, window, cx));
@@ -708,7 +766,7 @@ pub fn render(panel: &mut Panel, window: &mut Window, cx: &mut Context<Panel>) -
         .on_click(cx.listener(|panel, _, window, cx| capture(panel, window, cx)));
     let rules: Vec<Rule> = list.iter().flat_map(|ws| ws.windows.iter().cloned()).collect();
     icons::request(panel, &rules, cx);
-    let active = panel.state.as_ref().and_then(|s| s.workspace.as_ref()).map(|w| (w.id.clone(), w.drifted));
+    let screens = panel.state.as_ref().map(|s| s.screens.clone()).unwrap_or_default();
     let default = default_id(panel);
     let current = selected(panel);
     // A workspace on show for the first time asks how its apps are doing.
@@ -722,7 +780,10 @@ pub fn render(panel: &mut Panel, window: &mut Window, cx: &mut Context<Panel>) -
         .enumerate()
         .map(|(i, ws)| {
             let picked = current.as_ref().is_some_and(|c| c.id == ws.id);
-            let moved = active.as_ref().filter(|(id, _)| *id == ws.id).map(|(_, drifted)| match (drifted, picked) {
+            // In use on any screen, and drifted when what is in use there says so.
+            let held = held_on(panel, ws);
+            let drifted = screens.iter().filter_map(|s| s.workspace.as_ref()).any(|w| w.id == ws.id && w.drifted);
+            let moved = (!held.is_empty()).then(|| match (drifted, picked) {
                 (false, _) => Moved::No,
                 (true, true) => match moved_windows(panel, ws) {
                     0 => Moved::Some,
@@ -730,8 +791,11 @@ pub fn render(panel: &mut Panel, window: &mut Window, cx: &mut Context<Panel>) -
                 },
                 (true, false) => Moved::Some,
             });
+            // An all-screens workspace that holds only some of the screens says which.
+            let only = if ws.scope.is_none() && held.len() < screens.len() { held } else { Vec::new() };
             let focus = panel.focus_workspace.as_deref() == Some(ws.id.as_str());
-            let marks = Marks { picked, active: moved, default: default.as_deref() == Some(ws.id.as_str()), focus };
+            let default = default.as_deref() == Some(ws.id.as_str());
+            let marks = Marks { picked, scope: scope_of(ws, &screens), active: moved, only, default, focus };
             list::item((i, count), ws, &panel.icons, marks, p, window, cx)
         })
         .collect();
@@ -763,4 +827,54 @@ pub fn render(panel: &mut Panel, window: &mut Window, cx: &mut Context<Panel>) -
         .child(header.child(capture))
         .child(body)
         .child(sections::all_section(panel, p, window, cx))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::header_words;
+    use seam::state::{Screen, ScreenRect};
+    use seam::workspace::{Rule, Target, Workspace};
+
+    fn screen(number: u32, id: &str) -> Screen {
+        Screen {
+            number,
+            id: id.into(),
+            name: String::new(),
+            primary: false,
+            rect: ScreenRect::default(),
+            layout: None,
+            workspace: None,
+        }
+    }
+
+    fn zone_row(monitor: &str) -> Rule {
+        Rule { monitor: monitor.into(), target: Target::Zone { zone: 1, span_to: None }, ..Rule::default() }
+    }
+
+    #[test]
+    fn the_header_counts_the_zones_of_its_screen_only() {
+        let screens = [screen(1, "s1"), screen(2, "s2")];
+        // Y is for screen 2 and keeps a zone row on screen 1.
+        let ws = Workspace {
+            windows: vec![zone_row("s1"), zone_row("s2")],
+            scope: Some("s2".into()),
+            ..Workspace::default()
+        };
+        assert_eq!(header_words(&ws, &screens, 0), "Screen 2 only. Zones on screen 2");
+        // With no zone row on its screen, it counts the windows there.
+        let rects = Workspace {
+            windows: vec![zone_row("s1"), Rule { monitor: "s2".into(), ..Rule::default() }],
+            scope: Some("s2".into()),
+            ..Workspace::default()
+        };
+        assert_eq!(
+            header_words(&rects, &screens, 1),
+            "Screen 2 only. 1 window. 1 window isn't where this workspace puts it"
+        );
+        // All screens names every screen with a zone.
+        let wide = Workspace { scope: None, ..ws };
+        assert_eq!(header_words(&wide, &screens, 0), "Zones on screens 1 and 2");
+        let gone = Workspace { scope: Some("s9".into()), ..wide };
+        assert_eq!(header_words(&gone, &screens, 0), "Its screen isn't connected");
+    }
 }

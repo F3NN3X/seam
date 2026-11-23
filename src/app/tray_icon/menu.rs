@@ -23,24 +23,59 @@ fn with_hint(label: &str, hint: Option<String>) -> String {
     }
 }
 
+/// One workspace's item in the menu.
+#[derive(Debug, PartialEq, Eq)]
+struct Item {
+    label: String,
+    /// Its screen isn't connected, so it can't be switched to (D787).
+    grayed: bool,
+    /// One of several workspaces in use, so each is checked instead of one radio item (§10).
+    checked: bool,
+}
+
+/// The items for `workspaces`. A one-screen workspace says its screen before its shortcut, then
+/// "moved" when it is in use and its windows moved. `screen` gives a screen's Line Up number, none
+/// when it isn't connected; `drifted` says a workspace's windows moved.
+fn workspace_items(
+    workspaces: &[Workspace],
+    in_use: &[String],
+    drifted: &dyn Fn(&str) -> bool,
+    screen: &dyn Fn(&str) -> Option<u32>,
+) -> Vec<Item> {
+    workspaces
+        .iter()
+        .map(|ws| {
+            let held = in_use.contains(&ws.id);
+            let own = ws.scope.as_deref().map(screen);
+            let screen_hint = own.map(|n| n.map_or("Screen not connected".to_string(), |n| format!("Screen {n}")));
+            let moved = (held && drifted(&ws.id)).then(|| "moved".to_string());
+            let hints: Vec<String> = screen_hint.into_iter().chain(hint(&ws.hotkey)).chain(moved).collect();
+            let label = with_hint(&ws.name.replace('&', "&&"), (!hints.is_empty()).then(|| hints.join(", ")));
+            Item { label, grayed: own == Some(None), checked: in_use.len() > 1 && held }
+        })
+        .collect()
+}
+
 /// The workspaces of the desk as radio items, the one in use marked and hinted when its windows
-/// have moved. Ids run on from `ID_WORKSPACE`.
+/// have moved; with several in use, each is checked instead. Ids run on from `ID_WORKSPACE`.
 unsafe fn add_workspaces(app: &App, menu: HMENU, workspaces: &[Workspace]) {
     // The one the tray's items act on (D785): with nothing one-screen in use, the desk's.
     let meant = meant(app, None);
     let active = meant.as_deref();
+    let in_use = in_use_ids(app);
+    let drifted = |id: &str| app.drifted.get(id) == Some(&true);
+    let screen = |id: &str| app.mons.iter().position(|m| m.id == id).map(|i| i as u32 + 1);
+    let items = workspace_items(workspaces, &in_use, &drifted, &screen);
     unsafe {
         add_text(menu, MF_STRING | MF_GRAYED, 0, "Workspace");
-        for (id, ws) in (ID_WORKSPACE..).zip(workspaces) {
-            let name = ws.name.replace('&', "&&");
-            let drifted = app.drifted.get(&ws.id) == Some(&true);
-            let moved = (active == Some(ws.id.as_str()) && drifted).then(|| "moved".to_string());
-            // The workspace's own shortcut stays, ahead of the moved hint.
-            let hints: Vec<String> = hint(&ws.hotkey).into_iter().chain(moved).collect();
-            let label = with_hint(&name, (!hints.is_empty()).then(|| hints.join(", ")));
-            add_text(menu, MF_STRING, id, &label);
+        for (id, item) in (ID_WORKSPACE..).zip(&items) {
+            let flags = MF_STRING
+                | if item.grayed { MF_GRAYED } else { MF_ENABLED }
+                | if item.checked { MF_CHECKED } else { MF_UNCHECKED };
+            add_text(menu, flags, id, &item.label);
         }
-        if let Some(at) = workspaces.iter().position(|w| active == Some(w.id.as_str())) {
+        let radio = in_use.len() <= 1;
+        if let Some(at) = workspaces.iter().position(|w| active == Some(w.id.as_str())).filter(|_| radio) {
             let last = ID_WORKSPACE + workspaces.len() - 1;
             let _ =
                 CheckMenuRadioItem(menu, ID_WORKSPACE as u32, last as u32, (ID_WORKSPACE + at) as u32, MF_BYCOMMAND.0);
@@ -199,5 +234,60 @@ pub(in crate::app) fn show_menu(app: &mut App) {
             }
             _ => {}
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn ws(id: &str, scope: Option<&str>, hotkey: Option<&str>) -> Workspace {
+        Workspace {
+            id: id.into(),
+            name: id.to_uppercase(),
+            scope: scope.map(Into::into),
+            hotkey: hotkey.map(Into::into),
+            ..Workspace::default()
+        }
+    }
+
+    fn items(list: &[Workspace], in_use: &[&str], moved: &[&str]) -> Vec<Item> {
+        let in_use: Vec<String> = in_use.iter().map(|s| s.to_string()).collect();
+        let screen = |id: &str| ["s1", "s2"].iter().position(|s| *s == id).map(|i| i as u32 + 1);
+        workspace_items(list, &in_use, &|id| moved.contains(&id), &screen)
+    }
+
+    #[test]
+    fn a_one_screen_workspace_says_its_screen_before_its_shortcut() {
+        let list = [ws("a", None, Some("Ctrl+1")), ws("y", Some("s2"), Some("Ctrl+2")), ws("z", Some("s1"), None)];
+        let got = items(&list, &["a"], &[]);
+        assert_eq!(got[0].label, "A\tCtrl 1");
+        assert_eq!(got[1].label, "Y\tScreen 2, Ctrl 2");
+        assert_eq!(got[2].label, "Z\tScreen 1");
+        assert!(got.iter().all(|i| !i.grayed));
+    }
+
+    #[test]
+    fn a_workspace_whose_screen_is_gone_is_greyed_with_a_hint() {
+        let got = items(&[ws("y", Some("s9"), None), ws("a", None, None)], &["a"], &[]);
+        assert_eq!(got[0], Item { label: "Y\tScreen not connected".into(), grayed: true, checked: false });
+        assert!(!got[1].grayed);
+    }
+
+    #[test]
+    fn several_in_use_are_checked_and_one_is_left_to_the_radio_item() {
+        let list = [ws("a", None, None), ws("y", Some("s2"), None), ws("z", Some("s1"), None)];
+        let several: Vec<bool> = items(&list, &["a", "y"], &[]).iter().map(|i| i.checked).collect();
+        assert_eq!(several, [true, true, false]);
+        let one: Vec<bool> = items(&list, &["a"], &[]).iter().map(|i| i.checked).collect();
+        assert_eq!(one, [false, false, false]);
+    }
+
+    #[test]
+    fn moved_goes_after_the_screen_and_the_shortcut_and_only_for_one_in_use() {
+        let list = [ws("y", Some("s2"), Some("Ctrl+2")), ws("z", Some("s1"), None)];
+        let got = items(&list, &["y"], &["y", "z"]);
+        assert_eq!(got[0].label, "Y\tScreen 2, Ctrl 2, moved");
+        assert_eq!(got[1].label, "Z\tScreen 1");
     }
 }

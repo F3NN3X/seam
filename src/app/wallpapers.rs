@@ -81,11 +81,17 @@ pub(super) fn wallpaper_sync(app: &mut App, switch: Option<(&Workspace, &[String
         Some((id, scope, away)) => wants(app, &wallpaper::after_switch(desk, id, scope.as_deref(), &ids, away)),
         None => wants(app, desk),
     };
-    if app.wallpaper.sent.as_ref() == Some(&wants) {
+    if !should_send(app.wallpaper.sent.as_ref() == Some(&wants), ends_hold) {
         return;
     }
     app.wallpaper.sent = Some(wants.clone());
     app.wallpaper.send(Job::Apply(wants, ends_hold));
+}
+
+/// Whether an Apply goes to the worker: wants that differ from the last sent, or any that end a
+/// hold, since the worker still skips the screens that are unchanged.
+fn should_send(same: bool, ends_hold: bool) -> bool {
+    !same || ends_hold
 }
 
 /// The switch to `id` ended, done or cancelled: what is in use now decides. The late end of a
@@ -251,7 +257,7 @@ pub(super) fn wallpaper_state(app: &App) -> Value {
 pub(super) fn wallpaper_reported(app: &mut App) {
     for report in worker::take_reports() {
         app.wallpaper.original = report.original;
-        if report.outside {
+        if report.hold {
             app.wallpaper.held = true;
             app.wallpaper.sent = None;
         }
@@ -278,5 +284,18 @@ pub(super) fn wallpaper_reported(app: &mut App) {
             });
             api_server::broadcast("wallpaper.changed", &data);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::should_send;
+
+    #[test]
+    fn unchanged_wants_go_only_when_they_end_a_hold() {
+        assert!(!should_send(true, false));
+        assert!(should_send(true, true));
+        assert!(should_send(false, false));
+        assert!(should_send(false, true));
     }
 }

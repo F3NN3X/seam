@@ -262,9 +262,8 @@ mod tests {
         let new = rerecord(seen, Some(&old), &ours);
         assert_eq!(new.monitors[0].path, r"D:\theirs.jpg");
         assert_eq!(new.monitors[1].path, r"D:\old2.jpg");
-        // Nothing is remembered as set, so every wanted screen is set again, even the same picture.
+        // Only a screen whose remembered picture differs is set: Seam forgets what it set when it notices.
         let shows = vec![("m1".to_string(), crate::wallpaper::Show::Picture(r"C:\cache\a.png".into()))];
-        assert_eq!(crate::wallpaper::to_apply(&BTreeMap::new(), &shows).len(), 1);
         let applied = BTreeMap::from([("m1".to_string(), r"C:\cache\a.png".to_string())]);
         assert!(crate::wallpaper::to_apply(&applied, &shows).is_empty());
         // Only an Apply that ends a hold goes on over it.

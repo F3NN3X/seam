@@ -101,6 +101,9 @@ pub struct Report {
     pub restored: bool,
     /// Someone else changed the wallpaper, and that is mine now.
     pub outside: bool,
+    /// An outside change was noticed and Seam leaves it: the app holds until a switch, screen
+    /// change or choice.
+    pub hold: bool,
 }
 
 static REPORTS: Mutex<Vec<Report>> = Mutex::new(Vec::new());
@@ -150,17 +153,25 @@ fn run(owner: isize, enabled: bool, jobs: Receiver<Job>) {
     post(owner, state.at_start(enabled));
     while let Ok(first) = jobs.recv() {
         let batch: Vec<Job> = std::iter::once(first).chain(jobs.try_iter()).collect();
-        let last_apply = batch.iter().rposition(|j| matches!(j, Job::Apply(..)));
-        for (i, job) in batch.into_iter().enumerate() {
-            // A newer Apply came in behind this one: only the latest counts.
-            if matches!(job, Job::Apply(..)) && Some(i) != last_apply {
-                continue;
-            }
+        for job in coalesce(batch) {
             if let Some(report) = state.run(job) {
                 post(owner, report);
             }
         }
     }
+}
+
+/// A newer Apply replaces the older ones in a batch, but if any of them ended a hold, the one
+/// that runs does too, so a switch is never swallowed by a plain sync behind it.
+fn coalesce(batch: Vec<Job>) -> Vec<Job> {
+    let last = batch.iter().rposition(|j| matches!(j, Job::Apply(..)));
+    let ends_hold = batch.iter().any(|j| matches!(j, Job::Apply(_, true)));
+    let kept = batch.into_iter().enumerate().filter_map(|(i, job)| match job {
+        Job::Apply(wants, _) if Some(i) == last => Some(Job::Apply(wants, ends_hold)),
+        Job::Apply(..) => None,
+        other => Some(other),
+    });
+    kept.collect()
 }
 
 fn post(owner: isize, report: Report) {
@@ -293,6 +304,7 @@ impl State {
         // A change that sent Seam no message (Explorer's "Set as desktop background") is seen now (D799).
         report.outside = self.notice_outside(&desk);
         if !journal::apply_goes_on(report.outside, ends_hold) {
+            report.hold = true;
             report.original = self.original(Some(&desk));
             return report;
         }
@@ -483,6 +495,7 @@ impl State {
         let desk = Desktop::open().ok()?;
         self.notice_outside(&desk).then(|| Report {
             outside: true,
+            hold: true,
             original: self.original(Some(&desk)),
             ..Report::default()
         })
@@ -621,5 +634,35 @@ impl State {
         for path in evict(&files, CACHE_CAP, &kept) {
             let _ = std::fs::remove_file(path);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn apply(ends_hold: bool) -> Job {
+        Job::Apply(Vec::new(), ends_hold)
+    }
+
+    #[test]
+    fn the_last_apply_runs_and_ends_a_hold_if_any_did() {
+        let kept = coalesce(vec![apply(true), apply(false)]);
+        assert_eq!(kept.len(), 1);
+        assert!(matches!(kept[0], Job::Apply(_, true)));
+        let kept = coalesce(vec![apply(false), apply(false)]);
+        assert!(matches!(kept[..], [Job::Apply(_, false)]));
+    }
+
+    #[test]
+    fn other_jobs_keep_their_order_around_the_apply() {
+        let kept = coalesce(vec![Job::Check, apply(true), Job::Forget, apply(false), Job::Retry(None)]);
+        assert!(matches!(kept[..], [Job::Check, Job::Forget, Job::Apply(_, true), Job::Retry(None)]));
+    }
+
+    #[test]
+    fn a_single_apply_is_unchanged() {
+        assert!(matches!(coalesce(vec![apply(false)])[..], [Job::Apply(_, false)]));
+        assert!(matches!(coalesce(vec![Job::Check, apply(true)])[..], [Job::Check, Job::Apply(_, true)]));
     }
 }

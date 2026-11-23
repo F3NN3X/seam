@@ -34,6 +34,7 @@ pub const LOCAL_DESK: &[&str] = &[
     "screen_in_use",
     "wallpaper",
     "workspace_wallpapers",
+    "screen_gap_mm",
 ];
 
 /// The stamp only the shared file has.

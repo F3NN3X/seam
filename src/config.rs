@@ -577,19 +577,47 @@ pub struct Desk {
     /// pictures stay on this PC.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub workspace_wallpapers: BTreeMap<String, WallpaperSet>,
+    /// "Space between screens" in mm (0 to 30), left out of the picture across all screens where
+    /// screens meet (brief L, Q1). Left out while 0, and an older Seam drops it. Kept on this PC.
+    #[serde(skip_serializing_if = "is_zero", deserialize_with = "lenient_gap")]
+    pub screen_gap_mm: u32,
 }
 
-/// A picture for each screen, by monitor device path (D791).
+/// The widest "Space between screens", in mm.
+pub const MAX_SCREEN_GAP_MM: u32 = 30;
+
+fn is_zero(n: &u32) -> bool {
+    *n == 0
+}
+
+/// A gap that isn't a number from 0 to 30 reads as none, so it can never make the file unreadable.
+fn lenient_gap<'de, D: serde::Deserializer<'de>>(d: D) -> Result<u32, D::Error> {
+    let value = serde_json::Value::deserialize(d)?;
+    Ok(value.as_u64().filter(|n| *n <= MAX_SCREEN_GAP_MM as u64).map_or(0, |n| n as u32))
+}
+
+/// A picture for each screen, by monitor device path (D791), and one for all of them (D801).
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct WallpaperSet {
     pub screens: BTreeMap<String, Wallpaper>,
+    /// One picture across all the screens, cut to where each stands. Its fit is Fill, Fit or Stretch.
+    #[serde(skip_serializing_if = "Option::is_none", deserialize_with = "lenient_span")]
+    pub span: Option<Wallpaper>,
 }
 
 impl WallpaperSet {
     pub fn is_empty(&self) -> bool {
-        self.screens.is_empty()
+        self.screens.is_empty() && self.span.is_none()
     }
+}
+
+/// A span that doesn't read is none, and a fit it can't have (Center, Tile) reads as Fill, so a
+/// hand edit can never make the whole file unreadable.
+fn lenient_span<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<Wallpaper>, D::Error> {
+    let value = serde_json::Value::deserialize(d)?;
+    let span: Option<Wallpaper> = serde_json::from_value(value).unwrap_or_default();
+    Ok(span.map(|w| Wallpaper { fit: w.fit.across(), ..w }))
 }
 
 /// One screen's picture and how it fits the screen.
@@ -618,6 +646,16 @@ pub enum Fit {
     Stretch,
     Center,
     Tile,
+}
+
+impl Fit {
+    /// The fit across all screens: Fill, Fit and Stretch only, so Center and Tile read as Fill (D801).
+    pub fn across(self) -> Fit {
+        match self {
+            Fit::Center | Fit::Tile => Fit::Fill,
+            other => other,
+        }
+    }
 }
 
 /// One screen's workspaces in use (D782).

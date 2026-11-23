@@ -80,8 +80,8 @@ use update::{
     arm_auto_install, auto_install, check_for_updates, clean_up_after_update, read_update_state, update_read,
 };
 use wallpapers::{
-    Wallpapers, wallpaper_changed_outside, wallpaper_quit, wallpaper_reported, wallpaper_screens, wallpaper_set,
-    wallpaper_state, wallpaper_switched, wallpaper_sync, wallpaper_turned,
+    Wallpapers, wallpaper_across, wallpaper_changed_outside, wallpaper_quit, wallpaper_reported, wallpaper_screens,
+    wallpaper_set, wallpaper_state, wallpaper_switched, wallpaper_sync, wallpaper_turned,
 };
 use wincontrol::tile::{At, Verb};
 use windows::Win32::Foundation::*;

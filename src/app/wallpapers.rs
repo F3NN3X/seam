@@ -3,6 +3,7 @@
 //! and what comes back from it.
 
 use super::*;
+use seam::wallpaper::span::{self, Layout, Place};
 use seam::wallpaper::worker::{self, Job, Original, Shown, Want, Worker};
 use seam::wallpaper::{self, Fit, Wallpaper};
 use std::sync::mpsc::Receiver;
@@ -52,11 +53,23 @@ impl Wallpapers {
     }
 }
 
+/// Where each connected screen stands in a picture across all screens, `None` for one left out (D804).
+fn places(app: &App, desk: &seam::config::Desk) -> Vec<Option<Place>> {
+    span::places(&span::span_rects(&app.mons, &app.links, desk.screen_gap_mm as f64).0)
+}
+
+fn screen_of(app: &App, i: usize) -> worker::Screen {
+    let m = &app.mons[i];
+    worker::Screen { id: m.id.clone(), name: m.name.clone(), number: i + 1, rect: m.rect }
+}
+
 /// What each connected screen can show, best first, on `desk`.
 fn wants(app: &App, desk: &seam::config::Desk) -> Vec<Want> {
+    let places = places(app, desk);
     let each = app.mons.iter().enumerate().map(|(i, m)| Want {
-        screen: worker::Screen { id: m.id.clone(), name: m.name.clone(), number: i + 1, rect: m.rect },
+        screen: screen_of(app, i),
         choices: wallpaper::choices(desk, &m.id),
+        place: places[i],
     });
     each.collect()
 }
@@ -153,6 +166,12 @@ pub(super) fn wallpaper_quit(app: &mut App) -> Option<Receiver<bool>> {
     Some(rx)
 }
 
+fn find<'a>(list: &'a [Workspace], id: &Option<String>) -> Result<Option<&'a Workspace>, RpcError> {
+    let Some(id) = id else { return Ok(None) };
+    let found = list.iter().find(|w| w.id == *id);
+    found.map(Some).ok_or_else(|| RpcError::new(api::NOT_FOUND, "no such workspace on this desk"))
+}
+
 /// `wallpaper.set`: the picture a workspace, or with none the desk default, sets for one screen,
 /// or none. The file's type and size are read from its header here, and it is decoded on the worker.
 pub(super) fn wallpaper_set(
@@ -163,14 +182,7 @@ pub(super) fn wallpaper_set(
     fit: Option<Fit>,
 ) -> Reply {
     let list = desk_workspaces(app);
-    let ws = match &workspace {
-        Some(id) => Some(
-            list.iter()
-                .find(|w| w.id == *id)
-                .ok_or_else(|| RpcError::new(api::NOT_FOUND, "no such workspace on this desk"))?,
-        ),
-        None => None,
-    };
+    let ws = find(&list, &workspace)?;
     let connected = app.mons.iter().position(|m| m.id == screen);
     // A one-screen workspace whose screen isn't connected keeps its choices (J D787).
     if connected.is_none() && ws.and_then(|w| w.scope.as_deref()) != Some(screen.as_str()) {
@@ -208,9 +220,61 @@ pub(super) fn wallpaper_set(
     app.wallpaper.send(Job::Retry(Some(screen.clone())));
     // Rendered now, so the first switch to it finds it in the cache (D795).
     if let (Some(picture), Some(i)) = (picture, connected) {
-        let m = &app.mons[i];
-        let on = worker::Screen { id: m.id.clone(), name: m.name.clone(), number: i + 1, rect: m.rect };
-        app.wallpaper.send(Job::Render(on, picture));
+        app.wallpaper.send(Job::Render(screen_of(app, i), picture, None));
+    }
+    wallpaper_sync(app, None);
+    publish(app);
+    Ok(json!({ "ok": true }))
+}
+
+/// `wallpaper.set` with `across`: the picture a workspace, or with none the desk default, sets
+/// across all screens, or none (D801). Each connected screen's part is rendered now, so the first
+/// switch finds it in the cache (D809).
+pub(super) fn wallpaper_across(
+    app: &mut App,
+    workspace: Option<String>,
+    path: Option<String>,
+    fit: Option<Fit>,
+) -> Reply {
+    let list = desk_workspaces(app);
+    wallpaper::may_span(find(&list, &workspace)?).map_err(|why| RpcError::new(api::REFUSED, why))?;
+    if let Some(path) = &path {
+        if !std::path::Path::new(path).is_absolute() {
+            return refused(wallpaper::UNREADABLE);
+        }
+        wallpaper::read_header(path).map_err(|why| RpcError::new(api::REFUSED, why))?;
+    }
+    let shows_now = app
+        .cfg
+        .desks
+        .get(&app.sig)
+        .is_some_and(|d| app.mons.iter().any(|m| wallpaper::shows_now(d, workspace.as_deref(), &m.id)));
+    let Some(desk) = app.cfg.desks.get_mut(&app.sig) else { return refused("This desk isn't saved yet") };
+    let set = match &workspace {
+        Some(id) => desk.workspace_wallpapers.entry(id.clone()).or_default(),
+        None => &mut desk.wallpaper,
+    };
+    let picture = path.map(|path| {
+        let fit = fit.or_else(|| set.span.as_ref().map(|w| w.fit)).unwrap_or_default();
+        Wallpaper { path, fit: fit.across() }
+    });
+    set.span = picture.clone();
+    desk.workspace_wallpapers.retain(|_, set| !set.is_empty());
+    persist(app);
+    if shows_now {
+        app.wallpaper.held = false;
+    }
+    app.wallpaper.send(Job::Retry(None));
+    if let (Some(picture), Some(desk)) = (picture, app.cfg.desks.get(&app.sig)) {
+        let places = places(app, desk);
+        for (i, place) in places.into_iter().enumerate() {
+            // A screen left out shows the whole picture with Fill (D804).
+            let drawn = match place {
+                Some(_) => picture.clone(),
+                None => Wallpaper { fit: Fit::Fill, ..picture.clone() },
+            };
+            app.wallpaper.send(Job::Render(screen_of(app, i), drawn, place));
+        }
     }
     wallpaper_sync(app, None);
     publish(app);
@@ -222,9 +286,14 @@ fn origin(from: wallpaper::Origin) -> Value {
 }
 
 fn screens_json(shown: &[Shown]) -> Value {
-    let each = shown
-        .iter()
-        .map(|s| json!({ "id": s.screen, "path": s.path, "fit": s.fit, "from": origin(s.from), "missing": s.missing }));
+    let each = shown.iter().map(|s| {
+        let mut one =
+            json!({ "id": s.screen, "path": s.path, "fit": s.fit, "from": origin(s.from), "missing": s.missing });
+        if s.part {
+            one["part"] = json!(true);
+        }
+        one
+    });
     Value::Array(each.collect())
 }
 
@@ -241,6 +310,7 @@ pub(super) fn wallpaper_state(app: &App) -> Value {
                 path: String::new(),
                 fit: Fit::Fill,
                 from: wallpaper::Origin::Own,
+                part: false,
                 missing: false,
             })
         })
@@ -249,7 +319,31 @@ pub(super) fn wallpaper_state(app: &App) -> Value {
     json!({
         "enabled": on,
         "screens": screens_json(&shown),
+        "span": span_json(app, &shown),
         "original": { "spotlight": spotlight, "slideshow": slideshow },
+    })
+}
+
+/// The picture across all screens that the connected desk shows, which layout cuts it, the screens
+/// it leaves out and those that don't report their size (D810). `null` while none shows one.
+fn span_json(app: &App, shown: &[Shown]) -> Value {
+    let spans = shown.iter().filter(|s| s.from == wallpaper::Origin::Span);
+    let Some(first) = spans.clone().find(|s| s.part).or_else(|| spans.clone().next()) else { return Value::Null };
+    let gap = app.cfg.desks.get(&app.sig).map_or(0, |d| d.screen_gap_mm);
+    let layout = match span::span_rects(&app.mons, &app.links, gap as f64).1 {
+        Layout::Desk => "desk",
+        Layout::Windows => "windows",
+    };
+    let id = |i: usize| app.mons[i].id.clone();
+    let (_, reached) = seam::desk::walk(&app.mons, &app.links, 0.0);
+    let left_out: Vec<String> = (0..app.mons.len()).filter(|i| !reached[*i]).map(id).collect();
+    let unsized_ids: Vec<String> = span::unsized_screens(&app.mons, &app.links).into_iter().map(id).collect();
+    json!({
+        "path": first.path,
+        "fit": first.fit,
+        "layout": layout,
+        "left_out": left_out,
+        "unsized": unsized_ids,
     })
 }
 

@@ -104,6 +104,8 @@ pub(super) fn lineup_done(app: &mut App, accepted: bool) {
             "The pointer now crosses where your screens meet.".to_string()
         };
         refresh(app);
+        // The borders are saved, so the screens stand where Line Up put them (D808).
+        wallpaper_sync(app, None);
         notify(app, "Screens lined up", &msg, BalloonAction::None);
         api_server::broadcast("lineup.finished", &json!({ "saved": true }));
     } else {

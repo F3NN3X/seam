@@ -49,6 +49,7 @@ fn every_field_set() -> Value {
         "screen_in_use": { "m": { "workspace": "w", "previous": "w" } },
         "wallpaper": { "screens": { "m": { "path": "C:\\a.jpg" } } },
         "workspace_wallpapers": { "w": { "screens": { "m": { "path": "C:\\b.jpg", "fit": "tile" } } } },
+        "screen_gap_mm": 4,
     }))
     .unwrap();
     let config = Config {
@@ -135,7 +136,7 @@ fn wallpaper_fields_stay_on_this_pc() {
     // The pictures are files on this PC, and the switch says whether this PC changes them.
     assert!(shared.get("wallpapers_enabled").is_none());
     assert_eq!(local["wallpapers_enabled"], true);
-    for key in ["wallpaper", "workspace_wallpapers"] {
+    for key in ["wallpaper", "workspace_wallpapers", "screen_gap_mm"] {
         assert!(shared["desks"]["sig"].get(key).is_none(), "{key}");
     }
     assert_eq!(local["desks"]["sig"]["workspace_wallpapers"]["w"]["screens"]["m"]["fit"], "tile");

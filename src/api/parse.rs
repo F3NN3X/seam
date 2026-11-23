@@ -74,7 +74,18 @@ fn without_wallpapers(mut patch: Value) -> Value {
 }
 
 fn wallpaper_set(p: &Value) -> Result<Command, RpcError> {
-    let screen = str_param(p, "screen")?.ok_or_else(|| RpcError::new(INVALID_PARAMS, "screen is required"))?;
+    let across = match p.get("across") {
+        None | Some(Value::Null) | Some(Value::Bool(false)) => false,
+        Some(Value::Bool(true)) => true,
+        _ => return Err(RpcError::new(INVALID_PARAMS, "across must be true")),
+    };
+    if across && p.get("screen").is_some_and(|s| !s.is_null()) {
+        return Err(RpcError::new(INVALID_PARAMS, "across is in place of screen"));
+    }
+    let screen = match across {
+        true => String::new(),
+        false => str_param(p, "screen")?.ok_or_else(|| RpcError::new(INVALID_PARAMS, "screen is required"))?,
+    };
     let path = match p.get("path") {
         Some(Value::Null) => None,
         Some(Value::String(path)) if !path.is_empty() => Some(path.clone()),
@@ -87,7 +98,14 @@ fn wallpaper_set(p: &Value) -> Result<Command, RpcError> {
                 .map_err(|_| RpcError::new(INVALID_PARAMS, "fit must be fill, fit, stretch, center or tile"))?,
         ),
     };
-    Ok(Command::WallpaperSet { workspace: str_param(p, "workspace")?, screen, path, fit })
+    let workspace = str_param(p, "workspace")?;
+    if !across {
+        return Ok(Command::WallpaperSet { workspace, screen, path, fit });
+    }
+    if matches!(fit, Some(crate::config::Fit::Center | crate::config::Fit::Tile)) {
+        return Err(RpcError::new(INVALID_PARAMS, "fit across all screens must be fill, fit or stretch"));
+    }
+    Ok(Command::WallpaperAcross { workspace, path, fit })
 }
 
 fn config_set_folder(p: &Value) -> Result<Command, RpcError> {
@@ -617,6 +635,7 @@ fn allowed(command: &Command, peer: Peer) -> Result<(), RpcError> {
         | Command::WorkspaceCopyFromDesk { .. }
         | Command::CursorEasingSet(_)
         | Command::WallpaperSet { .. }
+        | Command::WallpaperAcross { .. }
         | Command::LayoutShow(_) => peer.panel,
         Command::AppQuit
         | Command::WorkspaceCapture { .. }
@@ -719,6 +738,34 @@ mod tests {
         assert_eq!(parse_request(&state, own).map(|(_, c)| c), Ok(Command::WallpaperState));
         assert_eq!(parse_request(&state, panel).map(|(_, c)| c), Ok(Command::WallpaperState));
         assert_eq!(parse_request(&state, anyone).map_err(|(_, e)| e.code), Err(FORBIDDEN));
+    }
+
+    #[test]
+    fn wallpaper_across_takes_no_screen_and_refuses_center_and_tile() {
+        let panel = Peer { panel: true, api_enabled: true, ..Peer::default() };
+        let anyone = Peer { api_enabled: true, ..Peer::default() };
+        let line = |params: &str| format!(r#"{{"jsonrpc":"2.0","id":1,"method":"wallpaper.set","params":{params}}}"#);
+        let set = line(r#"{"workspace":"w","across":true,"path":"C:\\a.jpg","fit":"stretch"}"#);
+        let want = Command::WallpaperAcross {
+            workspace: Some("w".into()),
+            path: Some(r"C:\a.jpg".into()),
+            fit: Some(crate::config::Fit::Stretch),
+        };
+        assert_eq!(parse_request(&set, panel).map(|(_, c)| c), Ok(want));
+        assert!(parse_request(&set, anyone).is_err(), "only the panel");
+        let remove = line(r#"{"across":true,"path":null}"#);
+        let want = Command::WallpaperAcross { workspace: None, path: None, fit: None };
+        assert_eq!(parse_request(&remove, panel).map(|(_, c)| c), Ok(want));
+        // A one-screen workspace is refused with `3` where the workspace is known (`wallpaper::may_span`).
+        for bad in [
+            r#"{"across":true,"path":"a","fit":"center"}"#,
+            r#"{"across":true,"path":"a","fit":"tile"}"#,
+            r#"{"across":true,"screen":"m","path":"a"}"#,
+            r#"{"across":"yes","path":"a"}"#,
+        ] {
+            let refused = parse_request(&line(bad), panel).map_err(|(_, e)| e.code);
+            assert_eq!(refused, Err(INVALID_PARAMS), "{bad}");
+        }
     }
 
     #[test]

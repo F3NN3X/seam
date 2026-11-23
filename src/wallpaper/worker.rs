@@ -4,7 +4,8 @@
 
 use super::desktop::{Desktop, match_ids};
 use super::journal::{self, AtStart, Record};
-use super::render::Wic;
+use super::render::{Failure, Wic};
+use super::span::{self, Place};
 use super::{
     CACHE_CAP, Cached, Failures, Fit, Origin, Show, UNREADABLE, Wallpaper, cache_key, cache_prefix, evict, retry,
     to_apply,
@@ -17,6 +18,7 @@ use std::sync::Mutex;
 use std::sync::mpsc::{Receiver, Sender, channel};
 use std::time::{SystemTime, UNIX_EPOCH};
 use windows::Win32::Foundation::{HWND, LPARAM, WPARAM};
+use windows::Win32::Graphics::Imaging::IWICBitmapSource;
 use windows::Win32::System::Com::{COINIT_APARTMENTTHREADED, CoInitializeEx, CoUninitialize};
 use windows::Win32::UI::WindowsAndMessaging::{PostMessageW, WM_APP};
 
@@ -40,6 +42,8 @@ pub struct Screen {
 pub struct Want {
     pub screen: Screen,
     pub choices: Vec<(Wallpaper, Origin)>,
+    /// Where the screen stands in the picture across all screens, `None` when it is left out (D804).
+    pub place: Option<Place>,
 }
 
 pub enum Job {
@@ -47,8 +51,9 @@ pub enum Job {
     /// screen change or a choice for a screen asked for it: it ends a hold, so it replaces a picture
     /// someone else set (D799). Without, it leaves such a picture where it is.
     Apply(Vec<Want>, bool),
-    /// Render a picture into the cache now, so the first switch finds it there (D795).
-    Render(Screen, Wallpaper),
+    /// Render a picture into the cache now, so the first switch finds it there (D795): the whole
+    /// picture, or with a place the part of a span that stands there (D809).
+    Render(Screen, Wallpaper, Option<Place>),
     /// Windows says the wallpaper changed: was it someone else (D799)?
     Check,
     /// Put mine back (D798), and say whether it went back.
@@ -68,6 +73,8 @@ pub struct Shown {
     pub path: String,
     pub fit: Fit,
     pub from: Origin,
+    /// A part of the picture across all screens, cut to where the screen stands.
+    pub part: bool,
     /// A picture it was to show is gone: its last render is shown, or the next choice.
     pub missing: bool,
 }
@@ -107,6 +114,9 @@ pub struct Report {
 }
 
 static REPORTS: Mutex<Vec<Report>> = Mutex::new(Vec::new());
+
+/// A picture's size once upright, with the file's length and write time it was read at.
+type Sized = ((u64, u64), (u32, u32));
 
 /// The reports since the last call.
 pub fn take_reports() -> Vec<Report> {
@@ -158,6 +168,8 @@ fn run(owner: isize, enabled: bool, jobs: Receiver<Job>) {
                 post(owner, report);
             }
         }
+        // The picture the parts were cut from isn't kept past the jobs that wanted it (D806).
+        state.kept = None;
     }
 }
 
@@ -197,6 +209,11 @@ struct State {
     failures: Failures,
     /// The journal (D797), while there is one.
     record: Option<Record>,
+    /// A picture's size once upright, by path, with the file's length and write time it was read at (D806).
+    sizes: BTreeMap<String, Sized>,
+    /// The picture the parts of a span are cut from, kept decoded while an Apply renders them
+    /// (D806): its path, length and write time. Only up to 64 megapixels; a bigger one is read for each part.
+    kept: Option<((String, u64, u64), IWICBitmapSource)>,
 }
 
 impl State {
@@ -210,7 +227,7 @@ impl State {
             let _ = std::fs::rename(&path, path.with_extension("json.corrupt"));
         }
         let (applied, read_back, failures) = (BTreeMap::new(), BTreeMap::new(), BTreeMap::new());
-        State { wic, dir, applied, read_back, failures, record }
+        State { wic, dir, applied, read_back, failures, record, sizes: BTreeMap::new(), kept: None }
     }
 
     fn cache(&self) -> PathBuf {
@@ -236,7 +253,7 @@ impl State {
     fn run(&mut self, job: Job) -> Option<Report> {
         match job {
             Job::Apply(wants, ends_hold) => Some(self.apply(&wants, ends_hold)),
-            Job::Render(screen, picture) => self.render_only(&screen, &picture),
+            Job::Render(screen, picture, place) => self.render_only(&screen, &picture, place.as_ref()),
             Job::Check => self.check(),
             Job::Restore(reply) => {
                 let report = self.restore(false);
@@ -391,7 +408,14 @@ impl State {
     fn pick(&mut self, want: &Want, bars: u32, failed: &mut Vec<Failed>) -> (Show, Shown) {
         let mut missing = false;
         for (picture, from) in &want.choices {
-            let file = match self.render(&want.screen, picture, bars) {
+            // A part of the span is cut to where the screen stands; one left out shows the whole picture
+            // with Fill (D804).
+            let (drawn, place) = match (from, &want.place) {
+                (Origin::Span, Some(place)) => (picture.clone(), Some(place)),
+                (Origin::Span, None) => (Wallpaper { fit: Fit::Fill, ..picture.clone() }, None),
+                _ => (picture.clone(), None),
+            };
+            let file = match self.render(&want.screen, &drawn, bars, place) {
                 Ok(Some(file)) => file,
                 Ok(None) => {
                     missing = true;
@@ -400,7 +424,7 @@ impl State {
                 // Said once, not at every Apply, until the file changes.
                 Err((message, fresh)) => {
                     if fresh {
-                        failed.push(self.failure(&want.screen, picture, message, true));
+                        failed.push(self.failure(&want.screen, &drawn, message, true));
                     }
                     continue;
                 }
@@ -408,14 +432,21 @@ impl State {
             let seen = Shown {
                 screen: want.screen.id.clone(),
                 path: picture.path.clone(),
-                fit: picture.fit,
+                fit: drawn.fit,
                 from: *from,
+                part: place.is_some(),
                 missing,
             };
             return (Show::Picture(file), seen);
         }
-        let own =
-            Shown { screen: want.screen.id.clone(), path: String::new(), fit: Fit::Fill, from: Origin::Own, missing };
+        let own = Shown {
+            screen: want.screen.id.clone(),
+            path: String::new(),
+            fit: Fit::Fill,
+            from: Origin::Own,
+            part: false,
+            missing,
+        };
         (Show::Own, own)
     }
 
@@ -429,39 +460,93 @@ impl State {
         }
     }
 
-    /// The render of `picture` for `screen`, made if it isn't in the cache. `None`: the picture is
-    /// gone and was never rendered at this size. A failure says whether it is new: one already
-    /// known for this very file isn't tried again.
+    /// The render of `picture` for `screen`, made if it isn't in the cache: the whole picture, or
+    /// with a `place` the part of it that stands there (D806). `None`: the picture is gone and was
+    /// never rendered at this size. A failure says whether it is new: one already known for this
+    /// very file isn't tried again.
     fn render(
         &mut self,
         screen: &Screen,
         picture: &Wallpaper,
         bars: u32,
+        place: Option<&Place>,
     ) -> Result<Option<String>, (&'static str, bool)> {
         let size = (screen.rect.width().max(1) as u32, screen.rect.height().max(1) as u32);
         let cache = self.cache();
         let Ok(meta) = std::fs::metadata(&picture.path) else {
-            return Ok(self.last_render(&cache_prefix(&picture.path, picture.fit, bars, size)));
+            // A part is found by where the screen stands, which doesn't need the file (D800).
+            return Ok(self.last_render(&cache_prefix(&picture.path, picture.fit, bars, size, place)));
         };
         let written = meta.modified().map(unix).unwrap_or(0);
-        let key = cache_key(&picture.path, meta.len(), written, picture.fit, bars, size);
-        let file = cache.join(format!("{key}.png"));
-        if let Some((_, message)) = self.failures.get(&key) {
+        let base = cache_key(&picture.path, meta.len(), written, picture.fit, bars, size, None, None);
+        if let Some((_, message)) = self.failures.get(&base) {
             return Err((message, false));
         }
+        let failed = |this: &mut State, e: Failure| {
+            log::info!("wallpaper: couldn't render a picture for screen {} ({:?})", screen.number, e.hresult);
+            this.failures.insert(base.clone(), (screen.id.clone(), e.message));
+            (e.message, true)
+        };
+        let cut = match place {
+            None => None,
+            Some(p) => match self.source_size(&picture.path, meta.len(), written) {
+                Ok(src) => Some(span::cut(src, p, picture.fit)),
+                Err(e) => return Err(failed(self, e)),
+            },
+        };
+        let key = match cut {
+            Some(_) => cache_key(&picture.path, meta.len(), written, picture.fit, bars, size, place, cut),
+            None => base.clone(),
+        };
+        let file = cache.join(format!("{key}.png"));
         if !file.exists() {
             let _ = std::fs::create_dir_all(&cache);
-            let Some(wic) = &self.wic else {
-                self.failures.insert(key, (screen.id.clone(), UNREADABLE));
-                return Err((UNREADABLE, true));
+            let made = match (cut, &self.wic) {
+                (None, Some(wic)) => wic.render(&picture.path, size, picture.fit, bars, &file),
+                (None, None) => Err(Failure { message: UNREADABLE, hresult: None }),
+                (Some(cut), _) => self.render_part(&picture.path, (meta.len(), written), size, cut, bars, &file),
             };
-            if let Err(e) = wic.render(&picture.path, size, picture.fit, bars, &file) {
-                log::info!("wallpaper: couldn't render a picture for screen {} ({:?})", screen.number, e.hresult);
-                self.failures.insert(key, (screen.id.clone(), e.message));
-                return Err((e.message, true));
+            if let Err(e) = made {
+                return Err(failed(self, e));
             }
         }
         Ok(Some(file.to_string_lossy().into_owned()))
+    }
+
+    /// A picture's size once upright, read from the file only when it changed (D806).
+    fn source_size(&mut self, path: &str, len: u64, written: u64) -> Result<(u32, u32), Failure> {
+        if let Some((_, size)) = self.sizes.get(path).filter(|(stamp, _)| *stamp == (len, written)) {
+            return Ok(*size);
+        }
+        let wic = self.wic.as_ref().ok_or(Failure { message: UNREADABLE, hresult: None })?;
+        let size = wic.size_of(path)?;
+        self.sizes.insert(path.to_string(), ((len, written), size));
+        Ok(size)
+    }
+
+    /// Render the part `cut` of a picture for a screen of `size`. The picture is decoded once for
+    /// every part of an Apply, up to 64 megapixels; a bigger one is read again for each part (D806).
+    fn render_part(
+        &mut self,
+        path: &str,
+        (len, written): (u64, u64),
+        size: (u32, u32),
+        cut: span::Cut,
+        bars: u32,
+        out: &Path,
+    ) -> Result<(), Failure> {
+        let stamp = (path.to_string(), len, written);
+        let wic = self.wic.as_ref().ok_or(Failure { message: UNREADABLE, hresult: None })?;
+        let source = match self.kept.as_ref().filter(|(s, _)| *s == stamp) {
+            Some((_, source)) => source.clone(),
+            None => {
+                let (source, kept) = wic.decode(path)?;
+                self.kept = kept.then(|| (stamp, source.clone()));
+                source
+            }
+        };
+        let wic = self.wic.as_ref().ok_or(Failure { message: UNREADABLE, hresult: None })?;
+        wic.render_part(&source, size, cut, bars, out)
     }
 
     /// The newest render whose name starts with `prefix`.
@@ -475,13 +560,13 @@ impl State {
     }
 
     /// `wallpaper.set` for a connected screen: render now, show nothing (D795).
-    fn render_only(&mut self, screen: &Screen, picture: &Wallpaper) -> Option<Report> {
+    fn render_only(&mut self, screen: &Screen, picture: &Wallpaper, place: Option<&Place>) -> Option<Report> {
         let desk = Desktop::open().ok();
         let bars = match (&self.record, &desk) {
             (Some(record), _) => record.background,
             (None, desk) => desk.as_ref().map_or(0, Desktop::background),
         };
-        let failed = match self.render(screen, picture, bars) {
+        let failed = match self.render(screen, picture, bars, place) {
             Err((message, _)) => vec![self.failure(screen, picture, message, false)],
             Ok(_) => Vec::new(),
         };

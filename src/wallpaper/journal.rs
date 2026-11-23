@@ -180,6 +180,13 @@ pub fn outside_change(
     read_back.iter().any(differs)
 }
 
+/// Whether an Apply goes on after it looked for an outside change (D799). One that saw one goes on
+/// only when it ends a hold (a switch, a screen change, a choice for a screen): any other leaves
+/// what the user just set, and the change is reported so the tray holds.
+pub fn apply_goes_on(outside: bool, ends_hold: bool) -> bool {
+    !outside || ends_hold
+}
+
 /// Whether a cache file stays (D800): one on screen now, or one the record names.
 pub fn kept(path: &Path, on_screen: &[&str], record: Option<&Record>) -> bool {
     on_screen.iter().any(|f| Path::new(f) == path) || record.is_some_and(|r| r.names(path))
@@ -231,6 +238,54 @@ mod tests {
         assert!(!check(&set(&[("m1", "")]), &|id: &str| id != "m1"));
         // A screen Seam never set is never compared.
         assert!(!outside_change(&set(&[]), &set(&[("m2", r"D:\x.jpg")]), &all, &ours));
+    }
+
+    fn pic(id: &str, path: &str) -> Picture {
+        Picture { id: id.into(), path: path.into(), copy: None }
+    }
+
+    #[test]
+    fn an_outside_change_at_apply_time_is_recorded_and_everything_is_set_again() {
+        let ours = |p: &str| in_dir(p, Path::new(r"C:\cache"));
+        let all = |_: &str| true;
+        let map = |p: &[(&str, &str)]| -> BTreeMap<String, String> {
+            p.iter().map(|(a, b)| (a.to_string(), b.to_string())).collect()
+        };
+        let read_back = map(&[("m1", r"C:\cache\a.png"), ("m2", r"C:\cache\b.png")]);
+        // Explorer set m1 with no message to Seam: the next Apply sees it.
+        let now = map(&[("m1", r"D:\theirs.jpg"), ("m2", r"C:\cache\b.png")]);
+        assert!(outside_change(&read_back, &now, &all, &ours));
+        // It is recorded as mine, and a monitor still showing Seam's picture keeps the old entry.
+        let old = Record { monitors: vec![pic("m1", r"D:\old1.jpg"), pic("m2", r"D:\old2.jpg")], ..Record::default() };
+        let seen =
+            Record { monitors: vec![pic("m1", r"D:\theirs.jpg"), pic("m2", r"C:\cache\b.png")], ..Record::default() };
+        let new = rerecord(seen, Some(&old), &ours);
+        assert_eq!(new.monitors[0].path, r"D:\theirs.jpg");
+        assert_eq!(new.monitors[1].path, r"D:\old2.jpg");
+        // Nothing is remembered as set, so every wanted screen is set again, even the same picture.
+        let shows = vec![("m1".to_string(), crate::wallpaper::Show::Picture(r"C:\cache\a.png".into()))];
+        assert_eq!(crate::wallpaper::to_apply(&BTreeMap::new(), &shows).len(), 1);
+        let applied = BTreeMap::from([("m1".to_string(), r"C:\cache\a.png".to_string())]);
+        assert!(crate::wallpaper::to_apply(&applied, &shows).is_empty());
+        // Only an Apply that ends a hold goes on over it.
+        assert!(apply_goes_on(true, true));
+        assert!(!apply_goes_on(true, false));
+        // No outside change: an Apply does what it did.
+        assert!(apply_goes_on(false, false));
+        assert!(apply_goes_on(false, true));
+        assert!(!outside_change(&read_back, &read_back, &all, &ours));
+    }
+
+    #[test]
+    fn an_outside_change_at_restore_time_gives_back_the_new_picture() {
+        let ours = |p: &str| in_dir(p, Path::new(r"C:\cache"));
+        let exists = |_: &str| true;
+        let old = Record { monitors: vec![pic("m1", r"D:\old.jpg")], ..Record::default() };
+        let seams = ["m1".to_string()];
+        assert_eq!(restore_plan(&old, &seams, false, &exists), [("m1".to_string(), r"D:\old.jpg".to_string())]);
+        let seen = Record { monitors: vec![pic("m1", r"D:\theirs.jpg")], ..Record::default() };
+        let new = rerecord(seen, Some(&old), &ours);
+        assert_eq!(restore_plan(&new, &seams, false, &exists), [("m1".to_string(), r"D:\theirs.jpg".to_string())]);
     }
 
     #[test]

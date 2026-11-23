@@ -20,6 +20,8 @@ pub(super) struct Wallpapers {
     original: Original,
     /// Someone else changed the wallpaper: Seam leaves it until the next switch or screen change (D799).
     held: bool,
+    /// The next sync is for a switch, a screen change or a choice, so its Apply ends a hold.
+    ends_hold: bool,
     /// A quit asked for mine back: nothing is put up after it.
     quitting: bool,
 }
@@ -38,6 +40,7 @@ impl Wallpapers {
             shown: Vec::new(),
             original: Original::default(),
             held: false,
+            ends_hold: false,
             quitting: false,
         }
     }
@@ -66,7 +69,9 @@ pub(super) fn wallpaper_sync(app: &mut App, switch: Option<(&Workspace, &[String
     if let Some((ws, away)) = switch.filter(|(ws, _)| ws.id != SESSION_ID) {
         app.wallpaper.switching = Some((ws.id.clone(), ws.scope.clone(), away.to_vec()));
         app.wallpaper.held = false;
+        app.wallpaper.ends_hold = true;
     }
+    let ends_hold = std::mem::take(&mut app.wallpaper.ends_hold);
     if !app.cfg.wallpapers_enabled || app.wallpaper.held || app.wallpaper.quitting {
         return;
     }
@@ -80,7 +85,7 @@ pub(super) fn wallpaper_sync(app: &mut App, switch: Option<(&Workspace, &[String
         return;
     }
     app.wallpaper.sent = Some(wants.clone());
-    app.wallpaper.send(Job::Apply(wants));
+    app.wallpaper.send(Job::Apply(wants, ends_hold));
 }
 
 /// The switch to `id` ended, done or cancelled: what is in use now decides. The late end of a
@@ -102,6 +107,7 @@ pub(super) fn wallpaper_screens(app: &mut App, forget: bool) {
     app.wallpaper.send(Job::Retry(None));
     app.wallpaper.sent = None;
     app.wallpaper.held = false;
+    app.wallpaper.ends_hold = true;
     wallpaper_sync(app, None);
 }
 
@@ -190,6 +196,7 @@ pub(super) fn wallpaper_set(
     persist(app);
     if shows_now {
         app.wallpaper.held = false;
+        app.wallpaper.ends_hold = true;
     }
     // A new choice for the screen tries again what failed there.
     app.wallpaper.send(Job::Retry(Some(screen.clone())));

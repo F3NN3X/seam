@@ -43,8 +43,10 @@ pub struct Want {
 }
 
 pub enum Job {
-    /// Show these pictures, changing only the screens that differ (D794).
-    Apply(Vec<Want>),
+    /// Show these pictures, changing only the screens that differ (D794). With `true`, a switch, a
+    /// screen change or a choice for a screen asked for it: it ends a hold, so it replaces a picture
+    /// someone else set (D799). Without, it leaves such a picture where it is.
+    Apply(Vec<Want>, bool),
     /// Render a picture into the cache now, so the first switch finds it there (D795).
     Render(Screen, Wallpaper),
     /// Windows says the wallpaper changed: was it someone else (D799)?
@@ -148,10 +150,10 @@ fn run(owner: isize, enabled: bool, jobs: Receiver<Job>) {
     post(owner, state.at_start(enabled));
     while let Ok(first) = jobs.recv() {
         let batch: Vec<Job> = std::iter::once(first).chain(jobs.try_iter()).collect();
-        let last_apply = batch.iter().rposition(|j| matches!(j, Job::Apply(_)));
+        let last_apply = batch.iter().rposition(|j| matches!(j, Job::Apply(..)));
         for (i, job) in batch.into_iter().enumerate() {
             // A newer Apply came in behind this one: only the latest counts.
-            if matches!(job, Job::Apply(_)) && Some(i) != last_apply {
+            if matches!(job, Job::Apply(..)) && Some(i) != last_apply {
                 continue;
             }
             if let Some(report) = state.run(job) {
@@ -222,7 +224,7 @@ impl State {
 
     fn run(&mut self, job: Job) -> Option<Report> {
         match job {
-            Job::Apply(wants) => Some(self.apply(&wants)),
+            Job::Apply(wants, ends_hold) => Some(self.apply(&wants, ends_hold)),
             Job::Render(screen, picture) => self.render_only(&screen, &picture),
             Job::Check => self.check(),
             Job::Restore(reply) => {
@@ -279,7 +281,7 @@ impl State {
         }
     }
 
-    fn apply(&mut self, wants: &[Want]) -> Report {
+    fn apply(&mut self, wants: &[Want], ends_hold: bool) -> Report {
         let mut report = Report::default();
         let desk = match Desktop::open() {
             Ok(desk) => desk,
@@ -288,6 +290,12 @@ impl State {
                 return report;
             }
         };
+        // A change that sent Seam no message (Explorer's "Set as desktop background") is seen now (D799).
+        report.outside = self.notice_outside(&desk);
+        if !journal::apply_goes_on(report.outside, ends_hold) {
+            report.original = self.original(Some(&desk));
+            return report;
+        }
         let screens: Vec<(&str, Rect)> = wants.iter().map(|w| (w.screen.id.as_str(), w.screen.rect)).collect();
         let ids: BTreeMap<String, String> = match_ids(&screens, &desk.monitors()).into_iter().collect();
         let bars = self.record.as_ref().map_or_else(|| desk.background(), |r| r.background);
@@ -472,56 +480,73 @@ impl State {
     /// D799: a monitor Seam set shows something else now, so that is mine, recorded once, and
     /// Seam leaves it until the next switch or screen change.
     fn check(&mut self) -> Option<Report> {
-        if self.read_back.is_empty() {
-            return None;
-        }
         let desk = Desktop::open().ok()?;
+        self.notice_outside(&desk).then(|| Report {
+            outside: true,
+            original: self.original(Some(&desk)),
+            ..Report::default()
+        })
+    }
+
+    /// Whether someone else changed the wallpaper since Seam set it (D799): if so, what shows now
+    /// is recorded as mine and every screen is forgotten, so the next Apply sets them all again.
+    /// Run by `check`, and before an Apply or a Restore acts: not every way to set a wallpaper
+    /// tells Seam.
+    fn notice_outside(&mut self, desk: &Desktop) -> bool {
+        if self.read_back.is_empty() {
+            return false;
+        }
         let monitors = desk.monitors();
         let attached = |id: &str| monitors.iter().any(|(m, rect)| m == id && rect.is_some());
         let now: BTreeMap<String, String> =
             self.read_back.keys().map(|id| (id.clone(), desk.wallpaper(id))).filter(|(_, s)| !s.is_empty()).collect();
         // A picture of Seam's own is never someone else's change.
         if !journal::outside_change(&self.read_back, &now, &attached, &|p| self.in_cache(p)) {
-            return None;
+            return false;
         }
         log::info!("wallpaper: someone else changed it, so that is your own now");
-        let record = self.record_now(&desk);
+        let record = self.record_now(desk);
         if self.write_journal(&record).is_ok() {
             self.record = Some(record);
         }
         self.forget_all();
-        Some(Report { outside: true, original: self.original(Some(&desk)), ..Report::default() })
+        true
     }
 
     /// Put mine back (D798), monitor by monitor, on every monitor Seam set too. The journal goes
     /// once anything is back, so a monitor Windows no longer takes can't keep it alive. With
     /// `only_seams` (a start after a crash), a monitor that shows something else now keeps it.
     fn restore(&mut self, only_seams: bool) -> Report {
-        let Some(record) = self.record.clone() else {
+        if self.record.is_none() {
             return Report { original: self.original(Desktop::open().ok().as_ref()), ..Report::default() };
-        };
+        }
+        let desk = Desktop::open();
+        let set_by_seam: Vec<String> = self.applied.keys().cloned().collect();
+        // What someone else set since is mine now, and goes back (D799). Not after a crash: there
+        // a monitor showing something else keeps it anyway.
+        let outside = !only_seams && desk.as_ref().is_ok_and(|desk| self.notice_outside(desk));
+        let record = self.record.clone().unwrap_or_default();
         let original = self.original(None);
         let exists = |p: &str| Path::new(p).exists();
-        let set_by_seam: Vec<String> = self.applied.keys().cloned().collect();
         let plan = journal::restore_plan(&record, &set_by_seam, only_seams, &exists);
-        let took = match (only_seams && plan.is_empty(), Desktop::open()) {
+        let took = match (only_seams && plan.is_empty(), desk) {
             // Nothing of Seam's is up: what shows is mine, whoever chose it.
             (true, _) => 0,
             (false, Ok(desk)) => desk.restore(&record, &plan),
             (false, Err(e)) => {
                 log::info!("wallpaper: your own didn't go back ({:#x}), the record stays", e.code().0);
-                return Report { original, ..Report::default() };
+                return Report { original, outside, ..Report::default() };
             }
         };
         if !journal::restored(plan.len(), took) {
             log::info!("wallpaper: no monitor took your own back, the record stays");
-            return Report { original, ..Report::default() };
+            return Report { original, outside, ..Report::default() };
         }
         let _ = std::fs::remove_file(self.dir.join("original.json"));
         self.record = None;
         self.forget_all();
         log::info!("wallpaper: your own is back ({took} of {} monitors)", plan.len());
-        Report { restored: true, original, ..Report::default() }
+        Report { restored: true, original, outside, ..Report::default() }
     }
 
     /// What Windows shows now, with a copy of each picture in `original\`, so a moved or deleted

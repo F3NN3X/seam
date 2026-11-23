@@ -41,12 +41,12 @@ pub struct Cut {
 }
 
 /// Where each screen stands (D804), `None` for one the walk from the primary doesn't reach, which is
-/// left out. `gap_mm` is the space between screens that meet, in the physical layout only. Lined up
-/// and every reached screen sized: the physical layout. Otherwise, one wrong size would shift every
-/// part, so Windows' pixels.
+/// left out. `gap_mm` is the space between screens that meet, in the physical layout only. Lined up:
+/// the physical layout, as the Displays map draws it, so a screen that doesn't report its size has
+/// the map's 96 dpi guess. Not lined up: Windows' pixels.
 pub fn span_rects(mons: &[Mon], links: &[Link], gap_mm: f64) -> (Vec<Option<RectF>>, Layout) {
     let (placed, reached) = walk(mons, links, gap_mm);
-    if !links.is_empty() && placed.iter().filter(|p| reached[p.index]).all(|p| p.sized) {
+    if !links.is_empty() {
         let mut rects = vec![None; mons.len()];
         for p in placed.iter().filter(|p| reached[p.index]) {
             rects[p.index] = Some(RectF { x: p.x, y: p.y, w: p.w, h: p.h });

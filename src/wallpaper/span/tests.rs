@@ -1,6 +1,7 @@
 //! The tests for where screens stand in a span and which part of the picture each one shows.
 
 use super::*;
+use crate::desk::physical_layout;
 use crate::geom::{EdgeMap, Rect, Side};
 
 fn mon(id: &str, rect: Rect, raw_dpi: f64, primary: bool) -> Mon {
@@ -126,12 +127,17 @@ fn not_lined_up_uses_pixels() {
 }
 
 #[test]
-fn one_unsized_screen_uses_pixels() {
+fn an_unsized_screen_is_placed_as_the_displays_map_has_it() {
     let (mut mons, links) = pair();
     mons[1].raw_dpi = 0.0;
     let (rects, layout) = span_rects(&mons, &links, 0.0);
-    assert_eq!(layout, Layout::Windows);
-    assert_eq!(rects[0], Some(RectF { x: 0.0, y: 0.0, w: 1920.0, h: 1080.0 }));
+    assert_eq!(layout, Layout::Desk);
+    let map = physical_layout(&mons, &links);
+    for p in map {
+        assert_eq!(rects[p.index], Some(RectF { x: p.x, y: p.y, w: p.w, h: p.h }));
+    }
+    // 96 dpi is the guess: 1920 px is 508 mm.
+    assert!((rects[1].unwrap().w - 508.0).abs() < 1e-9);
     assert_eq!(unsized_screens(&mons, &links), [1]);
 }
 

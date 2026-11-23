@@ -4,6 +4,10 @@ All notable changes to Seam. The format follows [Keep a Changelog](https://keepa
 
 ## [Unreleased]
 
+### Changed
+
+- **A picture across all screens follows the Displays map** when your screens are lined up, also when a screen doesn't report its size. That screen takes the size the map shows for it, instead of the whole picture falling back to Windows' arrangement. A Note names the screen, and **Space between screens** works there too.
+
 ## [0.10.0] - 2026-11-23
 
 ### Added

@@ -321,20 +321,19 @@ pub fn gap_subscription(slider: &Entity<SliderState>, window: &mut Window, cx: &
     })
 }
 
-/// A Note while a picture across all screens is in use on this desk and doesn't follow where the
-/// screens stand: "Line up screens" when that would help, and no button when a screen doesn't
-/// report its size.
+/// A Note while a picture across all screens is in use on this desk: "Line up screens" while it
+/// follows Windows' arrangement, and no button when it follows the desk but a screen's size is the
+/// Displays map's guess.
 fn span_note(panel: &Panel, p: Palette, cx: &mut Context<Panel>) -> Option<Div> {
     let desk = panel.config.desks.get(&desk_sig(panel))?;
     let in_use = panel.mons.iter().any(|m| choices(desk, &m.id).first().is_some_and(|c| c.1 == Origin::Span));
-    if !panel.config.wallpapers_enabled || panel.mons.len() < 2 || !in_use || layout(panel) == Layout::Desk {
+    if !panel.config.wallpapers_enabled || panel.mons.len() < 2 || !in_use {
         return None;
     }
-    if let Some(i) = span::unsized_screens(&panel.mons, &panel.links).first() {
-        let text = format!(
-            "Screen {} doesn't report its size, so the picture across the screens follows Windows' arrangement",
-            i + 1
-        );
+    if layout(panel) == Layout::Desk {
+        let i = span::unsized_screens(&panel.mons, &panel.links).first().copied()?;
+        let text =
+            format!("Screen {} doesn't report its size, so its part of the picture uses the size on Displays", i + 1);
         return Some(ui::note(text, None, p));
     }
     let line_up = ui::secondary("line-up-span", "Line up screens", cx)

@@ -13,11 +13,17 @@ pub const WM_APP_REFIT: u32 = WM_APP + 15;
 pub const WM_APP_REFIT_DONE: u32 = WM_APP + 45;
 /// Windows is still moving windows for a while after a display change.
 const DEBOUNCE_MS: u32 = 1500;
+/// The gap slider is let go once, but `config.patch` can come in bursts.
+const REGAP_DEBOUNCE_MS: u32 = 150;
 
 static FOUND: Mutex<Option<Vec<isize>>> = Mutex::new(None);
 
 struct Run {
     geometry: Vec<Placed>,
+    /// For a gap run: the screens' zones at the gap the windows were placed at.
+    before: Vec<Placed>,
+    /// A gap change asked for this run.
+    regap: bool,
     found: usize,
     moved: usize,
     skipped: usize,
@@ -28,6 +34,11 @@ pub(super) struct Refit {
     timer: usize,
     /// A change came while a drag, Line Up or another run was going. Go once it ends.
     waiting: bool,
+    /// A gap change asked for a run, so it goes whether or not `zones.refit` is on: the gap the
+    /// windows were placed at, from the first change asked since the last run began.
+    regap: Option<u32>,
+    /// The run now starting is for a gap change, from this gap.
+    starting: Option<u32>,
     /// A worker is listing windows.
     busy: bool,
     queue: VecDeque<isize>,
@@ -40,6 +51,49 @@ pub(super) fn covered(cells: &[Rect], from: usize, to: usize) -> Vec<usize> {
     let r = zones::span(*a, *b);
     let inside = |c: &Rect| c.x >= r.x && c.y >= r.y && c.x + c.w <= r.x + r.w && c.y + c.h <= r.y + r.h;
     cells.iter().enumerate().filter(|(_, c)| inside(c)).map(|(i, _)| i).collect()
+}
+
+/// Whether a change of the gap from `old` to `new` moves the windows in zones.
+/// Stored gaps past the slider's end are cut back when used, so they count as the end.
+pub(super) fn gap_changed(old: u32, new: u32) -> bool {
+    old.min(MAX_GAP) != new.min(MAX_GAP)
+}
+
+impl Refit {
+    /// A gap change from `old` asks for a run. A change asked for while one is waiting keeps
+    /// the earlier gap, which is where the windows still are.
+    fn request(&mut self, old: u32) {
+        self.regap = Some(self.regap.unwrap_or(old));
+    }
+
+    /// A run is about to begin: it takes the request, and a change that comes after asks again.
+    fn take_start(&mut self) -> Option<u32> {
+        self.starting = self.regap.take();
+        self.starting
+    }
+
+    /// A gap change is waiting for a run, or a run for one is on its way or going.
+    fn regap_live(&self) -> bool {
+        self.regap.is_some() || self.starting.is_some() || self.run.as_ref().is_some_and(|r| r.regap)
+    }
+}
+
+/// Whether something asks for a run: the setting, for screen changes, or a gap change.
+fn run_wanted(refit_on: bool, regap_live: bool, active: bool) -> bool {
+    active && (refit_on || regap_live)
+}
+
+/// Whether `update` drops what was lined up: stepping aside, nothing asks for a run, or zones
+/// are off while a gap run is. A screen-change re-fit with zones off waits, as it always did.
+fn run_stops(refit_on: bool, regap_live: bool, enabled: bool, aside: bool, standing_by: bool) -> bool {
+    aside || standing_by || !(refit_on || regap_live) || (regap_live && !enabled)
+}
+
+/// Whether a gap run moves a window: one the snapping put where it still is, or one whose stamp
+/// names a zone it sits in at the old gap. Never one that isn't on this desktop, which Windows
+/// cloaks, or that is minimized. Anything else was moved by the user since.
+fn regap_takes(minimized: bool, cloaked: bool, kept_in_place: bool, fits_old_gap: bool) -> bool {
+    !minimized && !cloaked && (kept_in_place || fits_old_gap)
 }
 
 /// Screens or resolution changed, or the PC woke up. Starts the debounce, and
@@ -138,12 +192,37 @@ impl Engine {
         if !self.settings.refit || !self.active() {
             return;
         }
+        self.refit_arm(DEBOUNCE_MS);
+    }
+
+    /// The gap changed from `old`, by the slider or `config.patch`: put the windows in zones at
+    /// the new gap, once, with `zones.refit` on or off. One that comes during a run runs again.
+    pub(super) fn regap(&mut self, old: u32) {
+        if !self.active() {
+            return;
+        }
+        self.refit.request(old);
+        self.refit_arm(REGAP_DEBOUNCE_MS);
+    }
+
+    /// A run can go: a screen change with the setting on, or a gap change, with zones active.
+    fn refit_wanted(&self) -> bool {
+        run_wanted(self.settings.refit, self.refit.regap_live(), self.active())
+    }
+
+    /// `update` should drop what was lined up. Not the opposite of `refit_wanted`: that one
+    /// asks whether zones are active right now, this one whether to give up what is queued.
+    pub(super) fn refit_unwanted(&self) -> bool {
+        run_stops(self.settings.refit, self.refit.regap_live(), self.enabled, self.aside.is_some(), self.standing_by)
+    }
+
+    fn refit_arm(&mut self, ms: u32) {
         if self.refit.timer != 0 {
             unsafe {
                 let _ = KillTimer(None, self.refit.timer);
             }
         }
-        self.refit.timer = unsafe { SetTimer(None, 0, DEBOUNCE_MS, Some(on_debounce)) };
+        self.refit.timer = unsafe { SetTimer(None, 0, ms, Some(on_debounce)) };
     }
 
     /// The setting went off: drop everything that was lined up.
@@ -157,7 +236,10 @@ impl Engine {
     }
 
     fn refit_begin(&mut self) {
-        if !self.settings.refit || !self.active() {
+        if !self.active() {
+            self.refit.regap = None;
+        }
+        if !self.refit_wanted() {
             return;
         }
         // A switch places windows itself, and stamps them where it puts them.
@@ -172,6 +254,7 @@ impl Engine {
         }
         self.refit.waiting = false;
         self.refit.busy = true;
+        self.refit.take_start();
         let owner = self.owner;
         let spawned = std::thread::Builder::new().name("seam-refit".into()).spawn(move || {
             let list = stamped_windows();
@@ -182,16 +265,20 @@ impl Engine {
         });
         if spawned.is_err() {
             self.refit.busy = false;
+            self.refit.starting = None;
         }
     }
 
     fn refit_found(&mut self, list: Vec<isize>) {
         self.refit.busy = false;
-        if !self.settings.refit || !self.active() {
+        if !self.refit_wanted() {
+            self.refit.starting = None;
             return;
         }
         let geometry = self.geometry();
-        self.refit.run = Some(Run { geometry, found: list.len(), moved: 0, skipped: 0 });
+        let from = self.refit.starting.take();
+        let before = from.map(|gap| self.geometry_at(gap)).unwrap_or_default();
+        self.refit.run = Some(Run { geometry, before, regap: from.is_some(), found: list.len(), moved: 0, skipped: 0 });
         self.refit.queue = list.into();
         self.refit_pump();
     }
@@ -207,9 +294,9 @@ impl Engine {
             && !self.refit.busy
             && !overlay::is_active()
             && !crate::switcher::switching();
-        if self.refit.waiting && free {
+        if self.refit.waiting && free && self.refit_wanted() {
             self.refit.waiting = false;
-            self.refit_schedule();
+            self.refit_arm(if self.refit.regap.is_some() { REGAP_DEBOUNCE_MS } else { DEBOUNCE_MS });
         }
     }
 
@@ -228,11 +315,19 @@ impl Engine {
         }
         if self.pending.is_none() && self.drag.is_none() && self.refit.queue.is_empty() {
             if let Some(run) = self.refit.run.take() {
-                log::info!("zone refit: {} found, {} moved, {} skipped", run.found, run.moved, run.skipped);
+                if run.regap {
+                    log::info!("zones gap: moved {} of {} windows to the new gap", run.moved, run.found);
+                } else {
+                    log::info!("zone refit: {} found, {} moved, {} skipped", run.found, run.moved, run.skipped);
+                }
+                self.sync_dividers();
                 // Every window of a stack was fitted on its own, so its top goes back over the rest.
                 self.stack_raise_tops();
-                unsafe {
-                    let _ = PostMessageW(Some(hwnd_of(self.owner)), WM_APP_REFIT_DONE, WPARAM(0), LPARAM(0));
+                // The restore offer waits for a screen change's re-fit, not for a gap's.
+                if !run.regap {
+                    unsafe {
+                        let _ = PostMessageW(Some(hwnd_of(self.owner)), WM_APP_REFIT_DONE, WPARAM(0), LPARAM(0));
+                    }
                 }
             }
             self.refit_resume();
@@ -252,6 +347,26 @@ impl Engine {
         let Some(run) = self.refit.run.as_ref() else { return false };
         // The screen it is on now, and that screen's layout.
         let Some(g) = run.geometry.iter().find(|g| g.bounds.contains(x, y)) else { return false };
+        if run.regap {
+            // A tiled screen is laid out again by the tiling, at the new gap.
+            if self.tiling_on(&g.id) {
+                return false;
+            }
+            let visible = winutil::visible_rect(hwnd).unwrap_or(now);
+            let sized = winutil::is_resizable(hwnd);
+            let key = hwnd.0 as isize;
+            let kept = self.snapped.get(&key).is_some_and(|s| close(visible, s.at, sized));
+            let old_span = run
+                .before
+                .iter()
+                .find(|b| b.id == g.id)
+                .and_then(|b| set.iter().map(|i| b.zones.get(*i).copied()).collect::<Option<Vec<_>>>())
+                .and_then(|zs| zs.into_iter().reduce(zones::span));
+            let fits = old_span.is_some_and(|span| close(visible, span, sized));
+            if !regap_takes(winutil::is_minimized(hwnd), winutil::is_cloaked(hwnd), kept, fits) {
+                return false;
+            }
+        }
         // A zone that isn't in this layout means the window isn't ours to move.
         if set.iter().any(|i| *i >= g.zones.len()) {
             return false;
@@ -271,5 +386,66 @@ impl Engine {
         });
         (entry.screen, entry.from, entry.to, entry.at) = (screen, *from, *to, target);
         moved
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_gap_change_asks_for_a_run_and_the_same_gap_does_not() {
+        assert!(gap_changed(8, 0));
+        assert!(gap_changed(0, 16));
+        assert!(!gap_changed(8, 8));
+        assert!(!gap_changed(MAX_GAP + 5, MAX_GAP + 9), "both are cut to the end");
+        assert!(gap_changed(MAX_GAP + 5, 8));
+    }
+
+    #[test]
+    fn a_gap_change_during_a_run_runs_again() {
+        let mut r = Refit::default();
+        r.request(8);
+        assert_eq!(r.take_start(), Some(8), "the run takes the request");
+        assert!(r.regap.is_none());
+        r.request(16);
+        assert_eq!(r.regap, Some(16), "a change during the run asks again");
+        assert!(run_wanted(false, r.regap_live(), true), "so it is still wanted with the setting off");
+        assert_eq!(r.take_start(), Some(16));
+    }
+
+    #[test]
+    fn a_burst_keeps_the_gap_the_windows_are_at() {
+        let mut r = Refit::default();
+        r.request(8);
+        r.request(12);
+        assert_eq!(r.regap, Some(8));
+    }
+
+    #[test]
+    fn nothing_is_wanted_without_the_setting_or_a_gap_change() {
+        assert!(!run_wanted(false, false, true));
+        assert!(run_wanted(true, false, true));
+        assert!(run_wanted(false, true, true));
+        assert!(!run_wanted(true, true, false), "zones aren't active");
+    }
+
+    #[test]
+    fn zones_off_stops_a_gap_run_and_stepping_aside_stops_any() {
+        assert!(run_stops(false, true, false, false, false), "zones off");
+        assert!(!run_stops(true, false, false, false, false), "a screen change re-fit waits as before");
+        assert!(run_stops(true, false, true, true, false), "stepping aside");
+        assert!(run_stops(true, true, true, false, true), "standing by");
+        assert!(run_stops(false, false, true, false, false), "nothing asks");
+        assert!(!run_stops(false, true, true, false, false));
+    }
+
+    #[test]
+    fn a_gap_run_moves_what_is_in_place_or_fits_the_old_gap() {
+        assert!(regap_takes(false, false, true, false), "the snapping's own");
+        assert!(regap_takes(false, false, false, true), "stamped and on the old gap's zone");
+        assert!(!regap_takes(false, false, false, false), "moved away since");
+        assert!(!regap_takes(true, false, true, true), "minimized");
+        assert!(!regap_takes(false, true, true, true), "cloaked, as on another desktop");
     }
 }

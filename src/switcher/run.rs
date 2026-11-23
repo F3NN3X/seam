@@ -230,7 +230,8 @@ fn run_switch(job: &SwitchJob, mine: u64) -> Option<Switched> {
     let seen = snapshot(&mut procs);
     let mut known: Vec<Candidate> =
         seen.iter().filter(|s| !job.held.contains(&s.cand.hwnd)).map(|s| s.cand.clone()).collect();
-    let mut found = workspace::assign_bound(&ws.windows, &known, &run.bound, &elsewhere);
+    let rows = workspace::sit_out(&ws.windows, ws.scope.as_deref(), &job.away);
+    let mut found = workspace::assign_bound(&rows, &known, &run.bound, &elsewhere);
     bind_unbound(&run, &found);
     if let Some(key) = stamp {
         clear_stale_stamps(key, &found, &seen);

@@ -135,11 +135,17 @@ pub(super) fn label(rule: &Rule) -> String {
     stem.filter(|s| !s.is_empty()).unwrap_or_else(|| rule.title_hint.clone())
 }
 
-/// A row joining a one-screen workspace goes on its screen, with the zones the desk gives that
-/// screen (D788). A row for all screens stays where the window is.
+/// A row joining a one-screen workspace goes on its screen (D788), with the zones a switch gives
+/// that screen: the workspace's own layout for it, else the desk's. A row for all screens stays
+/// where the window is.
 pub(super) fn onto_scope(app: &App, ws: &Workspace, rule: Rule) -> Rule {
     let Some(screen) = ws.scope.as_deref() else { return rule };
-    let layout = app.cfg.desks.get(&app.sig).and_then(|d| d.zones.get(screen)).and_then(zones::layout_of);
+    let desk = || app.cfg.desks.get(&app.sig).and_then(|d| d.zones.get(screen)).and_then(zones::layout_of);
+    // An entry this build can't read keeps the screen as it is, so the desk's layout counts then.
+    let layout = match ws.zones.get(screen).map(workspace::screen_layout) {
+        Some(Some(own)) => own,
+        _ => desk(),
+    };
     workspace::retarget(&rule, screen, layout.map_or(0, |l| zones::leaf_count(&l.tree)))
 }
 

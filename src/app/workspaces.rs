@@ -26,7 +26,7 @@ pub(super) use in_use::{
     next_put_back, put_back_all, screen_meant, set_default, snap_back, switch_back, switch_back_id, sync_live,
     ws_moved,
 };
-use in_use::{active_workspace, holders, rescoped, screen_ids, set_in_use, took_over};
+use in_use::{active_workspace, holders, put_in_use_back, rescoped, screen_ids, set_in_use, took_over};
 pub(super) use join::sent as sent_to_join;
 pub(super) use notice::{
     LastSwitch, ended, last_switch, open_switched, show_label, skipped_json, started, starting, starting_due,
@@ -389,16 +389,31 @@ pub(super) fn switched(app: &mut App) {
     api_server::broadcast("workspace.switched", &data);
     ended(app, &done);
     show_label(app, &done);
-    // "Put windows back" goes on with the next workspace that moved, now that this one is done.
+    // "Put windows back" goes on with the next workspace that moved, now that this one is done,
+    // unless the user stopped this one: that stops the rest too (D714).
+    app.put_back_queue = left_to_put_back(std::mem::take(&mut app.put_back_queue), done.cancelled);
     if let Some(Err(e)) = next_put_back(app) {
         log::info!("put windows back: {}", e.message);
     }
 }
 
+/// What the put-back queue still holds once a switch ended: nothing, when that one was cancelled.
+fn left_to_put_back(queue: Vec<(String, bool)>, cancelled: bool) -> Vec<(String, bool)> {
+    if cancelled { Vec::new() } else { queue }
+}
+
 #[cfg(test)]
 mod tests {
     use super::Via;
+    use super::left_to_put_back;
     use super::step::step_target;
+
+    #[test]
+    fn a_cancel_stops_the_snap_backs_still_queued() {
+        let queue = vec![("b".to_string(), false), ("c".to_string(), false)];
+        assert_eq!(left_to_put_back(queue.clone(), false), queue);
+        assert!(left_to_put_back(queue, true).is_empty());
+    }
     use seam::workspace::{Step, Workspace};
 
     fn list(ids: &[&str]) -> Vec<Workspace> {

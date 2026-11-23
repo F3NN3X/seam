@@ -110,7 +110,7 @@ fn windows_of(job: &CloseJob, remember: bool) -> Owned {
         .filter(|s| !job.held.contains(&s.cand.hwnd) && on_screens(s.cand.hwnd))
         .collect();
     let known: Vec<Candidate> = seen.iter().map(|s| s.cand.clone()).collect();
-    let matched = match_rows(ws, &known, remember);
+    let matched = match_reached(ws, &known, remember, &[]);
     let facts: Vec<Fact> = seen.iter().map(|s| (s.cand.hwnd, s.pin, s.elevated)).collect();
     let (take, kept) = workspace::sort_out(&ws.windows, &matched, &facts);
     let entry = |row: usize, hwnd: isize| {

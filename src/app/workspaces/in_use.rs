@@ -51,12 +51,17 @@ pub(in crate::app) fn in_use_ids(app: &App) -> Vec<String> {
 }
 
 /// The workspace in use on `screen`, or with none named, the one last switched to that is
-/// still in use, else the desk-wide one (D785).
+/// still in use, else the desk-wide one while it holds a screen (D785).
 pub(in crate::app) fn meant(app: &App, screen: Option<&str>) -> Option<String> {
     let desk = app.cfg.desks.get(&app.sig);
     match screen {
         Some(screen) => desk.and_then(|d| workspace::in_use_on(d, screen)).map(str::to_string),
-        None => app.last_in_use.clone().filter(|id| in_use_ids(app).contains(id)).or_else(|| app.workspace.clone()),
+        None => {
+            // A desk-wide workspace every screen has replaced with its own is in use nowhere.
+            let in_use = in_use_ids(app);
+            let still = |id: &String| in_use.contains(id);
+            app.last_in_use.clone().filter(still).or_else(|| app.workspace.clone().filter(still))
+        }
     }
 }
 
@@ -65,12 +70,12 @@ pub(in crate::app) fn meant(app: &App, screen: Option<&str>) -> Option<String> {
 pub(in crate::app) fn holders(app: &App, ws: &str, reach: &dyn Fn(&str) -> bool) -> Vec<(zones::Rect, u32)> {
     let Some(desk) = app.cfg.desks.get(&app.sig) else { return Vec::new() };
     let rect = |m: &Mon| zones::Rect { x: m.rect.left, y: m.rect.top, w: m.rect.width(), h: m.rect.height() };
-    let held = |m: &&Mon| !reach(&m.id);
-    let holder = |m: &Mon| {
-        let id = workspace::in_use_on(desk, &m.id).filter(|id| *id != ws)?;
+    let held = workspace::holders_of(desk, &screen_ids(app), ws, reach);
+    let on = |(screen, id): &(String, String)| {
+        let m = app.mons.iter().find(|m| m.id == *screen)?;
         Some((rect(m), workspace::stamp_key(id)))
     };
-    app.mons.iter().filter(held).filter_map(holder).collect()
+    held.iter().filter_map(on).collect()
 }
 
 /// A workspace with what a status check or auto-apply needs to place its windows: a one-screen
@@ -149,7 +154,8 @@ pub(super) fn took_over(app: &mut App, id: &str, scope: Option<&str>) {
 /// A deleted workspace is no longer in use, remembered or the default, on the desk or on any
 /// screen. Returns whether the config changed.
 pub(in crate::app) fn forget_deleted(app: &mut App) -> bool {
-    let ids: Vec<String> = desk_workspaces(app).into_iter().map(|w| w.id).collect();
+    let list = desk_workspaces(app);
+    let ids: Vec<String> = list.iter().map(|w| w.id.clone()).collect();
     // A deleted workspace's rows remember no windows (D336). Other desks' keep theirs.
     let everywhere: Vec<String> =
         app.cfg.desks.values().flat_map(|d| workspace::list(&d.workspaces)).map(|w| w.id).collect();
@@ -166,20 +172,37 @@ pub(in crate::app) fn forget_deleted(app: &mut App) -> bool {
     }
     app.put_back_queue.retain(|(id, _)| ids.contains(id));
     let Some(desk) = app.cfg.desks.get_mut(&app.sig) else { return false };
-    // A screen whose workspace went falls back to the desk-wide one.
-    workspace::forget(desk, &ids)
-}
-
-/// A workspace's scope changed in a save: what is in use follows it (brief J, edge cases).
-pub(super) fn rescoped(app: &mut App, id: &str, old: Option<&str>, new: Option<&str>) {
-    let Some(desk) = app.cfg.desks.get_mut(&app.sig) else { return };
-    let before = desk.clone();
-    workspace::rescope(desk, id, old, new);
-    if *desk != before {
+    // A screen whose workspace went, or is now for another screen (a synced file, a patch),
+    // falls back to the desk-wide one.
+    let changed = workspace::keep_valid(desk, &list);
+    if changed {
         app.workspace = desk.active_workspace.clone();
-        persist(app);
         sync_live(app);
     }
+    changed
+}
+
+/// What is in use on the desk, kept to be put back.
+pub(super) type InUse = (Option<String>, Option<String>, BTreeMap<String, seam::config::ScreenInUse>);
+
+/// Workspaces whose scope a save changes (`(id, old, new)`): what is in use follows them (brief J,
+/// edge cases). Done before the save is written, so the cleanup after it finds the screens
+/// already right. Returns what was in use, for `put_in_use_back` if the write fails.
+pub(super) fn rescoped(app: &mut App, changes: &[(&str, Option<&str>, Option<&str>)]) -> Option<InUse> {
+    let desk = app.cfg.desks.get_mut(&app.sig)?;
+    let before = (desk.active_workspace.clone(), desk.previous_workspace.clone(), desk.screen_in_use.clone());
+    for (id, old, new) in changes {
+        workspace::rescope(desk, id, *old, *new);
+    }
+    app.workspace = desk.active_workspace.clone();
+    Some(before)
+}
+
+/// A save that moved what is in use failed: it is as it was.
+pub(super) fn put_in_use_back(app: &mut App, before: InUse) {
+    let Some(desk) = app.cfg.desks.get_mut(&app.sig) else { return };
+    (desk.active_workspace, desk.previous_workspace, desk.screen_in_use) = before;
+    app.workspace = desk.active_workspace.clone();
 }
 
 /// At start and on another desk, which workspaces are in use, without moving a window:

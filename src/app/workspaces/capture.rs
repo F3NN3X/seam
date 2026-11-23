@@ -459,9 +459,14 @@ pub(super) fn check_rows(
     if !sealing {
         workspace::without_clear_commands(&mut sent);
     }
+    // A zone is on its screen when the desk's layout there has it, or the workspace's own, which
+    // a switch gives the screen first (a row added to a one-screen workspace is counted that way, D788).
+    let own = sent.zones.clone();
     let zones = |monitor: &str| {
-        let layout = desk.zones.get(monitor).and_then(zones::layout_of);
-        layout.map_or(0, |l| zones::leaf_count(&l.tree))
+        let count = |layout: Option<zones::ZoneLayout>| layout.map_or(0, |l| zones::leaf_count(&l.tree));
+        let desk_count = count(desk.zones.get(monitor).and_then(zones::layout_of));
+        let own_count = count(own.get(monitor).and_then(workspace::screen_layout).flatten());
+        desk_count.max(own_count)
     };
     let checked = workspace::checked_rows(&old, sent, &zones, only).map_err(|why| RpcError::new(api::REFUSED, why))?;
     let others: Vec<String> =
@@ -484,7 +489,25 @@ pub(super) fn write_checked(app: &mut App, edits: &[Checked]) -> Reply {
         })
         .collect();
     let patch = json!({ "desks": { app.sig.clone(): { "workspaces": list } } });
-    let reply = patch_config(app, &patch)?;
+    // A workspace in use whose scope changed stays in use where it is for now.
+    let rescopes: Vec<(&str, Option<&str>, Option<&str>)> = edits
+        .iter()
+        .filter(|e| e.old.scope != e.checked.scope)
+        .map(|e| (e.id.as_str(), e.old.scope.as_deref(), e.checked.scope.as_deref()))
+        .collect();
+    let in_use_before = if rescopes.is_empty() { None } else { rescoped(app, &rescopes) };
+    let reply = match patch_config(app, &patch) {
+        Ok(reply) => reply,
+        Err(e) => {
+            if let Some(before) = in_use_before {
+                put_in_use_back(app, before);
+            }
+            return Err(e);
+        }
+    };
+    if !rescopes.is_empty() {
+        sync_live(app);
+    }
     for Checked { id, old, checked } in edits {
         let moves = workspace::moved_rows(&old.windows, &checked.windows);
         // Windows a switch or auto-apply stamped keep the app they were stamped for. The
@@ -499,10 +522,6 @@ pub(super) fn write_checked(app: &mut App, edits: &[Checked]) -> Reply {
         }
         // An item that was edited isn't what its window opened, so the next switch starts the new one (D733).
         switcher::forget_edited(id, &workspace::edited_items(&old.windows, &checked.windows, &moves));
-        // A workspace in use whose scope changed stays in use where it is for now.
-        if old.scope != checked.scope {
-            rescoped(app, id, old.scope.as_deref(), checked.scope.as_deref());
-        }
     }
     Ok(reply)
 }

@@ -158,6 +158,14 @@ pub(super) fn match_rows(ws: &Workspace, wins: &[Candidate], remember: bool) -> 
     workspace::assign_bound(&ws.windows, wins, &bound, &elsewhere)
 }
 
+/// `match_rows`, with the rows on a screen it doesn't reach (another than the workspace's scope,
+/// or one of `away`) sitting out like off rows, so they take no window (D788).
+pub(super) fn match_reached(ws: &Workspace, wins: &[Candidate], remember: bool, away: &[String]) -> Vec<Option<isize>> {
+    let (bound, elsewhere) = bindings(ws, remember);
+    let rows = workspace::sit_out(&ws.windows, ws.scope.as_deref(), away);
+    workspace::assign_bound(&rows, wins, &bound, &elsewhere)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

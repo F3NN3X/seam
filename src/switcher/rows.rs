@@ -35,7 +35,7 @@ pub fn status(live: &LiveWorkspace) -> Vec<RowStatus> {
     let mut procs = Procs::new();
     let seen = snapshot(&mut procs);
     let cands: Vec<Candidate> = seen.iter().map(|s| s.cand.clone()).collect();
-    let found = match_rows(&live.workspace, &cands, live.places);
+    let found = match_reached(&live.workspace, &cands, live.places, &live.away);
     // An app with no window may still run, closed to the tray.
     let mut background = Background::default();
     let rows = live.workspace.windows.iter().zip(found).enumerate();

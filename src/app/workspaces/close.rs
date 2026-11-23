@@ -81,20 +81,18 @@ pub(in crate::app) fn start_close(
 
 /// Where a close or minimize of `ws` reaches (D786): the screens where it is in use, or while it
 /// isn't, its screen or every screen (empty, as before one-screen workspaces). Never a window
-/// another workspace in use holds.
+/// the workspace in use on a screen it doesn't reach holds there.
 fn reach_of(app: &App, ws: &Workspace) -> (Vec<zones::Rect>, std::collections::HashSet<isize>) {
     let ids = screen_ids(app);
-    let held = app.cfg.desks.get(&app.sig).map(|d| workspace::holds(d, &ids)).unwrap_or_default();
-    let mine: Vec<&str> = ids.iter().copied().filter(|s| held.get(*s) == Some(&ws.id)).collect();
-    let reach =
-        |s: &str| if mine.is_empty() { ws.scope.as_deref().is_none_or(|own| own == s) } else { mine.contains(&s) };
+    let reached = app.cfg.desks.get(&app.sig).map(|d| workspace::close_reach(d, &ids, ws)).unwrap_or_default();
+    let reach = |s: &str| reached.iter().any(|r| r == s);
     let rect = |m: &Mon| zones::Rect { x: m.rect.left, y: m.rect.top, w: m.rect.width(), h: m.rect.height() };
     let screens = if ids.iter().all(|s| reach(s)) {
         Vec::new()
     } else {
         app.mons.iter().filter(|m| reach(&m.id)).map(rect).collect()
     };
-    (screens, switcher::held_windows(&holders(app, &ws.id, &|_| false)))
+    (screens, switcher::held_windows(&holders(app, &ws.id, &reach)))
 }
 
 /// A tray item or a shortcut: say why it did nothing, in a notice.

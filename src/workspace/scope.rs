@@ -29,6 +29,32 @@ pub fn own_screens(desk: &Desk, screens: &[&str]) -> Vec<String> {
     screens.iter().filter(own).map(|s| s.to_string()).collect()
 }
 
+/// The screens of `screens` a switch or a close of `ws` leaves alone (`reach` says which it
+/// takes), each with the other workspace in use there, whose windows there it holds (D783).
+pub fn holders_of(desk: &Desk, screens: &[&str], ws: &str, reach: &dyn Fn(&str) -> bool) -> Vec<(String, String)> {
+    let holder = |s: &&str| in_use_on(desk, s).filter(|id| *id != ws).map(|id| (s.to_string(), id.to_string()));
+    screens.iter().filter(|s| !reach(s)).filter_map(holder).collect()
+}
+
+/// The screens a close or minimize of `ws` reaches (D786): the ones where it is in use, or while
+/// it is in use nowhere, its screen, or every screen.
+pub fn close_reach(desk: &Desk, screens: &[&str], ws: &Workspace) -> Vec<String> {
+    let mine: Vec<String> = holds(desk, screens).into_iter().filter(|(_, id)| *id == ws.id).map(|(s, _)| s).collect();
+    if !mine.is_empty() {
+        return screens.iter().filter(|s| mine.iter().any(|m| m == *s)).map(|s| s.to_string()).collect();
+    }
+    let own = |s: &&&str| ws.scope.as_deref().is_none_or(|own| own == **s);
+    screens.iter().filter(own).map(|s| s.to_string()).collect()
+}
+
+/// The rows as matching sees them: a row the switch, the status or the close doesn't reach (on
+/// another screen than `scope`, or on one of `away`) sits out like an off row, so it takes no
+/// window from a row that is reached (D788).
+pub fn sit_out(rules: &[Rule], scope: Option<&str>, away: &[String]) -> Vec<Rule> {
+    let reached = |r: &Rule| in_scope(r, scope) && !away.contains(&r.monitor);
+    rules.iter().map(|r| if reached(r) { r.clone() } else { Rule { off: true, ..r.clone() } }).collect()
+}
+
 /// What in use means after a switch to `id`, scoped to `scope`, ended on a desk of `screens`.
 /// A one-screen switch changes its screen only (D783). An All-screens one takes every screen
 /// and the desk-wide slots, as before one-screen workspaces (D784). Either way a screen keeps
@@ -324,6 +350,50 @@ mod tests {
         assert_eq!((full.monitor.as_str(), &full.target), ("s2", &Target::State { state: WinState::Max }));
         assert_eq!(full.shown, crate::workspace::Shown::Maximized);
         assert!(in_scope(&full, Some("s2")) && !in_scope(&zone, Some("s2")) && in_scope(&zone, None));
+    }
+
+    #[test]
+    fn with_no_one_screen_workspace_a_close_holds_nothing_back() {
+        let screens = ["s1", "s2"];
+        let d = desk(Some("x"), None);
+        for ws in [ws("x", None), ws("y", None)] {
+            let reach = close_reach(&d, &screens, &ws);
+            assert_eq!(reach, ["s1", "s2"], "{}", ws.id);
+            assert!(holders_of(&d, &screens, &ws.id, &|s| reach.iter().any(|r| r == s)).is_empty(), "{}", ws.id);
+        }
+        // With y in use on screen 2, x closes on screen 1 only, and y holds screen 2.
+        let mut d = d;
+        after_switch(&mut d, "y", Some("s2"), &screens);
+        let reach = close_reach(&d, &screens, &ws("x", None));
+        assert_eq!(reach, ["s1"]);
+        let held = holders_of(&d, &screens, "x", &|s| reach.iter().any(|r| r == s));
+        assert_eq!(held, [("s2".to_string(), "y".to_string())]);
+        // A workspace in use nowhere reaches its screen, or every screen.
+        assert_eq!(close_reach(&d, &screens, &ws("z", Some("s2"))), ["s2"]);
+        assert_eq!(close_reach(&d, &screens, &ws("z", None)), ["s1", "s2"]);
+    }
+
+    #[test]
+    fn a_row_on_another_screen_takes_no_window_from_one_that_is_reached() {
+        use crate::workspace::{Candidate, assign_bound};
+        let chrome = |monitor: &str| Rule { exe: r"C:\chrome.exe".into(), monitor: monitor.into(), ..Rule::default() };
+        // The row kept from before the scope was set comes first.
+        let rows = [chrome("s1"), chrome("s2")];
+        let open = Candidate {
+            hwnd: 7,
+            exe: r"C:\chrome.exe".into(),
+            aumid: None,
+            class: String::new(),
+            title: String::new(),
+            z: 0,
+        };
+        let found =
+            assign_bound(&sit_out(&rows, Some("s2"), &[]), std::slice::from_ref(&open), &[None, None], &HashSet::new());
+        assert_eq!(found, [None, Some(7)]);
+        // The same for a desk-wide Snap back that leaves screen 1 to its own workspace.
+        let found = assign_bound(&sit_out(&rows, None, &["s1".into()]), &[open], &[None, None], &HashSet::new());
+        assert_eq!(found, [None, Some(7)]);
+        assert!(!sit_out(&rows, None, &[]).iter().any(|r| r.off));
     }
 
     #[test]

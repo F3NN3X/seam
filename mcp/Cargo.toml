@@ -1,6 +1,6 @@
 [package]
 name = "seam-mcp"
-version = "0.10.1"
+version = "0.10.2"
 edition = "2024"
 rust-version = "1.100"
 description = "Lets an AI assistant use Seam over MCP, through Seam's local API."

@@ -104,6 +104,33 @@ fn scope_change_drops_the_old_screens_picture() {
 }
 
 #[test]
+fn only_a_choice_a_screen_shows_now_ends_the_hold() {
+    let mut d = desk();
+    d.screen_in_use.insert("s2".into(), ScreenInUse { workspace: Some("notes".into()), previous: None });
+    // The desk default, and the workspace in use on the screen.
+    assert!(shows_now(&d, None, "s1"));
+    assert!(shows_now(&d, Some("dev"), "s1"));
+    assert!(shows_now(&d, Some("notes"), "s2"));
+    // A workspace that isn't in use there changes nothing on screen.
+    assert!(!shows_now(&d, Some("dev"), "s2"));
+    assert!(!shows_now(&d, Some("other"), "s1"));
+}
+
+#[test]
+fn retry_forgets_a_screens_failures_or_all() {
+    let mut failures: Failures = BTreeMap::from([
+        ("k1".to_string(), ("s1".to_string(), UNREADABLE)),
+        ("k2".to_string(), ("s2".to_string(), NO_CODEC)),
+    ]);
+    retry(&mut failures, Some("s1"));
+    assert_eq!(failures.keys().collect::<Vec<_>>(), ["k2"]);
+    retry(&mut failures, Some("s3"));
+    assert_eq!(failures.len(), 1);
+    retry(&mut failures, None);
+    assert!(failures.is_empty());
+}
+
+#[test]
 fn only_changed_screens_are_applied() {
     let applied = BTreeMap::from([("s1".to_string(), "a.png".to_string()), ("s2".to_string(), "b.png".to_string())]);
     let wanted = [

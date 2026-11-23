@@ -98,6 +98,8 @@ pub(super) fn wallpaper_screens(app: &mut App, forget: bool) {
     if forget {
         app.wallpaper.send(Job::Forget);
     }
+    // What failed on the screens before may work now.
+    app.wallpaper.send(Job::Retry(None));
     app.wallpaper.sent = None;
     app.wallpaper.held = false;
     wallpaper_sync(app, None);
@@ -169,6 +171,8 @@ pub(super) fn wallpaper_set(
         }
         wallpaper::read_header(path).map_err(|why| RpcError::new(api::REFUSED, why))?;
     }
+    // Only a choice the screen shows now ends a hold after a change made elsewhere (D799).
+    let shows_now = app.cfg.desks.get(&app.sig).is_some_and(|d| wallpaper::shows_now(d, workspace.as_deref(), &screen));
     let Some(desk) = app.cfg.desks.get_mut(&app.sig) else { return refused("This desk isn't saved yet") };
     let set = match &workspace {
         Some(id) => desk.workspace_wallpapers.entry(id.clone()).or_default(),
@@ -184,8 +188,11 @@ pub(super) fn wallpaper_set(
     };
     desk.workspace_wallpapers.retain(|_, set| !set.is_empty());
     persist(app);
-    // A choice made here is one to show, whoever changed the wallpaper since (D799).
-    app.wallpaper.held = false;
+    if shows_now {
+        app.wallpaper.held = false;
+    }
+    // A new choice for the screen tries again what failed there.
+    app.wallpaper.send(Job::Retry(Some(screen.clone())));
     // Rendered now, so the first switch to it finds it in the cache (D795).
     if let (Some(picture), Some(i)) = (picture, connected) {
         let m = &app.mons[i];

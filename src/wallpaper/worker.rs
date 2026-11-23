@@ -5,7 +5,10 @@
 use super::desktop::{Desktop, match_ids};
 use super::journal::{self, AtStart, Record};
 use super::render::Wic;
-use super::{CACHE_CAP, Cached, Fit, Origin, Show, UNREADABLE, Wallpaper, cache_key, cache_prefix, evict, to_apply};
+use super::{
+    CACHE_CAP, Cached, Failures, Fit, Origin, Show, UNREADABLE, Wallpaper, cache_key, cache_prefix, evict, retry,
+    to_apply,
+};
 use crate::geom::Rect;
 use crate::log;
 use std::collections::BTreeMap;
@@ -50,6 +53,9 @@ pub enum Job {
     Restore(Option<Sender<bool>>),
     /// Explorer restarted: set every screen again at the next Apply.
     Forget,
+    /// Try the pictures that failed again: on one screen, after a choice for it, or with `None`
+    /// on every screen, after a screen change.
+    Retry(Option<String>),
 }
 
 /// What a screen shows after an Apply.
@@ -175,7 +181,7 @@ struct State {
     /// What Windows said each of those monitors showed right after Seam set it (D799).
     read_back: BTreeMap<String, String>,
     /// Renders that failed, by cache key, so a broken picture isn't opened again until it changes.
-    failures: BTreeMap<String, &'static str>,
+    failures: Failures,
     /// The journal (D797), while there is one.
     record: Option<Record>,
 }
@@ -228,6 +234,10 @@ impl State {
             }
             Job::Forget => {
                 self.forget_all();
+                None
+            }
+            Job::Retry(screen) => {
+                retry(&mut self.failures, screen.as_deref());
                 None
             }
         }
@@ -416,18 +426,18 @@ impl State {
         let written = meta.modified().map(unix).unwrap_or(0);
         let key = cache_key(&picture.path, meta.len(), written, picture.fit, bars, size);
         let file = cache.join(format!("{key}.png"));
-        if let Some(message) = self.failures.get(&key) {
+        if let Some((_, message)) = self.failures.get(&key) {
             return Err((message, false));
         }
         if !file.exists() {
             let _ = std::fs::create_dir_all(&cache);
             let Some(wic) = &self.wic else {
-                self.failures.insert(key, UNREADABLE);
+                self.failures.insert(key, (screen.id.clone(), UNREADABLE));
                 return Err((UNREADABLE, true));
             };
             if let Err(e) = wic.render(&picture.path, size, picture.fit, bars, &file) {
                 log::info!("wallpaper: couldn't render a picture for screen {} ({:?})", screen.number, e.hresult);
-                self.failures.insert(key, e.message);
+                self.failures.insert(key, (screen.id.clone(), e.message));
                 return Err((e.message, true));
             }
         }

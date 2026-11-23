@@ -115,6 +115,22 @@ pub fn may_set(ws: Option<&Workspace>, screen: &str) -> Result<(), &'static str>
     }
 }
 
+/// Whether a choice for `workspace` (the desk default with `None`) on `screen` can change what that
+/// screen shows now: the desk default, or a workspace in use on it. Only such a choice ends the
+/// hold after someone else changed the wallpaper (D799).
+pub fn shows_now(desk: &Desk, workspace: Option<&str>, screen: &str) -> bool {
+    workspace.is_none_or(|id| workspace::in_use_on(desk, screen) == Some(id))
+}
+
+/// Renders that failed, by cache key, with the screen each was for and why.
+pub type Failures = BTreeMap<String, (String, &'static str)>;
+
+/// Forget the failures of `screen`, or with `None` all of them, so their pictures are tried again:
+/// a drive that was offline may be back, a codec may have come since.
+pub fn retry(failures: &mut Failures, screen: Option<&str>) {
+    failures.retain(|_, (on, _)| screen.is_some_and(|s| s != on));
+}
+
 /// Keep only the pictures a workspace on the desk can show: none for a deleted workspace, and for a
 /// one-screen workspace only its own screen's, so a changed scope drops the old screen's picture
 /// (D793a). Returns whether anything went.
